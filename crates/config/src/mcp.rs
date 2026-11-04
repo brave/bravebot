@@ -245,6 +245,9 @@ pub enum Problem {
     Choice,
     /// `choice_arguments` names an argument to a server that does not ask about every call.
     ChoiceWithoutAsking,
+    /// `backend` is not `openshell`, or `image` is missing, empty or not one image reference, or
+    /// given without the backend that reads it. The value is the key that is wrong.
+    Backend(&'static str),
 }
 
 /// The arguments of a server's tools a declaration says take a choice, by tool (SERVERS-22). Each
@@ -315,6 +318,28 @@ impl Timeouts {
     }
 }
 
+/// Where a local server runs.
+///
+/// A declaration that names no backend runs under this machine's own confinement (MCP-3). One that
+/// names OpenShell runs inside an NVIDIA OpenShell sandbox made from its image, and only a manifest
+/// run offers its tools.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Backend {
+    /// This machine's own confinement.
+    #[default]
+    Native,
+    /// An OpenShell sandbox made from `image`, a container image reference.
+    OpenShell {
+        /// The image the sandbox is made from, as the declaration wrote it.
+        image: String,
+    },
+}
+
+impl Backend {
+    /// The word `backend` is spelled with in the file.
+    pub const OPENSHELL: &str = "openshell";
+}
+
 /// One server, as a person declared it.
 ///
 /// Its `Debug` shows a stored value by its name alone, so no value reaches a log or a panic.
@@ -350,6 +375,8 @@ pub enum Declaration {
         /// The arguments of its tools that take a choice. Empty unless `ask_every_call` is set,
         /// since the person is shown the element the choice leads to at each call (SERVERS-22).
         choice_arguments: ChoiceArguments,
+        /// Where it runs.
+        backend: Backend,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -387,6 +414,7 @@ impl std::fmt::Debug for Declaration {
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                backend,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -400,6 +428,7 @@ impl std::fmt::Debug for Declaration {
                 .field("allowed_hosts", allowed_hosts)
                 .field("ask_every_call", ask_every_call)
                 .field("choice_arguments", choice_arguments)
+                .field("backend", backend)
                 .finish(),
             Self::Http {
                 url,
@@ -443,6 +472,8 @@ pub enum Field {
     AllowedHosts,
     AskEveryCall,
     ChoiceArguments,
+    /// The backend, or the image an OpenShell backend is made from.
+    Backend,
 }
 
 impl Field {
@@ -462,6 +493,7 @@ impl Field {
             Self::AllowedHosts => "allowed_hosts",
             Self::AskEveryCall => "ask_every_call",
             Self::ChoiceArguments => "choice_arguments",
+            Self::Backend => "backend",
         }
     }
 }
@@ -492,6 +524,7 @@ impl Declaration {
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            backend: Backend::Native,
         })
     }
 
@@ -511,6 +544,7 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             choice_arguments,
+            backend,
             ..
         } = self
         else {
@@ -542,6 +576,7 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             choice_arguments,
+            backend,
         })
     }
 
@@ -558,6 +593,7 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             choice_arguments,
+            backend,
             ..
         } = self
         else {
@@ -587,6 +623,7 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             choice_arguments,
+            backend,
         })
     }
 
@@ -604,6 +641,7 @@ impl Declaration {
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                backend,
                 ..
             } => Self::Stdio {
                 argv,
@@ -617,6 +655,7 @@ impl Declaration {
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                backend,
             },
             Self::Http {
                 url,
@@ -673,6 +712,7 @@ impl Declaration {
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                backend,
                 ..
             } => Self::Stdio {
                 argv,
@@ -686,6 +726,7 @@ impl Declaration {
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                backend,
             },
             Self::Http {
                 url,
@@ -737,6 +778,7 @@ impl Declaration {
             exclude_tools,
             ask_every_call,
             choice_arguments,
+            backend,
             ..
         } = self
         else {
@@ -772,7 +814,37 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             choice_arguments,
+            backend,
         })
+    }
+
+    /// Where this server runs. A remote server is not started here, so it runs natively.
+    pub fn backend(&self) -> &Backend {
+        static NATIVE: Backend = Backend::Native;
+        match self {
+            Self::Stdio { backend, .. } => backend,
+            Self::Http { .. } => &NATIVE,
+        }
+    }
+
+    /// This declaration running in `chosen`. An OpenShell backend needs one image reference, and
+    /// is refused on a remote declaration, since that server is not started here.
+    pub fn running_in(mut self, chosen: Backend) -> Result<Self, Problem> {
+        if let Backend::OpenShell { image } = &chosen
+            && !is_image_reference(image)
+        {
+            return Err(Problem::Backend("image"));
+        }
+        match &mut self {
+            Self::Stdio { backend, .. } => {
+                *backend = chosen;
+                Ok(self)
+            }
+            Self::Http { .. } => match chosen {
+                Backend::Native => Ok(self),
+                Backend::OpenShell { .. } => Err(Problem::Remote("backend")),
+            },
+        }
     }
 
     /// Whether every call to this server is put to the person, whatever a rule or an earlier
@@ -801,6 +873,7 @@ impl Declaration {
                 exclude_tools,
                 allowed_hosts,
                 choice_arguments,
+                backend,
                 ..
             } => Self::Stdio {
                 argv,
@@ -818,6 +891,7 @@ impl Declaration {
                     true => choice_arguments,
                     false => ChoiceArguments::new(),
                 },
+                backend,
             },
             Self::Http {
                 url,
@@ -870,6 +944,7 @@ impl Declaration {
             exclude_tools,
             allowed_hosts,
             ask_every_call,
+            backend,
             ..
         } = self
         else {
@@ -901,6 +976,7 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             choice_arguments: choices,
+            backend,
         })
     }
 
@@ -1082,6 +1158,7 @@ impl Declaration {
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                backend,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -1116,6 +1193,11 @@ impl Declaration {
                 }
                 if !choice_arguments.is_empty() {
                     form.push(serde_json::json!({ "choice_arguments": choice_arguments }));
+                }
+                // Only where one is named, so a declaration running natively digests as it did
+                // before there was a choice, and the approval given it still stands.
+                if let Backend::OpenShell { image } = backend {
+                    form.push(serde_json::json!({ "backend": Backend::OPENSHELL, "image": image }));
                 }
                 serde_json::Value::Array(form)
             }
@@ -1180,6 +1262,7 @@ impl Declaration {
                     allowed_hosts,
                     ask_every_call,
                     choice_arguments,
+                    backend,
                     ..
                 },
                 Self::Stdio {
@@ -1193,6 +1276,7 @@ impl Declaration {
                     allowed_hosts: other_allowed_hosts,
                     ask_every_call: other_ask_every_call,
                     choice_arguments: other_choice_arguments,
+                    backend: other_backend,
                     ..
                 },
             ) => {
@@ -1219,6 +1303,7 @@ impl Declaration {
                         choice_arguments != other_choice_arguments,
                         Field::ChoiceArguments,
                     ),
+                    (backend != other_backend, Field::Backend),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
@@ -1294,6 +1379,7 @@ impl Declaration {
                 directory,
                 allowed_hosts,
                 choice_arguments,
+                backend,
                 ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
@@ -1321,6 +1407,10 @@ impl Declaration {
                         "choice_arguments".into(),
                         serde_json::json!(choice_arguments),
                     );
+                }
+                if let Backend::OpenShell { image } = backend {
+                    entry.insert("backend".into(), Backend::OPENSHELL.into());
+                    entry.insert("image".into(), image.clone().into());
                 }
             }
             Self::Http {
@@ -1361,13 +1451,15 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
-        const LOCAL: [&str; 6] = [
+        const LOCAL: [&str; 8] = [
             "variables",
             "env",
             "reads",
             "directory",
             "allowed_hosts",
             "choice_arguments",
+            "backend",
+            "image",
         ];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
             Some("stdio") => &[
@@ -1382,6 +1474,8 @@ impl Declaration {
                 "exclude_tools",
                 "ask_every_call",
                 "choice_arguments",
+                "backend",
+                "image",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -1500,6 +1594,7 @@ impl Declaration {
             Some(_) => return Err(Problem::Directory),
         };
         let allowed_hosts = hosts_in(entry)?;
+        let backend = backend_in(entry)?;
         let choices = match entry.get("choice_arguments") {
             None => ChoiceArguments::new(),
             Some(serde_json::Value::Object(by_tool)) => by_tool
@@ -1523,6 +1618,7 @@ impl Declaration {
             .filtering(tools, exclude_tools)?
             .asking_every_call(ask_every_call)
             .choosing(choices)?
+            .running_in(backend)?
             .timing(timeouts))
     }
 }
@@ -1553,6 +1649,33 @@ fn hosts_in(
             .ok_or_else(|| Problem::Hosts(String::new())),
         Some(_) => Err(Problem::Hosts(String::new())),
     }
+}
+
+/// The backend an entry names, read from `backend` and `image`. Neither key is a native
+/// declaration; `openshell` with an image is an OpenShell one; anything else is refused, naming the
+/// key that is wrong.
+fn backend_in(entry: &serde_json::Map<String, serde_json::Value>) -> Result<Backend, Problem> {
+    match (entry.get("backend"), entry.get("image")) {
+        (None, None) => Ok(Backend::Native),
+        (None, Some(_)) => Err(Problem::Backend("image")),
+        (Some(serde_json::Value::String(word)), image) if word == Backend::OPENSHELL => match image
+        {
+            Some(serde_json::Value::String(image)) => Ok(Backend::OpenShell {
+                image: image.clone(),
+            }),
+            _ => Err(Problem::Backend("image")),
+        },
+        (Some(_), _) => Err(Problem::Backend("backend")),
+    }
+}
+
+/// Whether `image` is one container image reference: not empty, and holding no space or control
+/// character that a command line could read as something else.
+fn is_image_reference(image: &str) -> bool {
+    !image.is_empty()
+        && image.len() <= 512
+        && !image.starts_with('-')
+        && !image.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// Validate and deduplicate tool filter names.
@@ -2314,6 +2437,119 @@ mod tests {
             }))
             .unwrap_err(),
             Problem::Remote("allowed_hosts")
+        );
+    }
+
+    fn sandboxed(image: Option<&str>) -> Declaration {
+        weather()
+            .running_in(match image {
+                None => Backend::Native,
+                Some(image) => Backend::OpenShell {
+                    image: image.to_string(),
+                },
+            })
+            .expect("a declaration with a backend")
+    }
+
+    /// The backend and its image are part of what an approval binds to, so choosing OpenShell or
+    /// changing its image asks again, while a declaration that names no backend digests as it did
+    /// before there was one, so the approvals already given stand.
+    #[test]
+    fn a_backend_and_its_image_are_part_of_the_digest_and_native_digests_as_before() {
+        let approved = sandboxed(Some("python:3.13-slim")).digest();
+        for changed in [
+            sandboxed(None),
+            sandboxed(Some("python:3.12-slim")),
+            sandboxed(Some("python:3.13-slim@sha256:abc")),
+        ] {
+            assert_ne!(changed.digest(), approved, "{changed:?}");
+        }
+        assert_eq!(sandboxed(None).digest(), weather().digest());
+        assert_eq!(weather().backend(), &Backend::Native);
+    }
+
+    #[test]
+    fn a_backend_names_the_field_that_changed_and_survives_the_file() {
+        let before = sandboxed(Some("python:3.13-slim"));
+        assert_eq!(before.changes(&sandboxed(None)), vec![Field::Backend]);
+        assert_eq!(
+            before.changes(&sandboxed(Some("node:22-slim"))),
+            vec![Field::Backend]
+        );
+        assert!(
+            before
+                .changes(&sandboxed(Some("python:3.13-slim")))
+                .is_empty()
+        );
+        for declaration in [before, sandboxed(None)] {
+            let written = declaration.to_value();
+            let read = Declaration::from_value(&written).expect("what was written reads back");
+            assert_eq!(read, declaration);
+            assert_eq!(read.backend(), declaration.backend());
+        }
+        assert_eq!(
+            sandboxed(Some("python:3.13-slim")).to_value()["backend"],
+            serde_json::json!("openshell")
+        );
+        assert!(sandboxed(None).to_value().get("backend").is_none());
+    }
+
+    #[test]
+    fn a_backend_is_openshell_with_one_image_and_belongs_to_a_local_server() {
+        let in_a_file = |extra: serde_json::Value| {
+            let mut entry = serde_json::json!({ "transport": "stdio", "argv": ["server"] });
+            for (key, value) in extra.as_object().expect("an object") {
+                entry[key] = value.clone();
+            }
+            Declaration::from_value(&entry)
+        };
+        assert_eq!(
+            in_a_file(serde_json::json!({ "backend": "docker", "image": "x" })).unwrap_err(),
+            Problem::Backend("backend")
+        );
+        assert_eq!(
+            in_a_file(serde_json::json!({ "backend": true })).unwrap_err(),
+            Problem::Backend("backend")
+        );
+        assert_eq!(
+            in_a_file(serde_json::json!({ "backend": "openshell" })).unwrap_err(),
+            Problem::Backend("image")
+        );
+        assert_eq!(
+            in_a_file(serde_json::json!({ "image": "python:3.13-slim" })).unwrap_err(),
+            Problem::Backend("image")
+        );
+        for image in ["", "python 3", "python:3\n--policy x", "-v", "a\tb"] {
+            assert_eq!(
+                in_a_file(serde_json::json!({ "backend": "openshell", "image": image }))
+                    .unwrap_err(),
+                Problem::Backend("image"),
+                "{image:?}"
+            );
+        }
+        assert_eq!(
+            in_a_file(serde_json::json!({ "backend": "openshell", "image": "python:3.13-slim" }))
+                .expect("an OpenShell declaration")
+                .backend(),
+            &Backend::OpenShell {
+                image: "python:3.13-slim".into()
+            }
+        );
+        let remote = Declaration::http("https://weather.example.com/mcp".into()).unwrap();
+        assert_eq!(
+            remote
+                .running_in(Backend::OpenShell {
+                    image: "python:3.13-slim".into()
+                })
+                .unwrap_err(),
+            Problem::Remote("backend")
+        );
+        assert_eq!(
+            Declaration::from_value(&serde_json::json!({
+                "transport": "http", "url": "https://a.example/mcp", "backend": "openshell"
+            }))
+            .unwrap_err(),
+            Problem::Remote("backend")
         );
     }
 

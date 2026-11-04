@@ -49,6 +49,53 @@ pub enum Connection {
     Http(HttpServer),
 }
 
+/// The OpenShell sandbox a server runs in, as `/status` says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sandboxed {
+    /// The sandbox's name, as `openshell sandbox list` shows it.
+    pub name: String,
+    /// The image it was made from.
+    pub image: String,
+    /// The hosts its program may reach, and no other; none where it reaches nothing.
+    pub hosts: Vec<String>,
+}
+
+impl Sandboxed {
+    /// The sandbox as lines of a label and what it says, as [`crate::servers::EffectivePolicy`]
+    /// says a confined server's policy: the sandbox and its image, what it may reach, what it
+    /// reads, and where its tools are offered.
+    pub fn described(&self) -> Vec<(String, String)> {
+        vec![
+            (
+                t!(status_server_openshell).to_string(),
+                t!(
+                    status_server_openshell_sandbox,
+                    name = &self.name,
+                    image = &self.image
+                )
+                .to_string(),
+            ),
+            (
+                t!(status_server_policy_egress).to_string(),
+                match self.hosts.as_slice() {
+                    [] => t!(status_server_policy_egress_closed).to_string(),
+                    hosts => {
+                        t!(status_server_openshell_hosts, hosts = hosts.join(", ")).to_string()
+                    }
+                },
+            ),
+            (
+                t!(status_server_policy_read).to_string(),
+                t!(status_server_openshell_image_only).to_string(),
+            ),
+            (
+                t!(status_server_openshell_offered).to_string(),
+                t!(status_server_openshell_manifest_runs).to_string(),
+            ),
+        ]
+    }
+}
+
 /// A server that completed its handshake and answered for its tools, with the declaration it was
 /// started from.
 pub struct Reached {
@@ -70,6 +117,12 @@ pub struct Reached {
     /// The headers and bearer token the declaration names, as the environment gave them when the
     /// server was started, which a server moved during a turn is reached with (SERVERS-18).
     headers: Vec<(String, String)>,
+    /// The OpenShell sandbox the server runs in, where it runs in one. Only a manifest run offers
+    /// such a server's tools while that backend is offered to manifest runs alone.
+    sandboxed: Option<Sandboxed>,
+    /// The sandbox itself, where it runs in one bravebot made for it, held so the
+    /// sandbox is removed once the server has stopped and not before.
+    sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl Reached {
@@ -90,7 +143,21 @@ impl Reached {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             headers: Vec::new(),
+            sandboxed: None,
+            sandbox: None,
         }
+    }
+
+    /// The same server, offered to manifest runs only, holding the sandbox it runs in and what that
+    /// sandbox is, as `/status` says it.
+    pub fn in_a_sandbox_for_manifest_runs(
+        mut self,
+        sandbox: Box<dyn std::any::Any + Send + Sync>,
+        shown: Sandboxed,
+    ) -> Self {
+        self.sandboxed = Some(shown);
+        self.sandbox = Some(sandbox);
+        self
     }
 
     /// The same server, with the headers its connection sends, which the connection it is moved to
@@ -297,6 +364,11 @@ struct Server {
     headers: Vec<(String, String)>,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
+    /// The OpenShell sandbox it runs in, where it runs in one; only a manifest run calls such a
+    /// server ([`Session::in_a_turn`]).
+    sandboxed: Option<Sandboxed>,
+    /// After `connection` for the same reason: the sandbox is removed once the server has stopped.
+    _sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 struct Shared {
@@ -410,6 +482,8 @@ impl Session {
                     choice_arguments: reached.choice_arguments,
                     headers: reached.headers,
                     _home: reached.home,
+                    sandboxed: reached.sandboxed,
+                    _sandbox: reached.sandbox,
                 })
             })
             .collect();
@@ -478,6 +552,20 @@ impl Session {
             .collect()
     }
 
+    /// `held` less the grant for each server a manifest run alone calls, such as one running in an
+    /// OpenShell sandbox: a turn neither puts that server's list to the person nor offers its tools.
+    pub fn in_a_turn(&self, mut held: CapabilitySet) -> CapabilitySet {
+        for server in self
+            .0
+            .servers
+            .iter()
+            .filter(|server| server.sandboxed.is_some())
+        {
+            held.revoke_mcp_call(&ServerAlias::new(server.alias.as_str()));
+        }
+        held
+    }
+
     /// One grant for each server reached, naming it and no other (SERVERS-9).
     pub fn grants(&self) -> Vec<ServerAlias> {
         self.0
@@ -499,6 +587,15 @@ impl Session {
             .servers
             .iter()
             .filter_map(|server| Some((server.alias.clone(), server.policy.clone()?)))
+            .collect()
+    }
+
+    /// The OpenShell sandbox each server that runs in one was started in, in order.
+    pub fn sandboxed(&self) -> Vec<(String, Sandboxed)> {
+        self.0
+            .servers
+            .iter()
+            .filter_map(|server| Some((server.alias.clone(), server.sandboxed.clone()?)))
             .collect()
     }
 
@@ -526,7 +623,13 @@ impl Session {
     /// reads and nothing is decided from it here.
     pub fn prompts<S: Sink>(&self, policy: &mut Policy<'_, S>) -> Vec<ListedPrompt> {
         let mut listed = Vec::new();
-        for server in &self.0.servers {
+        // A server only a manifest run calls offers a turn nothing, prompts included.
+        for server in self
+            .0
+            .servers
+            .iter()
+            .filter(|server| server.sandboxed.is_none())
+        {
             if server.prompts.offered() == 0 {
                 continue;
             }
@@ -571,6 +674,9 @@ impl Session {
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let (named, typed) = rest.split_at(end);
         let mut matched = self.0.servers.iter().filter_map(|server| {
+            if server.sandboxed.is_some() {
+                return None;
+            }
             let word = named
                 .strip_prefix(server.alias.as_str())?
                 .strip_prefix(WIRE_SEPARATOR)?;
@@ -892,7 +998,7 @@ impl Session {
         (state, usage)
     }
 
-    /// The tools this turn may offer: every tool on every list somebody vouched for.
+    /// The tools a manifest run may offer: every tool on every list somebody vouched for.
     pub fn offer(&self) -> Offer {
         let mut tools: Vec<Offered> = Vec::new();
         for server in &self.0.servers {
@@ -997,6 +1103,11 @@ impl Session {
         arguments: &[(String, String)],
     ) -> McpResult<Labelled<String>> {
         let server = self.reached(alias)?;
+        if server.sandboxed.is_some() {
+            return Err(McpError::Transport(format!(
+                "{alias} is called by manifest runs alone"
+            )));
+        }
         match &mut *held(&server.connection) {
             Connection::Stdio(server) => server.get_prompt(policy, name, arguments),
             Connection::Http(server) => server.get_prompt(policy, egress, name, arguments),

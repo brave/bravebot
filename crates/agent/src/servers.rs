@@ -518,6 +518,22 @@ enum Plan {
         /// The arguments of its tools that take a choice (SERVERS-22).
         choice_arguments: ChoiceArguments,
     },
+    /// A local server that runs in an NVIDIA OpenShell sandbox, offered to manifest runs only.
+    OpenShell {
+        /// The program as the declaration names it, which is looked up inside the image.
+        program: String,
+        arguments: Vec<String>,
+        /// The image the sandbox is made from.
+        image: String,
+        declared: Digest,
+        timeouts: Timeouts,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
+        /// The hosts the declaration lists for it. None is no egress.
+        allowed_hosts: Option<Vec<String>>,
+        ask_every_call: bool,
+        choice_arguments: ChoiceArguments,
+    },
     Http {
         url: String,
         headers: Vec<(String, String)>,
@@ -660,7 +676,7 @@ fn settle<A: Asker + ?Sized>(
                 declaration: &declaration,
                 program: match &plan {
                     Plan::Stdio { program, .. } => Some(program),
-                    Plan::Http { .. } => None,
+                    Plan::OpenShell { .. } | Plan::Http { .. } => None,
                 },
                 changed,
             };
@@ -856,6 +872,91 @@ pub fn named(file: &Path, project: &Path) -> String {
         .to_string()
 }
 
+/// What a declaration that runs in an OpenShell sandbox starts.
+///
+/// Its program is named as it is inside the image, so nothing on this machine is looked up for it.
+/// Nothing that reaches a native server's environment or files is passed into the sandbox yet: a
+/// variable would travel on a command line, and a path on this machine means nothing in the image.
+fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, String> {
+    let Declaration::Stdio {
+        argv,
+        variables,
+        env,
+        reads,
+        directory,
+        tools,
+        exclude_tools,
+        ..
+    } = declaration
+    else {
+        return Err(problem(&mcp::Problem::Remote("backend")));
+    };
+    if !variables.is_empty() || !env.is_empty() {
+        return Err(t!(servers_openshell_no_variables).to_string());
+    }
+    if !reads.is_empty() || directory.is_some() {
+        return Err(t!(servers_openshell_no_files).to_string());
+    }
+    // An approval covers the reference as written, so one that names no digest, a tag or a path
+    // whose contents can change, would cover whatever it names later. Only `mcp add` pins one.
+    if !crate::images::Reference::parse(image).is_some_and(|reference| reference.digest.is_some()) {
+        return Err(t!(servers_openshell_unpinned, image = image).to_string());
+    }
+    let (program, arguments) = argv
+        .split_first()
+        .ok_or_else(|| problem(&mcp::Problem::Program))?;
+    Ok(Plan::OpenShell {
+        program: program.clone(),
+        arguments: arguments.to_vec(),
+        image: image.to_string(),
+        declared: declaration.digest(),
+        timeouts: declaration.timeouts(),
+        tools: tools.clone(),
+        exclude_tools: exclude_tools.clone(),
+        allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
+        ask_every_call: declaration.asks_every_call(),
+        choice_arguments: declaration.choice_arguments().clone(),
+    })
+}
+
+/// The hosts a server in an OpenShell sandbox may reach: the ones its declaration lists, less any
+/// the session's own list does not cover, and none where the session closes the network or the
+/// declaration lists none.
+fn openshell_hosts(
+    session: (bravebot_sandbox::network::Network, Option<&Hosts>),
+    declared: Option<&[String]>,
+) -> Vec<String> {
+    if session.0 == bravebot_sandbox::network::Network::Closed {
+        return Vec::new();
+    }
+    let Some(declared) = declared else {
+        return Vec::new();
+    };
+    let Some(hosts) = crate::confine::hosts_for_a_server(session.1, Some(declared)) else {
+        return Vec::new();
+    };
+    // An OpenShell policy can only allow, so a host the session denies any name of is left out
+    // whole. A denied entry that does not parse would be a denial lost, so nothing is granted.
+    let (denied, invalid) = bravebot_sandbox::hosts::HostList::parse(
+        [],
+        hosts.denied.iter().map(|host| host.entry.as_str()),
+    );
+    if !invalid.is_empty() {
+        return Vec::new();
+    }
+    hosts
+        .allowed
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|host| bravebot_sandbox::hosts::HostRule::parse(&host.entry))
+        .filter(|rule| !denied.denies_any_name_of(rule))
+        // As OpenShell spells it, lower case and with no trailing dot, and only what it takes: a
+        // name the session's list allows and OpenShell does not, with `_` in it, is left out alone.
+        .map(|rule| rule.spelling())
+        .filter(|spelling| bravebot_sandbox::openshell::accepts_host(spelling))
+        .collect()
+}
+
 /// What a declaration starts, read against this process's environment for the variables it names
 /// and with the value it stores for each of the others.
 ///
@@ -866,6 +967,9 @@ fn planned(
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
+    if let bravebot_config::mcp::Backend::OpenShell { image } = declaration.backend() {
+        return planned_in_openshell(declaration, image);
+    }
     let (argv, names, env, reads, directory, tools, exclude_tools) = match declaration {
         Declaration::Http {
             url,
@@ -1186,6 +1290,14 @@ fn refused(managed: &Managed, plan: &Plan) -> Option<String> {
                 .collect();
             managed_refusal(managed, Server::Local(&argv))
         }
+        Plan::OpenShell {
+            program, arguments, ..
+        } => {
+            let argv: Vec<String> = std::iter::once(program.clone())
+                .chain(arguments.iter().cloned())
+                .collect();
+            managed_refusal(managed, Server::InImage(&argv))
+        }
         Plan::Http { url, .. } => managed_refusal(managed, Server::Remote(url)),
     }
 }
@@ -1201,6 +1313,12 @@ pub fn refused_declaration(
 ) -> Option<String> {
     match (planned(declaration, environment), declaration) {
         (Ok(plan), _) => refused(managed, &plan),
+        // One in an image is matched as one, whether or not it could be planned.
+        (Err(_), Declaration::Stdio { argv, .. })
+            if matches!(declaration.backend(), mcp::Backend::OpenShell { .. }) =>
+        {
+            managed_refusal(managed, Server::InImage(argv))
+        }
         (Err(_), Declaration::Stdio { argv, .. }) => managed_refusal(managed, Server::Local(argv)),
         (Err(_), Declaration::Http { url, .. }) => managed_refusal(managed, Server::Remote(url)),
     }
@@ -1556,6 +1674,9 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             }
         ));
     }
+    if let bravebot_config::mcp::Backend::OpenShell { image } = declaration.backend() {
+        lines.push(format!("{indent}{}", t!(mcp_openshell, image = image)));
+    }
     if !declaration.tools().is_empty() {
         lines.push(format!(
             "{indent}{}",
@@ -1632,6 +1753,8 @@ pub fn problem(found: &Problem) -> String {
         Problem::AskEveryCall => t!(mcp_problem_ask_every_call).to_string(),
         Problem::Choice => t!(mcp_problem_choice).to_string(),
         Problem::ChoiceWithoutAsking => t!(mcp_problem_choice_without_asking).to_string(),
+        Problem::Backend("image") => t!(mcp_problem_backend_image).to_string(),
+        Problem::Backend(_) => t!(mcp_problem_backend).to_string(),
     }
 }
 
@@ -2059,7 +2182,7 @@ fn start_under(
                     let outcome = handshake_local(
                         server,
                         declared,
-                        effective,
+                        Some(effective),
                         timeouts,
                         &tools,
                         &exclude_tools,
@@ -2075,6 +2198,74 @@ fn start_under(
                     });
                     let _ = sender.send((alias, outcome, None));
                 });
+            }
+            Plan::OpenShell {
+                program,
+                arguments,
+                image,
+                declared,
+                timeouts,
+                tools,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call,
+                choice_arguments,
+            } => {
+                #[cfg(not(unix))]
+                {
+                    let _ = (program, arguments, image, declared, tools, exclude_tools);
+                    let _ = (allowed_hosts, ask_every_call, choice_arguments, timeouts);
+                    notes.push(t!(servers_openshell_unsupported, alias = alias).to_string());
+                    continue;
+                }
+                #[cfg(unix)]
+                {
+                    sweep_openshell(home, notes);
+                    let ledger = openshell_ledger(home);
+                    let hosts = openshell_hosts(session, allowed_hosts.as_deref());
+                    waiting.push(wait_for(&alias, timeouts));
+                    std::thread::spawn(move || {
+                        // The sandbox is held by the server from here, so a start or a handshake
+                        // that fails drops it, and the sandbox goes with it.
+                        let outcome = start_in_openshell(
+                            &alias,
+                            &program,
+                            &arguments,
+                            &image,
+                            &hosts,
+                            diagnostics,
+                            ledger.as_ref(),
+                        )
+                        .and_then(|(server, sandbox, name)| {
+                            let started = t!(
+                                servers_openshell_started,
+                                alias = &alias,
+                                name = &name,
+                                image = &image
+                            )
+                            .to_string();
+                            let shown = crate::mcp::Sandboxed { name, image, hosts };
+                            handshake_local(
+                                server,
+                                declared,
+                                None,
+                                timeouts,
+                                &tools,
+                                &exclude_tools,
+                            )
+                            .map(|reached| {
+                                reached
+                                    .in_a_sandbox_for_manifest_runs(sandbox, shown)
+                                    .asking_every_call(ask_every_call)
+                                    .choosing(choice_arguments)
+                                    .noting(vec![started])
+                            })
+                        });
+                        // A session that stopped waiting has no use for the server, and dropping
+                        // it here removes its sandbox.
+                        sender.send((alias, outcome, None)).ok();
+                    });
+                }
             }
             Plan::Http {
                 url,
@@ -2143,6 +2334,11 @@ fn start_under(
                 started.push(server);
             }
             (Err(_), Some(hop)) => hops.push(hop),
+            // Only a server started on its own thread, as one in an OpenShell sandbox is, can be
+            // refused its confinement after the loop has moved on.
+            (Err(bravebot_mcp::McpError::Confinement(reason)), None) => {
+                notes.push(t!(servers_not_confined, alias = alias, reason = reason).to_string())
+            }
             (Err(error), None) => notes.push(
                 t!(
                     servers_no_handshake,
@@ -2172,6 +2368,71 @@ fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
     )
 }
 
+/// The file in the state directory that records the OpenShell sandboxes this machine made.
+#[cfg(unix)]
+const OPENSHELL_LEDGER: &str = "openshell-sandboxes";
+
+/// The record of the OpenShell sandboxes this machine made, in `home` where it may be written.
+/// Nowhere to write, as in an incognito session, means nothing recorded or swept.
+#[cfg(unix)]
+fn openshell_ledger(home: &Home) -> Option<bravebot_sandbox::openshell::Ledger> {
+    home.directory
+        .as_ref()
+        .filter(|_| home.writable)
+        .map(|directory| bravebot_sandbox::openshell::Ledger::at(directory.join(OPENSHELL_LEDGER)))
+}
+
+/// Once a process, before its first sandbox: delete the recorded sandboxes a process killed by a
+/// signal left behind, since the session that made them never will, and say which.
+#[cfg(unix)]
+fn sweep_openshell(home: &Home, notes: &mut Vec<String>) {
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| {
+        if let Some(Ok(removed)) = openshell_ledger(home).map(|ledger| ledger.remove_left_behind())
+            && !removed.is_empty()
+        {
+            notes.push(t!(servers_openshell_removed, names = removed.join(", ")).to_string());
+        }
+    });
+}
+
+/// Start `program` in a new OpenShell sandbox made from `image`, reaching `hosts` alone, and give
+/// back the server, the sandbox it holds and the sandbox's name. Run on the server's own thread:
+/// creating a sandbox and confirming its policy take seconds, which the declaration's startup bound
+/// covers and no other server waits on. A sandbox that cannot be recorded or made is refused as a
+/// confinement that failed.
+#[cfg(unix)]
+fn start_in_openshell(
+    alias: &str,
+    program: &str,
+    arguments: &[String],
+    image: &str,
+    hosts: &[String],
+    diagnostics: Stream,
+    ledger: Option<&bravebot_sandbox::openshell::Ledger>,
+) -> McpResult<(StdioServer, Box<dyn std::any::Any + Send + Sync>, String)> {
+    let name = bravebot_sandbox::openshell::next_name();
+    if let Some(ledger) = ledger {
+        ledger.record(&name).map_err(|error| {
+            bravebot_mcp::McpError::Confinement(format!(
+                "the sandbox could not be recorded: {error}"
+            ))
+        })?;
+    }
+    let sandbox = bravebot_sandbox::openshell::OpenShell::new(&name, image, hosts)
+        .map_err(|error| bravebot_mcp::McpError::Confinement(error.to_string()))?;
+    let server = StdioServer::launch(
+        alias,
+        program,
+        arguments,
+        Variables::new(),
+        &sandbox,
+        &bravebot_sandbox::policy::SandboxPolicy::strict(),
+        diagnostics,
+    )?;
+    Ok((server, Box::new(sandbox), name))
+}
+
 /// A local server's handshake, and then its list, each within the startup bound it was given.
 ///
 /// A request that is not answered in time stops the process. Once the handshake is done the server
@@ -2179,7 +2440,7 @@ fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
 fn handshake_local(
     mut server: StdioServer,
     declared: Digest,
-    confined_by: EffectivePolicy,
+    confined_by: Option<EffectivePolicy>,
     timeouts: Timeouts,
     tools: &[String],
     exclude_tools: &[String],
@@ -2191,13 +2452,14 @@ fn handshake_local(
         bravebot_mcp::listed_or_none(&alias, server.list_tools())?.filtered(tools, exclude_tools);
     let (prompts, notes) = prompts_or_none(&alias, server.list_prompts())?;
     server.set_bound(timeouts.tool());
-    Ok(
-        crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
-            .filtered_by(tools, exclude_tools)
-            .confined_by(confined_by)
-            .with_prompts(prompts)
-            .noting(notes),
-    )
+    let reached = crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
+        .filtered_by(tools, exclude_tools)
+        .with_prompts(prompts)
+        .noting(notes);
+    Ok(match confined_by {
+        Some(policy) => reached.confined_by(policy),
+        None => reached,
+    })
 }
 
 /// A remote server's handshake, through the one egress gate every request passes, with where it
@@ -6369,6 +6631,272 @@ done
                 panic!("a local declaration was not planned as a local server");
             };
             assert_eq!(ask_every_call, asking, "asking {asking}");
+        }
+    }
+
+    const PINNED_IMAGE: &str =
+        "python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1";
+
+    fn in_openshell(argv: &[&str]) -> Declaration {
+        Declaration::stdio(
+            argv.iter().map(|w| w.to_string()).collect(),
+            Vec::new(),
+            None,
+        )
+        .expect("declaration")
+        .running_in(bravebot_config::mcp::Backend::OpenShell {
+            image: PINNED_IMAGE.into(),
+        })
+        .expect("an OpenShell declaration")
+    }
+
+    /// A server declared to run in OpenShell is planned with its program as the image names it:
+    /// nothing on this machine is looked up for it, so a program this machine lacks is no reason
+    /// not to start it.
+    #[test]
+    fn an_openshell_declaration_is_planned_with_its_program_as_named_in_the_image() {
+        let declaration = in_openshell(&["program-only-the-image-has", "-u", "server.py"])
+            .hosting(Some(vec!["example.com".into()]))
+            .expect("hosts");
+        let Plan::OpenShell {
+            program,
+            arguments,
+            image,
+            allowed_hosts,
+            ..
+        } = planned(&declaration, &|_| None).expect("a plan")
+        else {
+            panic!("an OpenShell declaration was not planned as one");
+        };
+        assert_eq!(program, "program-only-the-image-has");
+        assert_eq!(arguments, vec!["-u".to_string(), "server.py".to_string()]);
+        assert_eq!(image, PINNED_IMAGE);
+        assert_eq!(allowed_hosts, Some(vec!["example.com".to_string()]));
+    }
+
+    /// Nothing of this machine's environment or files is passed into a sandbox yet, so a
+    /// declaration that names a variable, a stored value, a file to read or a directory is refused
+    /// with what to remove, before anything is started.
+    #[test]
+    fn an_openshell_declaration_naming_variables_or_files_is_refused() {
+        let variable =
+            Declaration::stdio(vec!["python3".into()], vec!["GITHUB_TOKEN".into()], None)
+                .expect("declaration")
+                .running_in(bravebot_config::mcp::Backend::OpenShell {
+                    image: PINNED_IMAGE.into(),
+                })
+                .expect("an OpenShell declaration");
+        let stored = in_openshell(&["python3"])
+            .storing(
+                [("TOKEN".to_string(), "x".to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+            .expect("stored");
+        let reading = in_openshell(&["python3"])
+            .reading(vec!["/etc/hosts".into()])
+            .expect("reads");
+        for refused in [variable, stored] {
+            let why = planned(&refused, &|_| None).expect_err("refused");
+            assert!(why.contains("no variables"), "{why}");
+        }
+        let why = planned(&reading, &|_| None).expect_err("refused");
+        assert!(why.contains("reads only its image"), "{why}");
+    }
+
+    /// A server in a sandbox reaches the hosts its declaration lists, less what the session's
+    /// own list leaves out or denies any name of, and nothing where the session closes the
+    /// network, the declaration lists no host, or a denied entry cannot be read.
+    #[test]
+    fn an_openshell_server_reaches_only_its_declared_hosts_within_the_session() {
+        use bravebot_config::sandbox_network::HostEntry;
+        use bravebot_sandbox::network::Network;
+        let declared = vec!["example.com".to_string(), "api.github.com".to_string()];
+        assert_eq!(
+            openshell_hosts((Network::Open, None), Some(&declared)),
+            declared
+        );
+        assert!(openshell_hosts((Network::Closed, None), Some(&declared)).is_empty());
+        assert!(openshell_hosts((Network::Open, None), None).is_empty());
+        let session = Hosts {
+            allowed: Some(vec![HostEntry {
+                entry: "example.com".into(),
+                by: None,
+            }]),
+            denied: Vec::new(),
+            on_unlisted: None,
+        };
+        assert_eq!(
+            openshell_hosts((Network::Open, Some(&session)), Some(&declared)),
+            vec!["example.com".to_string()]
+        );
+        let denying = Hosts {
+            allowed: None,
+            denied: vec![HostEntry {
+                entry: "api.github.com".into(),
+                by: None,
+            }],
+            on_unlisted: None,
+        };
+        assert_eq!(
+            openshell_hosts((Network::Open, Some(&denying)), Some(&declared)),
+            vec!["example.com".to_string()],
+            "a host the session denies was granted"
+        );
+        let unreadable = Hosts {
+            denied: vec![HostEntry {
+                entry: "not a host".into(),
+                by: None,
+            }],
+            ..denying
+        };
+        assert!(openshell_hosts((Network::Open, Some(&unreadable)), Some(&declared)).is_empty());
+        let spelled = vec![
+            "Example.COM.".to_string(),
+            "under_score.example".to_string(),
+            "*.cdn.example".to_string(),
+        ];
+        assert_eq!(
+            openshell_hosts((Network::Open, None), Some(&spelled)),
+            vec!["example.com".to_string(), "*.cdn.example".to_string()],
+            "a host is passed as OpenShell spells it, and one it refuses is left out alone"
+        );
+    }
+
+    /// The whole start of a server declared for OpenShell, against OpenShell itself where
+    /// `BRAVEBOT_OPENSHELL_TESTS=1`: the session reaches it in a sandbox recorded in the state
+    /// directory, with its hosts and its list, and the sandbox goes when the session does.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_declared_for_openshell_starts_in_a_recorded_sandbox_and_goes_with_the_session() {
+        if std::env::var("BRAVEBOT_OPENSHELL_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+        const SERVER: &str = r#"
+import sys, json
+for line in sys.stdin:
+    msg = json.loads(line); i = msg.get("id")
+    if msg.get("method") == "initialize":
+        result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "boxed", "version": "0"}}
+    elif msg.get("method") == "tools/list":
+        result = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+    else:
+        continue
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": i, "result": result}) + "\n"); sys.stdout.flush()
+"#;
+        let root = scratch(&format!(
+            "cli-servers-openshell-live-{}",
+            std::process::id()
+        ));
+        let (home, project) = (root.join("home"), root.join("project"));
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&project).expect("project");
+        let declarations = serde_json::json!({"servers": {"boxed": {
+            "transport": "stdio",
+            "argv": ["python3", "-u", "-c", SERVER],
+            "backend": "openshell",
+            "image": PINNED_IMAGE,
+            "allowed_hosts": ["example.com"],
+        }}});
+        std::fs::write(home.join("mcp.json"), declarations.to_string()).expect("mcp.json");
+        let requested = vec![(project.join(".bravebot/settings.json"), "boxed".to_string())];
+        let reached = reach(
+            &requested,
+            &project,
+            &Home {
+                directory: Some(home.clone()),
+                writable: true,
+            },
+            &Managed::default(),
+            Asking::Bypass,
+            &mut nobody(),
+            Stream::Null,
+        );
+        let session = reached
+            .session()
+            .unwrap_or_else(|| panic!("not reached: {:?}", reached.notes));
+        let [(alias, sandboxed)]: [(String, crate::mcp::Sandboxed); 1] = session
+            .sandboxed()
+            .try_into()
+            .expect("one sandboxed server");
+        assert_eq!(alias, "boxed");
+        assert_eq!(sandboxed.hosts, ["example.com"]);
+        let recorded = std::fs::read_to_string(home.join(OPENSHELL_LEDGER)).expect("recorded");
+        assert!(recorded.contains(&sandboxed.name), "{recorded}");
+        let listed = || {
+            let cli = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("openshell"))
+                .expect("openshell");
+            let output = bravebot_sandbox::programs::start(
+                &cli,
+                bravebot_sandbox::programs::Inherits::Only(&["HOME"]),
+                bravebot_sandbox::programs::SearchPath::Reduced,
+            )
+            .args(["sandbox", "list", "--color", "never"])
+            .output()
+            .expect("list");
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        assert!(
+            listed().contains(&sandboxed.name),
+            "the sandbox is not there"
+        );
+        drop(session);
+        drop(reached);
+        assert!(
+            !listed().contains(&sandboxed.name),
+            "the sandbox outlived the session"
+        );
+    }
+
+    /// `list` and `get` hold a server in an image to the managed layer as one, even where it could
+    /// not be planned: no allow entry names it, whatever path inside the image it runs.
+    #[test]
+    fn a_server_in_an_image_is_named_by_no_managed_allow_entry_even_unplanned() {
+        let root = scratch("cli-servers-openshell-managed");
+        let path = root.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp": {"allow": [{"command": ["/usr/local/bin/corp-server"]}]}}"#,
+        )
+        .expect("managed");
+        let managed = Managed::at(&path);
+        let in_image = |image: &str| {
+            Declaration::stdio(vec!["/usr/local/bin/corp-server".into()], Vec::new(), None)
+                .expect("declaration")
+                .running_in(bravebot_config::mcp::Backend::OpenShell {
+                    image: image.into(),
+                })
+                .expect("an OpenShell declaration")
+        };
+        for declaration in [in_image(PINNED_IMAGE), in_image("python:3.13-slim")] {
+            assert!(
+                refused_declaration(&managed, &declaration, &|_| None).is_some(),
+                "an allow entry named a server in an image: {:?}",
+                declaration.backend()
+            );
+        }
+    }
+
+    /// A server whose image names no digest, a tag a hand-written declaration gave or a path, is not
+    /// started, since its approval would cover whatever the reference names later.
+    #[test]
+    fn an_openshell_declaration_whose_image_is_not_pinned_is_refused() {
+        let digest = format!("@sha256:{}", "a".repeat(64));
+        for image in [
+            "python:3.13-slim".to_string(),
+            "./server-image".to_string(),
+            "ghcr.io/owner/srv:latest".to_string(),
+            format!("./server-image{digest}"),
+            format!("../elsewhere{digest}"),
+        ] {
+            let declaration = Declaration::stdio(vec!["python3".into()], Vec::new(), None)
+                .expect("declaration")
+                .running_in(bravebot_config::mcp::Backend::OpenShell {
+                    image: image.clone(),
+                })
+                .expect("an OpenShell declaration");
+            let why = planned(&declaration, &|_| None).expect_err("refused");
+            assert!(why.contains("not pinned"), "{image}: {why}");
         }
     }
 

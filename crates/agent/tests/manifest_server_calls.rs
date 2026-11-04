@@ -1197,6 +1197,52 @@ fn a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody() {
     }
 }
 
+/// A server only a manifest run calls, such as one in an OpenShell sandbox, has its list put to the
+/// person before the plan as any other server's is, and a plan may call its tools.
+#[test]
+fn a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls() {
+    let scratch = Scratch::new("manifest-only");
+    let (url, mcp) = serve_browser();
+    let session = session_of(
+        reach(&url, false).in_a_sandbox_for_manifest_runs(
+            Box::new(()),
+            bravebot_agent::mcp::Sandboxed {
+                name: "bb-1-0".into(),
+                image: "python:3.13-slim".into(),
+                hosts: Vec::new(),
+            },
+        ),
+        &scratch,
+        false,
+    );
+    let ran = walk(Walk {
+        session,
+        mode: PermissionMode::Ask,
+        task: Task::new("open the page and read it"),
+        replies: vec![
+            safe(),
+            shape(),
+            plan(vec![call(
+                "open_tab",
+                json!({"url": "https://example.com"}),
+            )]),
+        ],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()])
+            .answering_lists(Decision::Approve),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.asked.order, ["list", "plan", "call"]);
+    assert_eq!(
+        ran.called,
+        [(
+            "open_tab".to_string(),
+            json!({"url": "https://example.com"})
+        )]
+    );
+}
+
 /// A plan started in a session whose lists nobody has been asked about puts them to the person
 /// before it plans, as the start of a turn does, so a step can call a vouched tool at once. The
 /// person is asked once, before the plan and before the call, and the plan they are shown is the

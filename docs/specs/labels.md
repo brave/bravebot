@@ -45,6 +45,7 @@ guards:
       - crates/agent/src/aside.rs: 3
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/file_preview.rs: 1
+      - crates/agent/src/images.rs: 1
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
@@ -152,6 +153,7 @@ guards:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/file_preview.rs: 1
+      - crates/agent/src/images.rs: 1
       - crates/agent/src/manifest.rs: 8
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
@@ -194,6 +196,7 @@ guards:
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
     sites:
+      - crates/agent/src/images.rs: 1
       - crates/aichat/src/anthropic.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1

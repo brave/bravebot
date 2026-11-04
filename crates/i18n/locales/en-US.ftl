@@ -669,6 +669,16 @@ doctor-profile-absent = default credentials
 # Whether the AWS CLI hands this account a credential a request can be signed with now. Only the
 # answer is shown, never the credential, and the command to run where there is none. The sign-in
 # command is named only where a sign-in is what is missing: it cannot add a profile or install the CLI.
+# What doctor says of OpenShell, shown only where a server is declared to run in it.
+doctor-openshell = openshell
+doctor-openshell-servers = servers
+doctor-openshell-version = version
+doctor-openshell-missing = not found: { $reason }
+doctor-openshell-too-old = { $version }, older than { $minimum }, the oldest these servers run on
+doctor-openshell-unsupported = not available: OpenShell runs on macOS and Linux
+doctor-openshell-gateway = gateway
+doctor-openshell-gateway-up = connected
+doctor-openshell-gateway-down = not connected: { $reason }
 doctor-aws-session = session
 doctor-aws-signed-in = signed in
 doctor-aws-signed-out = not signed in (run `bravebot auth login bedrock`)
@@ -1546,6 +1556,13 @@ mcp-dir-needs-a-path = --dir needs a directory
 mcp-tools-needs-a-list = --tools needs a tool name or a comma-separated list of tool names
 mcp-exclude-tools-needs-a-list = --exclude-tools needs a tool name or a comma-separated list of tool names
 mcp-allowed-hosts-needs-a-list = --allowed-hosts needs a host name or a comma-separated list of host names
+mcp-openshell-needs-an-image = --openshell needs the image the server runs in, such as python:3.13-slim or node:22-slim
+# Said before mcp add asks an image's registry for the digest a tag names now.
+mcp-image-pinning = pinning { $image } to the image its registry gives that name now
+mcp-image-pinned = pinned to { $image }
+mcp-image-unpinned = { $image } could not be pinned: { $reason }. Give the image with its digest, as name@sha256:<digest>, to add it
+mcp-image-not-a-reference = it is not an image reference
+mcp-image-refused = its registry answered { $status }, which is so of a private image or one that does not exist
 mcp-choice-needs-a-pair = --choice needs a tool and an argument, written <TOOL>:<ARGUMENT>
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
@@ -1585,6 +1602,8 @@ mcp-problem-ask-every-call = ask_every_call is not true or false
 mcp-problem-choice =
     choice_arguments is not an object of tool names, each with a list of argument names
 mcp-problem-choice-without-asking = choice_arguments needs ask_every_call to be true
+mcp-problem-backend = backend is not openshell
+mcp-problem-backend-image = image must be one container image reference, given with backend openshell
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1608,6 +1627,20 @@ mcp-variable-stored = { $name } (stored)
 mcp-may-read = may read: { $path }
 mcp-allowed-hosts = may reach only: { $hosts }
 mcp-allowed-hosts-none = may reach no host
+# A server declared to run in an NVIDIA OpenShell sandbox, with the image it is made from.
+mcp-openshell = runs in an OpenShell sandbox made from { $image }, in manifest runs only
+# A server declared to run in OpenShell names a variable, which is not passed into a sandbox yet.
+servers-openshell-no-variables = a server that runs in OpenShell is passed no variables yet; remove variables and env from its declaration
+# A server declared to run in OpenShell names a file to read or a directory, which mean nothing inside its image.
+servers-openshell-no-files = a server that runs in OpenShell reads only its image; remove reads and directory from its declaration
+# A server declared to run in OpenShell whose image names no digest, so its approval would cover whatever the name points at later.
+servers-openshell-unpinned = { $image } is not pinned to a digest, so an approval of it would cover whatever it names later; add the server again with bravebot mcp add, which pins it, or write the image as name@sha256:<digest>
+# A server started in an OpenShell sandbox, offered to manifest runs only.
+servers-openshell-started = { $alias } runs in the OpenShell sandbox { $name }, made from { $image }; its tools are offered to manifest runs only
+# Sandboxes deleted at the first OpenShell start of a process, each left by a session that ended without deleting it.
+servers-openshell-removed = removed the OpenShell sandboxes sessions that ended left behind: { $names }
+# A server declared to run in OpenShell, on a platform OpenShell does not run on.
+servers-openshell-unsupported = { $alias } is not started: OpenShell runs on macOS and Linux
 mcp-directory = directory, which it may write: { $path }
 # The seconds a server has for its handshake and for each call, where a declaration gives either.
 mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
@@ -2707,6 +2740,7 @@ status-mcp-servers-none = none
 # How one started server's tools stand. A list nobody has read yet is put to the person at the
 # start of the next turn, and none of its tools is offered to the model until they say yes.
 status-mcp-servers-unread = { $alias }: its tools are put to you before the next turn plans
+status-mcp-servers-unread-manifest = { $alias }: its tools are put to you before a manifest run plans; turns do not offer them
 status-mcp-servers-tools =
     { $count ->
         [one] { $alias }: one tool offered to the model
@@ -2736,6 +2770,13 @@ status-server-policy-read-write = read, write
 # disk and these are not. The paths follow, one to a line.
 status-server-policy-left-out = left out
 status-server-policy-left-out-reason = not on disk, and this platform grants no path that is not
+# What /status says of a server running in an OpenShell sandbox, under its name.
+status-server-openshell = sandbox
+status-server-openshell-sandbox = OpenShell { $name }, made from { $image }
+status-server-openshell-hosts = only { $hosts }
+status-server-openshell-image-only = its image only, nothing of this machine
+status-server-openshell-offered = tools offered to
+status-server-openshell-manifest-runs = manifest runs only
 status-loop = Loop
 status-loop-numbered = Loop { $number }
 status-loop-every = every { $every }

@@ -518,6 +518,10 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         (None, Some(addressed)) => addressed.capabilities().clone(),
         (None, None) => held(task),
     };
+    let holding = match &task.mcp {
+        Some(session) => session.in_a_turn(holding),
+        None => holding,
+    };
     let holds_a_server = holding
         .iter()
         .any(|capability| matches!(capability, Capability::McpCall(_)));
