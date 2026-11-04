@@ -546,6 +546,10 @@ does not change them. A tool's account of its own failure is drawn in the margin
 client holds none of it, and the step's line says that the call failed and its reply could not be
 used. No word of the reply is in the line or in the record of the run.
 
+A server declared to run in an OpenShell sandbox ([SERVERS-24](mcp-servers.md#SERVERS-24)) is called by
+a plan run and by nothing else: its list is put before the plan as any server's is, and a step calls
+it as above. A turn neither puts that list nor offers its tools.
+
 **Why.** A call to a server is an effect decided by a program the plan does not name, so it is an
 action and it is approved by what a person can decide alone, the alias and the tool, with the
 arguments shown beside them. A plan has read nothing, so every argument is the planner's literal,
@@ -588,6 +592,7 @@ every call in force in a plan without a copy of either here.
 `verified-by: bravebot_ui_bridge::manifest::a_plan_run_after_a_turn_finds_the_servers_the_turn_started`
 `verified-by: bravebot_ui_bridge::manifest::a_plan_run_stopped_at_a_servers_question_starts_nothing_and_the_next_run_asks_again`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls`
 
 ## Known costs
 
