@@ -1,6 +1,6 @@
 # Mobile agent and remote-control prototypes
 
-Status: stages 1–2a, 3a, 3b and 3c are built: the Rust session view, the stdio TypeScript client in `packages/agent-client`, exact action targets, and the local host `bravebot-host` with controller loss and takeover after a client leaves. The React Native app in `mobile/` has its shell and session screens, tested against a fake client, and a development build can reach `bravebot-host` through the loopback development relay. Stages 2b, 4a, 4b, 5a, 5b and 6–8 remain proposed, and 3d has no device observations yet. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a, 3a, 3b and 3c are built: the Rust session view, the stdio TypeScript client in `packages/agent-client`, exact action targets, and the local host `bravebot-host` with controller loss and takeover after a client leaves. The React Native app in `mobile/` has its shell and session screens, tested against a fake client, and a development build can reach `bravebot-host` through the loopback development relay. Stages 2b, 4a, 4b, 5a, 5b and 6–8 remain proposed, and 3d's device observations are not done. The app has been run by hand against the host on one Android emulator. See [current local scope](client-contract.md#implemented-typescript-client).
 
 Start with the [executive summary](executive-summary.md). It is written to stand alone for readers who need the goal, design choices, implementation sequence, and prototype limits.
 
