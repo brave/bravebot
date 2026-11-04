@@ -2170,6 +2170,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
                 name: "weather:get_forecast".into(),
                 arguments: vec!["city (string, required)".into()],
                 description: Some("the forecast".into()),
+                read_only: true,
             }],
             refused: 2,
             withheld: 1,
@@ -2180,7 +2181,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     assert_eq!(
         tools["tools"],
         json!([{"name": "weather:get_forecast", "arguments": ["city (string, required)"],
-            "description": "the forecast"}])
+            "description": "the forecast", "read_only": true}])
     );
     assert_eq!(tools["refused"], 2);
     assert_eq!(tools["withheld"], 1);

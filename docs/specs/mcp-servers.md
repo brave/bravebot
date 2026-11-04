@@ -923,7 +923,8 @@ primitive, and the tool surface the planner sees must be decided by names people
 **How it is built.** Listing a server's tools returns one list, labelled untrusted, that the client
 drew from the server's reply and keeps nothing else of. Per tool it holds the word, the description,
 and each argument as its name, its type, the values it may take where it names at most sixteen, and
-whether it is required. An argument's own description is dropped: nobody reads it at the list, and
+whether it is required, and whether the server marks the tool read-only with MCP's `readOnlyHint`
+annotation, the one annotation it keeps. An argument's own description is dropped: nobody reads it at the list, and
 it would still reach the planner. In a description, each control character but a line break, and
 each character that reorders or hides text, is made a space, and it is cut at 1024 characters.
 
@@ -938,7 +939,8 @@ resources or prompts need not have it, and any other failure of the method fails
 
 That list is put to the person at the start of the first turn they ask for, or of the first plan run
 ([MANIFEST-15](manifest.md#MANIFEST-15)), whole. It shows each
-tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
+tool's name as `alias:tool`, its arguments, that it is read-only as the server says where the
+server marks it so, and every row of its description behind the margin with
 none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
 as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
 drawn above the list. The checks of every list to be put are made at the same time, no more than
@@ -987,6 +989,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::a_description_is_blanked_and_cut`
 `verified-by: bravebot_mcp::protocol::a_character_nobody_sees_is_blanked`
 `verified-by: bravebot_mcp::protocol::an_argument_is_its_name_type_and_whether_it_is_required`
+`verified-by: bravebot_mcp::protocol::a_tool_its_server_marks_read_only_is_drawn_as_one_and_no_other`
+`verified-by: bravebot_approval::lib::a_tool_the_server_marks_read_only_says_so_and_no_other_does`
 `verified-by: bravebot_mcp::protocol::the_list_is_the_same_whatever_order_the_server_sent`
 `verified-by: bravebot_mcp::protocol::a_long_list_is_capped_and_the_rest_counted`
 `verified-by: bravebot_mcp::protocol::a_server_without_the_method_lists_no_tool`

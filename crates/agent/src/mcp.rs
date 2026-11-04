@@ -271,6 +271,9 @@ struct Drawn {
     description: Option<String>,
     #[serde(default)]
     arguments: Vec<Argument>,
+    /// Whether the server marks the tool read-only, as the client drew it.
+    #[serde(default)]
+    read_only: bool,
 }
 
 /// One argument of a drawn tool.
@@ -1392,6 +1395,7 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
             name: format!("{alias}:{}", drawn.name),
             arguments: drawn.arguments.iter().map(Argument::drawn).collect(),
             description: drawn.description,
+            read_only: drawn.read_only,
         })
         .collect()
 }
@@ -1606,6 +1610,9 @@ pub struct Callable {
     pub alias: String,
     pub tool: String,
     pub arguments: Vec<CallableArgument>,
+    /// Whether the list a person vouched for marks the tool read-only, which is the server's word
+    /// and was shown to them with the tool.
+    pub read_only: bool,
 }
 
 /// One argument of a [`Callable`]: its name, its type where the list gave one, and whether the
@@ -2010,6 +2017,7 @@ impl Offer {
                         required: argument.required,
                     })
                     .collect(),
+                read_only: tool.drawn.read_only,
             })
             .collect()
     }
@@ -2044,6 +2052,7 @@ pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
                     name: tool.to_string(),
                     description: None,
                     arguments: Vec::new(),
+                    read_only: false,
                 },
             })
             .collect(),

@@ -1069,6 +1069,7 @@ fn tools_text(data: &Value) -> String {
             name: text_of(tool, "name"),
             arguments,
             description: tool["description"].as_str(),
+            read_only: tool["read_only"].as_bool().unwrap_or(false),
         })
         .collect();
     bravebot_approval::tools_lines(&bravebot_approval::Tools {

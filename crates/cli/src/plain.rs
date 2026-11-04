@@ -1657,6 +1657,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
                 name: &tool.name,
                 arguments: &tool.arguments,
                 description: tool.description.as_deref(),
+                read_only: tool.read_only,
             })
             .collect();
         let lines = bravebot_approval::tools_lines(&bravebot_approval::Tools {

@@ -1509,6 +1509,8 @@ pub struct ListedTool {
     pub arguments: Vec<String>,
     /// The server's own sentence about the tool, where it wrote one.
     pub description: Option<String>,
+    /// Whether the server marks the tool read-only. Its word, not a check of what the tool does.
+    pub read_only: bool,
 }
 
 /// A call to an MCP server's tool the planner has asked for (SERVERS-7).
