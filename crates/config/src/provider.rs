@@ -308,6 +308,14 @@ pub fn known_ids() -> impl Iterator<Item = &'static str> {
     KNOWN_ENDPOINTS.iter().map(|(id, _, _)| *id)
 }
 
+/// The name a service is written with where its block gives none, for the ids that have one.
+///
+/// Every place that names a provider reads [`Provider::display_name`], which ends here, so the
+/// accounts list, the model list and the settings report spell a service the same way.
+pub fn known_name(id: &str) -> Option<&'static str> {
+    (id == "openrouter").then_some("OpenRouter")
+}
+
 /// The variable the other tool reads `id`'s token from, where the id is one compiled in.
 pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
     if id == GOOGLE_VERTEX_ID {
@@ -1322,9 +1330,13 @@ impl Provider {
             .or_else(|| self.model(model).and_then(|model| model.output_limit))
     }
 
-    /// What to show a person choosing this provider.
+    /// What to show a person choosing this provider: the name its block gives, else the name a
+    /// known id is written with ([`known_name`]), else the id.
     pub fn display_name(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.id)
+        self.name
+            .as_deref()
+            .or_else(|| known_name(&self.id))
+            .unwrap_or(&self.id)
     }
 
     /// The host this gateway is reached at, which is what would end a token it carries.
@@ -2505,6 +2517,14 @@ mod tests {
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(provider.env, ["OPENROUTER_API_KEY"]);
         assert!(provider.offers("z-ai/glm-4.6"));
+
+        // A block that names no display name is shown as the known name for its id.
+        let unnamed = one(r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"]}}}"#);
+        assert_eq!(unnamed.display_name(), "OpenRouter");
+        let other = one(
+            r#"{"provider": {"local": {"env": ["A_KEY"], "options": {"baseURL": "http://localhost:1/v1"}}}}"#,
+        );
+        assert_eq!(other.display_name(), "local");
     }
 
     /// The block that configures this account in the other tool, copied across unedited. Its models
@@ -3928,14 +3948,17 @@ mod tests {
         assert_eq!(ids, ["openrouter", "together"]);
     }
 
-    /// Where the block said nothing friendlier, the id is what a picker row names it by: a term
-    /// that cannot collide with a name a service chose for itself.
+    /// Where the block said nothing friendlier, the id is what a picker row names it by, except for
+    /// an id with a brand name ([`known_name`]).
     #[test]
     fn a_provider_with_no_name_is_shown_by_its_id() {
-        let provider = one(
+        let provider =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://e.invalid/v1"}}}}"#);
+        assert_eq!(provider.display_name(), "gw");
+        let branded = one(
             r#"{"provider": {"openrouter": {"options": {"baseURL": "https://e.invalid/v1"}}}}"#,
         );
-        assert_eq!(provider.display_name(), "openrouter");
+        assert_eq!(branded.display_name(), "OpenRouter");
     }
 
     /// A provider that turns nothing on is still a provider, and "no models configured" is a better

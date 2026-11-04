@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
-import { Alert, Button, Icon, ProgressRing } from '../nala'
+import { Alert, Button, Icon } from '../nala'
 import { useDelayedFlag } from '../hooks'
 import { showToast } from '../toasts'
 import type { Composed } from '../../shared/bug-report'
+import { Skeleton } from './Skeleton'
 
 /** What the privacy note says, close to DIAG-8's known cost. */
 export const PRIVACY_NOTE = 'This names paths, model services and the names of environment variables. Read it before you post it. It holds no conversation, file contents or credentials.'
@@ -69,7 +70,7 @@ export function BugReport({ onClose }: { onClose: () => void }): React.JSX.Eleme
         <Button kind="filled" isDisabled={!ready || busy} onClick={() => void save()} data-test="bug-report-save">Save Report…</Button>
       </>}>
       {loading ? (
-        <p role="status" className="preview-status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Composing the report…</p>
+        <Skeleton label="Composing the report…" kind="lines" count={8} delayed={!showLoading} className="preview-skeleton" />
       ) : ready ? <>
         <Alert type="warning" size="small" className="bug-report-privacy" data-test="bug-report-privacy">{PRIVACY_NOTE}</Alert>
         <pre className="bug-report-text" tabIndex={0} aria-label="Report text" data-test="bug-report-text">{report.text}</pre>

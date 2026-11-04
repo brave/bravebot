@@ -213,7 +213,7 @@ test('the key window is a page of its own that reaches only its own channels', (
 })
 
 test('each way a key is entered for shows its mark', () => {
-  assert.equal(accountLogo('brave', null), 'brave-icon-release-color')
+  assert.equal(accountLogo('brave', null), 'social-brave-release-favicon-fullheight-color')
   assert.equal(accountLogo('gateway', 'openrouter'), 'openrouter')
   assert.equal(accountLogo('gateway', 'somewhere'), 'key')
   assert.equal(accountLogo('bedrock', null), 'amazon-color')

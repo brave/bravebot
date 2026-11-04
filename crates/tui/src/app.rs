@@ -4344,7 +4344,7 @@ mod tests {
     fn a_gateway_row_says_which_service_answers_it() {
         let models = provider_models(&gateway(r#"{"anthropic/claude-sonnet-4.5": {}}"#));
         assert_eq!(models[0].display_name, "anthropic/claude-sonnet-4.5");
-        assert_eq!(models[0].provider.as_deref(), Some("openrouter"));
+        assert_eq!(models[0].provider.as_deref(), Some("OpenRouter"));
     }
 
     /// The note left when a model is chosen names the service that answers it, because the row that
@@ -4366,7 +4366,7 @@ mod tests {
         let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
         assert!(
             said.iter()
-                .any(|text| text.contains("z-ai/glm-4.6") && text.contains("openrouter")),
+                .any(|text| text.contains("z-ai/glm-4.6") && text.contains("OpenRouter")),
             "{said:?}"
         );
 

@@ -7,15 +7,15 @@
  * main process's own dialogs; it has no catalog.
  */
 
-import { StrictMode, useEffect, useRef, useState } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { accountLogo, type KeyWindowState } from '../shared/accounts'
 import type { BravebotKeyApi } from '../preload/key-window'
-import { Alert, Button, Icon, Input } from './nala'
+import { Alert, Button, Input } from './nala'
+import { SmallWindowPage } from './small-window-page'
 import './nala-setup'
 import './styles.css'
-import './styles/sign-in.css'
-import './styles/key-window.css'
+import './styles/small-window.css'
 
 declare global {
   interface Window { bravebotKey?: BravebotKeyApi }
@@ -41,17 +41,13 @@ export function KeyPage({ state }: { state: KeyWindowState }): React.JSX.Element
       setSaving(false)
     }
   }
-  const logo = accountLogo(state.way, state.id)
-  const drawn = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const page = drawn.current
-    if (!page || !api) return
-    const observer = new ResizeObserver(() => void api.fit(page.getBoundingClientRect().height))
-    observer.observe(page)
-    return () => observer.disconnect()
-  }, [api])
-  return <main ref={drawn} className="sign-in key-window" data-test="key-window">
-    <h1><Icon name={logo} aria-hidden="true" data-test="key-logo" />Enter the key for {state.name}</h1>
+  return <SmallWindowPage logo={accountLogo(state.way, state.id)} logoTest="key-logo" title={`Enter the key for ${state.name}`} test="key-window"
+    fit={api?.fit} actions={<>
+      <Button kind="plain-faint" onClick={() => void api?.cancel()} data-test="key-cancel">Cancel</Button>
+      <Button kind="filled" isDisabled={empty || saving} onClick={() => void save()} data-test="key-save">
+        {state.replace ? 'Replace key' : 'Save key'}
+      </Button>
+    </>}>
     <p data-test="key-where">{state.way === 'brave'
       ? "It is kept on this computer, readable only by your account, and sent only to Brave's premium service."
       : `It is kept on this computer and sent only to ${where(state)}.`}
@@ -62,19 +58,11 @@ export function KeyPage({ state }: { state: KeyWindowState }): React.JSX.Element
     {state.variable && <Alert type="info" size="small" data-test="key-variable">
       <code>{state.variable}</code> is set, and while it is, a session sends its value instead of this key.
     </Alert>}
-    <div className="key-window-field">
-      <Input type="password" autofocus value={key} autocomplete="off" spellcheck={false} data-test="key-input" disabled={saving}
-        onInput={({ value }) => setKey(value)} onChange={({ value }) => setKey(value)}
-        onKeyDown={({ innerEvent }) => { if ((innerEvent as unknown as KeyboardEvent).key === 'Enter') void save() }}>Key</Input>
-    </div>
+    <Input className="small-window-input" type="password" autofocus value={key} autocomplete="off" spellcheck={false} data-test="key-input" disabled={saving}
+      onInput={({ value }) => setKey(value)} onChange={({ value }) => setKey(value)}
+      onKeyDown={({ innerEvent }) => { if ((innerEvent as unknown as KeyboardEvent).key === 'Enter') void save() }}>Key</Input>
     {refused && <Alert type="error" size="small" role="alert" data-test="key-refused">{refused}</Alert>}
-    <div className="sign-in-actions">
-      <Button kind="plain" onClick={() => void api?.cancel()} data-test="key-cancel">Cancel</Button>
-      <Button kind="filled" isDisabled={empty || saving} onClick={() => void save()} data-test="key-save">
-        {state.replace ? 'Replace key' : 'Save key'}
-      </Button>
-    </div>
-  </main>
+  </SmallWindowPage>
 }
 
 function Page(): React.JSX.Element | null {

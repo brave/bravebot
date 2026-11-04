@@ -51,6 +51,10 @@ governs:
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
+  - crates/ui-bridge/src/effort.rs
+  - ui/src/shared/model-preferences.ts
+  - ui/src/renderer/components/ProviderModels.tsx
+  - ui/src/renderer/components/ProvidersSettings.tsx
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/customize/providers/anthropic.md
@@ -224,7 +228,9 @@ request fails unsigned.
 ### BACKEND-6: a row says which service will answer it
 
 Where the same model is reachable through more than one service, every model offered carries which
-service answers it, in terms that cannot collide with a name a service chose for itself. Brave's own
+service answers it, in terms that cannot collide with a name a service chose for itself: the
+provider's id, except that `openrouter` is written "OpenRouter" wherever it is named, so the accounts
+list, the model list and the settings report spell it alike. Brave's own
 roster carries nothing, being the one every build has. What a person reads is drawn from that,
 under [VIEW-15](terminal-transcript.md#VIEW-15), and the note left when a model is chosen says it
 too, since the row that carried it is gone by the time that note is read. The rows of the ChatGPT account
@@ -2884,7 +2890,14 @@ rung [BACKEND-11](#BACKEND-11) gives a model pick: it outranks the key in `~/.br
 and is outranked by one in a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json`,
 or in the file `--settings` named. Above all of it are `--effort`, for the one run it starts, and a
 level picked with `/effort` in the session that is running. Whatever answers is what every surface
-asks for: the interface, a session in lines, and a one-shot run.
+asks for: the interface, a session in lines, a one-shot run, and every turn and plan run of the desktop
+window. The window's model picker records a level in the record `/effort` keeps, or removes it for
+Default, and reads it back with whether a checkout's file outranks it in the folder of the session it
+is open for, so it can say a pick changes nothing there. A checkout's file naming a word that is no
+level still outranks the pick, so the picker is told it is outranked while no level is in force. A
+record the window could not write is an error to the picker, which then shows the level it had.
+The ChatGPT account is sent one level for a whole session, so a window's session begins with the
+level a turn in its folder asks for when it opens, ranked as above, and not with the record alone.
 
 The word is read on the terms [SESSION-15](sessions.md#SESSION-15) reads the recorded one on, by the
 same rule and in one place. A word this program does not define is no level at all rather than a
@@ -2936,6 +2949,14 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
 `verified-by: bravebot_cli::main::an_effort_flag_names_the_level_a_run_asks_for`
 `verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
+`verified-by: bravebot_ui_bridge::effort::a_level_picked_in_the_window_is_recorded_where_the_terminal_reads_it`
+`verified-by: bravebot_ui_bridge::effort::a_word_naming_no_level_is_refused_and_nothing_is_recorded`
+`verified-by: bravebot_ui_bridge::effort::a_checkouts_level_outranks_the_pick_and_the_window_is_told`
+`verified-by: bravebot_ui_bridge::effort::a_checkouts_unknown_level_word_outranks_the_pick_and_leaves_none_in_force`
+`verified-by: bravebot_ui_bridge::effort::a_level_that_could_not_be_saved_is_reported_and_not_claimed`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_level`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_desktop_turn_and_plan_run_ask_for_the_level_they_were_given`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
 
 <a id="BACKEND-44"></a>
@@ -4379,6 +4400,44 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
 `verified-by: bravebot_config::provider::only_a_true_set_cache_key_turns_the_key_on`
 `verified-by: bravebot_aichat::lib::a_gateway_that_set_a_cache_key_sends_the_key_and_one_that_did_not_sends_none`
 `verified-by: bravebot_agent::backend::a_cache_key_is_the_identifier_of_the_session_and_only_where_the_block_set_it`
+
+<a id="BACKEND-71"></a>
+### BACKEND-71: the desktop window keeps which models each service shows in its picker, and in what order
+
+The window's Settings has a Providers page, second in its list, holding the
+accounts this app can sign in to as a list beside the account chosen, then what the model service is
+and how to set one up. A signed-in
+account shows the models `models.list` gives under its service, each with a switch that
+shows or hides it in the model picker and a handle that moves it, by dragging or by Alt with an arrow
+key, and a switch that shows or hides every model of the service. Reset to defaults forgets those
+choices for that service alone and signs nothing out.
+
+The bridge names the service of each row it lists as `providerKey`: `brave`, `bedrock`, `chatgpt`,
+`xai` or `gateway:<id>`, from where it took the row and never from what a listing said, and `default`
+for the configured model no service listed. An account row names the same key from its way and id,
+every AWS profile being the one `bedrock` service. Each row also says whether its model takes an
+effort level (`readsEffort`), which is false only where the service said it does not.
+
+The choices are the window's own, kept in its experience file against those keys, and are read by
+nothing but the window. The model picker leaves out a hidden service and a hidden model, except the
+model in use, and lists the rest grouped by service in the order chosen, the models no order names
+after, in the order the bridge sent them. Its rail lists every service that has a model to show,
+after an entry for all of them; a row carries its service's mark where more than one service is
+listed. A search runs over every model the picker may list, whichever entry is chosen. Beside the
+models is the level of [BACKEND-43](#BACKEND-43), locked with a line saying why where the model in
+use takes none or a checkout's file outranks a pick.
+
+**Why.** A person signed in to several services is offered every model each of them lists, most of
+which they will never use, and the one they want is a search away each time. Which models a person
+uses is a preference about the window's list and not about what a turn may request: hiding a model
+changes nothing a turn, the terminal or another front end asks for, so it is kept where the window's
+other preferences are and nothing in the agent reads it. The key is the bridge's because only the
+bridge knows which service a row came from; a display name changes when a gateway is renamed, and two
+gateways can share one.
+
+`verified-by: bravebot_ui_bridge::models::each_row_names_the_service_it_came_from_and_whether_it_reads_a_level`
+`verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/model-preferences.test.mjs holds that a hidden service and a hidden model leave the picker's rows while the model in use stays, that a chosen order is kept with the models it does not name after it, that a reset forgets one service and no other, that the choices survive the experience file, and that an account row names the key its models carry; ui/scripts/drive-providers.mjs opens Providers second in the list, hides a model and a service, moves rows by dragging and by keyboard, opens the real picker to hold that it lists what is left in that order and that a search does not bring a hidden service back, and resets a service with its account still signed in; ui/scripts/drive-models.mjs drives the rail, the marks, the search across services and the Reasoning column; make check-ui runs them)`
 
 <a id="BACKEND-70"></a>
 ### BACKEND-70: the desktop window signs in to an AWS account with `aws sso login`, only on a yes in a dialog its main process draws

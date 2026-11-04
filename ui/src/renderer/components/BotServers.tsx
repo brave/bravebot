@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import type { BotServers as Answer } from '../../shared/bots'
 import { STANDING_LABEL, standing, type Connector, type ConnectorList } from '../../shared/connectors'
 import { useDelayedFlag } from '../hooks'
-import { Alert, Checkbox, Dropdown, Label, ProgressRing } from '../nala'
+import { Alert, Checkbox, Dropdown, Label } from '../nala'
 import { call, invokeMessage } from '../request'
+import { Skeleton } from './Skeleton'
 
 /**
  * Which connected servers a bot may use, as the `mcpServers:` line of its definition says.
@@ -56,7 +57,7 @@ export function BotServers({ slug }: { slug: string }): React.JSX.Element {
     return <section className="bot-servers" data-test="bot-servers" aria-labelledby={`servers-${slug}`}>
       {heading}
       {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
-      {loading && <p role="status" className="bot-servers-loading" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading…</p>}
+      {loading && <Skeleton label="Loading…" count={2} delayed={!showLoading} />}
     </section>
   }
 

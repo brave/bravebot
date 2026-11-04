@@ -363,6 +363,14 @@ export interface ModelOption {
   id: string
   name: string
   provider: string
+  /**
+   * The service the row came from, named by where the bridge took it and never by what a listing
+   * said: `brave`, `bedrock`, `chatgpt`, `xai`, `gateway:<id>`, or `default` for the configured model
+   * no service listed. The same key `accountProviderKey` gives an account row.
+   */
+  providerKey: string
+  /** Whether the model takes an effort level. False only where its service said it does not. */
+  readsEffort: boolean
   premium: boolean
   contextWindow: number | null
   /** Provider-reported capabilities; absent when the backend does not report them. */
@@ -378,6 +386,17 @@ export interface ModelCatalogue {
    * warning that names none. Absent from a bridge that sends none.
    */
   warningCommands?: (string | null)[]
+}
+
+/** An effort level `/effort` and the model picker record, cheapest first. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type EffortLevel = typeof EFFORT_LEVELS[number]
+
+/** `effort.get`: the level recorded, the level a turn here asks for, and whether a checkout's settings outrank a pick. */
+export interface EffortReport {
+  recorded: EffortLevel | null
+  inForce: EffortLevel | null
+  outranked: boolean
 }
 
 /** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */

@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { accountLogo, isKeyWay, isSignInWay, parseAccounts, type AccountRow, type KeyWay, type SignInWay } from '../../shared/accounts'
+import { accountLogo, accountProviderKey, isKeyWay, isSignInWay, parseAccounts, type AccountRow, type KeyWay, type SignInWay } from '../../shared/accounts'
+import type { ModelCatalogue } from '../../shared/protocol'
 import { t } from '../i18n'
-import { Alert, Button, Icon, Label } from '../nala'
+import { Alert, Button, Icon, Label, type IconName } from '../nala'
 import { useSignIn, type Waiting } from '../use-sign-in'
 import { sameKeyTarget, useKeyEntry, type KeyResult } from '../use-key-entry'
 import { CopyButton } from './CopyButton'
 import { Modal } from './Modal'
+import { ModelWarnings } from './ModelWarnings'
+import { ProviderModels } from './ProviderModels'
 import { SIGN_IN_NAMES, SignInWaiting, signInSentence } from './SignInButton'
 
 /** Reading the rows again when the window comes back is held off this long after the last read. */
@@ -23,6 +26,9 @@ function standingText(row: AccountRow): string {
 
 const STANDING_COLOR = { signedIn: 'green', notSignedIn: 'neutral', unusable: 'yellow', misconfigured: 'red' } as const
 
+/** The ink a standing is said in where it is a line under the name rather than a label. */
+const STANDING_INK = { signedIn: 'success', notSignedIn: 'tertiary', unusable: 'warning', misconfigured: 'error' } as const
+
 const rowKey = (row: AccountRow) => `${row.way}:${row.id ?? ''}`
 
 /** The row's key window: open for it, and how to ask for one. */
@@ -34,8 +40,13 @@ export interface RowKeyEntry {
 }
 
 /** One sign-in: its standing, why it can't be used, and what can be done about it from here. */
-export function AccountRowView({ row, waiting, busy, signingOut, onSignIn, onSignOut, onShow, onCancel, keyEntry }: {
+export function AccountRowView({ row, waiting, busy, signingOut, onSignIn, onSignOut, onShow, onCancel, keyEntry, logo = true }: {
   row: AccountRow
+  /**
+   * Draw the account's mark and its standing as a label beside the name. A detail pane beside a list
+   * of marks leaves the mark out and says the standing as a line under the name, as the list does.
+   */
+  logo?: boolean
   waiting: Waiting | null
   busy: boolean
   signingOut: boolean
@@ -53,11 +64,13 @@ export function AccountRowView({ row, waiting, busy, signingOut, onSignIn, onSig
   const keyOpen = keyWay !== null && keyEntry?.open === true
   const command = !way && !keyWay && row.standing !== 'signedIn' ? row.command : null
   const actions = (way && !waiting) || keyWay || row.canSignOut
-  return <li className="account-row" data-test={`account-${rowKey(row)}`}>
-    <Icon className="account-logo" name={accountLogo(row.way, row.id)} aria-hidden="true" data-test="account-logo" />
-    <div className="account-head">
+  return <li className={`account-row${logo ? '' : ' no-logo'}`} data-test={`account-${rowKey(row)}`}>
+    {logo && <Icon className="account-logo" name={accountLogo(row.way, row.id)} aria-hidden="true" data-test="account-logo" />}
+    <div className={`account-head${logo ? '' : ' stacked'}`}>
       <span className="account-name">{row.name}</span>
-      <Label color={STANDING_COLOR[row.standing]} mode="outline" data-test="account-standing">{standingText(row)}</Label>
+      {logo
+        ? <Label color={STANDING_COLOR[row.standing]} mode="outline" data-test="account-standing">{standingText(row)}</Label>
+        : <span className={`account-standing-line ${STANDING_INK[row.standing]}`} data-test="account-standing">{standingText(row)}</span>}
     </div>
     {(row.detail || waiting || keyOpen || command) && <div className="account-body">
       {row.detail && (row.standing === 'unusable' || row.standing === 'misconfigured')
@@ -112,17 +125,34 @@ export function KeyResultAlert({ result, name }: { result: KeyResult; name: stri
  * entered in the main process's key window. One of the two windows is open at a time. No row shows
  * who is signed in, a key or a token.
  *
+ * The rows are a list on the left and the one chosen is drawn beside it, with what can be done about
+ * it and, once it is signed in, its models: whether they appear in the model picker, which of them
+ * do, and in what order (`ProviderModels`).
+ *
  * `refresh` reads the rows again when it changes. The window coming back reads them too, at most
  * once in `FOCUS_REFRESH_MS`, and not where an AWS Bedrock row is listed: reading that row runs
- * the AWS command-line tool.
+ * the AWS command-line tool. `pick` chooses the row of that service, for a link elsewhere on the page
+ * that points at it. A row is named by its service key (`accountProviderKey`), since two gateways
+ * may share a display name.
  */
-export function Accounts({ session, refresh, onChanged }: { session?: string; refresh: number; onChanged: () => void }): React.JSX.Element {
+export function Accounts({ session, refresh, onChanged, pick }: {
+  session?: string
+  refresh: number
+  onChanged: () => void
+  pick?: { key: string; asked: number } | null
+}): React.JSX.Element {
   const [rows, setRows] = useState<AccountRow[] | null>(null)
+  const [chosen, setChosen] = useState<string | null>(null)
+  const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null)
+  const [catalogueProblem, setCatalogueProblem] = useState<string | null>(null)
+  const [listed, setListed] = useState(0)
+  const list = useRef<HTMLUListElement>(null)
   const [unread, setUnread] = useState(false)
   const [said, setSaid] = useState<Said>(null)
   const [leaving, setLeaving] = useState<AccountRow | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const lastRead = useRef(0)
+  const picked = useRef(0)
   const changed = useRef(onChanged)
   changed.current = onChanged
 
@@ -135,9 +165,38 @@ export function Accounts({ session, refresh, onChanged }: { session?: string; re
       if (listed) setRows(listed)
     } catch { setUnread(true) }
   }
-  const signIn = useSignIn(() => { void read(); changed.current() }, session)
-  const keys = useKeyEntry(() => { void read(); changed.current() }, session)
+  const signIn = useSignIn(() => { void read(); setListed((n) => n + 1); changed.current() }, session)
+  const keys = useKeyEntry(() => { void read(); setListed((n) => n + 1); changed.current() }, session)
   useEffect(() => { void read() }, [session, refresh])
+  // The models each signed-in row offers, read once for the page and again after a sign-in, a key
+  // or a sign-out changes what the services offer.
+  useEffect(() => {
+    let gone = false
+    setCatalogue(null)
+    setCatalogueProblem(null)
+    void window.bravebot.request<ModelCatalogue>('models.list', { session }).then((answer) => {
+      if (gone) return
+      if (answer.ok) setCatalogue(answer.ok)
+      else setCatalogueProblem(answer.error?.message ?? 'Could not load models. Try again.')
+    }).catch(() => { if (!gone) setCatalogueProblem('Could not load models. Try again.') })
+    return () => { gone = true }
+  }, [session, refresh, listed])
+  // The first signed-in row is chosen when nothing is, and a row that went away gives its place up.
+  useEffect(() => {
+    if (!rows?.length) return
+    if (chosen && rows.some((row) => rowKey(row) === chosen)) return
+    setChosen(rowKey(rows.find((row) => row.standing === 'signedIn') ?? rows[0]!))
+  }, [rows, chosen])
+  useEffect(() => {
+    if (!pick || !rows || picked.current === pick.asked) return
+    const row = rows.find((each) => accountProviderKey(each) === pick.key)
+    if (!row) return
+    // Each ask applies once. A later read of the rows must not take the selection back from a row
+    // the person has chosen since.
+    picked.current = pick.asked
+    setChosen(rowKey(row))
+    list.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(rowKey(row))}"]`)?.focus()
+  }, [pick, rows])
   const rowsNow = useRef(rows)
   rowsNow.current = rows
   useEffect(() => window.bravebot.onWindowActive((active) => {
@@ -157,6 +216,7 @@ export function Accounts({ session, refresh, onChanged }: { session?: string; re
       } else {
         setRows(listed)
         setSaid({ type: 'success', text: t.uiAccountsSignedOut({ name: row.name }) })
+        setListed((n) => n + 1)
         changed.current()
       }
     } catch (error) {
@@ -173,24 +233,64 @@ export function Accounts({ session, refresh, onChanged }: { session?: string; re
     ?? (keyed.way === 'brave' ? 'Brave Premium' : keyed.id ?? keyed.way) : ''
   const endedName = ended?.way ? rows?.find((row) => row.way === ended.way && (ended.way !== 'bedrock' || row.id === ended.id))?.name
     ?? SIGN_IN_NAMES[ended.way] : ''
+  const current = rows?.find((row) => rowKey(row) === chosen) ?? null
+  const currentKey = current ? accountProviderKey(current) : null
+  const move = (by: number) => {
+    if (!rows?.length) return
+    const at = Math.max(0, rows.findIndex((row) => rowKey(row) === chosen))
+    const next = rows[Math.min(rows.length - 1, Math.max(0, at + by))]
+    if (!next) return
+    setChosen(rowKey(next))
+    list.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(rowKey(next))}"]`)?.focus()
+  }
   return <section className="settings-block accounts" data-test="accounts">
-    <h3>{t.uiAccountsHeading()}</h3>
+    <p>{t.uiAccountsEnvironmentNote()}</p>
     {said && <Alert type={said.type} size="small" role={said.type === 'error' ? 'alert' : 'status'} data-test="accounts-said">{said.text}</Alert>}
     {ended && <Alert type={ended.outcome === 'signedIn' ? 'success' : ended.outcome === 'failed' ? 'error' : 'info'} size="small"
       role={ended.outcome === 'failed' ? 'alert' : 'status'} data-test="accounts-sign-in-result">{signInSentence(ended, endedName)}</Alert>}
     {keyed && <KeyResultAlert result={keyed} name={keyedName} />}
     {unread && <Alert type="warning" size="small" role="alert" data-test="accounts-unread">{t.uiAccountsUnread()}</Alert>}
-    {rows && <ul className="account-list">
-      {rows.map((row) => <AccountRowView key={rowKey(row)} row={row} waiting={signIn.waiting?.way === row.way && (row.way !== 'bedrock' || signIn.waiting.id === row.id) ? signIn.waiting : null}
-        busy={signIn.busy || keys.busy} signingOut={signingOut} onShow={signIn.show} onCancel={signIn.cancel}
-        onSignIn={(way, id) => { setSaid(null); keys.dismiss(); void signIn.start(way, way === 'bedrock' ? id : null) }}
-        onSignOut={() => { setSaid(null); signIn.dismiss(); keys.dismiss(); setLeaving(row) }}
-        keyEntry={{
-          open: sameKeyTarget(keys.open, row.way, row.id), busy: keys.busy || signIn.busy, onShow: keys.show,
-          onEnter: (way, id) => { setSaid(null); signIn.dismiss(); void keys.start(way, id) },
-        }} />)}
-    </ul>}
-    <p className="settings-caption">{t.uiAccountsEnvironmentNote()}</p>
+    {catalogue && catalogue.warnings.length > 0 && <div className="providers-warnings" data-test="providers-warnings">
+      <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} session={session}
+        onSignedIn={() => { void read(); setListed((n) => n + 1); changed.current() }} />
+      <Button size="small" kind="outline" onClick={() => setListed((n) => n + 1)} data-test="providers-warnings-retry">Try again</Button>
+    </div>}
+    {rows && <div className="providers-panes">
+      <ul ref={list} className="providers-list" role="listbox" aria-label={t.uiAccountsHeading()} data-test="providers-list"
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); move(event.key === 'ArrowDown' ? 1 : -1) }
+          else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); move(event.key === 'Home' ? -rows.length : rows.length) }
+        }}>
+        {rows.map((row) => {
+          const key = rowKey(row)
+          const selected = key === chosen
+          return <li key={key} role="option" aria-selected={selected} tabIndex={selected ? 0 : -1} data-key={key}
+            className="providers-item" data-test={`provider-${key}`} onClick={() => setChosen(key)}>
+            <Icon className="providers-item-logo" name={accountLogo(row.way, row.id) as IconName} aria-hidden="true" />
+            <span className="providers-item-text">
+              <span className="providers-item-name">{row.name}</span>
+              <span className={`account-standing-line ${STANDING_INK[row.standing]}`}>{standingText(row)}</span>
+            </span>
+          </li>
+        })}
+      </ul>
+      <div className="providers-detail" data-test="provider-detail">
+        {current && <ul className="account-list">
+          <AccountRowView key={rowKey(current)} row={current} logo={false}
+            waiting={signIn.waiting?.way === current.way && (current.way !== 'bedrock' || signIn.waiting.id === current.id) ? signIn.waiting : null}
+            busy={signIn.busy || keys.busy} signingOut={signingOut} onShow={signIn.show} onCancel={signIn.cancel}
+            onSignIn={(way, id) => { setSaid(null); keys.dismiss(); void signIn.start(way, way === 'bedrock' ? id : null) }}
+            onSignOut={() => { setSaid(null); signIn.dismiss(); keys.dismiss(); setLeaving(current) }}
+            keyEntry={{
+              open: sameKeyTarget(keys.open, current.way, current.id), busy: keys.busy || signIn.busy, onShow: keys.show,
+              onEnter: (way, id) => { setSaid(null); signIn.dismiss(); void keys.start(way, id) },
+            }} />
+        </ul>}
+        {current && currentKey && current.standing === 'signedIn' && <ProviderModels key={currentKey} providerKey={currentKey} name={current.name}
+          models={catalogue ? catalogue.models.filter((model) => model.providerKey === currentKey) : null}
+          problem={catalogueProblem} onRetry={() => setListed((n) => n + 1)} />}
+      </div>
+    </div>}
     {leaving && <SignOutConfirm row={leaving} busy={signingOut} onConfirm={() => void signOut(leaving)} onCancel={() => { if (!signingOut) setLeaving(null) }} />}
   </section>
 }

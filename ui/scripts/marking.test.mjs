@@ -693,7 +693,7 @@ test('a run that failed on the ChatGPT account says the same sentence with the c
  * The picker's warnings are the bridge's sentences, one for each service whose models could not be
  * listed. A warning that names a command has it beside the sentence, in the same order, and it is
  * drawn as code: the picker does not read the sentence to find it, a warning with none is a plain
- * paragraph in the picker's status type, and nothing in either is read as markup.
+ * sentence in the same alert, and nothing in either is read as markup.
  */
 test('a picker warning draws the command it names as code and the rest as text', () => {
   const { ModelWarnings } = load('src/renderer/components/ModelWarnings.tsx')
@@ -705,10 +705,16 @@ test('a picker warning draws the command it names as code and the rest as text',
   const drawn = draw({ warnings: [named, unnamed], commands: [command, null] })
   assert.match(
     drawn,
-    /<p class="model-status">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\. <span class="sign-in-ask"><leo-button data-test="sign-in-chatgpt">Sign in<\/leo-button><\/span><\/p>/,
+    /<leo-alert data-test="model-warning">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<div slot="actions"><span class="sign-in-ask"><leo-button data-test="sign-in-chatgpt">Sign in<\/leo-button><\/span><\/div><\/leo-alert>/,
     drawn,
   )
-  assert.match(drawn, /<p class="model-status">Could not load models from Down Gateway\. Try again\.<\/p>/, drawn)
+  assert.match(drawn, /<leo-alert data-test="model-warning">Could not load models from Down Gateway\. Try again\.<\/leo-alert>/, drawn)
+  // Each warning is a small warning alert, and only the one with a sign-in has actions.
+  const alerts = ModelWarnings({ warnings: [named, unnamed], commands: [command, null] }).props.children
+  assert.deepEqual(alerts.map((each) => [each.props.type, each.props.size, each.props.className, each.props.hasActions, each.props.isInlineActions]), [
+    ['warning', 'small', 'model-status', true, true],
+    ['warning', 'small', 'model-status', false, true],
+  ])
   assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
   assert.doesNotMatch(drawn, /`/, drawn)
 
@@ -750,7 +756,7 @@ test('the code in a failure card, a narration and a picker warning is set in the
   for (const [file, surface, selector] of [
     ['cards.css', '.error-card', '.error-card p code'],
     ['transcript.css', '.plan-detail', '.plan-ended .plan-detail code'],
-    ['menus.css', '.model-status', '.model-status code'],
+    ['models.css', '.model-status', '.model-status code'],
     ['activity.css', '.narration', '.narration code'],
   ]) {
     const setting = rules.filter((rule) => 'font' in rule.declarations || 'font-family' in rule.declarations || 'font-size' in rule.declarations)

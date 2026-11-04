@@ -18,7 +18,7 @@ try {
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
-    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
+    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
     const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
     const accounts = [
@@ -91,26 +91,46 @@ try {
   await dialog.waitFor()
   await dialog.locator('[data-test="settings-page-agent"]').click()
   for (const name of ['Connection', 'Hooks', 'Run settings']) await dialog.getByRole('heading', { name, exact: true, level: 2 }).waitFor()
-  await dialog.getByText('Model service configured', { exact: true }).waitFor()
   await dialog.getByText('Locked by your administrator: provider', { exact: true }).waitFor()
   await dialog.getByText('proxy.example:8080 · authenticated', { exact: true }).waitFor()
   await snap('01-connection')
+  // The model service and the accounts are the Providers page, the second in the list.
+  assert.deepEqual(await dialog.locator('[data-test^="settings-page-"]').evaluateAll((items) => items.map((item) => item.dataset.test)),
+    ['settings-page-general', 'settings-page-providers', 'settings-page-connectors', 'settings-page-agent'])
+  assert.equal(await dialog.getByText('Model service configured', { exact: true }).count(), 0, 'the model service is not on Agent settings')
+  await dialog.locator('[data-test="settings-page-providers"]').click()
+  await dialog.getByRole('heading', { name: 'Model service configured', exact: true, level: 2 }).waitFor()
+  await dialog.getByText('Credentials not required', { exact: true }).waitFor()
 
   // Accounts: one row per sign-in, what can be done about each, and nothing stored shown.
   const fixture = () => app.evaluate(() => globalThis.agentSettingsFixture.state)
   const accounts = dialog.locator('[data-test="accounts"]')
+  // Only the account chosen in the list is drawn beside it, so a row is chosen before it is read.
   const row = name => accounts.locator(`[data-test="account-${name}"]`)
-  await accounts.getByRole('heading', { name: 'Accounts', exact: true }).waitFor()
+  const pick = async name => {
+    await accounts.locator(`[data-test="provider-${name}"]`).click()
+    await row(name).waitFor()
+  }
+  await dialog.getByRole('heading', { name: 'Accounts', exact: true, level: 2 }).waitFor()
+  await pick('brave:')
   assert.equal(await row('brave:').locator('[data-test="account-standing"]').textContent(), 'Key stored')
+  await pick('gateway:local')
   assert.equal(await row('gateway:local').locator('[data-test="account-standing"]').textContent(), 'No key needed')
+  await pick('xai:')
   assert.equal(await row('xai:').locator('[data-test="account-standing"]').textContent(), "Can't be used")
   await row('xai:').getByText('The stored xAI sign-in cannot be read. Sign in again.').waitFor()
+  await pick('gateway:corp')
   assert.equal(await row('gateway:corp').locator('code').textContent(), 'bravebot auth login gateway corp')
+  await pick('gateway:openrouter')
   assert.equal(await row('gateway:openrouter').locator('[data-test="account-command"]').count(), 0, 'a row that takes a key in the window shows no command')
   await row('gateway:openrouter').locator('[data-test="account-enter-key"]').waitFor()
+  await pick('chatgpt:')
   assert.equal(await row('chatgpt:').locator('[data-test="account-command"]').count(), 0, 'ChatGPT signs in from the window, so it shows no command')
+  await pick('bedrock:dev')
   assert.equal(await row('bedrock:dev').locator('[data-test="account-command"]').count(), 0, 'an AWS account signs in from the window, so it shows no command')
+  await pick('gateway:local')
   assert.equal(await row('gateway:local').locator('[data-test="account-sign-out"]').count(), 0, 'nothing stored, nothing to sign out of')
+  await pick('gateway:corp')
   await row('gateway:corp').locator('[data-test="account-copy"]').scrollIntoViewIfNeeded()
   await snap('01b-accounts')
   await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
@@ -120,6 +140,7 @@ try {
 
   // Enter key only asks the main process, which opens a key window of its own; the key never reaches the page.
   const keyNotice = n => app.evaluate((_, n) => globalThis.agentSettingsFixture.keyNotice(n), n)
+  await pick('gateway:openrouter')
   await row('gateway:openrouter').locator('[data-test="account-enter-key"]').click()
   await row('gateway:openrouter').locator('[data-test="account-key-open"]').waitFor()
   assert.equal(await row('gateway:openrouter').locator('[data-test="account-key-open"]').textContent(), 'Enter the key in its window.')
@@ -130,6 +151,7 @@ try {
   await row('gateway:openrouter').locator('[data-test="account-enter-key"]').waitFor()
 
   // Sign out asks first; Escape and Cancel forget nothing.
+  await pick('brave:')
   await row('brave:').locator('[data-test="account-sign-out"]').click()
   const confirm = page.locator('.confirm-sign-out')
   await confirm.getByText('bravebot forgets this sign-in on this computer.', { exact: false }).waitFor()
@@ -148,6 +170,7 @@ try {
 
   // Sign in only asks the main process. The page is told the port and how long it waits, never an address.
   const notice = n => app.evaluate((_, n) => globalThis.agentSettingsFixture.notice(n), n)
+  await pick('chatgpt:')
   await row('chatgpt:').locator('[data-test="account-sign-in"]').click()
   await row('chatgpt:').locator('[data-test="sign-in-waiting-chatgpt"]').waitFor()
   assert.deepEqual((await fixture()).signIns, ['chatgpt'])
@@ -160,6 +183,7 @@ try {
   assert.deepEqual((await fixture()).cancels, ['t1'])
   await snap('01e-cancelled')
 
+  await pick('xai:')
   await row('xai:').locator('[data-test="account-sign-in"]').click()
   await row('xai:').getByText('Requesting a code…', { exact: true }).waitFor()
   await snap('01f-requesting-code')
@@ -169,6 +193,7 @@ try {
   await snap('01g-failed')
 
   // An AWS account is signed in to by its profile, and waits on its own row.
+  await pick('bedrock:dev')
   await row('bedrock:dev').locator('[data-test="account-sign-in"]').click()
   await row('bedrock:dev').locator('[data-test="sign-in-waiting-bedrock"]').waitFor()
   assert.deepEqual((await fixture()).signIns, ['chatgpt', 'xai', 'bedrock:dev'])
@@ -177,6 +202,7 @@ try {
   await snap('01h-aws-waiting')
   await notice({ kind: 'ended', attempt: 't3', way: 'bedrock', id: 'dev', outcome: 'signedIn', sentence: null })
   await accounts.getByText('Signed in to AWS Bedrock (dev).', { exact: true }).waitFor()
+  await dialog.locator('[data-test="settings-page-agent"]').click()
   await dialog.getByRole('button', { name: 'Choose settings file…' }).click()
   await dialog.getByRole('button', { name: 'Clear override' }).waitFor({ state: 'visible' })
   // Leo draws the button inside a shadow root, so wait on the role query, which pierces it.

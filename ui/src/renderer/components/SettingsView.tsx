@@ -6,13 +6,15 @@ import { AgentSettings } from './AgentSettings'
 import { Connectors } from './Connectors'
 import { GeneralSettings } from './GeneralSettings'
 import { IconButton } from './IconButton'
+import { ProvidersSettings } from './ProvidersSettings'
 
-export type SettingsPage = 'general' | 'connectors' | 'agent'
+export type SettingsPage = 'general' | 'providers' | 'connectors' | 'agent'
 
 // `label` names the page in the list; `title` and `subtitle` head the page and are read in the
 // window's language where a page has been moved to the catalog.
 const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; title: () => string; subtitle: () => string }[] = [
   { id: 'general', label: 'General', icon: 'settings', title: () => t.uiSettingsGeneral(), subtitle: () => t.uiSettingsGeneralExplained() },
+  { id: 'providers', label: 'Providers', icon: 'robot', title: () => 'Providers', subtitle: () => 'Models and providers' },
   { id: 'connectors', label: 'Connectors', icon: 'plug', title: () => 'Connectors', subtitle: () => 'MCP servers that give the model tools for your accounts and services' },
   { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', title: () => 'Agent settings', subtitle: () => 'Configuration and automation for this app' },
 ]
@@ -108,8 +110,10 @@ export function SettingsView({ page, onPage, onBack, session, chosen, running, o
             <p className="settings-subtitle" data-test="settings-subtitle">{current.subtitle()}</p>
             {shown === 'agent'
               ? <AgentSettings session={session} onChanged={onChanged} onDirty={onDirty} />
-              : shown === 'connectors'
-                ? <Connectors onBack={onInner} />
+              : shown === 'providers'
+                ? <ProvidersSettings session={session} onChanged={onChanged} />
+                : shown === 'connectors'
+                  ? <Connectors onBack={onInner} />
                 : <GeneralSettings chosen={chosen} running={running} onAppearance={onAppearance} />}
           </div>
         </div>

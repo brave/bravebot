@@ -351,6 +351,13 @@ impl Bridge {
             "connectors.disconnect" => crate::connectors::disconnect(request),
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
+            "effort.get" => {
+                let directory = request.optional_string("directory").map(PathBuf::from);
+                let settings =
+                    crate::settings::layers(directory.as_deref(), self.settings.as_deref());
+                Ok(crate::effort::get(&settings))
+            }
+            "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
             "changelog.read" => Ok(crate::help::changelog()),
@@ -536,10 +543,11 @@ impl Bridge {
             .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
         // Held from here for as long as the session stays open, so a record a terminal holds is
         // refused in the words the terminal uses (SESSION-38).
-        let state = match State::resumed(&directory, &record, opening.trust) {
+        let mut state = match State::resumed(&directory, &record, opening.trust) {
             Ok(state) => state,
             Err(held) => return Ok(Stored::Refused(held)),
         };
+        state.account = self.account_session(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open::opened(
@@ -638,6 +646,17 @@ impl Bridge {
             .get(handle)
             .and_then(|open| open.state.lock().ok().map(|state| state.scratch.report()))
             .unwrap_or(Value::Null)
+    }
+
+    /// A ChatGPT account session, which is sent one level for the whole of a session (BACKEND-22), begun with
+    /// the level a turn in `project` would ask for: the recorded pick, ranked against the settings
+    /// of that project and of the file selected in the window as BACKEND-43 ranks them.
+    fn account_session(
+        &self,
+        project: &std::path::Path,
+    ) -> bravebot_agent::chatgpt::AccountSession {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -772,6 +791,7 @@ impl Bridge {
         let opening = Opening::of(&directory, None);
         let reported = opening.json(&directory);
         let mut state = State::fresh(opening.trust);
+        state.account = self.account_session(&directory);
         state.directories = additional;
         let handle = self.mint(Open::opened(
             directory.clone(),
@@ -951,6 +971,7 @@ impl Bridge {
                 );
                 // The map is the parent's, so what the mode answered in it is still the mode's.
                 forked.answered_by_mode = by_mode;
+                forked.account = self.account_session(&project);
                 forked
             },
             // Inherited along with the map itself: the same person, in the same directory, in
@@ -1477,6 +1498,10 @@ impl Bridge {
             return Err(Failure::bad_request(refused));
         }
         let attribution = settings.attribution().clone();
+        // The level the terminal's `/effort` and this window's picker record, ranked against the
+        // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
+        // between turns applies to the next one.
+        let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
@@ -1558,6 +1583,7 @@ impl Bridge {
                 state,
                 config,
                 attribution,
+                effort,
                 output_cap,
                 download_cap,
                 deadlines,
@@ -1728,6 +1754,7 @@ impl Bridge {
         }
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
+        let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
@@ -1792,6 +1819,7 @@ impl Bridge {
                 state,
                 config,
                 attribution,
+                effort,
                 output_cap,
                 deadlines,
                 sandbox,
@@ -2977,6 +3005,12 @@ fn take_back_touched(
     }
 }
 
+/// The effort level a turn or plan run in this window asks for: the one recorded with `/effort` or
+/// this window's picker, ranked against `settings` as BACKEND-43 ranks them.
+pub(crate) fn recorded_effort(settings: &Settings) -> Option<bravebot_session::store::Effort> {
+    bravebot_session::store::effort(bravebot_session::store::load_effort(), settings)
+}
+
 /// Everything a worker needs to run one turn.
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
@@ -2989,6 +3023,9 @@ struct Work {
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
+    /// How hard the model is asked to think: the recorded level and the settings layers, ranked as
+    /// BACKEND-43 ranks them. `None` asks for the service's own default.
+    effort: Option<bravebot_session::store::Effort>,
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
@@ -3115,6 +3152,7 @@ fn work(work: Work) {
         state,
         mut config,
         attribution,
+        effort,
         output_cap,
         download_cap,
         deadlines,
@@ -3224,6 +3262,7 @@ fn work(work: Work) {
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
         .with_model(model)
+        .with_effort(effort)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
@@ -3297,6 +3336,8 @@ fn work(work: Work) {
     open_rewind_point(&mut state, &workspace, &prompt);
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
+    #[cfg(test)]
+    crate::running::built_in::record_level("turn", task.effort);
     let began_at = std::time::Instant::now();
     let mut completed = agent_turn::resume(
         &config,

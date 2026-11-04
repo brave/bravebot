@@ -28,6 +28,8 @@ export const IconButton = forwardRef<HTMLElement, {
   hasPopup?: 'menu' | 'dialog' | 'true'
   disabled?: boolean
   className?: string
+  /** The host's id, for a field that points at it with `aria-activedescendant`. */
+  id?: string
   slot?: string
   placement?: 'top' | 'bottom' | 'left' | 'right'
   onClick?: (event: MouseEvent) => void
@@ -36,12 +38,13 @@ export const IconButton = forwardRef<HTMLElement, {
   dataset?: Record<string, string | number>
 }>(function IconButton({
   icon, label, shortcut, tooltip, description, kind = 'plain-faint', size = 'small', pressed, expanded, controls, hasPopup,
-  disabled, className, slot, placement, onClick, 'data-test': dataTest, dataset,
+  disabled, className, id, slot, placement, onClick, 'data-test': dataTest, dataset,
 }, ref) {
   return (
     <Button
       {...(dataset && Object.fromEntries(Object.entries(dataset).map(([key, value]) => [`data-${key}`, value])))}
       ref={ref}
+      {...(id ? { id } : {})}
       fab
       kind={kind}
       size={size}
