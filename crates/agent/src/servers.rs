@@ -922,6 +922,7 @@ fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, 
 /// The hosts a server in an OpenShell sandbox may reach: the ones its declaration lists, less any
 /// the session's own list does not cover, and none where the session closes the network or the
 /// declaration lists none.
+#[cfg(unix)]
 fn openshell_hosts(
     session: (bravebot_sandbox::network::Network, Option<&Hosts>),
     declared: Option<&[String]>,
@@ -6707,6 +6708,7 @@ done
     /// A server in a sandbox reaches the hosts its declaration lists, less what the session's
     /// own list leaves out or denies any name of, and nothing where the session closes the
     /// network, the declaration lists no host, or a denied entry cannot be read.
+    #[cfg(unix)]
     #[test]
     fn an_openshell_server_reaches_only_its_declared_hosts_within_the_session() {
         use bravebot_config::sandbox_network::HostEntry;
