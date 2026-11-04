@@ -27840,15 +27840,50 @@ mod tests {
         );
     }
 
-    /// A directory whose own name begins with a tilde is not a home-relative path.
+    /// A directory whose own name begins with a tilde is not a home-relative path. Read through
+    /// `named_directory`, since `~` is no longer expanded by a helper of its own: the one
+    /// implementation `--add-dir`, a settings file and `/cd` all share lives in `bravebot-agent`
+    /// (CLI-11, SHARE-001).
     #[test]
     fn a_tilde_is_expanded_only_as_a_whole_first_segment() {
         let home = std::env::var("HOME").expect("a home directory");
-        assert_eq!(expand_home("~/notes"), format!("{home}/notes"));
-        assert_eq!(expand_home("~"), home);
-        assert_eq!(expand_home("~notes"), "~notes");
-        assert_eq!(expand_home("/tmp/notes"), "/tmp/notes");
-        assert_eq!(expand_home("relative/notes"), "relative/notes");
+        let root = std::path::Path::new("/tmp/named-directory-tilde-test-root");
+        let home_path = std::path::Path::new(&home);
+        assert_eq!(
+            named_directory(root, "~/notes", Some(home_path)).ok(),
+            Some(format!("{home}/notes"))
+        );
+        assert_eq!(
+            named_directory(root, "~", Some(home_path)).ok(),
+            Some(home.clone())
+        );
+        assert_eq!(
+            named_directory(root, "~notes", Some(home_path)).ok(),
+            Some(root.join("~notes").display().to_string()),
+            "a directory literally named ~notes was read as the home directory"
+        );
+        assert_eq!(
+            named_directory(root, "/tmp/notes", Some(home_path)).ok(),
+            Some("/tmp/notes".to_string())
+        );
+        assert_eq!(
+            named_directory(root, "relative/notes", Some(home_path)).ok(),
+            Some(root.join("relative/notes").display().to_string())
+        );
+    }
+
+    /// TRUST-9: with no home directory known, a leading `~` is not a refusal, the way a file
+    /// tool's own read of one is; it is a name under the working directory, exactly as a name
+    /// with no leading `~` is. The home has to be a parameter rather than
+    /// [`bravebot_agent::home::profile`] read here, since a machine running this test may have
+    /// one, so there would be no way to hold "no home" fixed otherwise.
+    #[test]
+    fn a_leading_tilde_resolves_as_a_literal_name_with_no_home() {
+        let root = std::path::Path::new("/w/proj");
+        assert_eq!(
+            named_directory(root, "~/x", None).ok(),
+            Some(root.join("~").join("x").display().to_string())
+        );
     }
 
     /// CMDLINE-4: a `~` somebody types and a `~` the planner writes in a command line stand for
@@ -27861,15 +27896,14 @@ mod tests {
     #[test]
     fn a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory() {
         let profile = bravebot_agent::home::profile().expect("a home directory");
+        let root = std::path::Path::new("/tmp/named-directory-tilde-test-root");
 
-        assert_eq!(
-            expand_home("~/notes.txt"),
-            format!("{}/notes.txt", profile.display())
-        );
+        let resolved =
+            named_directory(root, "~/notes.txt", Some(&profile)).expect("a tilde resolves");
+        assert_eq!(resolved, format!("{}/notes.txt", profile.display()));
         assert!(
-            !expand_home("~/notes.txt").contains(".bravebot"),
-            "a typed `~` named the state directory: {}",
-            expand_home("~/notes.txt")
+            !resolved.contains(".bravebot"),
+            "a typed `~` named the state directory: {resolved}"
         );
     }
 
@@ -41558,7 +41592,7 @@ mod tests {
     #[test]
     fn an_absolute_directory_in_a_settings_file_is_not_joined_onto_the_workspace() {
         assert_eq!(
-            named_directory(std::path::Path::new("/tmp/project"), "/opt/other").ok(),
+            named_directory(std::path::Path::new("/tmp/project"), "/opt/other", None).ok(),
             Some("/opt/other".to_string())
         );
     }
@@ -41589,7 +41623,7 @@ mod tests {
             ("/opt/other", "/opt/other"),
         ] {
             assert_eq!(
-                named_directory(root, typed).ok(),
+                named_directory(root, typed, None).ok(),
                 Some(resolved.to_string()),
                 "{typed}"
             );
@@ -41613,7 +41647,7 @@ mod tests {
         let lookalike = std::path::Path::new("/w/proj-\u{FFFD}");
 
         for relative in ["notes", "../notes", ".", "./sub"] {
-            match named_directory(not_text, relative) {
+            match named_directory(not_text, relative, None) {
                 Err(bravebot_agent::WorkspaceError::Invalid { path, reason }) => {
                     assert_eq!(path, relative);
                     assert_eq!(reason, t!(session_directory_root_not_text));
@@ -41623,17 +41657,17 @@ mod tests {
                 }
             }
             assert!(
-                named_directory(lookalike, relative).is_ok(),
+                named_directory(lookalike, relative, None).is_ok(),
                 "{relative} was refused against a working directory that is text"
             );
         }
         assert_eq!(
-            named_directory(lookalike, "../notes").ok(),
+            named_directory(lookalike, "../notes", None).ok(),
             Some("/w/notes".to_string())
         );
         for root in [not_text, lookalike] {
             assert_eq!(
-                named_directory(root, "/opt/other").ok(),
+                named_directory(root, "/opt/other", None).ok(),
                 Some("/opt/other".to_string()),
                 "an absolute name was refused for {root:?}"
             );

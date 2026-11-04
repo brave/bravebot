@@ -5439,6 +5439,29 @@ mod tests {
         assert!(workspace.confines(&file).is_ok(), "not reachable after");
     }
 
+    /// CLI-11: a relative path such as `--add-dir ../notes` is resolved against the working
+    /// directory, the same way `/add-dir ../notes` resolves it in the terminal, rather than
+    /// refused with "must be an absolute path".
+    #[test]
+    fn a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory() {
+        let scratch = Scratch::new("add-dir-relative");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let file = beside.join("notes.md");
+        std::fs::write(&file, "notes").expect("write");
+
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        assert!(
+            workspace.confines(&file).is_err(),
+            "reachable before it was opened"
+        );
+        open_directories(&mut workspace, &["../beside".to_string()]).expect("opens");
+        assert!(
+            workspace.confines(&file).is_ok(),
+            "a relative --add-dir path was not resolved against the working directory"
+        );
+    }
+
     /// CHECKOUT-7. `--add-dir` of a directory holding the working directory says so, since a run
     /// is where nobody is watching to find out from a refused spawn; one beside it says nothing.
     #[test]

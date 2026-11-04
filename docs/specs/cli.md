@@ -562,12 +562,19 @@ against one.
 ### CLI-11: `--add-dir` makes a directory reachable, and vouches for nothing
 
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
-given more than once. An absolute path that exists, is a directory, and is not already inside the
-working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map holds nothing for it, so a file read there is read on the same footing as the
-project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
-the working directory alone. A write there is refused as any other write in an unattended run is,
-and the flag in CLI-1 lifts that exactly as it does elsewhere, `--approve-input-lines` included.
+given more than once. The path may be relative, resolved against the working directory the same
+way `/add-dir` resolves one ([TRUST-9](trust-map.md#TRUST-9)): its leading `.` and `..` are taken
+out against the working directory's own canonical path and the remaining components are appended
+in order, so `--add-dir ../notes` opens the directory beside the working one. A `~` is not; it is
+left to the shell, which ordinarily expands it before this ever sees the path, and an unexpanded
+one is read as an ordinary directory component rather than as the home directory, since a second
+reading of it here is a second place for it to resolve apart from the shell's own. A path that is
+not absolute once resolved, does not exist, is not a directory, or is already inside the working
+one is refused by name and the run stops before the turn. The run's trust map holds nothing for
+it, so a file read there is read on the same footing as the project's own files without an answer
+about them: nothing vouched for it. `--trust-workspace` covers the working directory alone. A
+write there is refused as any other write in an unattended run is, and the flag in CLI-1 lifts
+that exactly as it does elsewhere, `--approve-input-lines` included.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
 outside the working directory is otherwise refused whatever else is true, so without this the task
@@ -588,8 +595,12 @@ in, over a file it was told it could open.
 `verified-by: bravebot_cli::main::the_directory_flag_is_repeatable`
 `verified-by: bravebot_cli::main::a_directory_flag_with_no_path_is_refused`
 `verified-by: bravebot_cli::main::a_directory_the_command_line_named_is_reachable`
+`verified-by: bravebot_cli::main::a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory`
 `verified-by: bravebot_cli::main::a_directory_that_cannot_be_opened_stops_the_run`
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
+`verified-by: bravebot_agent::workspace::an_absolute_directory_name_is_not_joined_onto_a_root`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_refused_against_a_root_whose_name_is_not_text`
 
 <a id="CLI-12"></a>
 ### CLI-12: `--json` puts one result object on stdout, in the reply's place
