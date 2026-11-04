@@ -19,6 +19,10 @@ carries an `expects`. The other two come with a read the planner made for its ow
 [read-output.md](read-output.md) and the vouch offer in [trust-map.md](../trust-map.md#TRUST-8).
 [CHECK-10](../vetting.md#CHECK-10) covers all three.
 
+A call to `fetch_url` or to a server's tool may also ask for this release in its own result, with
+`read: true`, so that the round a `vet_content` call would take is not spent
+([VET-6](#VET-6)).
+
 ## Clauses
 
 <a id="VET-1"></a>
@@ -339,3 +343,80 @@ never in a result, which a planner could aim at.
 `verified-by: bravebot_agent::tools::who_answers_vet_content_is_stated_only_on_a_list_that_holds_it`
 `verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
 `verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`
+
+<a id="VET-6"></a>
+### VET-6: a fetch or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
+
+`read: true` on a `fetch_url` call, or on a call to a server's tool, asks for what the call returned
+in the result that returned it. It is offered only on a list that holds `vet_content`, so a delegate
+and a definition that leaves the tool out are not offered it. A `read` given to `fetch_url` there is
+still checked to be a boolean and releases nothing, and one given to a server's tool is sent as
+written, since this process did not offer it. A server's tool is offered it only where the server
+lists no argument named `read` itself ([MCP-16](../mcp.md#MCP-16)).
+
+The content is quarantined as [FETCH-1](fetch-url.md#FETCH-1) or [MCP-1](../mcp.md#MCP-1) has it and
+then released by this tool's own path: the same check, where one is made, the same release of the
+slot and the same promotion, so the label is the one a `vet_content` call on that slot gives it. The
+slot keeps its name and the result gives it beside the text. The trail entry is the one
+[VET-3](#VET-3)'s release writes, crediting the mode where permissions are bypassed with no screening
+asked for ([MODE-4](../permission-modes.md#MODE-4)) and the check where auto-vetting is on and its
+word is `safe` ([CHECK-12](../vetting.md#CHECK-12)). The check is a model call like the one a
+`vet_content` call makes, so it is announced in the same way and its tokens and the time spent
+waiting on it are the turn's. It is made without an `expects`, since the planner has said nothing
+about what the content should be.
+
+Any other word, and a check that could not be made, leaves the content behind its reference with
+nobody asked, in a mode that asks as in one that does not: the person is asked when the planner calls
+`vet_content`, as it would have been without `read`. The result then carries the sentence that names
+`vet_content` as the way to see the content, and a sentence saying that `read: true` did not return
+it, and nothing of the word or the reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)).
+
+The size bounds the release as [RUN-21](run.md#RUN-21) bounds a run's. A slot larger than the
+task's output cap stays behind its reference, no check is made, and the result says the content is
+longer than one result may hold and that `vet_content` is the way to see it. A slot whose stated
+size is 0 is not released and no check is made over it: the reference states that it holds 0 bytes,
+and the trail records, under `vet_content`, that the slot holds 0 bytes and so nothing was checked or
+released. A picture is never released this way ([VET-4](#VET-4)): it reaches the planner only as the
+attachment of a `vet_content` call, so a picture asked to be read stays quarantined, nobody is asked
+and no check is made.
+
+Everywhere else `read` changes nothing. Where a person answers `vet_content` and screening was not
+asked for, the content is quarantined and no prompt is drawn at the call, since it would be spent on
+content the planner has not called `vet_content` for. A `read` that is absent or null is a call
+without it, and one that is neither `true` nor `false` is refused before the call is made, as
+[RUN-22](run.md#RUN-22) refuses one. A result a server marked as a failure is released in the same
+way as one it did not, since the flag is the server's word and decides nothing here.
+
+**Why.** Where permissions are bypassed with no screening, `vet_content` has one answer, and where a
+check answers it is made either way, so a round spent on the call buys nothing but the round: a model
+call, and the whole conversation sent again. A prompt is not drawn at the call because the planner has
+not seen the size or shape of the content yet.
+
+**This changes no label.** The value and the trail entry are the ones a `vet_content` call on the
+slot makes, a round early. What decides whether the release happens is the planner's own argument,
+set before the result existed, the mode, whether the turn was offered `vet_content`, the slot's size
+as its reference states it, and where screening is asked for, the check's word. The only branch on the
+check is on its word, the branch `vet_content` makes. No byte of the page or of the server's reply,
+no reason the check wrote and no failure flag is read to decide it. A planner offered `vet_content`
+may call it on any reference it holds, so asking with `read` gives it nothing it could not already
+have. The manifest path ([MANIFEST-15](../manifest.md#MANIFEST-15)) never presents a result to the
+planner and takes no `read`.
+
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_where_the_check_finds_nothing_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_where_the_check_objects_or_fails_stays_a_reference`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_where_a_person_answers_changes_nothing`
+`verified-by: bravebot_agent::mcp::a_servers_answer_past_the_output_cap_stays_a_reference_when_the_call_asks_to_read`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_stays_quarantined_when_the_call_asks_to_read`
+`verified-by: bravebot_agent::mcp::a_servers_failed_result_called_with_read_in_bypass_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_fetch_that_asks_to_read_is_handed_the_page_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_is_handed_the_page_where_the_check_finds_nothing`
+`verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_does_not_say_safe`
+`verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot_be_made`
+`verified-by: bravebot_agent::turn::asking_to_read_a_fetched_page_changes_nothing_where_a_person_still_answers_for_it`
+`verified-by: bravebot_agent::turn::a_fetch_asked_to_read_in_a_turn_without_vet_content_stays_a_reference`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
+`verified-by: bravebot_agent::turn::a_fetch_whose_read_is_not_a_boolean_is_refused_before_anything_is_fetched`
+`verified-by: bravebot_agent::turn::a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch`

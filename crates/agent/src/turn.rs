@@ -2318,6 +2318,10 @@ struct Reported<'a> {
 }
 
 /// What `answer_the_turn` settles before the first round and `run_rounds` only reads.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the tools the turn was offered, read on its own"
+)]
 struct Plan<'p> {
     system: crate::request_view::Prompt,
     system_text: String,
@@ -2336,14 +2340,23 @@ struct Plan<'p> {
     /// Whether the turn was offered `read_output`, which decides who answers a read of what a run
     /// printed.
     offers_read_output: bool,
+    /// Whether the turn was offered `vet_content`, which decides who answers a read of what
+    /// `fetch_url` or a server's tool returned.
+    offers_vet_content: bool,
 }
 
 /// What the rounds change, and what the answer step reads once they are over.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the turn has already said or done, set and read on its own"
+)]
 struct State<'s> {
     steps: usize,
     reminded: round_steps::Reminded,
     worked: Worked,
     may_call_tools: bool,
+    /// Whether a delegate has been warned that it is near its token budget (DELEGATE-29).
+    warned_of_token_budget: bool,
     account: crate::outcome::Spent,
     shown_before: u64,
     may_compact: bool,
@@ -2824,12 +2837,19 @@ where
     let offers_read_output = offered
         .iter()
         .any(|tool| tool.function.name == "read_output");
+    // The same for `vet_content`: it decides whether `fetch_url` and a server's tools are offered
+    // a `read` argument, and who answers one.
+    let offers_vet_content = offered_names(&offered, "vet_content");
 
     // A reference sends its holder to `vet_content`, `spawn_processor`, `write_file` and
     // `read_output` only where the list holds them, and so do the descriptions of the tools that
     // name others. A delegate is never offered the first and a reader the third, and a
     // definition's tools line or the command line can leave any of them out of a turn's.
-    if !offered_names(&offered, "vet_content") {
+    let processors = crate::delegate::Processors::of(
+        policy.processors_closed(),
+        offered_names(&offered, "spawn_processor"),
+    );
+    if !offers_vet_content {
         policy.without_vetting();
     }
     if !offered_names(&offered, "spawn_processor") {
@@ -2885,6 +2905,8 @@ where
         &preamble,
         started_in,
         &kept_facts,
+        offers_vet_content,
+        processors,
         memory,
     );
     let system_text = system.text();
@@ -3231,6 +3253,7 @@ where
         reporter,
         &mut subscription,
         &mut notices,
+        offers_vet_content,
     );
     let settled_wait = waiting.waited();
     // What checking the servers' lists spent is this turn's, since this turn is what asked.
@@ -3300,6 +3323,7 @@ where
         addressed,
         premium_key,
         offers_read_output,
+        offers_vet_content,
     };
     let mut state = State {
         steps: 0,
@@ -3319,6 +3343,7 @@ where
         // runs out, so the last request goes out with none offered and the turn ends with an answer
         // rather than with the driver's apology.
         may_call_tools: true,
+        warned_of_token_budget: false,
         // What this turn's requests did, summed from zero: not what the session has done, which the
         // session adds up itself. `output_tokens` is tracked apart from the total because it is what
         // the live count reports, and adding a round's output to a running total that also holds
@@ -4307,28 +4332,66 @@ where
                 // conversation. A read_output call is made by a planner that has seen the
                 // size; this ask was made before there was one to see. The size is the
                 // slot's, as the reference states it, so no byte is read to decide.
+                //
+                // Not for a slot that states 0 bytes either. There is nothing to release and
+                // nothing for a check to read, so the result takes the route of a run that
+                // printed nothing (RUN-24) and the trail says why no check was made.
                 let output_cap = task.output_cap.unwrap_or(tools::OUTPUT_CAP);
+                // Who answers a read of this result: read_output's answer for a run, and
+                // vet_content's for `fetch_url` and a server's tool, each asked of the list that
+                // holds the release the read makes a round early.
+                let a_run = output.tool == "run";
+                let read_gate = if a_run {
+                    read_output_is()
+                } else {
+                    setup::vet_content_is(task, plan.offers_vet_content)
+                };
+                if output.read_asked
+                    && read_gate != ReadOutputIs::Asked
+                    && let Presentation::Quarantined(reference) = &presented
+                    && reference.bytes == Some(0)
+                {
+                    policy.record_empty_output(
+                        if a_run { "run" } else { "vet_content" },
+                        &reference.slot,
+                    );
+                }
                 let read_from = match &presented {
                     Presentation::Quarantined(reference)
                         if output.read_asked
-                            && read_output_is() != ReadOutputIs::Asked
-                            && reference.bytes.is_some_and(|bytes| bytes <= output_cap) =>
+                            && read_gate != ReadOutputIs::Asked
+                            && reference
+                                .bytes
+                                .is_some_and(|bytes| bytes != 0 && bytes <= output_cap) =>
                     {
                         let mut chat =
                             crate::processor::Chat::new(config, egress, task.account_session())
                                 .spending(state.subscription.as_mut())
                                 .on(state.turn_model.as_deref())
                                 .stoppable_by(cancel);
-                        let released = tools::read_in_the_result(
-                            policy,
-                            conversation.quarantine(),
-                            task.permission_mode.get(),
-                            task.auto_vetting,
-                            confirmer,
-                            &mut chat,
-                            reporter,
-                            &reference.slot,
-                        );
+                        let released = if a_run {
+                            tools::read_in_the_result(
+                                policy,
+                                conversation.quarantine(),
+                                task.permission_mode.get(),
+                                task.auto_vetting,
+                                confirmer,
+                                &mut chat,
+                                reporter,
+                                &reference.slot,
+                            )
+                        } else {
+                            tools::vet_in_the_result(
+                                policy,
+                                conversation.quarantine(),
+                                task.permission_mode.get(),
+                                task.auto_vetting,
+                                confirmer,
+                                &mut chat,
+                                reporter,
+                                &reference.slot,
+                            )
+                        };
                         // A check made here is a model call like the one read_output makes, so
                         // its tokens and the time spent waiting on it are the turn's.
                         if let Some(interval) = released.waited {
@@ -4660,6 +4723,19 @@ where
                             reference.bytes,
                             output_cap,
                         );
+                        // `read: true` asked of `fetch_url` or a server's tool that still came
+                        // back as a reference: said once, so it does not read as an unexplained
+                        // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
+                        let not_returned = if a_run {
+                            ""
+                        } else {
+                            sentences::read_not_returned(
+                                output.read_asked,
+                                read_gate,
+                                reference.bytes,
+                                output_cap,
+                            )
+                        };
                         // Only where git ran in a directory whose repository read_git
                         // opens: the output of git log or show is what read_git answers
                         // with nobody asked, and for any other program, or a repository
@@ -4681,7 +4757,7 @@ where
                             _ => String::new(),
                         };
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{advice}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{advice}{not_returned}{history}",
                             output.tool,
                             reference.describe()
                         )

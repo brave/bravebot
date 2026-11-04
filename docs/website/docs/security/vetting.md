@@ -68,6 +68,32 @@ It refuses a reference to nothing, a private sentence, and a call from a delegat
 nothing has read yet is opened rather than refused, since naming one is the ordinary way for the planner
 to ask about a file it may not read.
 
+### Asking for the result in the same call
+
+A `fetch_url` call, and a call to a tool of an [MCP server](../customize/mcp-servers.md), can carry
+`read: true`. It asks for the result in the result of the call, without a `vet_content` call after it.
+The argument is offered only to a session that is offered `vet_content`, so a delegate or a definition
+that leaves the tool out is not offered it. A server that lists an argument named `read` of its own
+keeps it: that argument is the server's, is sent to it as written, and does not ask for anything here.
+
+The content is quarantined as it always is, then released by the same path `vet_content` uses, with
+the same label and the same audit entry, and the reference it was kept under comes back beside it.
+That happens in two cases:
+
+- Permissions are bypassed and screening was not asked for. Nobody is asked and no check is made.
+- Auto-vetting is on and the check says `safe`. The check is made at the call and is announced and
+  counted like one made for `vet_content`.
+
+In every other case the content stays behind its reference and the result says the argument did not
+return it. That includes any other word from the check and a check that could not be made, and it
+names neither. Nobody is asked at the call. Where you answer `vet_content` yourself, `read` changes
+nothing: you are asked only if the planner calls `vet_content`. A picture is never released this way,
+content longer than one result may hold stays behind its reference with the reason, and content of
+zero bytes is reported as empty without a check. `read` must be `true` or `false`, and a call that
+gives anything else is refused before it is made. Asking this way saves the model round a
+`vet_content` call would have cost. [`run`](../reference/run-tool.md#reading-the-output-in-the-same-result)
+has the same argument for a program's output.
+
 ## A picture or a PDF
 
 A PNG, JPEG, GIF, WebP or PDF file the planner read goes the same way as text, with two differences. The

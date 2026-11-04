@@ -20,8 +20,9 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Fetching an http or https URL. `url` is routing; the only content argument is the `why` every tool takes
-([TOOL-5](tool-surface.md#TOOL-5)). The result is a
-reference. Where a rule about a host is written and how one is matched is
+([TOOL-5](tool-surface.md#TOOL-5)), and the `read` that asks for the result in the same result
+([FETCH-9](#FETCH-9)). The result is a
+reference, unless that release is asked for and made. Where a rule about a host is written and how one is matched is
 [permissions.md](../permissions.md); what a label means is [labels.md](../labels.md).
 
 ## Why a URL is admissible as routing
@@ -40,6 +41,10 @@ The label comes from `Capability::WebFetch`, so it is fixed before the request g
 about the reply can raise it. The planner gets a reference and never the bytes: it may hand them to
 a processor, or write them to a file with `contents_ref`, and it cannot read them or be told what
 they say.
+
+The release a person, a check or the mode makes of a body is [vet-content.md](vet-content.md)'s, and
+the body is released only by it, whether the planner calls `vet_content` or asks for it with `read`
+([FETCH-9](#FETCH-9)).
 
 **Why.** This is the difference between a fetch and a run, and the one place the two could be
 confused. Vouching for a command trusts what it prints, because a person can read one command and
@@ -317,3 +322,40 @@ connects, and what it is allowed to reach is its own configuration's.
 `verified-by: bravebot_net::egress::an_approved_address_literal_on_this_machine_is_fetched`
 `verified-by: bravebot_core::policy::a_fetch_is_in_flight_from_its_approval_until_it_finishes`
 `verified-by: bravebot_agent::turn::a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it`
+
+<a id="FETCH-9"></a>
+### FETCH-9: a fetch may ask for its body in the same result, and gets it where the mode or a check answers
+
+`fetch_url` takes a boolean `read` beside `url`. It is offered only on a list that holds
+`vet_content`, and the property is described there as asking for the page in the result of the
+call. `read: true` does not change the request: the URL, the headers, the redirect chain and the
+label are those of any fetch ([FETCH-1](#FETCH-1), [FETCH-4](#FETCH-4), [FETCH-7](#FETCH-7)), and
+the body is quarantined before anything else happens to it.
+
+Whether the body is then released in the result, what the check reads and says, what the trail
+records, what the result holds where it is not released, and what a size of 0, a size past the output
+cap and a picture do, are [VET-6](vet-content.md#VET-6)'s. A fetch that failed has no body and no
+slot, so `read` has nothing to release, and the failure is reported as it is without `read`.
+
+A `read` that is neither `true` nor `false` is refused before the host is asked about, so a person
+is not shown a question for a call that was going to be refused. Absent and null are `false`.
+
+**Why.** A planner that wants a page it will read has nothing to decide between the fetch and the
+`vet_content` call that follows it where the mode or a check answers that call, and the second round
+only adds a model call and the whole conversation sent again. The argument is set before the body
+exists and is not routing: the host is the only field a person approves ([FETCH-2](#FETCH-2)), and
+approving it grants nothing about what the host returns ([FETCH-1](#FETCH-1)).
+
+**This changes no label.** The body is untrusted and public when the request goes out, and a release
+by the flag is the release `vet_content` makes of it. No byte of the page is read to decide it.
+
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_fetch_that_asks_to_read_is_handed_the_page_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_is_handed_the_page_where_the_check_finds_nothing`
+`verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_does_not_say_safe`
+`verified-by: bravebot_agent::turn::a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot_be_made`
+`verified-by: bravebot_agent::turn::asking_to_read_a_fetched_page_changes_nothing_where_a_person_still_answers_for_it`
+`verified-by: bravebot_agent::turn::a_fetch_asked_to_read_in_a_turn_without_vet_content_stays_a_reference`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
+`verified-by: bravebot_agent::turn::a_fetch_whose_read_is_not_a_boolean_is_refused_before_anything_is_fetched`
+`verified-by: bravebot_agent::turn::a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch`

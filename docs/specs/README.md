@@ -26,7 +26,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [recall.md](recall.md) | `RECALL` | 11 | what a person's sessions remember across projects: rules loaded in full every turn, facts ranked and recalled, and how neither lets untrusted content in (proposed: built, thresholds not yet measured on a bravebot store) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
-| [turns.md](turns.md) | `TURN` | 15 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, what the note under a finished turn says about refusals, what is done about the planner's task list when a turn answers with tasks still open, what the planner is told when a turn ends in a failure, and what a limit a person gave a run does to it |
+| [turns.md](turns.md) | `TURN` | 16 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, what the note under a finished turn says about refusals, what is done about the planner's task list when a turn answers with tasks still open, what the planner is told when a turn ends in a failure, and what a limit a person gave a run does to it |
 | [prompting.md](prompting.md) | `PROMPT` | 14 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
 | [permission-modes.md](permission-modes.md) | `MODE` | 14 | a standing answer to those prompts: accepting edits, planning, auto, or asking about nothing at all |
 | [auto-mode.md](auto-mode.md) | `AUTO` | 9 | a fifth permission mode in which a classifier that reads only the person's typed lines and the action answers a confined run and the first fetch question, and every other question is asked (the setting that removes the mode from the ladder and from the desktop window's menu, and a model of its own, are not built) |
@@ -55,7 +55,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [chatgpt-sign-in.md](chatgpt-sign-in.md) | `CHATGPT` | 17 | signing in to OpenAI with a ChatGPT account through a browser, from a typed command or the window's own sign-in, and offering the account's models in the picker (proposed, built and exercised against a real account; whether OpenAI's terms allow it is undecided, and what that account did not show is listed in the spec) |
 | [xai-sign-in.md](xai-sign-in.md) | `XAI` | 22 | signing in to xAI with a SuperGrok subscription through a code a person enters on any device, from a typed command or the window's own sign-in, the file the tokens are kept in, replacing an access token before it expires, and how the account's models are named (proposed; the command, the turn's request and the account's models are built) |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 32 | operating-system confinement for processes running code we did not write |
-| [mcp.md](mcp.md) | `MCP` | 15 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
+| [mcp.md](mcp.md) | `MCP` | 16 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 22 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 46 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
@@ -110,8 +110,8 @@ the routing-versus-content split they share.
 | [tools/run.md](tools/run.md) | `RUN` | 30 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 6 | `read_output` |
-| [tools/vet-content.md](tools/vet-content.md) | `VET` | 5 | `vet_content` |
-| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
+| [tools/vet-content.md](tools/vet-content.md) | `VET` | 6 | `vet_content` |
+| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 9 | `fetch_url` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
 | [tools/search-skills.md](tools/search-skills.md) | `FINDSKILL` | 4 | `search_skills` |

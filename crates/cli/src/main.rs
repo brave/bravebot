@@ -1237,6 +1237,12 @@ fn prepare_the_run(
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
         .working_towards(goal.clone());
     task = task_from_the_settings(task, &settings, effort);
+    // A one-shot run puts no question to anybody (ASK-7), so the planner is told to say in its
+    // reply what it could not read. A run reading lines sends its questions to the program feeding
+    // it, which answers them.
+    if !input_lines {
+        task = task.with_nobody_answering();
+    }
     // The kept facts a continued session has already had put in front of its planner (RECALL-9).
     if let Some(record) = &continued {
         task = task.with_injected_facts(record.injected_facts.clone());

@@ -289,6 +289,19 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         conversation,
     );
 
+    // Once, after that stop, from the same counts (DELEGATE-29): a delegate the stop just left
+    // with no tools is not also told it is near the end. Here rather than after the round so that
+    // what a child spent, collected above, counts toward it as well.
+    warn_near_token_budget(
+        state.may_call_tools,
+        &mut state.warned_of_token_budget,
+        task,
+        state.steps,
+        state.account.tokens,
+        state.account.context_tokens,
+        conversation,
+    );
+
     reporter.spent(crate::outcome::Spent {
         timing: state.spent.finish(),
 
@@ -896,6 +909,64 @@ pub(super) fn stop_at_token_budget<R: Reporter>(
         Provenance::Driver,
     );
     true
+}
+
+/// Whether `tokens` of a `budget` leave a delegate near the end of it: four fifths spent, or
+/// fewer tokens left than two requests at the current context size cost, since every request
+/// counts the whole context again. False once the budget is spent, which
+/// [`stop_at_token_budget`] decides.
+pub(super) fn near_token_budget(budget: u64, tokens: u64, context_tokens: u64) -> bool {
+    tokens < budget
+        && (tokens.saturating_mul(5) >= budget.saturating_mul(4)
+            || budget - tokens < context_tokens.saturating_mul(2))
+}
+
+/// What a delegate is told when it is near its token budget (DELEGATE-29).
+///
+/// Made of two counts and fixed words, so nothing a tool returned or the delegate wrote reaches
+/// it. It asks what the rounds warning asks, since the tools go in the same way.
+pub(super) fn token_budget_notice(budget: u64, tokens: u64) -> String {
+    format!(
+        "{TOOL_BUDGET_SPENT} You have spent {tokens} of your {budget} tokens. Every request counts \
+         the whole conversation again, so you may have only a few requests left. After them you have \
+         no tools and can only answer. Finish what you have started or undo it, so that the \
+         working tree is consistent when your tools go: complete or abort a rebase, merge or \
+         cherry-pick that is in progress, and commit or discard edits you have made. Then \
+         answer with what you did, what is left, and the state you left the tree in."
+    )
+}
+
+/// Warn a delegate once that it is near its token budget, after at least one round of its own.
+///
+/// Compares the delegate's token total, its context size and the figure its spec fixed; no reply
+/// or tool result is read (DELEGATE-29). Nothing is sent to a run that is not a delegate, that has
+/// no budget, or that has no tools left.
+pub(super) fn warn_near_token_budget(
+    may_call_tools: bool,
+    warned: &mut bool,
+    task: &Task,
+    steps: usize,
+    tokens: u64,
+    context_tokens: u64,
+    conversation: &mut Conversation,
+) {
+    if !may_call_tools || *warned || steps == 0 {
+        return;
+    }
+    let Some(budget) = task
+        .delegate
+        .as_ref()
+        .and_then(bravebot_core::delegate::DelegateSpec::budget)
+        .filter(|budget| near_token_budget(*budget, tokens, context_tokens))
+    else {
+        return;
+    };
+    *warned = true;
+    conversation.push_composed_from(
+        Message::user(token_budget_notice(budget, tokens)),
+        Composed::Notice,
+        Provenance::Driver,
+    );
 }
 
 /// The most rounds a delegate is warned ahead of its limit, when its limit leaves room for that

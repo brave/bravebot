@@ -4,7 +4,7 @@
 //! None of it takes a `Labelled` value, a `Policy`, a `SlotStore` or a `Sink`: the tool bodies that
 //! read, label or declassify content stay in `tools.rs`.
 
-use super::{WHY, offer_runs};
+use super::{MAX_FANOUT, WHY, offer_runs};
 use crate::confine::LOOPBACK_CONNECT_RULE;
 use bravebot_aichat::protocol::Tool;
 use bravebot_core::todo::Status;
@@ -203,7 +203,8 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
          should be is its decision, not yours. It reads the whole document, so it can work out \
          what is wrong and where the fix goes, and leave a file alone if it turns out not to be \
          the one you are after. {derived_text} Once your context holds private content, as it does {shows}after \
-         a delegate reports some, and in a conversation resumed with some, every later \
+         a delegate reports some, in a conversation resumed with some, and in a delegate started \
+         while its parent's context held some, every later \
          spawn_processor call is refused for the rest of the conversation: what you write is \
          private from then on, and a processor takes no private instruction. {working} keep \
          working."
@@ -218,13 +219,19 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     } else {
         ""
     };
+    let closes_processors = if beside("spawn_processor") {
+        "Being shown output closes spawn_processor for you and for every delegate you start \
+         afterwards. "
+    } else {
+        ""
+    };
     format!(
         "Ask to be shown what a command printed. Give the reference a run handed back. Use it \
          whenever you ran something to find something out, which is most of the time: a run's \
          output is quarantined by default, so `which`, `find`, `uname` and the like tell you \
          nothing until you ask for the result. Ask for the errors too when a run fails, or you \
          will not know why it failed and must not claim it succeeded. Only for output from run; \
-         a quarantined file is not readable this way. {anything_else}Output you were shown the \
+         a quarantined file is not readable this way. {closes_processors}{anything_else}Output you were shown the \
          beginning and end of, because the whole was too long for one result, is the exception: \
          you may read all of it, so nobody is asked, and it comes back a page at a time from the \
          offset you give. A pattern searches that output instead of paging it: you get the \
@@ -372,7 +379,20 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
         match tool.function.name.as_str() {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
-            "fetch_url" => tool.function.description = fetch_url_description(&beside),
+            "fetch_url" => {
+                tool.function.description = fetch_url_description(&beside);
+                // `read` asks for the release `vet_content` makes, so a list without it has
+                // nothing for the argument to ask.
+                if !beside("vet_content")
+                    && let Some(properties) = tool
+                        .function
+                        .parameters
+                        .pointer_mut("/properties")
+                        .and_then(|properties| properties.as_object_mut())
+                {
+                    properties.remove("read");
+                }
+            }
             "job_output" => tool.function.description = job_output_description(&beside),
             "run" => {
                 tool.function.description = tool.function.description.replacen(
@@ -1565,7 +1585,10 @@ fn table(
              task to delegates of its own, though not without end: the tree stops a few levels \
              down, and one turn starts only so many however they are arranged. Its writes, its \
              runs and its calls to an MCP server's tools are still shown to the user for \
-             approval, so this saves you context and never an approval. Do not use it for \
+             approval, so this saves you context and never an approval. A delegate started after \
+             you have been shown output from read_output, content from vet_content or a \
+             delegate's report cannot run processors, so start a task that needs a picture or \
+             a file looked at before then, or leave it to the person. Do not use it for \
              something one read would answer: it is a \
              whole second agent and costs like one.",
             json!({
@@ -1574,7 +1597,8 @@ fn table(
                     "kind": {
                         "type": "string",
                         "description": "Which kind of agent, narrowest first. \"reader\" reads, \
-                                        lists, searches and runs processors: use it to find \
+                                        lists, searches and, while the context that started it \
+                                        holds nothing private, runs processors: use it to find \
                                         something out. \"checker\" also runs programs and asks \
                                         a language server, so it can build, test and lint, but \
                                         writes nothing: use it to \
@@ -1596,13 +1620,16 @@ fn table(
                     },
                     "each": {
                         "type": "array",
-                        "description": "Optional. Start one delegate per entry instead of one \
-                                        in total, each told the task followed by its own entry. \
-                                        Put what they share in task and only the differing part \
-                                        here, e.g. one path per entry. Writing the same \
-                                        paragraph out four times costs you the seconds it takes \
-                                        to say it, and the delegates cannot start until you \
-                                        have.",
+                        "description": format!(
+                            "Optional. Start one delegate per entry instead of one in total, \
+                             each told the task followed by its own entry. Put what they share \
+                             in task and only the differing part here, e.g. one path per \
+                             entry. One call starts at most {MAX_FANOUT} delegates and a call \
+                             with more entries is refused; for more, make a further call with \
+                             the same task and the next entries. Writing the same paragraph \
+                             out four times costs you the seconds it takes to say it, and the \
+                             delegates cannot start until you have."
+                        ),
                         "items": {"type": "string"}
                     },
                     "isolation": {
@@ -1639,7 +1666,11 @@ fn table(
                         "description": "Optional. The most tokens each delegate may spend, \
                                         written as \"500000\", \"500k\" or \"2m\". A delegate that has spent it \
                                         loses its tools and answers with what it has, and you \
-                                        are told so beside its report. It can only lower the \
+                                        are told so beside its report. Every request counts \
+                                        the whole conversation so far, so a figure buys a few \
+                                        dozen requests, not a few dozen thousand tokens of \
+                                        reading: 2m is about thirty requests at 70k tokens \
+                                        each. It can only lower the \
                                         bound the delegate's definition sets. Leave it out to \
                                         set none."
                     }
@@ -1656,6 +1687,14 @@ fn table(
                     "url": {
                         "type": "string",
                         "description": "The absolute http or https URL to fetch."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": "Ask to have the page checked and released in this \
+                                        result, as vet_content would, so there is no \
+                                        vet_content call to make. Where it would be kept \
+                                        back, or the page is too long for one result, it \
+                                        still comes back as a reference. Defaults to false."
                     }
                 },
                 "required": ["url"]

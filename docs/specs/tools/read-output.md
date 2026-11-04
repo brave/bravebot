@@ -62,6 +62,14 @@ have made it. Where a check makes it, the check is made at the run and nobody is
 Only output from `run` can be read this way. A file's worth is the trust map's answer, and a second
 route to it would be a way to disagree with the first.
 
+**Nothing is released from a slot that holds no bytes.** `read_output` on a slot whose size is 0 makes
+no check, draws no prompt in any mode, writes no release, and answers in the driver's own words that
+the slot printed nothing. The size is the one the slot states for its reference ([LABEL-4](../labels.md#LABEL-4)),
+which the planner was shown, so no byte is read to decide. The trail records under `read_output`
+that the slot holds 0 bytes, so no check was made and nothing was released. A run that asked with
+`read` ([RUN-22](run.md#RUN-22)) over such a slot gets the same treatment in its own result
+([RUN-24](run.md#RUN-24)).
+
 **Why.** This is the strongest assertion in the system and the only one made about bytes rather
 than about a prediction: vouching guesses at output that does not exist yet, while this is a
 statement about text in front of the reader. Errors count: a run that failed put its explanation on
@@ -77,6 +85,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
@@ -122,9 +131,15 @@ found releases the output and every other verdict keeps it back, the refusal bei
 was asked for. Without the screening asked for the output is released unshown and no check is made
 ([MODE-4](../permission-modes.md#MODE-4)).
 
+Output shown to the planner is private content, so the description says that being shown output
+closes `spawn_processor` for the planner and for every delegate it starts afterwards
+([PROC-4](../processors.md#PROC-4), [DELEGATE-8](../delegation.md#DELEGATE-8)). A list that does not
+offer `spawn_processor` does not name it there.
+
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_started_after_private_content_has_no_processors`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`

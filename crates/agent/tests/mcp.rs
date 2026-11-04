@@ -1064,6 +1064,660 @@ fn a_servers_picture_a_person_keeps_out_is_never_attached() {
     );
 }
 
+/// A server's tool called with `read: true` in a mode that bypasses permissions, with no screening
+/// asked for, hands back the answer in the same result: the round `vet_content` would have taken
+/// is not spent, nobody is asked, and the server is never sent the flag, which is the driver's
+/// and not the server's argument.
+///
+/// A wrong implementation forwards `read` to the server, or leaves the answer behind its
+/// reference, which shows as the flag in the `tools/call` body or the payload missing from the
+/// round after the call.
+#[test]
+fn a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result() {
+    let scratch = Scratch::new("mcp-read-bypass");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("show me the forecast")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    assert_eq!(inner.vets, 0, "a person was asked about the answer");
+    let sent = rounds(&chat);
+    let [first, second] = sent.as_slice() else {
+        panic!("the turn made {} rounds, not two", sent.len());
+    };
+    assert!(
+        first.contains("\"read\""),
+        "the tool was not offered a read argument: {first}"
+    );
+    assert!(
+        second.contains(PAYLOAD),
+        "the answer did not come back in the result that asked for it: {second}"
+    );
+    assert!(
+        !second.contains("could not be shown to you"),
+        "the result still says the answer was kept back: {second}"
+    );
+    let calls: Vec<String> = server
+        .try_iter()
+        .filter(|body| body.contains("tools/call"))
+        .collect();
+    let [call] = calls.as_slice() else {
+        panic!("the server was sent {} calls", calls.len());
+    };
+    assert!(
+        call.contains("Paris") && !call.contains("read"),
+        "the server was sent the driver's flag: {call}"
+    );
+}
+
+/// Without the flag the same call, in the same mode, still hands back a reference.
+#[test]
+fn a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference() {
+    let scratch = Scratch::new("mcp-no-read-bypass");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("show me the forecast")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [_, second] = sent.as_slice() else {
+        panic!("the turn made {} rounds, not two", sent.len());
+    };
+    assert!(
+        !second.contains(PAYLOAD) && second.contains("could not be shown to you"),
+        "an answer nobody asked to read reached the planner: {second}"
+    );
+}
+
+/// What the checking chat server says about a check whose request holds the forecast payload.
+enum OutputCheck {
+    /// Answer with this reply (a `reply_with` body).
+    Says(String),
+    /// Refuse the request, so the check cannot be made.
+    Fails,
+}
+
+/// A mock chat server like [`serve_chat`], except that a check whose request holds [`PAYLOAD`] (a
+/// check of a call's answer, and not of the server's list) gets `output_check`. Every other check
+/// finds nothing.
+fn serve_chat_checking(
+    replies: Vec<String>,
+    output_check: OutputCheck,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = if body.contains(A_CHECK_ASKING) && body.contains(PAYLOAD) {
+                match &output_check {
+                    OutputCheck::Says(reply) => Some(reply.clone()),
+                    OutputCheck::Fails => None,
+                }
+            } else if body.contains(A_CHECK_ASKING) {
+                Some(reply_with(
+                    r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                ))
+            } else {
+                replies.next()
+            };
+            let Some(reply) = reply else {
+                let refusal =
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(refusal.as_bytes());
+                continue;
+            };
+            let frames = as_sse(&reply);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                frames.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// A server like the weather server, except that its list is `tools` and every call is answered
+/// with `result`, where those are given.
+fn serve_with(tools: Option<Value>, result: Option<Value>) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let given = match request.get("method").and_then(Value::as_str) {
+                Some("tools/list") => tools.clone().map(|tools| json!({ "tools": tools })),
+                Some("tools/call") => result.clone(),
+                _ => None,
+            };
+            let response = match given {
+                Some(given) => {
+                    let reply = json!({"jsonrpc": "2.0", "id": request.get("id"), "result": given})
+                        .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                }
+                None => answered(&body, "get_forecast"),
+            };
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// How many checks of the forecast payload the chat server was asked for.
+fn checks_of_the_answer(all: &[String]) -> usize {
+    all.iter()
+        .filter(|body| body.contains(A_CHECK_ASKING) && body.contains(PAYLOAD))
+        .count()
+}
+
+/// What the planner was sent as the answer to its call, in the round after it.
+fn the_answer_the_planner_got(all: &[String]) -> String {
+    let turn: Vec<&String> = all
+        .iter()
+        .filter(|body| !body.contains(A_CHECK_ASKING))
+        .collect();
+    let [_, second] = turn.as_slice() else {
+        panic!("the turn made {} rounds, not two", turn.len());
+    };
+    tool_results(second).join("\n")
+}
+
+/// Run the one call `arguments` to the weather server's tool under `task`, with the chat server
+/// `endpoint`, and hand back the person's double.
+fn call_the_forecast<'a>(
+    endpoint: &str,
+    scratch: &Scratch,
+    session: Session,
+    task: Task,
+    inner: &'a mut Answering,
+) -> &'a mut Answering {
+    let mode = task.permission_mode.get();
+    let mut confirmer = bravebot_agent::Confining::new(inner, mode, false);
+    run_turn(
+        endpoint,
+        &scratch.project(),
+        task.with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    drop(confirmer);
+    inner
+}
+
+/// MCP-16 and VET-6 with auto-vetting on: a call that asks to read has its answer checked, and a
+/// check that finds nothing releases it in the same result with nobody asked and one check made.
+///
+/// A wrong implementation asks the person anyway (`vets` is not 0), releases without checking
+/// (no check holds the payload), checks twice, or leaves the answer behind its reference.
+#[test]
+fn a_servers_tool_called_with_read_where_the_check_finds_nothing_is_answered_in_the_same_result() {
+    let scratch = Scratch::new("mcp-read-checked-safe");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("show me the forecast").with_auto_vetting(true),
+        &mut inner,
+    );
+
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(inner.vets, 0, "a person was asked about the answer");
+    assert_eq!(
+        checks_of_the_answer(&all),
+        1,
+        "the answer was not checked once"
+    );
+    let answer = the_answer_the_planner_got(&all);
+    assert!(
+        answer.contains(PAYLOAD) && !answer.contains("could not be shown to you"),
+        "the checked answer did not come back in the result that asked for it: {answer}"
+    );
+}
+
+/// MCP-16 and VET-6: any word but `safe` from the check leaves the answer behind its reference
+/// with nobody asked, and nothing the check said reaches the planner. The same holds where the
+/// check cannot be made.
+///
+/// A wrong implementation releases on any answer, puts an unsafe answer to the person, or writes
+/// the check's word or reason into the result.
+#[test]
+fn a_servers_tool_called_with_read_where_the_check_objects_or_fails_stays_a_reference() {
+    for (name, check) in [
+        (
+            "unsafe",
+            OutputCheck::Says(reply_with(
+                r#"{\"verdict\": \"unsafe\", \"reason\": \"REASON-MARKER-FROM-THE-CHECK\"}"#,
+            )),
+        ),
+        ("lost", OutputCheck::Fails),
+    ] {
+        let scratch = Scratch::new(&format!("mcp-read-check-{name}"));
+        let (url, _server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let (endpoint, chat) = serve_chat_checking(
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+                reply_with("done"),
+            ],
+            check,
+        );
+        let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+        call_the_forecast(
+            &endpoint,
+            &scratch,
+            session,
+            Task::new("show me the forecast").with_auto_vetting(true),
+            &mut inner,
+        );
+
+        let all: Vec<String> = chat.try_iter().collect();
+        assert_eq!(inner.vets, 0, "{name}: a person was asked about the answer");
+        assert!(
+            checks_of_the_answer(&all) >= 1,
+            "{name}: the answer was not checked"
+        );
+        let answer = the_answer_the_planner_got(&all);
+        assert!(
+            !answer.contains(PAYLOAD) && answer.contains("could not be shown to you"),
+            "{name}: the answer was not kept behind its reference: {answer}"
+        );
+        assert!(
+            answer.contains("did not return it in this result"),
+            "{name}: the result does not say the read did not return it: {answer}"
+        );
+        assert!(
+            !answer.contains("unsafe") && !answer.contains("REASON-MARKER"),
+            "{name}: the check's word reached the planner: {answer}"
+        );
+    }
+}
+
+/// MCP-16 and MCP-5: a result the server marks as a failure is released the same way as any other
+/// when the call asks to read it.
+///
+/// A wrong implementation releases only results that did not fail, so the failure text stays behind
+/// a reference.
+#[test]
+fn a_servers_failed_result_called_with_read_in_bypass_is_answered_in_the_same_result() {
+    let scratch = Scratch::new("mcp-read-failed");
+    let (url, _server) = serve_with(
+        None,
+        Some(json!({
+            "content": [{"type": "text", "text": "FORECAST-BACKEND-DOWN"}],
+            "isError": true,
+        })),
+    );
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("show me the forecast").with_permission_mode(PermissionMode::Bypass),
+        &mut inner,
+    );
+
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(inner.vets, 0, "a person was asked about the failure");
+    let answer = the_answer_the_planner_got(&all);
+    assert!(
+        answer.contains("FORECAST-BACKEND-DOWN") && !answer.contains("could not be shown to you"),
+        "the failure did not come back in the result that asked for it: {answer}"
+    );
+}
+
+/// VET-4 and MCP-16: a picture is never released by `read: true`, and nobody is asked about it.
+/// The caption the server sent beside the picture is a separate text slot, and it stays behind its
+/// reference too: a reply that holds a picture is presented as references only, so `read` releases
+/// neither part.
+///
+/// A wrong implementation attaches the picture to the result, puts its bytes into the text, or
+/// releases the caption beside it.
+#[test]
+fn a_picture_a_server_returns_stays_quarantined_when_the_call_asks_to_read() {
+    let scratch = Scratch::new("mcp-read-picture");
+    let (url, _server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("screenshot the forecast").with_permission_mode(PermissionMode::Bypass),
+        &mut inner,
+    );
+
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(inner.vets, 0, "a person was asked about the picture");
+    let turn: Vec<&String> = all
+        .iter()
+        .filter(|body| !body.contains(A_CHECK_ASKING))
+        .collect();
+    let [_, second] = turn.as_slice() else {
+        panic!("the turn made {} rounds", turn.len());
+    };
+    assert!(
+        !second.contains("iVBORw0KGgo") && !second.contains("image_url"),
+        "the picture reached the planner: {second}"
+    );
+    let answer = tool_results(second).join("\n");
+    assert!(
+        !second.contains(CAPTION)
+            && answer.contains("Its text and its 1 picture are quarantined, one reference each"),
+        "the caption was released with the picture: {answer}"
+    );
+}
+
+/// MCP-16: a turn whose list lacks `vet_content` is offered a server's tool without a `read`, and a
+/// turn whose list holds it is offered one. The addressed worker is the turn whose list is the
+/// definition's.
+///
+/// A wrong implementation offers `read` whatever the list holds, so a planner is told it can ask
+/// for a release it has no tool for, or never offers it.
+#[test]
+fn a_turn_without_vet_content_is_offered_no_read_on_a_servers_tool() {
+    for (name, fields, offered) in [
+        (
+            "read-offered-without-vet",
+            "tools: read_file\nmcpServers: weather\n",
+            false,
+        ),
+        (
+            "read-offered-with-vet",
+            "tools: read_file, vet_content\nmcpServers: weather\n",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(name);
+        let home = Scratch::new(&format!("{name}-home"));
+        std::fs::create_dir_all(home.path.join("agents"))
+            .expect("create the definitions directory");
+        std::fs::write(
+            home.path.join("agents").join("scout.md"),
+            format!(
+                "---\nname: scout\ndescription: Looks things up.\nkind: worker\n{fields}---\n\n\
+                 SCOUT-BY-DEFINITION\n"
+            ),
+        )
+        .expect("write the definition");
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            reply_with("looked it up"),
+        ]);
+        let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+        let _ = reported_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("what is the forecast")
+                .with_home(Some(home.path.clone()))
+                .addressing(Some("scout".to_string()))
+                .with_mcp(Some(session)),
+            &mut asked,
+        );
+        let all: Vec<String> = chat.try_iter().collect();
+        let first = all
+            .iter()
+            .find(|body| !body.contains(A_CHECK_ASKING))
+            .expect("a round");
+        let request: Value = serde_json::from_str(first).expect("a request");
+        let forecast = request["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["function"]["name"] == FORECAST)
+            .unwrap_or_else(|| panic!("{name}: the forecast tool was not offered: {first}"));
+        let properties = &forecast["function"]["parameters"]["properties"];
+        assert_eq!(
+            properties.get("read").is_some(),
+            offered,
+            "{name}: read is offered only where vet_content is: {properties}"
+        );
+        if offered {
+            assert_eq!(
+                properties["read"]["type"], "boolean",
+                "{name}: {properties}"
+            );
+        }
+    }
+}
+
+/// MCP-16: a tool whose server lists its own `read` argument is offered as the server listed it,
+/// is not offered ours, and a call that gives `read` reaches the server as written and gets the
+/// usual reference.
+///
+/// A wrong implementation offers ours over the server's, strips or reads the server's value, or
+/// releases the answer.
+#[test]
+fn a_servers_own_read_argument_is_the_servers_and_asks_for_nothing_to_be_released() {
+    let scratch = Scratch::new("mcp-read-own");
+    let (url, server) = serve_with(
+        Some(json!([{
+            "name": "get_forecast",
+            "description": DESCRIPTION,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                    "read": {"type": "string", "description": "SERVER-OWN-READ"},
+                },
+                "required": ["city"],
+            },
+        }])),
+        None,
+    );
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":"full"}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("show me the forecast").with_permission_mode(PermissionMode::Bypass),
+        &mut inner,
+    );
+
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(inner.vets, 0, "a person was asked about the answer");
+    let first = all
+        .iter()
+        .find(|body| !body.contains(A_CHECK_ASKING))
+        .expect("a round");
+    let request: Value = serde_json::from_str(first).expect("a request");
+    let forecast = request["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == FORECAST)
+        .expect("the forecast tool was offered");
+    let read = &forecast["function"]["parameters"]["properties"]["read"];
+    assert!(
+        read["type"] == "string" && read.get("description").is_none(),
+        "the offered argument is not the server's own: {forecast}"
+    );
+    let answer = the_answer_the_planner_got(&all);
+    assert!(
+        !answer.contains(PAYLOAD) && answer.contains("could not be shown to you"),
+        "the server's own read released the answer: {answer}"
+    );
+    let calls: Vec<String> = server
+        .try_iter()
+        .filter(|body| body.contains("tools/call"))
+        .collect();
+    let [call] = calls.as_slice() else {
+        panic!("the server was sent {} calls", calls.len());
+    };
+    assert!(
+        call.contains(r#""read":"full""#),
+        "the server's own argument did not reach it as written: {call}"
+    );
+}
+
+/// VET-6 where a person answers: `read: true` changes nothing in the default mode with no
+/// screening, so nobody is asked at the call, no check is made, and the answer stays behind its
+/// reference until `vet_content` is called.
+///
+/// A wrong implementation treats the flag as consent, or puts the vet prompt to the person at the
+/// call.
+#[test]
+fn a_servers_tool_called_with_read_where_a_person_answers_changes_nothing() {
+    let scratch = Scratch::new("mcp-read-person");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("show me the forecast"),
+        &mut inner,
+    );
+
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(inner.vets, 0, "a person was asked at the call");
+    assert_eq!(checks_of_the_answer(&all), 0, "the answer was checked");
+    let answer = the_answer_the_planner_got(&all);
+    assert!(
+        !answer.contains(PAYLOAD) && answer.contains("could not be shown to you"),
+        "the answer was not kept behind its reference: {answer}"
+    );
+}
+
+/// MCP-16: a `read` that is not true or false is refused before the server is called, with nobody
+/// asked.
+///
+/// A wrong implementation reads "yes" as true, drops it, or forwards it to the server.
+#[test]
+fn a_servers_tool_called_with_a_read_that_is_not_a_boolean_is_refused_before_the_server_is_called()
+{
+    let scratch = Scratch::new("mcp-read-not-boolean");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":"yes"}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    let asked = call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("show me the forecast").with_permission_mode(PermissionMode::Bypass),
+        &mut inner,
+    );
+    assert_eq!(asked.vets, 0, "a person was asked about the answer");
+
+    assert!(
+        !methods(&server).iter().any(|method| method == "tools/call"),
+        "the server was called with a read that is not a boolean"
+    );
+    let all: Vec<String> = chat.try_iter().collect();
+    let answer = the_answer_the_planner_got(&all);
+    assert!(
+        answer.contains("'read' must be true or false"),
+        "the planner was not told why: {answer}"
+    );
+}
+
+/// MCP-16 and VET-6: an answer past the cap on what a result may hold stays behind its reference
+/// and the result says it was left out for its length, with no check made.
+///
+/// A wrong implementation releases the whole answer, or leaves it out without saying why.
+#[test]
+fn a_servers_answer_past_the_output_cap_stays_a_reference_when_the_call_asks_to_read() {
+    let scratch = Scratch::new("mcp-read-cap");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    call_the_forecast(
+        &endpoint,
+        &scratch,
+        session,
+        Task::new("show me the forecast")
+            .with_permission_mode(PermissionMode::Bypass)
+            .with_output_cap(Some(10)),
+        &mut inner,
+    );
+
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(inner.vets, 0, "a person was asked about the answer");
+    assert_eq!(checks_of_the_answer(&all), 0, "the answer was checked");
+    let answer = the_answer_the_planner_got(&all);
+    assert!(
+        !answer.contains(PAYLOAD) && answer.contains("longer than a result may hold"),
+        "the answer was not left out for its length: {answer}"
+    );
+}
+
 /// A part the transport leaves out is told to the planner as a count whether or not the result held
 /// a picture, so a screenshot that did not arrive is not mistaken for a tool with nothing to say.
 /// The result here has one image that is not base64 and no other part to take a picture from.
@@ -6622,4 +7276,369 @@ fn a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals()
         "a declined move was not recorded once, under the alias"
     );
     assert!(!clean, "a turn whose move was declined read as clean");
+}
+
+/// How long the slow chat server holds each check before it answers.
+const A_CHECK_TAKES: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// A mock chat server that answers each connection on a thread of its own, holding a check for
+/// [`A_CHECK_TAKES`] before it says it found nothing, and answering the turn's own round at once.
+/// Every body is reported.
+fn serve_slow_checks() -> (String, mpsc::Receiver<String>) {
+    let (endpoint, bodies, _most) = serve_counted_checks();
+    (endpoint, bodies)
+}
+
+/// As [`serve_slow_checks`], and also counts the most checks it held open at one moment.
+fn serve_counted_checks() -> (
+    String,
+    mpsc::Receiver<String>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let most = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let holding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = most.clone();
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let sender = sender.clone();
+            let (most, holding) = (most.clone(), holding.clone());
+            thread::spawn(move || {
+                let body = body_of(&stream);
+                let _ = sender.send(body.clone());
+                let reply = match body.contains(A_CHECK_ASKING) {
+                    true => {
+                        let now = holding.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        most.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                        thread::sleep(A_CHECK_TAKES);
+                        holding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        reply_with(
+                            r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                        )
+                    }
+                    false => reply_with("done"),
+                };
+                let frames = as_sse(&reply);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                    frames.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver, counted)
+}
+
+/// `count` servers, each answering as the weather server does, under the aliases `s0`, `s1` and on.
+fn servers_named(scratch: &Scratch, count: usize) -> Session {
+    let reached: Vec<Reached> = (0..count)
+        .map(|n| {
+            let (url, _requests) = serve_weather();
+            reach_as(&format!("s{n}"), &url)
+        })
+        .collect();
+    Session::new(
+        reached,
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    )
+}
+
+/// Three servers, each answering as the weather server does, under the aliases `a`, `b` and `c`.
+fn three_servers(scratch: &Scratch) -> Session {
+    let reached: Vec<Reached> = ["a", "b", "c"]
+        .into_iter()
+        .map(|alias| {
+            let (url, _requests) = serve_weather();
+            reach_as(alias, &url)
+        })
+        .collect();
+    Session::new(
+        reached,
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    )
+}
+
+/// The checks of every list a turn puts to the person are made at the same time, so the wait
+/// before the planner is asked is one check's and not the sum of them, and the questions are still
+/// drawn in server order, one per list, each over its own check (SERVERS-8). The regressions it
+/// rejects are a loop that finishes one server's check and question before it starts the next
+/// server's, which makes the wait three checks long, and a settle that drops, repeats or reorders
+/// a question or a check while overlapping them.
+#[test]
+fn the_checks_of_every_unasked_list_are_made_together_and_the_questions_drawn_in_server_order() {
+    let scratch = Scratch::new("checks-together");
+    let session = three_servers(&scratch);
+    let (endpoint, chat) = serve_slow_checks();
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trail = RecordingSink::new();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+
+    let started = std::time::Instant::now();
+    let outcome = turns::run_cancellable(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut confirmer,
+        &mut reporter,
+        &mut trail,
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        &Cancel::new(),
+    );
+    let took = started.elapsed();
+    outcome.expect("the turn runs");
+
+    let put: Vec<&str> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(
+        put,
+        ["a", "b", "c"],
+        "the questions were not drawn in server order"
+    );
+    let checks = chat
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .count();
+    assert_eq!(
+        checks, 3,
+        "a list was checked more or fewer times than once"
+    );
+    assert_eq!(reporter.checks.len(), 3, "a check was not announced");
+    assert_eq!(
+        reporter.checks_finished, 3,
+        "a check was not announced as over"
+    );
+    let said = trail
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::GatePassed { gate: "vetting", detail }
+                    if detail.contains("the check said")
+            )
+        })
+        .count();
+    assert_eq!(said, 3, "the trail does not hold one verdict per check");
+    assert_eq!(
+        session.offering(),
+        vec![
+            ("a".to_string(), Offering::Tools(1)),
+            ("b".to_string(), Offering::Tools(1)),
+            ("c".to_string(), Offering::Tools(1)),
+        ]
+    );
+    assert!(
+        took < A_CHECK_TAKES * 2,
+        "three checks of {A_CHECK_TAKES:?} took {took:?}, so they were made one after another"
+    );
+}
+
+/// A turn stopped at the first question leaves every list it did not get an answer to for the
+/// next turn to ask, though the checks of all of them were already running (SERVERS-8). The
+/// regression it rejects is a settle that marks the lists it took out as asked once their checks
+/// are running, so a stop loses them.
+#[test]
+fn a_turn_stopped_at_the_first_of_several_lists_leaves_the_others_to_be_asked_again() {
+    let scratch = Scratch::new("checks-together-stopped");
+    let session = three_servers(&scratch);
+    let (endpoint, _chat) = serve_slow_checks();
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
+    stopping.stop = Some(cancel.clone());
+
+    let (result, _reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut stopping,
+        &cancel,
+    );
+    let _ = result;
+
+    let put: Vec<&str> = stopping
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(put, ["a"], "only the first list should have been put");
+    assert_eq!(
+        session.offering(),
+        vec![
+            ("a".to_string(), Offering::Unasked),
+            ("b".to_string(), Offering::Unasked),
+            ("c".to_string(), Offering::Unasked),
+        ],
+        "a list the stopped turn did not get an answer to was not left to be asked again"
+    );
+}
+
+/// A subscription that is held and never drawn on, which is what makes a turn one that spends one.
+struct IdleWallet;
+
+impl bravebot_aichat::Subscription for IdleWallet {
+    fn next_credential(&mut self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+        Ok(bravebot_aichat::SubscriptionCredential {
+            key: bravebot_config::Secret::new("credential-1".to_string()),
+        })
+    }
+}
+
+/// A turn that spends a subscription makes the checks of the lists one after another, because the
+/// credential is lent to one request at a time (SERVERS-8). The regression it rejects is a settle
+/// that overlaps the checks whatever the turn holds, which lends the one credential to several
+/// requests at once. The checks and the questions are otherwise as when they are made together.
+#[test]
+fn a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another() {
+    let scratch = Scratch::new("checks-serial-subscription");
+    let session = three_servers(&scratch);
+    let (endpoint, chat_requests) = serve_slow_checks();
+    let mut config = config_for(&endpoint);
+    // The compiled-in premium host is Brave's, which a subscription's request would reach, so the
+    // mock server is made the premium host as well.
+    config.premium_endpoint = Some(endpoint.clone());
+    let egress = Egress::new();
+    let account = bravebot_agent::chatgpt::AccountSession::begin();
+    let mut wallet = IdleWallet;
+    let mut chat = bravebot_agent::processor::Chat::new(&config, &egress, &account)
+        .on(Some(&config.default_model))
+        .spending(Some(&mut wallet));
+    let holding = CapabilitySet::from_iter(
+        std::iter::once(Capability::WebFetch)
+            .chain(["a", "b", "c"].map(|alias| Capability::McpCall(ServerAlias::new(alias)))),
+    );
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "settle the lists");
+    let mut sink = RecordingSink::new();
+    let mut policy =
+        Policy::begin(routing, ReleasePlan::new(), holding.clone(), &mut sink).expect("policy");
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+
+    let started = std::time::Instant::now();
+    session.settle(
+        &mut policy,
+        &mut chat,
+        &mut confirmer,
+        &mut bravebot_agent::IgnoreReports,
+        PermissionMode::Ask,
+        &holding,
+    );
+    let took = started.elapsed();
+
+    let put: Vec<&str> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(put, ["a", "b", "c"]);
+    let checks = chat_requests
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .count();
+    assert_eq!(
+        checks, 3,
+        "a list was checked more or fewer times than once"
+    );
+    assert!(
+        took >= A_CHECK_TAKES * 3,
+        "three checks of {A_CHECK_TAKES:?} took {took:?} in a turn spending a subscription, so they overlapped"
+    );
+}
+
+/// The time a person takes over each of several lists is charged to them in full and nothing else
+/// is: the checks, made together, are not part of it (SESSION-12, SERVERS-8). The regressions it
+/// rejects are a settle that charges only the first question's wait or drops the waits of the
+/// questions drawn after a check returned, and one that charges the checks' own wait to the person.
+#[test]
+fn the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once() {
+    let scratch = Scratch::new("checks-together-wait");
+    let session = three_servers(&scratch);
+    let (endpoint, _chat) = serve_slow_checks();
+    let mut reading = Answering::new(Decision::Approve, CallDecision::reject());
+    reading.list_delay = std::time::Duration::from_millis(400);
+    let (result, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut reading,
+        &Cancel::new(),
+    );
+    let timing = result.expect("the turn runs").timing;
+    let waited = 3 * 400;
+    assert_eq!(reading.lists.len(), 3, "a list was not put to the person");
+    assert!(
+        timing.stalled_ms >= waited,
+        "the waits on the lists were not all charged to the person: {timing:?}"
+    );
+    assert!(
+        timing.stalled_ms < waited + 400,
+        "the wait on the checks was charged to the person: {timing:?}"
+    );
+    assert!(
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+        "the parts exceed the whole: {timing:?}"
+    );
+    let last = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent");
+    assert_eq!(last.timing.stalled_ms, timing.stalled_ms);
+}
+
+/// A session with more servers than a round may read at once checks no more of their lists at one
+/// moment than that, begins the next as one is joined, and still draws the questions in server
+/// order (SERVERS-8, TURN-10). The regression it rejects is a thread for every list, which holds
+/// as many requests open as there are servers.
+#[test]
+fn no_more_checks_are_made_at_once_than_the_reads_of_one_round() {
+    let scratch = Scratch::new("checks-together-capped");
+    let session = servers_named(&scratch, 10);
+    let (endpoint, chat, most) = serve_counted_checks();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    let (result, _reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+        &Cancel::new(),
+    );
+    result.expect("the turn runs");
+
+    let put: Vec<String> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str().to_string())
+        .collect();
+    let declared: Vec<String> = (0..10).map(|n| format!("s{n}")).collect();
+    assert_eq!(
+        put, declared,
+        "the questions were not drawn in server order"
+    );
+    let checks = chat
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .count();
+    assert_eq!(
+        checks, 10,
+        "a list was checked more or fewer times than once"
+    );
+    assert_eq!(
+        most.load(std::sync::atomic::Ordering::SeqCst),
+        8,
+        "the checks held open at one moment were not the eight a round may read"
+    );
 }

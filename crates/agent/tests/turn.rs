@@ -37211,6 +37211,205 @@ fn a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check
     }
 }
 
+/// What a turn that ran `sed -n p empty.txt` over an empty file left behind, for the tests of what
+/// is done with a slot that holds no bytes.
+struct OverEmptyOutput {
+    /// Every request the model double received, the checks included.
+    sent: Vec<String>,
+    sink: RecordingSink,
+    reporter: bravebot_agent::report::RecordingReporter,
+    /// What the confirmer was asked to release.
+    asked: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::OutputRequest>>>,
+}
+
+/// Run a turn in `mode` whose planner makes the calls in `calls` over an empty file, and answers
+/// every check `safe`, so a check that is made shows as a request carrying `A_CHECK_ASKING`.
+fn over_empty_output(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    calls: Vec<String>,
+) -> OverEmptyOutput {
+    let scratch = Scratch::new(&format!("empty-output-{mode:?}-{auto_vetting}"));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("empty.txt"), "").unwrap();
+
+    let mut planner = calls;
+    planner.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{\"verdict\": \"safe\", \"reason\": \"a single path and nothing else\"}"#,
+        )],
+        planner,
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, auto_vetting);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(mode)
+            .with_auto_vetting(auto_vetting),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    OverEmptyOutput {
+        sent: received.try_iter().collect(),
+        sink,
+        reporter,
+        asked,
+    }
+}
+
+/// The trail entries saying a slot held no bytes and so was neither checked nor released.
+fn empty_output_records(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "read_output",
+                detail,
+            } if detail.contains("holds 0 bytes") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Assert that nothing was checked, released or asked for an empty output, and that the trail says
+/// why.
+fn assert_empty_output_was_neither_checked_nor_released(
+    mode: bravebot_agent::PermissionMode,
+    over: &OverEmptyOutput,
+    tool: &str,
+) {
+    assert!(
+        !over.sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "{mode:?}: a check was made over output that holds no bytes"
+    );
+    assert!(
+        over.reporter.checks.is_empty(),
+        "{mode:?}: a check was announced for output that holds no bytes"
+    );
+    assert!(
+        releases_of_output(&over.sink).is_empty(),
+        "{mode:?}: the trail records a release of nothing: {:?}",
+        releases_of_output(&over.sink)
+    );
+    assert!(
+        over.asked.lock().unwrap().is_empty(),
+        "{mode:?}: somebody was asked about output that holds no bytes"
+    );
+    let records = empty_output_records(&over.sink);
+    assert!(
+        records.len() == 1 && records[0].starts_with(&format!("{tool}: ref:1 holds 0 bytes")),
+        "{mode:?}: the trail does not say once that {tool} found no bytes to check: {records:?}"
+    );
+}
+
+/// RUN-22 and RUN-24. A run that asks to read what it printed, where the slot states 0 bytes, is
+/// handed the answer a run that printed nothing is: it exited, it printed nothing, and no reference.
+/// No check is made and nothing is released, in every mode and with screening on or off, and the
+/// trail says why.
+///
+/// A wrong implementation tests the size only against the cap, which lets 0 through. It makes the
+/// check (a request carrying `A_CHECK_ASKING`, a check announced, a `vetting` entry for 0 lines),
+/// or releases the empty text without one, which leaves the reference and the "same output" sentence
+/// in the result and no "It printed nothing."
+#[test]
+fn a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, true),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::AcceptEdits, true),
+        (bravebot_agent::PermissionMode::Plan, true),
+        (bravebot_agent::PermissionMode::Bypass, false),
+    ] {
+        let over = over_empty_output(
+            mode,
+            auto_vetting,
+            vec![tool_request(
+                "run",
+                r#"{"command":"sed -n p empty.txt","read":true}"#,
+            )],
+        );
+        let [_asked_to_run, after_the_run] = over.sent.as_slice() else {
+            panic!(
+                "{mode:?}/{auto_vetting}: the turn took {} requests, not two: {:#?}",
+                over.sent.len(),
+                over.sent
+            );
+        };
+        let told = message_from(after_the_run, "Result of run");
+        assert!(
+            told.contains("It exited 0.") && told.contains("It printed nothing."),
+            "{mode:?}/{auto_vetting}: the planner was not told the run printed nothing: {told}"
+        );
+        for advice in ["ref:", "read_output", "The same output"] {
+            assert!(
+                !told.contains(advice),
+                "{mode:?}/{auto_vetting}: the result for output that is not there holds \
+                 {advice:?}: {told}"
+            );
+        }
+        assert_empty_output_was_neither_checked_nor_released(mode, &over, "run");
+    }
+}
+
+/// OUTPUT-1 and RUN-24. `read_output` over a slot that holds no bytes makes no check, asks nobody
+/// and releases nothing, and answers in the driver's words that there is nothing to read. Held to
+/// in every mode where a check is made, and in the mode where a person would otherwise be asked.
+///
+/// A wrong implementation makes the zero-line check the call made before, or puts the person a
+/// prompt to release nothing.
+#[test]
+fn read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, true),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::AcceptEdits, true),
+        (bravebot_agent::PermissionMode::Plan, true),
+        (bravebot_agent::PermissionMode::Ask, false),
+        (bravebot_agent::PermissionMode::Bypass, false),
+    ] {
+        let over = over_empty_output(
+            mode,
+            auto_vetting,
+            vec![
+                tool_request("run", r#"{"command":"sed -n p empty.txt"}"#),
+                tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            ],
+        );
+        let [_asked_to_run, _after_the_run, after_the_read] = over.sent.as_slice() else {
+            panic!(
+                "{mode:?}/{auto_vetting}: the turn took {} requests, not three: {:#?}",
+                over.sent.len(),
+                over.sent
+            );
+        };
+        let told = message_from(after_the_read, "Result of read_output");
+        assert!(
+            told.contains("ref:1 printed nothing, so there is nothing to read."),
+            "{mode:?}/{auto_vetting}: read_output did not say the slot is empty: {told}"
+        );
+        assert_empty_output_was_neither_checked_nor_released(mode, &over, "read_output");
+    }
+}
+
 /// Everywhere a person still answers for reading a run's output, asking to read it in the same
 /// result changes nothing: the output is quarantined, nobody is asked, and no check is made. A
 /// person asked would be a prompt the planner did not request with `read_output`.
@@ -43656,6 +43855,126 @@ fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
     );
 }
 
+/// DELEGATE-8, PROC-4. A delegate started by a planner that holds private content holds it from
+/// its first request, so every processor call it made would be refused. It is not offered
+/// `spawn_processor`, is not told it may hand files to processors, and is told why. A delegate
+/// started by a planner that holds nothing private keeps all three, so the first half cannot
+/// pass by removing the tool from every delegate.
+#[test]
+fn a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why() {
+    /// The requests a delegate sent: those that do not carry the parent's own prompt.
+    fn the_delegates_requests(received: &MockRequests, parent: &str, task: &str) -> Vec<String> {
+        let delegates: Vec<String> = every_request(received)
+            .into_iter()
+            .filter(|body| !body.contains(parent) && body.contains(task))
+            .collect();
+        assert!(!delegates.is_empty(), "no delegate ever asked the model");
+        delegates
+    }
+
+    // The parent is shown a program's output, which makes its context private, then starts a
+    // reader.
+    let scratch = Scratch::new("delegate-private-parent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-MAIL\n").unwrap();
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-UNDER-PRIVATE",
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+                tool_request("read_output", r#"{"ref":"ref:1"}"#),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"LOOK-AT-THE-PICTURE"}"#,
+                ),
+                reply_with("waiting on the reader"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("LOOK-AT-THE-PICTURE", vec![reply_with("looked")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("START-UNDER-PRIVATE"),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    for body in the_delegates_requests(&received, "START-UNDER-PRIVATE", "LOOK-AT-THE-PICTURE") {
+        let request: serde_json::Value = serde_json::from_str(&body).expect("a request");
+        assert!(
+            !the_tools_in(&request).contains(&"spawn_processor".to_string()),
+            "a delegate that starts out private was offered spawn_processor"
+        );
+        let prompt = system_prompt_of(&body);
+        assert!(
+            !prompt.contains("hand quarantined files to processors"),
+            "a delegate that starts out private was told it may use processors: {prompt}"
+        );
+        assert!(
+            prompt.contains("You were started holding the private content"),
+            "the delegate was not told why it has no processors: {prompt}"
+        );
+    }
+
+    // The same task from a parent that holds nothing private.
+    let scratch = Scratch::new("delegate-clean-parent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-UNDER-NOTHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"LOOK-AT-THE-PICTURE"}"#,
+                ),
+                reply_with("waiting on the reader"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("LOOK-AT-THE-PICTURE", vec![reply_with("looked")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("START-UNDER-NOTHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+    for body in the_delegates_requests(&received, "START-UNDER-NOTHING", "LOOK-AT-THE-PICTURE") {
+        let request: serde_json::Value = serde_json::from_str(&body).expect("a request");
+        assert!(
+            the_tools_in(&request).contains(&"spawn_processor".to_string()),
+            "a delegate started under a clean parent lost spawn_processor"
+        );
+        let prompt = system_prompt_of(&body);
+        assert!(
+            prompt.contains("hand quarantined files to processors")
+                && !prompt.contains("You were started holding the private content"),
+            "a delegate started under a clean parent was told it inherited private content: {prompt}"
+        );
+    }
+}
+
 /// A delegate's rounds are the spawning turn's spend, and the cache figure travels with them. A turn
 /// that hands most of its work to delegates keeps one prefix cached across their rounds, and a turn
 /// counting only the requests it made itself would report that as a cache that never hit.
@@ -48042,6 +48361,348 @@ fn a_delegate_that_spent_its_token_budget_is_not_warned_ahead_in_the_same_round(
     assert!(
         delegate.iter().all(|body| !body.contains("left of your")),
         "a delegate that spent its budget was also warned ahead of its round limit"
+    );
+}
+
+/// The requests of a delegate bounded to `budget` tokens and 40 rounds that makes `rounds` rounds
+/// of `read_file` calls, each reporting `prompt` and `completion` tokens, and then answers.
+fn token_budgeted_requests(
+    name: &str,
+    budget: u64,
+    rounds: usize,
+    prompt: u64,
+    completion: u64,
+) -> Vec<String> {
+    let mut script: Vec<String> = (0..rounds)
+        .map(|_| {
+            tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, prompt, completion)
+        })
+        .collect();
+    script.push(reply_with("what the budget bought"));
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    bounded_delegate_requests(name, 40, Some(budget), script, &mut reporter)
+}
+
+fn carried_tools(body: &str) -> bool {
+    let request: serde_json::Value = serde_json::from_str(body).expect("a request");
+    request["tools"]
+        .as_array()
+        .is_some_and(|tools| !tools.is_empty())
+}
+
+/// DELEGATE-29: a delegate is warned once, in the request after the round at which four fifths of
+/// its budget are spent, and the warning asks for the tree to be left consistent. The request that
+/// follows the spent budget has no tools.
+///
+/// Rejects: no warning, a warning at half the budget or only once the budget is spent, a warning
+/// repeated each round, and a warning that does not ask for open work to be finished or undone and
+/// for an account of what is left.
+#[test]
+fn a_delegate_is_warned_once_when_four_fifths_of_its_token_budget_are_spent() {
+    // 1500 tokens a request against 10000: 9000 after the sixth round is the first total at or
+    // over 8000, and the seventh round passes the budget.
+    let delegate = token_budgeted_requests("delegate-token-warned", 10_000, 7, 1000, 500);
+    assert_eq!(delegate.len(), 8, "seven rounds of calls and the answer");
+
+    let warning = "You have spent 9000 of your 10000 tokens.";
+    let warned_in: Vec<usize> = delegate
+        .iter()
+        .enumerate()
+        .filter(|(_, body)| body.contains(warning))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        warned_in,
+        [6, 7],
+        "the warning was not first carried by the request after the round that reached four \
+         fifths and kept in the conversation after it"
+    );
+    for (index, body) in delegate.iter().enumerate() {
+        assert_eq!(
+            body.matches("of your 10000 tokens.").count(),
+            usize::from(index >= 6),
+            "request {index} holds the warning a wrong number of times"
+        );
+    }
+    let told = &delegate[6];
+    assert!(
+        told.contains("complete or abort a rebase")
+            && told.contains("commit or discard edits")
+            && told.contains("what is left"),
+        "the warning does not ask for a consistent tree and a report of what is left: {told}"
+    );
+    assert!(
+        delegate[..7].iter().all(|body| carried_tools(body)),
+        "a request before the budget was spent carried no tools"
+    );
+    assert!(
+        !carried_tools(&delegate[7]) && delegate[7].contains("You have spent your budget of 10000"),
+        "the request after the budget was spent still offered tools: {}",
+        delegate[7]
+    );
+}
+
+/// DELEGATE-29: a large context brings the warning earlier than four fifths, since the next
+/// request counts all of it again. Fewer than two requests of that size left is near.
+///
+/// Rejects: a rule that is only a share of the budget, which would send nothing here until the
+/// budget was spent.
+#[test]
+fn a_delegate_whose_context_leaves_under_two_requests_is_warned_before_four_fifths() {
+    // 4100 a request against 10000: after one round 5900 is left, under twice the 4000 context.
+    let delegate = token_budgeted_requests("delegate-token-context", 10_000, 3, 4000, 100);
+    assert_eq!(delegate.len(), 4, "three rounds of calls and the answer");
+    let warned_in: Vec<usize> = delegate
+        .iter()
+        .enumerate()
+        .filter(|(_, body)| body.contains("You have spent 4100 of your 10000 tokens."))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(warned_in, [1, 2, 3]);
+}
+
+/// DELEGATE-29: a delegate that goes past its budget in one round is told only that the budget is
+/// spent.
+///
+/// Rejects: both notices in the one round.
+#[test]
+fn a_delegate_that_spent_its_token_budget_is_not_also_warned_of_nearing_it() {
+    let delegate = token_budgeted_requests("delegate-token-spent-unwarned", 1000, 1, 800, 300);
+    assert_eq!(delegate.len(), 2);
+    assert!(
+        delegate
+            .iter()
+            .all(|body| !body.contains("You have spent 1100 of your")),
+        "a delegate that spent its budget was also told it was near it"
+    );
+    assert!(!carried_tools(&delegate[1]));
+}
+
+/// DELEGATE-29 and DELEGATE-6: the warning of a token budget and the warning of the rounds limit
+/// are independent, so a delegate near both is sent both, in the same request.
+///
+/// Rejects: one warning suppressing the other.
+#[test]
+fn a_delegate_near_its_rounds_and_its_tokens_is_warned_of_both() {
+    let scratch = Scratch::new("delegate-both-warned");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new("delegate-both-warned-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("bounded.md"),
+        "---\nname: bounded\ndescription: Looks.\nkind: reader\nrounds: 3\nbudget: 10000\n---\n\nLook.\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "BOTH-TURN",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"bounded","task":"BOTH-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "BOTH-TASK",
+            vec![
+                tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 6000, 3000),
+                tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 100, 100),
+                reply_with("both"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("BOTH-TURN").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let delegate: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("BOTH-TASK") && !body.contains("BOTH-TURN"))
+        .collect();
+    assert_eq!(delegate.len(), 3);
+    assert!(
+        delegate[1].contains("You have 2 rounds left of your 3.")
+            && delegate[1].contains("You have spent 9000 of your 10000 tokens."),
+        "the request after the first round lacks one of the warnings: {}",
+        delegate[1]
+    );
+}
+
+/// DELEGATE-29: a backend that reports no usage is counted from the words of its replies, which
+/// are far beneath the budget, so the delegate is not warned.
+///
+/// Rejects: a warning from a count of zero or of rounds.
+#[test]
+fn a_backend_reporting_no_usage_does_not_warn_of_the_token_budget() {
+    let mut script: Vec<String> = (0..6)
+        .map(|_| tool_request("read_file", r#"{"path":"notes.txt"}"#))
+        .collect();
+    script.push(reply_with("no figure"));
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let delegate = bounded_delegate_requests(
+        "delegate-token-no-usage",
+        40,
+        Some(1000),
+        script,
+        &mut reporter,
+    );
+    assert_eq!(delegate.len(), 7);
+    assert!(
+        delegate
+            .iter()
+            .all(|body| !body.contains("of your 1000 tokens.")),
+        "a delegate whose backend reported no usage was warned"
+    );
+}
+
+/// DELEGATE-29 and TURN-14: a turn a person started under a limit on tokens is not sent the
+/// warning a delegate gets for its token budget. The limit ends the run and nobody is told it is
+/// near.
+///
+/// Rejects: a warning built from the run's own limit on tokens, which would reach a turn that is
+/// not a delegate once four fifths of the limit are spent.
+#[test]
+fn a_turn_near_its_own_token_limit_is_not_warned_as_a_delegate_is() {
+    let scratch = Scratch::new("turn-token-limit-unwarned");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // 1500 tokens a request against a limit of 10000: 9000 after the sixth round is over four
+    // fifths, and the seventh round passes the limit.
+    let mut script: Vec<String> = (0..8)
+        .map(|_| tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 1000, 500))
+        .collect();
+    script.push(reply_with("not reached"));
+    let (endpoint, received) = serve_by_marker(vec![("TOKEN-LIMITED-TURN", script)]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ended = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("TOKEN-LIMITED-TURN").with_run_limits(bravebot_agent::turn::RunLimits {
+            rounds: None,
+            tokens: Some(10_000),
+        }),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(
+            ended,
+            Err(bravebot_agent::TurnError::LimitReached(
+                bravebot_agent::turn::LimitReached::Tokens { most: 10_000, .. }
+            ))
+        ),
+        "the run did not end at its limit on tokens"
+    );
+    let asked = every_request(&received);
+    assert_eq!(asked.len(), 7, "seven rounds of calls, then the limit");
+    assert!(
+        asked
+            .iter()
+            .all(|body| !body.contains("of your 10000 tokens.")),
+        "a turn that is not a delegate was warned of its limit on tokens"
+    );
+}
+
+/// DELEGATE-29: what a child spent counts toward the warning of the delegate that started it. The
+/// parent has spent 1500 of 10000 itself, and its child's 7000 collected with the child's report
+/// take it past four fifths and not past the budget.
+///
+/// Rejects: a warning decided before the children of the round are collected, which would count
+/// only the parent's own 1500 and send nothing.
+#[test]
+fn a_delegate_whose_childs_spend_takes_it_near_its_token_budget_is_warned() {
+    let scratch = Scratch::new("delegate-budget-child-warned");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"DO-THE-WORK","budget":10000}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request_with_usage(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-DEEPER"}"#,
+                    1000,
+                    500,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "READ-DEEPER",
+            vec![reply_with_usage("DEEPER-REPORT", 6000, 1000)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let parent: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("DO-THE-WORK") && !body.contains("DELEGATE-THE-WORK"))
+        .collect();
+    let first = parent.first().expect("the parent's first request");
+    assert!(
+        !first.contains("of your 10000 tokens."),
+        "the parent was warned before any child had spent anything"
+    );
+    let with_report = parent
+        .iter()
+        .find(|body| body.contains("DEEPER-REPORT"))
+        .expect("a request of the parent that carries its child's report");
+    assert_eq!(
+        with_report.matches("of your 10000 tokens.").count(),
+        1,
+        "the request that first carries the child's report did not carry the warning its spend \
+         brought on: {with_report}"
+    );
+    assert!(
+        carried_tools(with_report),
+        "the parent's tools were taken away although its budget was not spent"
     );
 }
 
@@ -57329,6 +57990,9 @@ struct ApprovesFetchesAndWrites {
     hop_urls: Vec<String>,
     /// Words sent with each answer to a write.
     note: Option<&'static str>,
+    /// Every question about letting vetted content through, which it refuses. A test of a release
+    /// nobody is asked about reads this to say no question was put.
+    vets: Vec<bravebot_agent::confirm::VetRequest>,
 }
 
 impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
@@ -57373,8 +58037,9 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
 
     fn confirm_vetted_read(
         &mut self,
-        _request: &bravebot_agent::confirm::VetRequest,
+        request: &bravebot_agent::confirm::VetRequest,
     ) -> bravebot_agent::confirm::Decision {
+        self.vets.push(request.clone());
         bravebot_agent::confirm::Decision::Reject
     }
 
@@ -87816,4 +88481,728 @@ fn a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal() {
         "an approved read was recorded as refused"
     );
     assert!(clean, "a turn whose read was approved read as unclean");
+}
+
+/// What a turn that fetched one page with `read` in its arguments left behind.
+struct FetchedAskingToRead {
+    /// Every request the model double received, the checks included.
+    sent: Vec<String>,
+    sink: RecordingSink,
+    /// How many times the confirmer was asked to let vetted content through.
+    vets: usize,
+    /// How many requests the page's server was sent.
+    fetched: usize,
+}
+
+impl FetchedAskingToRead {
+    /// The request that carries the fetch's result to the planner: the last one that is not a check.
+    fn after_the_fetch(&self) -> &str {
+        self.sent
+            .iter()
+            .rev()
+            .find(|body| !body.contains(A_CHECK_ASKING))
+            .expect("a request after the fetch")
+    }
+
+    fn checks_made(&self) -> usize {
+        self.sent
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING))
+            .count()
+    }
+}
+
+/// Every release `vet_content` makes in the trail, as [`releases_of_output`] has it for
+/// `read_output`, so a test can say none was made without the helper panicking on the count.
+fn releases_by_vet_content(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "vet_content",
+                detail,
+            } if detail.contains("so the planner is given") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run a turn in `mode` whose planner fetches one page from a server answering `reply`, with
+/// `arguments_tail` after the URL in the call's arguments. `checks` are the words the checks are
+/// answered with, and `None` loses every check.
+fn fetch_asking_to_read(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    reply: Vec<u8>,
+    arguments_tail: &str,
+    cap: Option<usize>,
+) -> FetchedAskingToRead {
+    fetch_script_turn(
+        Task::new("read the page").with_output_cap(cap),
+        mode,
+        auto_vetting,
+        checks,
+        reply,
+        |site| {
+            vec![
+                tool_request_2(
+                    "fetch_url",
+                    &format!(r#"{{"url":"{site}/docs"{arguments_tail}}}"#),
+                ),
+                reply_with("done"),
+            ]
+        },
+    )
+}
+
+/// As [`fetch_asking_to_read`], for a `task` the caller built and a script the caller writes from
+/// the address of the server that answers with `reply`.
+fn fetch_script_turn(
+    task: Task,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    reply: Vec<u8>,
+    script_of: impl FnOnce(&str) -> Vec<String>,
+) -> FetchedAskingToRead {
+    let scratch = Scratch::new("fetch-read");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, count) = serve_raw(reply);
+    let script = script_of(&site);
+    let (endpoint, received) = match checks {
+        Some(checks) => serve_sequence_answering_checks_with(checks, script),
+        None => serve_sequence_losing_every_check(script),
+    };
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut inner = ApprovesFetchesAndWrites::default();
+    {
+        let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, auto_vetting);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &task
+                .with_permission_mode(mode)
+                .with_auto_vetting(auto_vetting),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    }
+    FetchedAskingToRead {
+        sent: received.try_iter().collect(),
+        sink,
+        vets: inner.vets.len(),
+        fetched: count.load(Ordering::SeqCst),
+    }
+}
+
+fn a_safe_check() -> Vec<String> {
+    vec![reply_with(
+        r#"{"verdict": "safe", "reason": "plain prose and nothing addressed to a reader"}"#,
+    )]
+}
+
+fn a_text_page(body: &str) -> Vec<u8> {
+    raw_reply("text/plain", body.as_bytes())
+}
+
+/// RUN-22 for `fetch_url`. A fetch that asks to read, bypassing permissions with no screening
+/// asked for, is handed the page in the same result by `vet_content`'s own path: the trail credits
+/// the mode under that gate, the label is the one `vet_content` gives, and nobody is asked.
+///
+/// A wrong implementation ignores the flag (the page stays behind its reference), asks the person
+/// at `vet_content` anyway, releases under another gate so the trail credits `read_output`, or
+/// makes a check in a mode that reads no verdict.
+#[test]
+fn an_unscreened_unattended_fetch_that_asks_to_read_is_handed_the_page_in_the_same_result() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        Some(a_safe_check()),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    let after = fetched.after_the_fetch();
+    assert!(
+        after.contains("SENTINEL-PAGE-TEXT"),
+        "the page did not come back in the result that fetched it: {after}"
+    );
+    assert_eq!(
+        fetched.vets, 0,
+        "somebody was asked to let the page through"
+    );
+    assert_eq!(
+        fetched.checks_made(),
+        0,
+        "a check was made in the mode that reads no verdict"
+    );
+    let released = how_a_slot_was_released(&fetched.sink, "vet_content");
+    assert!(
+        released.contains("permissions are being bypassed with no screening asked for"),
+        "the trail does not credit the mode with the release: {released}"
+    );
+    assert!(
+        released.contains("so the planner is given (T,priv)"),
+        "the page reached the planner at a label vet_content would not give it: {released}"
+    );
+    assert!(
+        releases_of_output(&fetched.sink).is_empty(),
+        "the release was credited to read_output: {:?}",
+        releases_of_output(&fetched.sink)
+    );
+}
+
+/// RUN-22 for `fetch_url`. With auto-vetting on, a check that answers `safe` releases the page in
+/// the same result and the trail credits the check, with nobody asked.
+///
+/// A wrong implementation asks the person after a safe word, credits the mode instead of the check,
+/// or never makes the check and releases.
+#[test]
+fn a_screened_fetch_that_asks_to_read_is_handed_the_page_where_the_check_finds_nothing() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        Some(a_safe_check()),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    let after = fetched.after_the_fetch();
+    assert!(
+        after.contains("SENTINEL-PAGE-TEXT"),
+        "the page did not come back in the result that fetched it: {after}"
+    );
+    assert_eq!(fetched.vets, 0, "somebody was asked after a safe word");
+    assert_eq!(
+        fetched.checks_made(),
+        1,
+        "the page was released without a check"
+    );
+    let released = how_a_slot_was_released(&fetched.sink, "vet_content");
+    assert!(
+        released.contains("auto-vetting is on and the check found nothing"),
+        "the trail does not credit the check with the release: {released}"
+    );
+    assert!(
+        !released.contains("bypassed"),
+        "the trail credits the mode for a release the check made: {released}"
+    );
+}
+
+/// What the planner is told where the page was asked for and not released: the page stays behind
+/// its reference, in the driver's words, and nothing the check wrote reaches it.
+fn assert_the_page_was_kept_back(fetched: &FetchedAskingToRead, what: &str) {
+    let after = fetched.after_the_fetch();
+    assert!(
+        !after.contains("SENTINEL-PAGE-TEXT"),
+        "{what}: the page reached the planner: {after}"
+    );
+    assert!(
+        after.contains("ref:1"),
+        "{what}: no reference was given: {after}"
+    );
+    assert!(
+        after.contains(
+            "Your read: true did not return it in this result, so vet_content is the way to see it."
+        ),
+        "{what}: the planner was not told the flag did not return it: {after}"
+    );
+    assert_eq!(fetched.vets, 0, "{what}: somebody was asked");
+    assert!(
+        releases_by_vet_content(&fetched.sink).is_empty(),
+        "{what}: the trail records a release: {:?}",
+        releases_by_vet_content(&fetched.sink)
+    );
+}
+
+/// RUN-22 for `fetch_url`. A check that answers any word but `safe` leaves the page behind its
+/// reference with nobody asked. The planner is told the flag did not return it and that
+/// `vet_content` is the way to see it, and none of the check's word or reason reaches it.
+///
+/// A wrong implementation releases on any verdict that is not an error, or asks the person after
+/// an `unsafe` word, or relays the check's reason to the planner.
+#[test]
+fn a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_does_not_say_safe() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        Some(vec![reply_with(
+            r#"{"verdict": "unsafe", "reason": "REASON-WORDS-ZQ addressed to a reader"}"#,
+        )]),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    assert_eq!(fetched.checks_made(), 1, "no check was made");
+    assert_the_page_was_kept_back(&fetched, "unsafe");
+    let after = fetched.after_the_fetch();
+    for word in ["REASON-WORDS-ZQ", "unsafe"] {
+        assert!(
+            !after.contains(word),
+            "something of the check reached the planner ({word}): {after}"
+        );
+    }
+}
+
+/// RUN-22 for `fetch_url`. A check that cannot be made, because the backend is down, leaves the
+/// page behind its reference with nobody asked, and says the same as any other word that is not
+/// `safe`.
+///
+/// A wrong implementation reads a lost check as "nothing found" and releases, or fails the call.
+#[test]
+fn a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot_be_made() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        None,
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    assert_the_page_was_kept_back(&fetched, "check lost");
+}
+
+/// RUN-22 for `fetch_url`. Where a person still answers for the page (no screening, not bypass),
+/// the flag changes nothing: no check, nobody asked at the call, the reference kept, and no
+/// sentence about a flag that has nothing to answer.
+///
+/// A wrong implementation releases the page in these modes, which hands a person's decision to
+/// the planner's own argument, or asks the person from inside the fetch call.
+#[test]
+fn asking_to_read_a_fetched_page_changes_nothing_where_a_person_still_answers_for_it() {
+    for mode in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        bravebot_agent::PermissionMode::Plan,
+    ] {
+        let fetched = fetch_asking_to_read(
+            mode,
+            false,
+            Some(a_safe_check()),
+            a_text_page("SENTINEL-PAGE-TEXT"),
+            r#","read":true"#,
+            None,
+        );
+        let after = fetched.after_the_fetch();
+        assert!(
+            !after.contains("SENTINEL-PAGE-TEXT"),
+            "{mode:?}: the page reached the planner: {after}"
+        );
+        assert!(after.contains("ref:1"), "{mode:?}: no reference: {after}");
+        assert!(
+            !after.contains("Your read: true"),
+            "{mode:?}: the planner was told about a flag a person's answer overrides: {after}"
+        );
+        assert_eq!(fetched.vets, 0, "{mode:?}: a prompt was put at the call");
+        assert_eq!(fetched.checks_made(), 0, "{mode:?}: a check was made");
+        assert!(
+            releases_by_vet_content(&fetched.sink).is_empty(),
+            "{mode:?}: a release was recorded: {:?}",
+            releases_by_vet_content(&fetched.sink)
+        );
+    }
+}
+
+/// RUN-22 for `fetch_url`. A page larger than `task.output_cap` stays behind its reference and the
+/// result says why, in every mode where it would otherwise have been released, and no check is
+/// spent on a page that could not be released.
+///
+/// A wrong implementation ignores the cap and puts a page of any size into the conversation, or
+/// checks it first and then discards the answer.
+#[test]
+fn a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+    ] {
+        let page = format!("SENTINEL-PAGE-TEXT {}", "x".repeat(300));
+        let fetched = fetch_asking_to_read(
+            mode,
+            auto_vetting,
+            Some(a_safe_check()),
+            a_text_page(&page),
+            r#","read":true"#,
+            Some(64),
+        );
+        let after = fetched.after_the_fetch();
+        assert!(
+            !after.contains("SENTINEL-PAGE-TEXT"),
+            "{mode:?}: a page past the cap reached the planner: {after}"
+        );
+        assert!(after.contains("ref:1"), "{mode:?}: no reference: {after}");
+        assert!(
+            after.contains("It is longer than a result may hold"),
+            "{mode:?}: the result does not say why the page was left out: {after}"
+        );
+        assert_eq!(
+            fetched.checks_made(),
+            0,
+            "{mode:?}: a check was made over a page too large"
+        );
+        assert_eq!(fetched.vets, 0, "{mode:?}: somebody was asked");
+        assert!(releases_by_vet_content(&fetched.sink).is_empty());
+    }
+}
+
+/// RUN-22 and RUN-24 for `fetch_url`. A page of no bytes makes no check, asks nobody and releases
+/// nothing, in every mode, and the trail says why.
+///
+/// A wrong implementation tests only the size against the cap, which lets 0 through, so it makes
+/// the check or releases an empty text.
+#[test]
+fn a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::Plan, true),
+    ] {
+        let fetched = fetch_asking_to_read(
+            mode,
+            auto_vetting,
+            Some(a_safe_check()),
+            a_text_page(""),
+            r#","read":true"#,
+            None,
+        );
+        assert_eq!(
+            fetched.checks_made(),
+            0,
+            "{mode:?}: a check was made over no bytes"
+        );
+        assert_eq!(
+            fetched.vets, 0,
+            "{mode:?}: somebody was asked about no bytes"
+        );
+        assert!(
+            releases_by_vet_content(&fetched.sink).is_empty()
+                && releases_of_output(&fetched.sink).is_empty(),
+            "{mode:?}: a release of nothing was recorded"
+        );
+        let records = empty_output_records(&fetched.sink);
+        assert!(
+            records.len() == 1 && records[0].starts_with("vet_content: ref:1 holds 0 bytes"),
+            "{mode:?}: the trail does not say once that no bytes were found: {records:?}"
+        );
+    }
+}
+
+/// RUN-22 for `fetch_url`. A `read` that is not a boolean is refused before the request goes out,
+/// and the refusal says what it must be.
+///
+/// A wrong implementation reads a string as false and fetches anyway, so the server is sent a
+/// request the planner's call did not validly ask for.
+#[test]
+fn a_fetch_whose_read_is_not_a_boolean_is_refused_before_anything_is_fetched() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        Some(a_safe_check()),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":"yes""#,
+        None,
+    );
+    assert_eq!(
+        fetched.fetched, 0,
+        "the page was fetched under a call that was refused"
+    );
+    let after = fetched.after_the_fetch();
+    assert!(
+        after.contains("'read' must be true or false"),
+        "the refusal does not say what read must be: {after}"
+    );
+    assert!(!after.contains("SENTINEL-PAGE-TEXT"));
+}
+
+/// The arguments `fetch_url` is offered in the request at `index`, as the planner is shown them.
+fn fetch_url_properties(sent: &[String], index: usize) -> serde_json::Value {
+    let request: serde_json::Value =
+        serde_json::from_str(&sent[index]).expect("the request is JSON");
+    request["tools"]
+        .as_array()
+        .expect("the request offers tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "fetch_url")
+        .expect("fetch_url is offered")["function"]["parameters"]["properties"]
+        .clone()
+}
+
+/// VET-6 for `fetch_url`. A definition whose tools leave out `vet_content` is not offered `read`,
+/// and a `read: true` it gives anyway releases nothing and draws no check or prompt, in the mode
+/// that would otherwise have released the page. A `read` that is not a boolean is still refused.
+///
+/// A wrong implementation offers the argument wherever `fetch_url` is, or releases on the flag
+/// because the mode bypasses, which hands a definition the page it was confined away from.
+#[test]
+fn a_fetch_asked_to_read_in_a_turn_without_vet_content_stays_a_reference() {
+    let home = Scratch::new("fetch-read-confined-home");
+    define(
+        &home,
+        "runner",
+        "kind: worker\ntools: fetch_url\n",
+        "FETCH-IT",
+    );
+    let confined = |arguments_tail: &'static str| {
+        let home_path = home.path.clone();
+        let task = Task::new("find out")
+            .with_home(Some(home_path))
+            .with_model(Some("custom-parent-model".to_string()))
+            .addressing(Some("runner".to_string()));
+        fetch_script_turn(
+            task,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            a_text_page("SENTINEL-PAGE-TEXT"),
+            move |site| {
+                vec![
+                    tool_request_2(
+                        "fetch_url",
+                        &format!(r#"{{"url":"{site}/docs"{arguments_tail}}}"#),
+                    ),
+                    reply_with("done"),
+                ]
+            },
+        )
+    };
+
+    let fetched = confined(r#","read":true"#);
+    let asked = &fetched.sent[0];
+    assert!(
+        !asked.contains(r#""name":"vet_content""#),
+        "the definition was offered vet_content, so this says nothing: {asked}"
+    );
+    let properties = fetch_url_properties(&fetched.sent, 0);
+    assert!(
+        properties.get("url").is_some(),
+        "fetch_url lost its url: {properties}"
+    );
+    assert!(
+        properties.get("read").is_none(),
+        "fetch_url was offered read where nothing can answer it: {properties}"
+    );
+    let after = fetched.after_the_fetch();
+    assert_eq!(fetched.fetched, 1, "the page was not fetched");
+    assert!(
+        !after.contains("SENTINEL-PAGE-TEXT"),
+        "a turn left without vet_content was handed the page: {after}"
+    );
+    assert!(after.contains("ref:1"), "no reference was given: {after}");
+    assert!(
+        !after.contains("Your read: true"),
+        "the planner was told about a flag it was not offered: {after}"
+    );
+    assert_eq!(fetched.vets, 0, "somebody was asked");
+    assert_eq!(fetched.checks_made(), 0, "a check was made");
+    assert!(
+        releases_by_vet_content(&fetched.sink).is_empty(),
+        "the trail records a release: {:?}",
+        releases_by_vet_content(&fetched.sink)
+    );
+
+    let refused = confined(r#","read":"yes""#);
+    assert_eq!(
+        refused.fetched, 0,
+        "the page was fetched under a call that was refused"
+    );
+    assert!(
+        refused
+            .after_the_fetch()
+            .contains("'read' must be true or false"),
+        "a read that is not a boolean went unchecked: {}",
+        refused.after_the_fetch()
+    );
+}
+
+/// FETCH-5 and VET-6 for `fetch_url`. `fetch_url` decodes whatever a server sends as text, so an
+/// image it serves is a text slot and never a picture slot. Asked to be read, it is released as the
+/// same fetch is by `vet_content` without the flag: the same text at the same label, credited the
+/// same way, and never as an attachment.
+///
+/// A wrong implementation treats the body as a picture and attaches it, or releases it at another
+/// label than `vet_content` gives it.
+#[test]
+fn a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch() {
+    let image = || {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(b"SENTINEL-INSIDE-AN-IMAGE");
+        raw_reply("image/png", &bytes)
+    };
+    let mode = bravebot_agent::PermissionMode::Bypass;
+
+    let asked = fetch_asking_to_read(
+        mode,
+        false,
+        Some(a_safe_check()),
+        image(),
+        r#","read":true"#,
+        None,
+    );
+    let in_the_result = asked.after_the_fetch();
+    assert!(
+        in_the_result.contains("SENTINEL-INSIDE-AN-IMAGE"),
+        "the fetched image was not released in the result: {in_the_result}"
+    );
+    assert!(
+        !in_the_result.contains("image_url"),
+        "the fetched image was attached as a picture: {in_the_result}"
+    );
+    assert_eq!(asked.vets, 0, "somebody was asked");
+    assert_eq!(asked.checks_made(), 0, "a check was made");
+
+    let later = fetch_script_turn(
+        Task::new("read the page"),
+        mode,
+        false,
+        Some(a_safe_check()),
+        image(),
+        |site| {
+            vec![
+                tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+                tool_request_2("vet_content", r#"{"ref":"ref:1","expects":"an image"}"#),
+                reply_with("done"),
+            ]
+        },
+    );
+    assert!(
+        !later.sent[1].contains("SENTINEL-INSIDE-AN-IMAGE"),
+        "the image reached the planner before vet_content was called: {}",
+        later.sent[1]
+    );
+    let after_vet_content = later.after_the_fetch();
+    assert!(
+        after_vet_content.contains("SENTINEL-INSIDE-AN-IMAGE"),
+        "vet_content did not release the fetched image: {after_vet_content}"
+    );
+    assert!(
+        !after_vet_content.contains("image_url"),
+        "vet_content attached the fetched image: {after_vet_content}"
+    );
+    assert_eq!(
+        how_a_slot_was_released(&asked.sink, "vet_content"),
+        how_a_slot_was_released(&later.sink, "vet_content"),
+        "the flag released the image at a different label or on a different account"
+    );
+}
+
+/// The system prompt of the first request of a turn of `task`, which may be addressed to a
+/// definition written as `fields`.
+fn first_system_prompt(tag: &str, definition: Option<&str>, task: Task) -> String {
+    let scratch = Scratch::new(&format!("reading-a-reference-{tag}"));
+    let home = Scratch::new(&format!("reading-a-reference-{tag}-home"));
+    std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut task = task.with_home(Some(home.path.clone()));
+    if let Some(fields) = definition {
+        define(&home, "looker", fields, "LOOK-BY-DEFINITION");
+        task = task.addressing(Some("looker".to_string()));
+    }
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &task,
+    );
+    system_prompt_of(&received.recv().expect("a request"))
+}
+
+/// TURN-16: what the planner is told about reading a quarantined reference follows the tools the
+/// turn is offered and whether anybody can answer it. `vet_content` is named exactly where it is
+/// offered, the three ways to lift the quarantine are named only to a run nobody answers, and `--vet`
+/// is named only where `vet_content` is offered and no check already answers for it.
+///
+/// Rejects: a prompt that names `vet_content` to a run that was not offered it, one that leaves it
+/// out for a run that was, and one that tells an attended run to say how to vouch on another run.
+#[test]
+fn the_planner_is_told_how_to_read_a_reference_by_the_tools_it_is_offered_and_who_can_answer() {
+    for (tag, definition, nobody, auto, names_vet_content, lifts, names_vet_flag) in [
+        ("attended", None, false, false, true, false, false),
+        ("unattended", None, true, false, true, true, true),
+        ("checked", None, true, true, true, true, false),
+        (
+            "no-tool",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            true,
+            false,
+            false,
+            true,
+            false,
+        ),
+        (
+            "no-tool-attended",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+    ] {
+        let mut task = Task::new("LOOK-AT-THE-NOTES");
+        task.nobody_answers = nobody;
+        task.auto_vetting = auto;
+        let system = first_system_prompt(tag, definition, task);
+        assert_eq!(
+            names(&system, "vet_content"),
+            names_vet_content,
+            "{tag}: the prompt and the tools offered disagree about vet_content: {system}"
+        );
+        for flag in ["--trust-workspace", "--file"] {
+            assert_eq!(system.contains(flag), lifts, "{tag}: {flag}: {system}");
+        }
+        assert_eq!(system.contains("--vet"), names_vet_flag, "{tag}: {system}");
+        assert!(!system.contains("not asking"), "{tag}: {system}");
+    }
+}
+
+/// VET-2 and TURN-16: a delegate shares the planner's guidance and is never offered `vet_content`,
+/// so what it is told about a reference does not name it, or the flags of a command line it has no
+/// part in.
+#[test]
+fn a_delegate_is_not_told_to_call_vet_content_or_to_name_the_flags() {
+    let scratch = Scratch::new("delegate-reading-a-reference");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "LOOK-AT-THE-NOTES",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-THE-NOTES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("noted"),
+            ],
+        ),
+        ("READ-THE-NOTES", vec![reply_with("it is held")]),
+    ]);
+    let mut task = Task::new("LOOK-AT-THE-NOTES");
+    task.nobody_answers = true;
+
+    run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &task,
+    );
+
+    let (session, delegate): (Vec<String>, Vec<String>) = every_request(&received)
+        .into_iter()
+        .partition(|body| body.contains("LOOK-AT-THE-NOTES"));
+    assert!(names(&system_prompt_of(&session[0]), "vet_content"));
+    let system = system_prompt_of(delegate.first().expect("the delegate made a request"));
+    assert!(!names(&system, "vet_content"), "{system}");
+    assert!(!system.contains("--trust-workspace"), "{system}");
 }

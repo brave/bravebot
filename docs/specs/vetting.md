@@ -460,7 +460,9 @@ where screening is asked for makes the check `read_output` would make on its slo
 round early, so it is not a fourth kind of grant. Any other word, and a check that could not be made,
 keep the output back with no prompt drawn in any mode, including one that asks: the person is asked when
 the planner calls `read_output`. The planner is told that `read: true` did not return the output and
-nothing of the word.
+nothing of the word. No check is made over a slot that holds no bytes, by this route or by
+`read_output`: there is nothing for a check to read, and the result says the run printed nothing
+([RUN-24](tools/run.md#RUN-24)).
 
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
@@ -593,6 +595,11 @@ rather than as one: the round's phase does not change while a check runs, so it 
 the screen that is not what the session is waiting on, and it is what the surface goes back to
 saying once the check is over. A surface that is handed the pair and draws neither half leaves the
 finished-looking row that made the pair necessary.
+
+Where several checks are made at the same time, as the checks of a session's MCP tool lists are
+([SERVERS-8](mcp-servers.md#SERVERS-8)), the pair is still announced one check at a time: a check
+is announced as the turn begins to wait on it, in the order the questions are drawn, and announced
+as over when that wait ends.
 
 **Why.** A whole model call runs inside a tool call, and the verb already on the screen names the
 thing that has not happened yet: somebody watching `Read output` cannot tell a check that is working
