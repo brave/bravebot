@@ -46,6 +46,8 @@ pub mod mode;
 #[cfg(target_os = "linux")]
 pub(crate) mod netns;
 pub mod network;
+#[cfg(unix)]
+pub mod openshell;
 pub mod policy;
 pub mod process;
 pub mod programs;

@@ -25,6 +25,7 @@ governs:
   - crates/agent/src/reach.rs
   - crates/sandbox/src/rules.rs
   - crates/sandbox/src/programs.rs
+  - crates/sandbox/src/openshell.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
 guards:
@@ -3772,6 +3773,50 @@ fetch on macOS.
 `verified-by: bravebot_sandbox::macos::the_profile_allows_a_lookup_of_named_services_and_not_of_every_service`
 `verified-by: bravebot_sandbox::macos::the_trust_services_are_looked_up_only_where_the_network_is_allowed`
 `verified-by: bravebot_sandbox::macos::a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person`
+
+<a id="SANDBOX-33"></a>
+### SANDBOX-33: an OpenShell sandbox is created with its whole policy, and refused where the policy cannot be confirmed
+
+The `openshell` backend starts one program inside an NVIDIA OpenShell sandbox through the `openshell`
+program, found as every program this one starts is found ([SANDBOX-30](#SANDBOX-30)), with only `HOME`
+from this process's environment. A sandbox's name is up to 19 lower-case letters, digits and `-`,
+starting with a letter, and its image a reference with no whitespace or control character. Its policy
+is passed when it is created, and holds:
+
+- the filesystem OpenShell gives every sandbox, read-only system directories with `/tmp` writable,
+  with Landlock as a hard requirement, so a kernel that cannot enforce it refuses the sandbox rather
+  than running it unconfined;
+- one network rule per allowed host, port 443 only, for the program's real path inside the image,
+  read there with `readlink -f` before the rule is written, and enforced. With no host the program
+  reaches nothing.
+
+The rule is applied with `policy set --wait` and the program is started only once OpenShell reports it
+loaded. The sandbox is used only once it reports `Ready`, within 60 seconds. Any step that fails
+refuses the start, and a sandbox already created is deleted. A variable the caller would pass other
+than `PATH` and `HOME` is refused before anything is created, since nothing of this machine's
+environment goes into the sandbox. The program's standard streams are carried by `openshell sandbox
+exec`, so a long-lived MCP connection runs over them as it does over a local child's pipes.
+
+OpenShell inspects the TLS of what the program sends, through a certificate authority the sandbox
+trusts by `SSL_CERT_FILE` and the variables like it. That is how its rules see the host of an HTTPS
+request. It differs from the proxy of [SANDBOX-24](#SANDBOX-24), which never decrypts, and a program
+that pins certificates or ignores those variables fails to connect.
+
+**Why.** A policy loaded after the program starts leaves it running under a policy that is not yet
+the one approved, and OpenShell applies a live change about a second later. A rule naming a symlink
+such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the binary that runs.
+
+`verified-by: bravebot_sandbox::openshell::a_policy_with_no_hosts_reaches_nothing_and_requires_landlock`
+`verified-by: bravebot_sandbox::openshell::each_host_is_granted_to_the_one_binary_and_enforced`
+`verified-by: bravebot_sandbox::openshell::a_quote_or_backslash_cannot_end_a_scalar_early`
+`verified-by: bravebot_sandbox::openshell::a_host_that_is_not_a_name_or_a_domain_is_refused`
+`verified-by: bravebot_sandbox::openshell::a_name_or_image_a_command_line_could_misread_is_refused`
+`verified-by: bravebot_sandbox::openshell::a_path_from_the_image_must_be_absolute_and_plain`
+`verified-by: bravebot_sandbox::openshell::the_phase_is_read_from_its_own_line`
+`verified-by: bravebot_sandbox::openshell::a_variable_other_than_path_or_home_is_refused_before_anything_is_created`
+`verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`
+`verified-by: bravebot_mcp::openshell::a_program_missing_from_the_image_is_refused_and_the_sandbox_removed`
+`verified-by: bravebot_mcp::openshell::a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply`
 
 ## Programs a person asked for
 
