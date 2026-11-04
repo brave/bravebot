@@ -1475,7 +1475,8 @@ held first, and a file one created is removed; where two rewound turns wrote the
 back to what it held before the first of them.
 
 The conversation, turn count, spend, timing, remembered commands and transcript return to the
-snapshot before the earliest rewound turn. Those turns' audit lines are dropped too. The prompt of the
+snapshot before the earliest rewound turn. Your answers to the planner's questions are forgotten, all
+of them, so a question the planner puts again is asked again. Those turns' audit lines are dropped too. The prompt of the
 earliest turn rewound comes back into the input box so you can edit it and send it again. It arrives as
 a prompt (shell mode is switched off) and only into an empty box, so a line you have typed since is not
 overwritten, and not while a turn is running.

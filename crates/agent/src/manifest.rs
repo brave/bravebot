@@ -1400,7 +1400,9 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 step.tool()
             )));
         };
-        let activity = Activity::running(entry.capability, step.describe()).of_tool(step.tool());
+        let activity = Activity::running(entry.capability, step.describe())
+            .for_call(crate::report::CallId::next())
+            .of_tool(step.tool());
         reporter.tool_started(activity.clone());
 
         // Wrapped per step for the same reason the turn loop wraps per call: the borrow has to go

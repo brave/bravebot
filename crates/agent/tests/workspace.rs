@@ -9431,6 +9431,7 @@ fn log_of(repository: &Labelled<String>) -> bravebot_agent::workspace::GitQuesti
         messages: false,
         since: None,
         until: None,
+        beside: bravebot_agent::tools::Beside::every(),
     }
 }
 

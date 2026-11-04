@@ -295,7 +295,6 @@
   width: var(--hit);
   height: var(--hit);
   border-radius: var(--radius-control);
-  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--ink-tertiary);
   /* The ring is 16px and sits the toolbar's gap from its neighbours. The rest of the 28px target
@@ -304,6 +303,7 @@
 }
 .context-meter:hover { background: var(--surface-hover); }
 .context-meter:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.context-meter leo-progressring { --leo-progressring-size: var(--icon-control); }
 .context-meter.high { --leo-progressring-color: var(--status-warning); }
 .context-meter.full { --leo-progressring-color: var(--status-error); }
 .meter-ring { display: grid; }
@@ -554,16 +554,10 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
 }
 .welcome { width: min(560px, 100%); display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
 .welcome-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: var(--leo-spacing-5xl);
   height: var(--leo-spacing-5xl);
   margin-bottom: var(--leo-spacing-m);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--surface-raised);
-  --leo-icon-size: var(--icon-hero);
-  --leo-icon-color: var(--ink-secondary);
 }
 .welcome h1 { margin: 0; font: var(--leo-font-heading-h2); color: var(--ink-primary); }
 .welcome-lede { margin: 0; font: var(--type-body); color: var(--ink-secondary); }

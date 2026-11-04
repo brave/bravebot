@@ -16393,6 +16393,50 @@ fn a_recorded_run(scratch: &Scratch, arguments: &[&str]) -> (Output, String, Str
     (output, stdout, stderr)
 }
 
+/// CLI-15: a one-shot run in bypass with auto-vetting on says on stderr, after the line about the
+/// flag, that bypass refuses content a check objects to or cannot assess instead of asking. The
+/// same run without `--vet` says the flag's line and nothing about vetting. A property of the
+/// process: the standing setting is resolved from the flag, the home file and the settings, and
+/// only a run through the entry point shows that the lines follow it. Rejects a one-shot path that
+/// prints the vetting line whenever the flag is present, or never.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on() {
+    let run_with = |name: &str, extra: &[&str]| {
+        let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = vec!["--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "say something"]);
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{extra:?}: {stderr}");
+        assert!(stdout.contains("all done"), "{extra:?}: {stdout}");
+        stderr
+    };
+    let flag_line = "--dangerously-skip-permissions: nothing will be asked";
+    let vetting_line = "bypass is on with auto-vetting";
+
+    let vetted = run_with("cli-running-bypass-vet", &["--vet"]);
+    let flag = vetted
+        .find(flag_line)
+        .unwrap_or_else(|| panic!("the flag's line was not said: {vetted}"));
+    let screens = vetted
+        .find(vetting_line)
+        .unwrap_or_else(|| panic!("the vetting line was not said: {vetted}"));
+    assert!(
+        flag < screens,
+        "the lines came in the wrong order: {vetted}"
+    );
+
+    let plain = run_with("cli-running-bypass-no-vet", &[]);
+    assert!(plain.contains(flag_line), "{plain}");
+    assert!(
+        !plain.contains(vetting_line),
+        "a run without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
 /// CLI-25: a one-shot run is written down, and its result object names the record. A script reads
 /// the id out of one run and hands it to the next, so a run that wrote nothing, or wrote it and
 /// said nothing, leaves the script restating everything each time.
@@ -21638,6 +21682,45 @@ fn the_command_lines_own_prompt_is_the_first_turn() {
     let sent = bodies(&gateway);
     assert!(sent[0].contains("COMMAND-WORDS"));
     assert!(sent[1].contains("COMMAND-WORDS") && sent[1].contains("LINE-WORDS"));
+}
+
+/// TURN-16, ASK-7: a one-shot run puts no question to anybody, so the planner is told to say in its
+/// reply how the person can lift a quarantine, and a run reading lines sends its questions to the
+/// program feeding it, so it is not told that. The same prompt is sent both ways and only the input
+/// format differs. The faults this rejects: a one-shot run that is never told (the planner ends on a
+/// question nobody receives), and a run reading lines that is told nobody can answer when a program
+/// is answering.
+#[test]
+fn only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine() {
+    const TOLD: &str = "Nobody is available to answer a question in this run";
+
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-turn16-one-shot").with_settings(&settings_for(&gateway));
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "ONE-SHOT-WORDS"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert!(!sent.is_empty(), "the one-shot run reached no gateway");
+    assert!(
+        sent.iter().all(|body| body.contains(TOLD)
+            && body.contains("--trust-workspace")
+            && body.contains("--file")),
+        "a one-shot run was not told nobody answers: {sent:?}"
+    );
+
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-turn16-lines").with_settings(&settings_for(&gateway));
+    let run = LinesRun::start(&scratch, &["--trust-input-lines", "-p", "LINES-WORDS"]);
+    let first = run.until(|line| line.get("event").is_none());
+    let (_, status, stderr) = run.finish();
+    assert_eq!(results(&first)[0]["ok"], true, "{first:?}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert!(!sent.is_empty(), "the run reading lines reached no gateway");
+    assert!(
+        sent.iter().all(|body| !body.contains(TOLD)),
+        "a run whose questions reach a program was told nobody answers: {sent:?}"
+    );
 }
 
 /// CLI-3 and CLI-36: a line on a pipe is the launching program's words, so the planner is given a

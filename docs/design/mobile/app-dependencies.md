@@ -11,7 +11,7 @@ The review [decision 9](decisions-and-tradeoffs.md#9-mobile-dependencies-and-bui
 
 ## Direct dependencies
 
-Licences and versions are from `pnpm licenses list` on the lockfile.
+Licences and versions are from `pnpm licenses list` on the lockfile. `react` and `react-native` are exact in `package.json`; the other versions are what the lockfile resolves a range to.
 
 | Package | Version | Licence | Why | Native code |
 |---|---|---|---|---|

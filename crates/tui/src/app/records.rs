@@ -190,6 +190,10 @@ pub(super) fn rewind(
     // replies a list of links was read from are gone with them.
     session.hunks_listed = None;
     session.links_listed = None;
+    // The answers given in the turns gone are not kept, and those given before them go with them:
+    // the memo does not say which turn an answer came in, and a question put again after an undo
+    // is to be shown (ASK-8).
+    session.answers.forget();
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     // Read off the point before anything is removed. The display prompts of the rewound turns go

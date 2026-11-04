@@ -1,7 +1,5 @@
 # Bravebot mobile: executive summary
 
-Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
-
 ## Two modes in one app
 
 ![One React Native app and shared session client support an on-device agent and remote control of an agent on the host machine.](mobile-modes.png)
@@ -13,7 +11,7 @@ Each session stays with its chosen execution target. Switching targets never mov
 
 ## Why React Native
 
-The prototype uses React Native for native mobile controls and shared Android/iOS screens. Validate responsiveness, approval legibility, accessibility, keyboard behavior, scrolling, and lifecycle handling in the first device proof before expanding the screens. The unmerged WebView prototype supplies a reference for reusable integration code; it does not determine the mobile UI architecture. See the [UI decision](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). Neither platform has delivery priority.
+The prototype uses React Native for native mobile controls and shared Android/iOS screens. Validate responsiveness, approval legibility, accessibility, keyboard behavior, scrolling, and lifecycle handling in the first device proof before expanding the screens. See the [UI decision](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). Neither platform has delivery priority.
 
 Keep shareable behavior in Rust. Both execution modes call the same Rust session-view and approval code; the thin TypeScript package in `packages/agent-client/` handles transport and UI wiring. Validate the new view capability through a real local RPC process, independently of Electron.
 
@@ -29,15 +27,7 @@ The first deliverable is the local client proof. The [first secure remote checkp
 
 ## Current mobile status
 
-The [android-shell](https://github.com/brave/bravebot/tree/android-shell) branch contains an unmerged proof of concept with:
-
-- On-device Rust execution through JNI and an Android app using the renderer in a WebView.
-- Phone navigation, drawers, sheets, and touch-layout work.
-- Host input checks, source-consistency and layout tests, and build guidance.
-
-Build on this work when implementing native integration and mobile interactions. Review branch progress before stage 2b and later work that uses it, record the selected revision, and preserve contributor attribution.
-
-The current source reference is [`9635f16b`](https://github.com/brave/bravebot/tree/9635f16b49798624e6174b0d15818227773e81a8), separate from the plan's main baseline. Integrate and validate against current main; existing checks do not establish JNI or Kotlin runtime coverage. See the [source findings](README.md#current-mobile-status).
+See the [README](README.md#current-mobile-status) for what is built and for the unmerged `android-shell` proof of concept.
 
 ## Known limits and open decisions
 

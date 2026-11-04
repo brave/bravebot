@@ -195,7 +195,8 @@ programs may reach and about a directory, the names a checkout's removal would d
 same way, and so do the line a call about a file draws in the transcript, the lists of files a turn
 wrote, read or changed, and the startup notes about an allow rule a checkout proposed. A search for a
 pattern is drawn as written. The question is
-asked once per path per turn, and only where the read is quarantined. Declining leaves the file as it
+asked once per path per turn, and only where the read is quarantined, except that a yes given after the
+file changed while you were answering is thrown away and the next read of it asks again. Declining leaves the file as it
 was and the turn carries on with a reference.
 
 The startup trust question an editor, the desktop window or the mobile app shows draws the directory and

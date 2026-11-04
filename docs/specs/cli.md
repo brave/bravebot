@@ -562,12 +562,19 @@ against one.
 ### CLI-11: `--add-dir` makes a directory reachable, and vouches for nothing
 
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
-given more than once. An absolute path that exists, is a directory, and is not already inside the
-working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map holds nothing for it, so a file read there is read on the same footing as the
-project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
-the working directory alone. A write there is refused as any other write in an unattended run is,
-and the flag in CLI-1 lifts that exactly as it does elsewhere, `--approve-input-lines` included.
+given more than once. The path may be relative, resolved against the working directory the same
+way `/add-dir` resolves one ([TRUST-9](trust-map.md#TRUST-9)): its leading `.` and `..` are taken
+out against the working directory's own canonical path and the remaining components are appended
+in order, so `--add-dir ../notes` opens the directory beside the working one. A `~` is not; it is
+left to the shell, which ordinarily expands it before this ever sees the path, and an unexpanded
+one is read as an ordinary directory component rather than as the home directory, since a second
+reading of it here is a second place for it to resolve apart from the shell's own. A path that is
+not absolute once resolved, does not exist, is not a directory, or is already inside the working
+one is refused by name and the run stops before the turn. The run's trust map holds nothing for
+it, so a file read there is read on the same footing as the project's own files without an answer
+about them: nothing vouched for it. `--trust-workspace` covers the working directory alone. A
+write there is refused as any other write in an unattended run is, and the flag in CLI-1 lifts
+that exactly as it does elsewhere, `--approve-input-lines` included.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
 outside the working directory is otherwise refused whatever else is true, so without this the task
@@ -588,8 +595,12 @@ in, over a file it was told it could open.
 `verified-by: bravebot_cli::main::the_directory_flag_is_repeatable`
 `verified-by: bravebot_cli::main::a_directory_flag_with_no_path_is_refused`
 `verified-by: bravebot_cli::main::a_directory_the_command_line_named_is_reachable`
+`verified-by: bravebot_cli::main::a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory`
 `verified-by: bravebot_cli::main::a_directory_that_cannot_be_opened_stops_the_run`
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
+`verified-by: bravebot_agent::workspace::an_absolute_directory_name_is_not_joined_onto_a_root`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_refused_against_a_root_whose_name_is_not_text`
 
 <a id="CLI-12"></a>
 ### CLI-12: `--json` puts one result object on stdout, in the reply's place
@@ -822,6 +833,13 @@ since making the check is what sends them, and each promotion costs a model call
 critical path. Both are the price of the screening rather than side effects of it, and a run that
 wants neither leaves the flag off.
 
+A person is told what the screening does. Where the run also bypasses permissions and the flag
+turns auto-vetting on, the plain client and the other command-line path print one line after the
+notice that permissions are skipped, saying that a read a check does not pass is refused and not
+asked about ([CHECK-11](vetting.md#CHECK-11)). Without the bypass flag, or with auto-vetting off,
+that line is not printed. A refusal that screening makes is also told to the person as it happens
+([CHECK-9](vetting.md#CHECK-9)).
+
 The flag is taken out of the arguments before anything dispatches on them, so it composes with
 every way of starting and with the other flags taken out there, `--plain` included. Given
 twice it is given once, which is asking for something that is already on rather than an error to
@@ -847,6 +865,9 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
 `verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
 `verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would

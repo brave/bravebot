@@ -4979,7 +4979,7 @@ mod tests {
             .expect("refused");
         assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
         assert!(
-            format!("{failure}").contains("openrouter"),
+            format!("{failure}").contains("OpenRouter"),
             "the failure does not say which gateway: {failure}"
         );
         // The remedy, not only the diagnosis: both places a credential can be named.

@@ -18,6 +18,13 @@ export function rpcBinary(): string {
   return path
 }
 
+/** The built `bravebot-host`: BRAVEBOT_HOST, or the workspace's debug build. It is never built implicitly. */
+export function hostBinary(): string {
+  const path = process.env.BRAVEBOT_HOST ?? join(here, `../../../../../target/debug/bravebot-host${process.platform === 'win32' ? '.exe' : ''}`)
+  assert.ok(existsSync(path), `bravebot-host is not built at ${path}; run \`make check-agent-client\` or set BRAVEBOT_HOST`)
+  return path
+}
+
 /**
  * The environment a test runs the bridge in: nothing inherited, a home of its own, and the model
  * service pointed at the test's stub, so no real credential, setting or session is read or written.

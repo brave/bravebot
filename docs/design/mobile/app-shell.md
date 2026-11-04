@@ -49,7 +49,7 @@ Opening a session means different things by target. Against a host it attaches t
 - Every field the [client contract](client-contract.md#first-non-stdio-listener-allowlist) lists for the kind is shown: the full command, the program it resolves to and where it runs for `run`; the host the request connects to, apart from the address as sent, for `fetch`; the path, effect, changes, credentials found and notes for `confirm`; the questions and offered choices for `ask`. A write of untrusted text carries a dashed warning band in words.
 - A card taller than its viewport scrolls and says "Scroll to read the rest before you approve" until the end is reached. Approve stays off until then, so a person cannot approve what is below the fold. Reject is always available.
 - Only the pending request can be answered, and a reply carries the request number the card showed. A reply for a request that is no longer on screen is refused by the client and the app shows the refusal.
-- A payload that does not read completely, or that names a request other than the pending one, is shown as unanswerable. Cancel is the only action, and it refuses the question. A question of an unsupported kind is handled the same way.
+- A payload that does not read completely, or that names a request other than the pending one, is shown as unanswerable. The card has no buttons; it says to cancel the turn, and the composer's Cancel control is the only way to refuse the question. A question of an unsupported kind is handled the same way.
 - A command is approved once and the reply never carries `remember`.
 - Every word of a card that came from the agent or from outside is drawn through the escaping text, including the program names and paths of a command, the headings and the choices of a question, and the labels a screen reader speaks. A question takes either a choice or typed text for each prompt: typing clears the choice and choosing clears the text, so what is shown is what is sent.
 
@@ -61,7 +61,7 @@ The composer is the desktop's two-tier object: a message box with a round send c
 |---|---|
 | `awaiting_trust` | The box is disabled, and the trust card is pinned above it. |
 | `idle`, `completed`, `failed`, `cancelled` | Send is available once there is text. |
-| `running`, `waiting` | The round control becomes a stop control labelled Cancel. The draft stays in the field. There is no queue. The control keeps its size, so nothing moves. |
+| `running`, `waiting` | The round control becomes a stop control labelled Cancel. The field stays editable so the draft can be written, but it cannot be sent. There is no queue. The control keeps its size, so nothing moves. |
 | `detached`, or a view that has `ended` | Disabled with the reason (closed, connection lost, sequence gap). No recovery is claimed. |
 
 ### Empty session
@@ -86,7 +86,7 @@ Portrait only. Landscape is unsupported: Android ignores a rotation request, and
 
 A `Target` (`mobile/src/targets.ts`) is an id, a label, a description, the suggested prompts and a `create` function that returns an `AgentClient`. `App` takes its targets as a prop and uses the first one. With none, it shows the blank slate: the usual frame with "Nothing is connected", a composer that is disabled and says "No target is connected.", and no menu, target pill or calls control. Choosing between several targets is not built.
 
-The app lists and opens sessions through `listSessions()` and `openSession(id)`, which are capability-gated additions to the common interface. `TargetInfo.sessionList` says whether a target has them. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`, so a target that cannot list shows an empty list. Hiding the drawer for such a target waits for the first one.
+The app lists and opens sessions through `listSessions()` and `openSession(id)`, which are capability-gated additions to the common interface. `TargetInfo.sessionList` says whether a target has them. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`. The app reads `sessionList` before its first list request; for a target that cannot list, the drawer says so in place of the list and asks for none. A failed list request is shown as a failure, not as an empty list ([Q8](open-questions.md#q8-how-does-the-app-know-a-target-can-list-its-sessions)).
 
 The tests run the app against `FakeClient` and `FakeSession` in `mobile/src/__tests__/support/`. A test sets the session's view directly and records what the app asked of the session, so the screens are tested for what they show and send, not for what a target does with it.
 
@@ -105,11 +105,11 @@ pnpm works with Metro when `nodeLinker` is `hoisted`. Gradle also needs the hois
 ## Done when
 
 - The app builds reproducibly on the Android emulator or a device and on the iOS simulator, and imports `@brave/agent-client`.
-- Against a fake client, the drawer lists sessions and opens one in its recorded state, and the approval cards work for all four kinds with approve and reject outcomes.
+- Against a fake client, the drawer lists sessions and opens one in its recorded state, says when a target does not list sessions or a list request fails, and the approval cards work for all four kinds with approve and reject outcomes.
 - A session whose content contains a forged label, control and bidirectional characters, or a very long line, displays labelled, escaped plain text, and nothing it contains changes the surrounding layout or markings.
 - The Calls made drawer lists the session's calls, one row per call.
 - The dependency review, lockfile checks, affected-check selection and CODEOWNERS entries exist for the new paths (decision 9). CI runs type checks, unit tests and dependency checks. Device builds are not part of CI yet.
 
 ## What this does not establish
 
-The fake client proves screens, not a target. It does not show host connectivity, embedded execution, pairing, recovery, lifecycle behavior, security properties of a real session, or that any approval reached a real tool. The app keeps the sessions it has opened so a person can switch back to one with its draft and answers intact, and it does not close them, or the client the target gave it, when it switches session, changes target or exits ([Q7](open-questions.md#q7-when-does-the-mobile-app-close-a-session-it-opened)). A tool finish is matched to the latest running call by arrival order, because no content of a call may decide the row, so two calls in flight can swap their rows ([Q6](open-questions.md#q6-how-does-a-tool-finish-name-the-call-it-ends)). A list request that fails keeps the last list that arrived, or shows an empty list if none has, the same as a target with no sessions ([Q8](open-questions.md#q8-how-does-the-app-know-a-target-can-list-its-sessions)). Both wait for a target with a real session lifecycle. Hiding the content behind an open panel from a screen reader is set for both platforms and has not been checked with TalkBack or VoiceOver. Physical devices and a release build are untested.
+The fake client proves screens, not a target. It does not show host connectivity, embedded execution, pairing, recovery, lifecycle behavior, security properties of a real session, or that any approval reached a real tool. The app keeps the sessions it has opened so a person can switch back to one with its draft and answers intact, and it does not close them, or the client the target gave it, when it switches session, changes target or exits ([Q7](open-questions.md#q7-when-does-the-mobile-app-close-a-session-it-opened)). A list request that fails keeps the last list that arrived, or shows an empty list if none has, the same as a target with no sessions ([Q8](open-questions.md#q8-how-does-the-app-know-a-target-can-list-its-sessions)). Both wait for a target with a real session lifecycle. Hiding the content behind an open panel from a screen reader is set for both platforms and has not been checked with TalkBack or VoiceOver. Physical devices and a release build are untested.

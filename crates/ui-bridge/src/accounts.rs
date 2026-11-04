@@ -161,7 +161,7 @@ fn worded(row: &Row, config: &Result<Config, ConfigError>) -> Value {
     json!({
         "way": way,
         "id": id,
-        "name": name(&row.way),
+        "name": name(&row.way, config),
         "standing": standing,
         "keyFrom": key_from,
         "detail": detail(&row.standing),
@@ -189,7 +189,7 @@ fn can_sign_out(row: &Row) -> bool {
     row.stored && !matches!(row.way, Way::Bedrock { .. } | Way::Gateways)
 }
 
-fn name(way: &Way) -> String {
+fn name(way: &Way, config: &Result<Config, ConfigError>) -> String {
     match way {
         Way::Brave => t!(desktop_accounts_name_brave).into(),
         Way::Bedrock { profile: None } => t!(desktop_accounts_name_bedrock).into(),
@@ -199,7 +199,13 @@ fn name(way: &Way) -> String {
             desktop_accounts_name_bedrock_profile,
             profile = profile.clone()
         ),
-        Way::Gateway { id } => id.clone(),
+        // The string the model list and the settings report use for the same provider.
+        Way::Gateway { id } => bravebot_agent::key_entry::configured_gateways(config)
+            .ok()
+            .and_then(|providers| providers.iter().find(|provider| provider.id == *id))
+            .map(|provider| provider.display_name().to_string())
+            .or_else(|| bravebot_config::provider::known_name(id).map(str::to_string))
+            .unwrap_or_else(|| id.clone()),
         Way::Gateways => t!(desktop_accounts_name_gateways).into(),
         Way::ChatGpt => t!(desktop_accounts_name_chatgpt).into(),
         Way::Xai => t!(desktop_accounts_name_xai).into(),

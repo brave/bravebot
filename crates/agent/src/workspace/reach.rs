@@ -7,7 +7,8 @@ use super::{
     BACKSLASH_SEPARATES, Workspace, WorkspaceError, destination, expand_home, locked,
     refuse_unkeyable,
 };
-use std::path::{Path, PathBuf};
+use bravebot_i18n::t;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 /// The checks a directory name a person typed has to pass before anything is asked about where it
@@ -35,6 +36,63 @@ fn existing_directory(directory: &str) -> Result<PathBuf, WorkspaceError> {
         });
     }
     Ok(canonical)
+}
+
+/// The name a person, a settings file, or `--add-dir` gave a directory, resolved against `root`,
+/// as an absolute path.
+///
+/// A relative name means a path under `root`: a directory a session, a settings file, or
+/// `--add-dir` names is one `/cd`, `/add-dir`, `/add-dir close` and `--add-dir` all read against
+/// the working directory the same way, through this one function (CLI-11, TRUST-9), so
+/// `--add-dir ../notes` and `/add-dir ../notes` cannot resolve apart.
+///
+/// The leading `.` and `..` of a relative name are cleaned against `root` here, and the
+/// remaining components are appended in order. `root` is expected to be canonical, so it holds
+/// no link for a `..` to step over, and `../notes` becomes `<parent of root>/notes`, which is
+/// the spelling an opened directory is recorded under and so the one `/add-dir close` matches
+/// before it asks the file system where the name leads. A `..` after a name is left alone, since
+/// that name may be a link and the file system takes the `..` from the link's target (TRUST-10).
+///
+/// A relative name against a `root` that is not text is refused. The `String` this returns
+/// becomes a reach grant and a trust key, and a rendering of `root` that replaces the bytes it
+/// cannot show names another directory (PATH-002). A name that is already absolute needs no
+/// `root`.
+///
+/// Not `~`. A leading `~` means something different to each caller: the terminal's `/cd` and
+/// `/add-dir` expand it to the home directory themselves, for CMDLINE-4 (a `~` the person types
+/// and a `~` the planner writes in a command line are to name the same file); `--add-dir` leaves
+/// it to the shell, which ordinarily expands it before this is ever called, and a settings
+/// file's own reading of it is [`Workspace::with_references`]'s to decide. A caller that wants a
+/// leading `~` expanded does so before calling this.
+pub fn named_directory(root: &Path, typed: &str) -> Result<String, WorkspaceError> {
+    if Path::new(typed).is_absolute() {
+        return Ok(typed.to_string());
+    }
+    let not_text = || WorkspaceError::Invalid {
+        path: typed.to_string(),
+        reason: t!(session_directory_root_not_text),
+    };
+    if root.to_str().is_none() {
+        return Err(not_text());
+    }
+
+    let mut resolved = root.to_path_buf();
+    let mut components = Path::new(typed).components().peekable();
+    while let Some(leading) = components.peek() {
+        match leading {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            _ => break,
+        }
+        components.next();
+    }
+    resolved.extend(components);
+    resolved
+        .into_os_string()
+        .into_string()
+        .map_err(|_| not_text())
 }
 
 /// A directory the person's settings named and the workspace opened (REFER-3).

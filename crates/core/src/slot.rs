@@ -622,6 +622,20 @@ impl SlotStore {
         }
     }
 
+    /// Whether this slot holds text of 0 bytes.
+    ///
+    /// Metadata: a yes or a no, and no part of the text. It is the one figure of
+    /// [`Measured`] that decides anything, because a slot that states 0 bytes has nothing for a
+    /// check to read or for a person to be shown, and the planner is told the size of any slot it
+    /// may not read. A slot still waiting on its file, and a name that holds nothing, are not
+    /// empty.
+    pub fn holds_no_bytes(&self, id: &SlotId) -> bool {
+        matches!(
+            self.slots.get(id),
+            Some(Entry::Read { value, .. }) if value.shape().bytes == 0
+        )
+    }
+
     /// Whether this slot's text is a decoding of a file in another encoding.
     ///
     /// Metadata, and the driver's own: a yes or a no, and no part of the text.

@@ -42,7 +42,8 @@ import { EYE_PARTS, eyesToward, placeEyes, spriteOf, type Look, type Sprite } fr
  * - leans in as work starts, perks up as thinking starts or a question is asked, and while it
  *   waits for an answer bounces now and then;
  * - perks up when the pointer arrives over it, squashes under a press and springs back when let
- *   go, and giggles when pressed three times quickly;
+ *   go, and giggles when pressed three times quickly; in a list, choosing its row by pointer or by
+ *   Enter or Space is a press that always ends in a giggle;
  * - when it is the open one, watches the field being typed in;
  * - glances toward a neighbour that cheers, startles or giggles;
  * - in a list, dozes off when nothing has happened to it for a while, and wakes with a stretch;
@@ -104,6 +105,8 @@ export interface Registered {
   attended?: number
   /** Whether it is held down, and when it was last let go of, for a giggle. */
   pressed?: boolean
+  /** Whether the press is a row being chosen, which ends in a giggle however many came before. */
+  choosing?: boolean
   releases?: number[]
   giggled?: number
   /** A neighbour it is glancing at, and until when. */
@@ -478,20 +481,34 @@ export function typing(): void {
   schedule()
 }
 
-/** The detailed face whose frame holds an element, if any. */
-function faceAt(target: EventTarget | null): Registered | null {
+/**
+ * The detailed face a press on an element presses, if any: the one whose frame holds it, or the one
+ * inside the control around it that says, with `data-presses-face`, that choosing it is touching its
+ * face. A bot's row in a list says so, and choosing the bot makes its face giggle. `choosing` is
+ * whether the press is on such a control.
+ */
+export function faceAt(target: EventTarget | null): { entry: Registered; choosing: boolean } | null {
   if (!(target instanceof Node)) return null
-  for (const entry of registered.values()) if (entry.detail && entry.svg.parentElement?.contains(target)) return entry
+  const holder = (target instanceof Element ? target : target.parentElement)?.closest('[data-presses-face]')
+  for (const entry of registered.values()) {
+    if (!entry.detail) continue
+    // A press on the face itself is a press on the face, even where the row around it says that
+    // choosing it touches its face: the third press in a row giggles, not the first.
+    if (entry.svg.parentElement?.contains(target)) return { entry, choosing: false }
+    if (holder?.contains(entry.svg)) return { entry, choosing: true }
+  }
   return null
 }
 
-/** Let go of a pressed face: it springs back, or, at the third press in a row, giggles. */
+/** Let go of a pressed face: it springs back, or, at the third press in a row or on choosing it, giggles. */
 function release(entry: Registered, seconds: number): void {
   entry.pressed = false
+  const choosing = entry.choosing
+  entry.choosing = false
   const last = entry.releases?.at(-1)
   // A press too long after the one before starts the count again.
   entry.releases = last !== undefined && seconds - last <= GIGGLE.within ? [...entry.releases!, seconds] : [seconds]
-  if (entry.releases.length >= GIGGLE.presses) {
+  if (choosing || entry.releases.length >= GIGGLE.presses) {
     entry.releases = []
     entry.giggled = seconds
     play(entry, 'giggle', seconds)
@@ -501,10 +518,11 @@ function release(entry: Registered, seconds: number): void {
 }
 
 /** Press a face and let go of it, for the pointer handlers and the tests. */
-export function press(svg: SVGSVGElement): void {
+export function press(svg: SVGSVGElement, choosing = false): void {
   const entry = registered.get(svg)
   if (!entry?.detail) return
   entry.pressed = true
+  entry.choosing = choosing
   entry.attended = performance.now() / 1000
   play(entry, 'press', entry.attended)
   schedule()
@@ -520,14 +538,24 @@ if (typeof document !== 'undefined') {
   // A press on a face squashes it; the press still reaches whatever the face is in.
   document.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return
-    const entry = faceAt(event.target)
-    if (entry) press(entry.svg)
+    const hit = faceAt(event.target)
+    if (hit) press(hit.entry.svg, hit.choosing)
   }, { passive: true })
   const letGoAll = () => {
     for (const entry of registered.values()) if (entry.pressed) letGo(entry.svg)
   }
   document.addEventListener('pointerup', letGoAll, { passive: true })
   document.addEventListener('pointercancel', letGoAll, { passive: true })
+  // Choosing a row with Enter or Space touches its face as a click does: down presses, up lets go.
+  // A key held down repeats, and only its first press counts.
+  document.addEventListener('keydown', (event) => {
+    if ((event.key !== 'Enter' && event.key !== ' ') || event.repeat) return
+    const hit = faceAt(event.target)
+    if (hit && !hit.entry.pressed) press(hit.entry.svg, hit.choosing)
+  }, { passive: true })
+  document.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') letGoAll()
+  }, { passive: true })
   // The pointer is only recorded here; the clock reads it on its next tick, so a burst of events
   // costs nothing. A touch or pen is not a pointer anyone is looking from.
   document.addEventListener('pointermove', (event) => {

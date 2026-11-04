@@ -46,7 +46,6 @@
 /* A message naming a long path has no break in it, and an alert that will not wrap widens the body
    past the dialog, which clips the footer and its Close button off the right-hand edge. */
 .modal leo-alert { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
-.modal .dialog-busy { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
 
 /* ---------------------------------------------------------------- import
 
@@ -370,7 +369,6 @@
 .memory-body { padding-block: var(--leo-spacing-xs); }
 .memory-tools { display: flex; gap: var(--leo-spacing-m); }
 .memory-dialog .memory-reset, .memory-dialog .memory-history { margin-top: var(--leo-spacing-l); }
-.memory-loading { font: var(--type-meta); color: var(--ink-secondary); }
 
 @media (prefers-reduced-motion: reduce) {
   .modal.about { animation: none; }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useDelayedFlag } from '../hooks'
-import { Alert, Button, Checkbox, Label, ProgressRing } from '../nala'
+import { Alert, Button, Checkbox, Label } from '../nala'
 import { call } from '../request'
 import { shortAgo } from '../time'
 import { showToast } from '../toasts'
 import { Modal } from './Modal'
 import { plural } from '../plural'
+import { Skeleton } from './Skeleton'
 
 /** One of Claude Code's sessions for the project, as `session.import` lists it. */
 export interface Found {
@@ -98,7 +99,7 @@ export function ImportSessions({ directory, onImported, onClose }: {
       </> : <Button kind="filled" onClick={onClose}>Close</Button>}>
       {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
       {found === null && !problem && (
-        <p role="status" className="dialog-busy" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Reading Claude Code’s sessions…</p>
+        <Skeleton label="Reading Claude Code’s sessions…" count={3} delayed={!showLoading} />
       )}
       {found?.length === 0 && <p data-test="import-empty">No Claude Code sessions for this folder.</p>}
       {found && found.length > 0 && <ImportList found={found} chosen={chosen} copying={copying} onPick={pick} />}

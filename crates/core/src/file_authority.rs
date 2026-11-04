@@ -1,12 +1,18 @@
 //! File decisions shared by a run and its delegates.
 //!
-//! Capture holds the short access lock across reading bytes and assigning their label.
+//! Capture holds the short access lock across the decision it protects: the bytes a capture reads
+//! and the label it gives them, or the revision check, trust lookup and reservation of an effect
+//! entering. A capture does not hold it across a walk of a tree or across work that needs no
+//! agreement with a decision, such as reading a backup of a path already reserved.
 //! An entered effect publishes distrust before releasing that lock. Long effects keep a
 //! path reservation, so unrelated captures proceed while that path remains quarantined.
 //!
 //! The lock is shared by captures that only read and exclusive for everything that enters or
 //! completes an effect. Readers exclude effects and are excluded by them; they do not exclude
 //! each other, because a reader changes no decision.
+//!
+//! Every delegate is seeded with the parent's one authority (`with_own_waits`), so the file
+//! decisions are single and only the record of time spent waiting for the lock is the delegate's own.
 
 use crate::label::Integrity;
 use crate::trust::TrustStore;
@@ -89,6 +95,17 @@ struct Shared {
 pub struct FileAuthority {
     shared: Arc<Shared>,
     root: Option<Arc<str>>,
+    waits: Arc<Mutex<Vec<Wait>>>,
+}
+
+/// A span during which one capture was blocked from entering the boundary, on the monotonic clock.
+///
+/// Two instants and nothing else: no path, label or bytes, so it may be carried, summed and shown
+/// without a release.
+#[derive(Debug, Clone, Copy)]
+pub struct Wait {
+    pub start: std::time::Instant,
+    pub end: std::time::Instant,
 }
 
 impl FileAuthority {
@@ -105,7 +122,54 @@ impl FileAuthority {
                 }),
             }),
             root: None,
+            waits: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// This authority, deciding the same things, that records the waits of its own captures apart
+    /// from every other handle's.
+    ///
+    /// For a delegate: the figure a turn reports is the time that turn waited, and a delegate's wait
+    /// is not the wait of the turn that started it (DELEGATE-18).
+    #[must_use]
+    pub fn with_own_waits(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            root: self.root.clone(),
+            waits: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// How many blocked spans this handle's log holds, to read what a stretch of work added with
+    /// [`FileAuthority::waits_after`].
+    pub fn wait_mark(&self) -> usize {
+        self.log().len()
+    }
+
+    /// The spans recorded after `mark`, oldest first: every capture through this handle's log that
+    /// was blocked entering the boundary since then.
+    pub fn waits_after(&self, mark: usize) -> Vec<Wait> {
+        self.log().iter().skip(mark).copied().collect()
+    }
+
+    /// Every span in this handle's log, for a delegate to hand back when it ends.
+    pub fn all_waits(&self) -> Vec<Wait> {
+        self.log().clone()
+    }
+
+    /// Add spans a delegate that this handle's holder joined was blocked for, so they reach the
+    /// holder's own parent when the holder ends. Durations only.
+    pub fn record_waits(&self, spans: impl IntoIterator<Item = Wait>) {
+        self.log().extend(spans);
+    }
+
+    fn log(&self) -> std::sync::MutexGuard<'_, Vec<Wait>> {
+        self.waits.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn waited(&self, start: std::time::Instant) {
+        let end = std::time::Instant::now();
+        self.log().push(Wait { start, end });
     }
 
     /// This authority, with a relative name read beneath `root` instead of the map's own root.
@@ -119,6 +183,7 @@ impl FileAuthority {
         Self {
             shared: self.shared.clone(),
             root: Some(Arc::from(crate::trust::normalise(root))),
+            waits: self.waits.clone(),
         }
     }
 
@@ -128,6 +193,7 @@ impl FileAuthority {
         Self {
             shared: self.shared.clone(),
             root: None,
+            waits: self.waits.clone(),
         }
     }
 
@@ -189,13 +255,23 @@ impl FileAuthority {
     /// Order a capture or effect entry against every other participant.
     /// Never keep this guard across a prompt, model request or process wait.
     pub fn capture(&self) -> FileCapture<'_> {
+        let guard = match self.shared.access.try_write() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let from = std::time::Instant::now();
+                let guard = self
+                    .shared
+                    .access
+                    .write()
+                    .unwrap_or_else(|error| error.into_inner());
+                self.waited(from);
+                guard
+            }
+        };
         FileCapture {
             authority: self,
-            _guard: self
-                .shared
-                .access
-                .write()
-                .unwrap_or_else(|error| error.into_inner()),
+            _guard: guard,
         }
     }
 
@@ -207,13 +283,21 @@ impl FileAuthority {
     /// handle it returns cannot enter an effect. Never keep this guard across a prompt, model
     /// request or process wait.
     pub fn capture_shared(&self) -> SharedCapture<'_> {
-        SharedCapture {
-            _guard: self
-                .shared
-                .access
-                .read()
-                .unwrap_or_else(|error| error.into_inner()),
-        }
+        let guard = match self.shared.access.try_read() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let from = std::time::Instant::now();
+                let guard = self
+                    .shared
+                    .access
+                    .read()
+                    .unwrap_or_else(|error| error.into_inner());
+                self.waited(from);
+                guard
+            }
+        };
+        SharedCapture { _guard: guard }
     }
 
     pub fn snapshot(&self) -> TrustStore {
@@ -441,6 +525,61 @@ impl Drop for FileEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture that had to wait for another guard records how long, and one that did not records
+    /// nothing. Rejects an implementation that times every capture (a figure for a free boundary
+    /// would be noise) and one that records nothing.
+    #[test]
+    fn a_blocked_capture_records_its_wait_and_a_free_one_does_not() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let mark = authority.wait_mark();
+        drop(authority.capture());
+        drop(authority.capture_shared());
+        assert!(
+            authority.waits_after(mark).is_empty(),
+            "a capture that was not blocked was recorded"
+        );
+
+        let held = authority.capture();
+        let hold = std::time::Duration::from_millis(60);
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| drop(authority.capture()));
+            let reader = scope.spawn(|| drop(authority.capture_shared()));
+            std::thread::sleep(hold);
+            drop(held);
+            waiter.join().unwrap();
+            reader.join().unwrap();
+        });
+        let waits = authority.waits_after(mark);
+        assert_eq!(waits.len(), 2, "{waits:?}");
+        for wait in &waits {
+            assert!(
+                wait.end.duration_since(wait.start) >= hold / 2,
+                "the span is shorter than the time the guard was held: {wait:?}"
+            );
+        }
+        assert_eq!(authority.all_waits().len(), 2);
+        assert_eq!(authority.wait_mark(), mark + 2);
+    }
+
+    /// A handle with its own log shares the boundary and not the record, so a delegate's waits are
+    /// not read as the waits of the turn that started it until they are handed back.
+    #[test]
+    fn a_handle_with_its_own_log_keeps_its_waits_apart() {
+        let parent = FileAuthority::new(TrustStore::new("/work"));
+        let child = parent.with_own_waits();
+        let held = parent.capture();
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| drop(child.capture()));
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            drop(held);
+            waiter.join().unwrap();
+        });
+        assert_eq!(child.all_waits().len(), 1, "the boundary was not shared");
+        assert!(parent.all_waits().is_empty(), "the child's wait leaked");
+        parent.record_waits(child.all_waits());
+        assert_eq!(parent.all_waits().len(), 1);
+    }
 
     /// Ancestor decisions invalidate previews; sibling and descendant decisions do not.
     #[test]

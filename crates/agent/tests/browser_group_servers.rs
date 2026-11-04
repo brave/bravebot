@@ -3029,16 +3029,25 @@ fn a_choice_fills_only_the_argument_the_declaration_named() {
             .map(|name| name.as_str().expect("a name").to_string())
             .collect()
     };
+    // Every tool is also offered `read`, which this process takes off the call before it reaches
+    // the server (the turn is offered `vet_content`). No tool is offered a reference or a choice
+    // beyond the two the declaration named.
     assert_eq!(
         properties("click_element"),
-        ["element_number", "element_number_ref", "url"]
+        ["element_number", "element_number_ref", "read", "url"]
     );
     assert_eq!(
         properties("type_text"),
-        ["element_number", "element_number_ref", "text", "url"]
+        [
+            "element_number",
+            "element_number_ref",
+            "read",
+            "text",
+            "url"
+        ]
     );
-    assert_eq!(properties("scroll_page"), ["pages", "url"]);
-    assert_eq!(properties("list_page_elements"), ["url"]);
+    assert_eq!(properties("scroll_page"), ["pages", "read", "url"]);
+    assert_eq!(properties("list_page_elements"), ["read", "url"]);
     assert_eq!(
         required("click_element"),
         ["url"],

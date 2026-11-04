@@ -21,7 +21,11 @@ export interface Limits {
 }
 export interface AgentSettings {
   build: string; configured: boolean; problem: string | null; model: string | null
-  brave: boolean; bedrock: boolean; providers: { name: string; credential: string }[]
+  brave: boolean; bedrock: boolean; providers: {
+    name: string; credential: string
+    /** The service key the account list names the provider by (`gateway:<id>`), which two providers do not share even when they share a name. */
+    key: string
+  }[]
   selected: string | null; layers: string[]; overrides: { name: string; path: string }[]
   /** Keys a project file named that the agent reads from the home directory only. */
   ignored?: { name: string; path: string }[]

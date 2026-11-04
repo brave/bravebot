@@ -445,28 +445,35 @@ export function beginTurn(entries: Entry[], number: number): Entry[] {
 /**
  * Attach a finished call to the row it started in.
  *
- * Matched on the last still-running tool row rather than by an id, because the engine
- * does not give calls one: it announces a start and later a finish, and the pairing is
- * positional. A finish with nothing running is appended as its own row rather than
- * dropped — an unexplained line is better than a missing one.
+ * Matched on the call id the start and the finish both carry, never on what the call names: a
+ * call's target can be content from outside, and a delegate's calls arrive between the turn's,
+ * so the latest running row is not always the one a finish ends. A finish for no running row is
+ * appended as its own row rather than dropped, since an unexplained line is better than a missing one.
  */
 export function finish(entries: Entry[], activity: Activity): Entry[] {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (entry?.kind === 'tool' && entry.activity.note === null) {
-      const updated = [...entries]
-      updated[index] = { ...entry, activity }
-      return updated
+  if (activity.call !== null) {
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index]
+      if (entry?.kind === 'tool' && entry.activity.note === null && entry.activity.call === activity.call) {
+        const updated = [...entries]
+        updated[index] = { ...entry, activity }
+        return updated
+      }
     }
   }
   return [...entries, { kind: 'tool', id: nextId(), activity, landing: null }]
 }
 
-/** Where the last finished call's result went. */
-export function land(entries: Entry[], landing: Landing): Entry[] {
+/**
+ * Where a finished call's result went, on the row of the call with that id. A delegate's call can
+ * start between the turn's call and its landing, so the latest row without one is not always the
+ * row the landing is about. A landing with no id, or for a call with no row, is dropped.
+ */
+export function land(entries: Entry[], landing: Landing, call: number | null): Entry[] {
+  if (call === null) return entries
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]
-    if (entry?.kind === 'tool' && entry.landing === null) {
+    if (entry?.kind === 'tool' && entry.landing === null && entry.activity.call === call) {
       const updated = [...entries]
       updated[index] = { ...entry, landing }
       return updated

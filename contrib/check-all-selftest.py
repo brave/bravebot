@@ -182,9 +182,9 @@ class CheckTargets(unittest.TestCase):
                 self.assertEqual(self.log.read_text().splitlines(), expected)
 
     def test_the_client_gate_builds_the_bridge_before_its_tests_and_preserves_each_failure(self):
-        """The client's tests drive a built bravebot-rpc and never build it, so a bridge that
-        fails to build must stop the gate before they run."""
-        commands = ["cargo build -p bravebot-ui-bridge --bin bravebot-rpc",
+        """The client's tests drive a built bravebot-rpc and bravebot-host and never build them, so
+        a bridge that fails to build must stop the gate before they run."""
+        commands = ["cargo build -p bravebot-ui-bridge --bin bravebot-rpc --bin bravebot-host",
                     "pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts",
                     "pnpm --dir packages/agent-client run check"]
         for failing in ("", *commands):

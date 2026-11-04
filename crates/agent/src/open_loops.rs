@@ -214,6 +214,7 @@ pub fn uncommitted(
                     since: None,
                     until: None,
                     every_untracked: true,
+                    beside: crate::tools::Beside::every(),
                     deadline,
                 },
                 &|_| false,

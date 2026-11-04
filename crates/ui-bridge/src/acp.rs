@@ -32,10 +32,9 @@ const ALLOW_ONCE: &str = "allow-once";
 const ALLOW_ALWAYS: &str = "allow-always";
 const REJECT_ONCE: &str = "reject-once";
 
-/// A tool call the editor was told about and has not been told the end of.
+/// A tool call the editor was told about and has not been told the end of, by the id dispatch gave it.
 struct Tool {
-    verb: String,
-    target: String,
+    call: u64,
     id: String,
 }
 
@@ -752,20 +751,23 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
         }
         "tool.started" => {
             let verb = data["verb"].as_str().unwrap_or_default().to_string();
-            let target = data["target"].as_str().unwrap_or_default().to_string();
+            let target = data["target"].as_str().unwrap_or_default();
             // What the editor is shown, spelled so a file name that is blank or ends in whitespace
-            // is visible. Calls are matched on `target`, as the finished event carries it.
-            let shown = data["shownTarget"].as_str().unwrap_or(&target).to_string();
+            // is visible.
+            let shown = data["shownTarget"].as_str().unwrap_or(target).to_string();
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
             held.next_tool += 1;
             let id = format!("tool-{}", held.next_tool);
-            held.tools.push(Tool {
-                verb: verb.clone(),
-                target: target.clone(),
-                id: id.clone(),
-            });
+            // The call id is the engine's dispatch counter, never content. A start without one is
+            // shown and no finish is matched to it.
+            if let Some(call) = data["call"].as_u64() {
+                held.tools.push(Tool {
+                    call,
+                    id: id.clone(),
+                });
+            }
             shared.notify(
                 &session,
                 json!({
@@ -778,8 +780,6 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
             );
         }
         "tool.finished" => {
-            let verb = data["verb"].as_str().unwrap_or_default();
-            let target = data["target"].as_str().unwrap_or_default();
             let status = if data["failed"].as_bool() == Some(true) {
                 "failed"
             } else {
@@ -788,11 +788,12 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
-            let Some(at) = held
-                .tools
-                .iter()
-                .position(|tool| tool.verb == verb && tool.target == target)
-            else {
+            // Matched on the call id alone. A call's verb and target can be content from outside,
+            // and two calls can have the same ones.
+            let Some(call) = data["call"].as_u64() else {
+                return;
+            };
+            let Some(at) = held.tools.iter().position(|tool| tool.call == call) else {
                 return;
             };
             let tool = held.tools.remove(at);
@@ -2089,10 +2090,9 @@ mod tests {
     }
 
     /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,
-    /// while the end of the call is matched on the name as held, so a title that ends in a space
-    /// is not read as the one without and the call still closes.
+    /// so a name that ends in a space is not shown as the one without, and the call still closes.
     #[test]
-    fn a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held() {
+    fn a_call_is_titled_with_the_file_as_spelled() {
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&written);
         let shared = Arc::new(Mutex::new(Shared {
@@ -2105,6 +2105,7 @@ mod tests {
             queued: Vec::new(),
         }));
         let data = json!({
+            "call": 1,
             "verb": "Write",
             "target": "note.md ",
             "shownTarget": "\"note.md\u{2423}\"",
@@ -2122,6 +2123,47 @@ mod tests {
             written[1]["params"]["update"]["toolCallId"],
             written[0]["params"]["update"]["toolCallId"]
         );
+    }
+
+    /// Three calls with the same verb and target, where the middle one finishes first, each
+    /// close the editor's entry for their own start, because a finish is matched on the call id
+    /// and nothing in the call's content. Pairing with the first or the latest call still
+    /// running closes the wrong entry. A finish for no call it was told of sends nothing.
+    #[test]
+    fn a_finished_call_closes_the_editor_entry_with_its_call_id() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let event = |name: &'static str, call: Value, failed: bool| {
+            let data = json!({"call": call, "verb": "Read", "target": "a.rs", "failed": failed});
+            on_event(&shared, Event::new(name, "s", data));
+        };
+        event("tool.started", json!(7), false);
+        event("tool.started", json!(8), false);
+        event("tool.started", json!(9), false);
+        event("tool.finished", json!(8), true);
+        event("tool.finished", json!(7), false);
+        event("tool.finished", json!(7), false);
+        event("tool.finished", Value::Null, false);
+        event("tool.finished", json!(9), false);
+
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 6);
+        let id = |at: usize| written[at]["params"]["update"]["toolCallId"].clone();
+        let status = |at: usize| written[at]["params"]["update"]["status"].clone();
+        assert_ne!(id(0), id(1));
+        assert_ne!(id(1), id(2));
+        assert_eq!((id(3), status(3)), (id(1), json!("failed")));
+        assert_eq!((id(4), status(4)), (id(0), json!("completed")));
+        assert_eq!((id(5), status(5)), (id(2), json!("completed")));
     }
 
     #[test]

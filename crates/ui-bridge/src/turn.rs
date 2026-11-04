@@ -20,7 +20,7 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
-use bravebot_agent::report::{self, Activity, Landing, Phase, Reporter, Shown, Why};
+use bravebot_agent::report::{self, Activity, CallId, Landing, Phase, Reporter, Shown, Why};
 use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
@@ -506,8 +506,11 @@ impl Reporter for BridgeReporter {
         self.say("quarantined", wire::shown(&shown));
     }
 
-    fn landed(&mut self, landing: Landing) {
-        self.say("landed", json!({ "landing": wire::landing(landing) }));
+    fn landed(&mut self, call: Option<CallId>, landing: Landing) {
+        self.say(
+            "landed",
+            json!({ "call": call.map(CallId::get), "landing": wire::landing(landing) }),
+        );
     }
 
     fn tool_started(&mut self, activity: Activity) {

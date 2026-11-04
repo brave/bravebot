@@ -5,7 +5,7 @@
  * The token stylesheet and icon base path are set from `nala-setup.ts` so Node
  * tests that load React components through esbuild do not have to emit CSS.
  *
- * Button, Input, Navigation, NavigationItem and TextArea are wrapped by `withShadowAttrs`
+ * Button, Input, Navigation, NavigationItem, TextArea and Toggle are wrapped by `withShadowAttrs`
  * (see `nala-a11y.tsx`): Leo's React wrappers drop `aria-*` props, so an icon-only button would
  * have no accessible name. ButtonMenu is wrapped so its anchor is not a second button around the
  * Button inside it. Everything else is Leo's own export.
@@ -20,6 +20,7 @@ import LeoInput from '@brave/leo/react/input'
 import LeoNavigation from '@brave/leo/react/navigation'
 import LeoNavigationItem from '@brave/leo/react/navigationItem'
 import LeoTextArea from '@brave/leo/react/textarea'
+import LeoToggle from '@brave/leo/react/toggle'
 import { withPlainMenuAnchor, withShadowAttrs } from './nala-a11y'
 
 export const Button = withShadowAttrs(LeoButton, 'button, a')
@@ -28,6 +29,7 @@ export const Input = withShadowAttrs(LeoInput, 'input', { flattenTabindex: true 
 export const Navigation = withShadowAttrs(LeoNavigation, 'nav')
 export const NavigationItem = withShadowAttrs(LeoNavigationItem, 'button, a')
 export const TextArea = withShadowAttrs(LeoTextArea, 'textarea', { flattenTabindex: true })
+export const Toggle = withShadowAttrs(LeoToggle, 'button')
 
 export { default as Alert } from '@brave/leo/react/alert'
 export { default as Checkbox } from '@brave/leo/react/checkbox'

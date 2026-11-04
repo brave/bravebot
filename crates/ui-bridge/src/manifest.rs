@@ -35,6 +35,8 @@ pub(crate) struct Walk {
     pub state: Arc<Mutex<State>>,
     pub config: Config,
     pub attribution: bravebot_config::Attribution,
+    /// The effort level the run asks for, resolved as a turn resolves it.
+    pub effort: Option<bravebot_session::store::Effort>,
     pub output_cap: Option<usize>,
     pub deadlines: bravebot_agent::exec::Deadlines,
     pub sandbox: bravebot_sandbox::SandboxMode,
@@ -77,6 +79,7 @@ pub(crate) fn walk(walk: Walk) {
         state,
         config,
         attribution,
+        effort,
         output_cap,
         deadlines,
         sandbox,
@@ -133,6 +136,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_home(bravebot_agent::home::directory())
         .with_cache(bravebot_agent::home::cache())
         .with_model(model)
+        .with_effort(effort)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
@@ -154,6 +158,8 @@ pub(crate) fn walk(walk: Walk) {
 
     #[cfg(test)]
     crate::running::built_in::record("manifest", task.account_session().identifier());
+    #[cfg(test)]
+    crate::running::built_in::record_level("manifest", task.effort);
     let outcome = bravebot_agent::manifest::run_recording(
         &config,
         &egress,
