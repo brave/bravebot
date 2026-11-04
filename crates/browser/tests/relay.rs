@@ -1091,6 +1091,7 @@ fn the_list_of_a_server_with_no_group_is_the_seven_tools_with_their_descriptions
     let expected = json!([
         {
             "name": "get_platform_info",
+            "annotations": {"readOnlyHint": true},
             "description": "Say the operating system and architecture Brave runs on, which shows the extension is installed and answering. It tells nothing about the person.",
             "inputSchema": {
                 "properties": {},
@@ -1099,6 +1100,7 @@ fn the_list_of_a_server_with_no_group_is_the_seven_tools_with_their_descriptions
         },
         {
             "name": "list_tabs",
+            "annotations": {"readOnlyHint": true},
             "description": "List the tabs open in Brave: each tab's id, window id, title and URL.",
             "inputSchema": {
                 "properties": {},
@@ -1107,6 +1109,7 @@ fn the_list_of_a_server_with_no_group_is_the_seven_tools_with_their_descriptions
         },
         {
             "name": "list_frames",
+            "annotations": {"readOnlyHint": true},
             "description": "List the exact HTTP and HTTPS frame URLs in the open tab at this URL, for a person to choose and provide in a later read_page call.",
             "inputSchema": {
                 "properties": {
@@ -1120,6 +1123,7 @@ fn the_list_of_a_server_with_no_group_is_the_seven_tools_with_their_descriptions
         },
         {
             "name": "read_page",
+            "annotations": {"readOnlyHint": true},
             "description": "Read the text of the open tab at this URL, or the exact frame_url in it that a person chose after list_frames.",
             "inputSchema": {
                 "properties": {
@@ -1136,6 +1140,7 @@ fn the_list_of_a_server_with_no_group_is_the_seven_tools_with_their_descriptions
         },
         {
             "name": "search_history",
+            "annotations": {"readOnlyHint": true},
             "description": "Search Brave's browsing history by words in a page's title or URL.",
             "inputSchema": {
                 "properties": {
@@ -1154,6 +1159,7 @@ fn the_list_of_a_server_with_no_group_is_the_seven_tools_with_their_descriptions
         },
         {
             "name": "search_bookmarks",
+            "annotations": {"readOnlyHint": true},
             "description": "Search Brave's bookmarks by words in a bookmark's title or URL.",
             "inputSchema": {
                 "properties": {
