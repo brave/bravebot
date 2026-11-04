@@ -86048,8 +86048,9 @@ fn an_unopened_redirection_is_named_under_the_directory_as_typed() {
 }
 
 /// The same when the link leads to a directory whose name is not UTF-8: the decision is made on
-/// the path, so the landing name still does not reach the planner (PATH-001).
-#[cfg(unix)]
+/// the path, so the landing name still does not reach the planner (PATH-001). Linux only: a macOS
+/// file system cannot hold the name.
+#[cfg(target_os = "linux")]
 #[test]
 fn an_unopened_redirection_under_a_non_utf8_link_target_is_named_as_typed() {
     use std::os::unix::ffi::OsStrExt;
