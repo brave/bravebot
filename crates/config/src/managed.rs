@@ -1214,7 +1214,7 @@ mod tests {
     /// the list names, so a server it does not name is not started whatever it is called.
     #[test]
     fn an_allow_list_starts_only_what_it_names() {
-        let managed = scratch("managed-allow", CORP);
+        let managed = scratch("managed-allow-list", CORP);
         for url in [
             "https://mcp.corp.example/mcp",
             "https://a.b.corp.example:8443/",
