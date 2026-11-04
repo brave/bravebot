@@ -49,7 +49,7 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 41
+      - crates/agent/src/tools.rs: 42
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
