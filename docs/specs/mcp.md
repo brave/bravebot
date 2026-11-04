@@ -489,8 +489,7 @@ released the same way, and a picture is not ([VET-4](tools/vet-content.md#VET-4)
 
 **Why.** A name the planner writes for the driver must not be mistaken for an argument of the
 server, and an argument the server defined must not be taken from it. The manifest path
-(`crates/agent/src/server_calls.rs`) presents no reply to the planner, so it takes no `read` and was
-not changed.
+(`crates/agent/src/server_calls.rs`) presents no reply to the planner, so it takes no `read`.
 
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result`
 `verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
