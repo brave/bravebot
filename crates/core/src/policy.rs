@@ -8422,17 +8422,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// `argument` is the `run` argument, `unconfined` or `scopes`, and `causes` is every reason that
     /// held, in the fixed order the caller lists them. Each is a fact about the session and none is
     /// text a call or a tool produced (TRACE-2).
-    pub fn refuse_run_request(&mut self, argument: &'static str, causes: &[RunRequestCause]) {
+    ///
+    /// Returns the causes joined the same way the trail records them, so a caller can put the same
+    /// words in the note the person watching is told, without a second place that spells a cause
+    /// (SANDBOX-26, SANDBOX-29).
+    pub fn refuse_run_request(
+        &mut self,
+        argument: &'static str,
+        causes: &[RunRequestCause],
+    ) -> String {
         debug_assert!(!causes.is_empty(), "a refusal with no cause names nothing");
         let causes: Vec<String> = causes.iter().map(RunRequestCause::to_string).collect();
+        let joined = causes.join("; ");
         let _ = self.deny(
             "sandbox",
             Principle::Confinement,
-            format!(
-                "run.{argument}: the request was refused and the line did not run: {}",
-                causes.join("; ")
-            ),
+            format!("run.{argument}: the request was refused and the line did not run: {joined}"),
         );
+        joined
     }
 
     /// Record that a reference argument named a name no slot holds, so nothing was read, written

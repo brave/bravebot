@@ -2956,7 +2956,9 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
 - Refused, with one sentence that does not say which setting withheld it, with no profile directory
   and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)). The trail records
   the refusal under `sandbox`, naming `scopes` and each cause that held ([TRACE-1](trace.md#TRACE-1)).
-  A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
+  The person watching is told the same causes, in a note beside the planner's own sentence, which
+  stays as it is; the two are written from the one list, so neither can name a cause the other does
+  not. A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
   carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
@@ -2987,6 +2989,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
+`verified-by: bravebot_agent::tools::a_refused_scope_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::confine::a_requested_scope_lifts_its_own_directory_for_a_stage_that_names_none`
 `verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
@@ -3252,7 +3255,9 @@ none to add to.
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
   The sentence does not suggest the argument: the planner learns it from the `run` description. The
   trail records the refusal under `sandbox`, naming `unconfined` and each cause that held
-  ([TRACE-1](trace.md#TRACE-1)).
+  ([TRACE-1](trace.md#TRACE-1)), and the person watching is told the same causes in a note beside
+  the planner's unchanged sentence, so they can tell which setting to change without reading the
+  trail.
 - **A line not approved is recorded as not run.** The `sandbox` entry saying the programs ran
   `unconfined` is written only once the person has approved the line. A line they do not approve
   leaves a refusal under `approval` instead ([TRACE-1](trace.md#TRACE-1)).
@@ -3287,7 +3292,9 @@ none to add to.
   sandbox in this turn and exited non-zero, and each such failure earns one request: accepting one
   spends it, so a request the person declines, or a plan the policy then refuses, leaves it. The
   failed line need not be the line the request names. A request with none earned is refused before
-  anybody is asked, with a sentence that says to run the line with the sandbox first, and the trail records the refusal under `sandbox` naming that cause. The count comes from
+  anybody is asked, with a sentence that says to run the line with the sandbox first, and the trail
+  records the refusal under `sandbox` naming that cause, which the person watching is also told in a
+  note beside the sentence. The count comes from
   exit codes and whether the deadline stopped the line, and nothing a program printed is read. A line
   stopped at its deadline or by the person, a line that ran with no sandbox and a line moved to the
   background earn nothing. A line whose own redirection leaves the workspace is accepted without one, since the
@@ -3310,6 +3317,7 @@ The planner is pointed at the argument because it has no other way to learn it w
 refuse the path.
 
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
 `verified-by: bravebot_agent::tools::each_confined_failure_earns_one_request_for_no_sandbox`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`

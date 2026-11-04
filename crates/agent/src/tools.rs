@@ -9140,8 +9140,11 @@ fn settle_the_confinement<S: Sink>(
             Some(_) => RunRequestCause::NoProfileDirectory,
             None => RunRequestCause::NoPlatformSandbox,
         };
-        policy.refuse_run_request("scopes", &[cause]);
-        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
+        let causes = policy.refuse_run_request("scopes", &[cause]);
+        return Err(Box::new(Produced::refused_with_a_note(
+            NOT_ACCEPTING_REQUESTS,
+            format!("refused, 'scopes' is not accepted: {causes}"),
+        )));
     }
     // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
     // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
@@ -9154,8 +9157,12 @@ fn settle_the_confinement<S: Sink>(
             .iter()
             .any(|path| tools.workspace.confines_writing(path).is_err());
         if !leaves_the_workspace && !tools.confined_failures.has_one() {
-            policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
-            return Err(Box::new(Produced::problem(UNCONFINED_BEFORE_A_FAILURE)));
+            let causes =
+                policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
+            return Err(Box::new(Produced::refused_with_a_note(
+                UNCONFINED_BEFORE_A_FAILURE,
+                format!("refused, 'unconfined' is not accepted: {causes}"),
+            )));
         }
         spends_a_request = !leaves_the_workspace;
     }
@@ -9413,12 +9420,18 @@ fn run_call<S: Sink>(
     if !requested.is_empty()
         && let Err(causes) = requests_accepted(policy, tools)
     {
-        policy.refuse_run_request("scopes", &causes);
-        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
+        let detail = policy.refuse_run_request("scopes", &causes);
+        return Err(Box::new(Produced::refused_with_a_note(
+            NOT_ACCEPTING_REQUESTS,
+            format!("refused, 'scopes' is not accepted: {detail}"),
+        )));
     }
     if unconfined && let Err(causes) = unconfined_accepted(policy, tools) {
-        policy.refuse_run_request("unconfined", &causes);
-        return Err(Box::new(Produced::problem(NOT_ACCEPTING_UNCONFINED)));
+        let detail = policy.refuse_run_request("unconfined", &causes);
+        return Err(Box::new(Produced::refused_with_a_note(
+            NOT_ACCEPTING_UNCONFINED,
+            format!("refused, 'unconfined' is not accepted: {detail}"),
+        )));
     }
     Ok(RunCall {
         limit,
@@ -23785,7 +23798,7 @@ mod tests {
             name: &str,
             arguments: &Value,
             session: Session,
-        ) -> (String, Vec<(&'static str, String)>, bool) {
+        ) -> (String, Vec<(&'static str, String)>, bool, String) {
             let scratch = Scratch::new(name);
             let workspace = Workspace::new(&scratch.path).expect("workspace");
             let mut trust = bravebot_core::trust::TrustStore::new("/work");
@@ -23822,6 +23835,7 @@ mod tests {
                 )
             });
             assert!(!produced.ran_a_program, "a refused call ran a program");
+            let note = produced.note.clone();
             let said = told(&mut policy, &produced.text);
             let clean = policy.finish();
 
@@ -23832,7 +23846,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            (said, refused, clean)
+            (said, refused, clean, note)
         }
 
         /// The `sandbox` refusals among `refused`.
@@ -23846,11 +23860,13 @@ mod tests {
 
         /// TRACE-1, SANDBOX-29: a request to run one line with no sandbox that the session refuses
         /// leaves one refusal under `sandbox` that names `unconfined` and every cause that held, and
-        /// the sentence the planner reads is the one it always was, naming no setting. One row for
+        /// the sentence the planner reads is the one it always was, naming no setting. The note the
+        /// person watching is told names the same cause the trail records (SANDBOX-29). One row for
         /// each cause the session can show here; a managed closed network is settled once for the
         /// process, so its row is in the table of the rule itself. The regressions it rejects are a
-        /// refusal that leaves no entry, an entry naming one cause where two held, and a sentence
-        /// that began to say which setting withheld the request.
+        /// refusal that leaves no entry, an entry naming one cause where two held, a sentence
+        /// that began to say which setting withheld the request, and a note left blank or stale
+        /// against the cause.
         #[test]
         fn a_refused_unconfined_request_is_recorded_with_each_cause_that_held() {
             use bravebot_sandbox::SandboxMode::{ReadOnly, Strict, WorkspaceWrite};
@@ -23888,7 +23904,7 @@ mod tests {
                      delegate may not ask",
                 ),
             ] {
-                let (said, refused, clean) = run_in(
+                let (said, refused, clean, note) = run_in(
                     "run-unconfined-refused",
                     &json!({"command": "echo hi", "unconfined": true}),
                     session,
@@ -23900,6 +23916,11 @@ mod tests {
                     [format!("{prefix}{cause}")],
                     "{cause}: {refused:?}"
                 );
+                assert_eq!(
+                    note,
+                    format!("refused, 'unconfined' is not accepted: {cause}"),
+                    "the person watching was not told which setting withheld it"
+                );
                 assert!(
                     !clean,
                     "{cause}: a turn whose run was refused ended as clean"
@@ -23910,7 +23931,8 @@ mod tests {
         /// TRACE-1, SANDBOX-26: a request for a credential scope that the session refuses leaves one
         /// refusal under `sandbox` that names `scopes` and every cause that held, at both places the
         /// request is refused: before the line is read, and after it, for want of a profile
-        /// directory to record the request under. The sentence is unchanged.
+        /// directory to record the request under. The sentence the planner reads is unchanged; the
+        /// note the person watching is told names the cause (SANDBOX-26).
         #[test]
         fn a_refused_scope_request_is_recorded_with_each_cause_that_held() {
             use bravebot_sandbox::SandboxMode::Strict;
@@ -23939,7 +23961,7 @@ mod tests {
                 ),
             });
             for (session, cause) in rows {
-                let (said, refused, clean) = run_in(
+                let (said, refused, clean, note) = run_in(
                     "run-scopes-refused",
                     &json!({"command": "echo hi", "scopes": ["remote"]}),
                     session,
@@ -23949,6 +23971,11 @@ mod tests {
                     sandbox_refusals(&refused),
                     [format!("{prefix}{cause}")],
                     "{cause}: {refused:?}"
+                );
+                assert_eq!(
+                    note,
+                    format!("refused, 'scopes' is not accepted: {cause}"),
+                    "the person watching was not told which setting withheld it"
                 );
                 assert!(
                     !clean,
@@ -23983,7 +24010,7 @@ mod tests {
                     json!({"command": "echo hi", "unconfined": true}),
                     json!({"command": "echo hi", "unconfined": false, "scopes": ["remote", "aws"]}),
                 ] {
-                    let (said, refused, _) = run_in("run-request-dropped", &arguments, session);
+                    let (said, refused, _, _) = run_in("run-request-dropped", &arguments, session);
                     assert!(
                         said.starts_with("refused: the user did not approve running this"),
                         "{why}: {arguments}: the call did not reach the confirmer: {said}"
@@ -24004,7 +24031,8 @@ mod tests {
                     json!({"command": "echo hi", "scopes": ["remote"]}),
                     json!({"command": "echo hi", "unconfined": true}),
                 ] {
-                    let (said, refused, _) = run_in("run-request-untrusted", &arguments, untrusted);
+                    let (said, refused, _, _) =
+                        run_in("run-request-untrusted", &arguments, untrusted);
                     assert!(
                         said.starts_with("refused: this session does not accept a request"),
                         "{why}: {arguments}: an untrusted workspace was not refused: {said}"
@@ -24029,7 +24057,7 @@ mod tests {
                         "holds a name that is not on this list",
                     ),
                 ] {
-                    let (said, _, _) = run_in("run-request-malformed", &arguments, session);
+                    let (said, _, _, _) = run_in("run-request-malformed", &arguments, session);
                     assert!(
                         said.contains(expected),
                         "{why}: {arguments}: a malformed argument was not an error: {said}"
@@ -24058,7 +24086,7 @@ mod tests {
                     json!({"command": "echo hi", "scopes": ["remote"]}),
                 ),
             ] {
-                let (said, refused, _) = run_in("run-request-accepted", &arguments, session);
+                let (said, refused, _, _) = run_in("run-request-accepted", &arguments, session);
                 assert!(
                     said.starts_with("refused: the user did not approve running this"),
                     "the request did not get as far as the confirmer, so the session did not accept \
@@ -24079,7 +24107,7 @@ mod tests {
             use bravebot_sandbox::SandboxMode::WorkspaceWrite;
             let asks = json!({"command": "echo hi", "unconfined": true});
 
-            let (said, refused, _) =
+            let (said, refused, _, note) =
                 run_in("run-unconfined-first", &asks, session_under(WorkspaceWrite));
             assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
             assert_eq!(
@@ -24090,8 +24118,14 @@ mod tests {
                 ],
                 "{refused:?}"
             );
+            assert_eq!(
+                note,
+                "refused, 'unconfined' is not accepted: the line has not run with a sandbox and \
+                 failed this turn",
+                "the person watching was not told why"
+            );
 
-            let (said, refused, _) = run_in(
+            let (said, refused, _, _) = run_in(
                 "run-unconfined-after-failure",
                 &asks,
                 Session {
@@ -24114,7 +24148,7 @@ mod tests {
         #[test]
         fn a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted() {
             use bravebot_sandbox::SandboxMode::WorkspaceWrite;
-            let (said, refused, _) = run_in(
+            let (said, refused, _, _) = run_in(
                 "run-unconfined-redirect",
                 &json!({"command": "echo hi > /bravebot-outside/hello.txt", "unconfined": true}),
                 session_under(WorkspaceWrite),
@@ -24125,7 +24159,7 @@ mod tests {
             );
             assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
 
-            let (said, _, _) = run_in(
+            let (said, _, _, _) = run_in(
                 "run-unconfined-after-redirect",
                 &json!({"command": "echo hi", "unconfined": true}),
                 session_under(WorkspaceWrite),
@@ -24215,7 +24249,7 @@ mod tests {
                     asks_about_unconfined: true,
                     ..session_under(mode)
                 };
-                let (said, refused, _) = run_in(
+                let (said, refused, _, _) = run_in(
                     "run-redirect-points-at-unconfined",
                     &json!({"command": "echo hi > ../escaped.txt"}),
                     session,
