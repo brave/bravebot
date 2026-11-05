@@ -1565,17 +1565,19 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let reply = match answer {
         Some(answered) => answered,
         None => {
-            shown = match plan
-                .steps()
-                .iter()
-                .any(|step| step.tool() == manifest::MCP_CALL)
-            {
-                true => format!(
+            let called = |tool: &str| plan.steps().iter().any(|step| step.tool() == tool);
+            shown = match (called(manifest::APPLY), called(manifest::MCP_CALL)) {
+                (true, _) => format!(
+                    "Ran the {} step(s) in the plan. What became of each call you approved is \
+                     listed under its step.",
+                    plan.len()
+                ),
+                (false, true) => format!(
                     "Ran the {} step(s) in the plan. It had no ANSWER step; what each server call \
                      returned is shown under it.",
                     plan.len()
                 ),
-                false => format!(
+                (false, false) => format!(
                     "Ran the {} step(s) in the plan. It had no ANSWER step, so there is nothing \
                      to show.",
                     plan.len()

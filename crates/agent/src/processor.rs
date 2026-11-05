@@ -166,15 +166,47 @@ row N: tool T name=kind:N name=kind:N
 A new line gives short text, one line of at most {longest} characters, for a thing a call creates. \
 A row is one call: the tool by its number and each argument the tool lists below, and no other. \
 Number new lines and rows from 1. A row that names another row comes after it. Give at most {rows} \
-rows and {news} new lines. Leave out anything that needs no call.
+rows and {news} new lines. Leave out anything that needs no call.{used}
 
 The tools:
 {tools}",
         longest = bravebot_core::apply::LONGEST_NEW,
         rows = shape.max_rows,
         news = shape.max_new,
+        used = made_for_later(shape),
         tools = tools.join("\n")
     )
+}
+
+/// Where a later row may name what a tool creates, that the processor should create only what a
+/// later row uses: a folder no bookmark moves into is a change the person did not need. Said from
+/// the plan's shape alone, of whichever tools a row argument refers to.
+fn made_for_later(shape: &bravebot_core::apply::Shape) -> String {
+    use bravebot_core::apply::Kind;
+    fn referred(kind: &Kind, found: &mut std::collections::BTreeSet<usize>) {
+        match kind {
+            Kind::Row { tool, .. } => {
+                found.insert(*tool);
+            }
+            Kind::Either(kinds) => kinds.iter().for_each(|kind| referred(kind, found)),
+            _ => {}
+        }
+    }
+    let mut tools = std::collections::BTreeSet::new();
+    shape
+        .tools
+        .iter()
+        .flat_map(|tool| &tool.arguments)
+        .for_each(|(_, kind)| referred(kind, &mut tools));
+    tools
+        .iter()
+        .map(|tool| {
+            format!(
+                " Give a row of tool {} only where a later row uses what it creates.",
+                tool + 1
+            )
+        })
+        .collect()
 }
 
 /// The model a second call runs on, and the way to reach it.
