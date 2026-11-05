@@ -26,8 +26,8 @@
   --leo-icon-color: var(--ink-tertiary);
 }
 .tool.failed .tool-status { --leo-icon-color: var(--status-error); }
+.tool-status:has(.tool-ring) { width: var(--spinner); height: var(--spinner); }
 .tool-ring {
-  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }
@@ -139,8 +139,7 @@
 .working-ring {
   display: grid;
   place-items: center;
-  width: var(--icon-control);
-  --leo-progressring-size: var(--icon-control);
+  width: var(--spinner);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }

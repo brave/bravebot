@@ -446,7 +446,10 @@ return it.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
-the planner. That is decided from the size of the output alone.
+the planner. That is decided from the size of the output alone. The same holds when the call passed
+`read: true`, or when the planner calls `read_output` on such a reference: no check is made, nobody
+is asked and nothing is released for output that holds no bytes, and the result says the command
+printed nothing.
 
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
@@ -494,10 +497,13 @@ you are asked only when the planner calls `read_output`. Where screening is aske
 ([`--vet`](../security/permission-modes.md#bypassing)), the check reads the output at the run, and when
 it finds nothing the output comes back in that result with the same label and audit entry
 `read_output` would have written. When it does not, or cannot be made, the output stays behind its
-reference, nobody is asked, and the result says the argument did not return it. The same holds for an
+reference, nobody is asked, and the result says the argument did not return it. Under bypass the
+person is also told that auto-vetting kept the output back. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
-holds nothing the job has printed.
+holds nothing the job has printed. [`fetch_url`](tools.md#fetch_url) and the tools of an
+[MCP server](../customize/mcp-servers.md) take the same argument, described under
+[Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 ## Filtering something the agent may not read
 

@@ -35,6 +35,11 @@ The list offered to a run is narrowed by the capabilities that run holds: a run 
 is not offered the kind that writes ([DELEGATE-32](../delegation.md#DELEGATE-32)). The offer is
 advisory, and a name outside the resolved set is refused ([DELEGATE-3](../delegation.md#DELEGATE-3)).
 
+The description says that a delegate started after the planner was shown private content cannot run
+processors, and that a task needing a picture or a file looked at goes first or to the person. The
+`reader` kind text does not promise processors without condition
+([DELEGATE-8](../delegation.md#DELEGATE-8)).
+
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
 `verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
@@ -98,7 +103,9 @@ from the label the delegate's own context earned.
 `each` names one delegate per entry. Each is told the shared `task` followed by its own entry,
 and is otherwise a delegate like any other: it passes the same gate, takes its own number, and
 holds its own copy of what a person has vouched for. A call naming more than eight, or naming
-none, is refused and starts nothing. A call that meets the turn's ceiling on delegates
+none, is refused and starts nothing. The text of `each` says that one call starts at most that
+many and that a further call with the same `task` starts more, and takes the figure from the one
+the refusal enforces. A call that meets the turn's ceiling on delegates
 ([DELEGATE-7](../delegation.md#DELEGATE-7)) part-way starts the ones that fit and says how many did
 not start, and why.
 
@@ -117,6 +124,7 @@ field turning one sentence into an unbounded number of runs at once is worth a b
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 `verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
+`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
 
 <a id="AGENT-6"></a>
 ### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away
@@ -169,7 +177,9 @@ definition's `budget:` ([DELEGATE-29](../delegation.md#DELEGATE-29)), and of wha
 left under its own, so a call without the field leaves the definition's in force and a figure above
 the definition's changes nothing. In a fan-out the figure applies to each delegate separately, and
 one delegate's spend is not another's. A delegate that spends it loses its tools and answers with
-what it has, and the planner is told so beside the report.
+what it has, and the planner is told so beside the report. Every request counts the whole
+conversation so far, so a figure buys a few dozen requests and not a few dozen thousand tokens of
+reading, and the field's description says so.
 
 A value that is not a count of tokens above zero is refused with what the field takes, and nothing
 starts. The figure must be public and is read only after the integrity gate has passed, as `kind`
@@ -199,7 +209,10 @@ delegate. A task sized to a figure it was never given ends with the delegate's t
 way through.
 
 **Why only the parameter text.** The tool's description names neither of the bounds on the tree
-([DELEGATE-7](../delegation.md#DELEGATE-7)), and a delegate's own rounds are not one of them.
+([DELEGATE-7](../delegation.md#DELEGATE-7)), and a delegate's own rounds are not one of them. The
+most one call starts ([AGENT-5](#AGENT-5)) is a limit on a call and not a bound on the tree, and is
+stated in the text of `each`.
 
 `verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
 `verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`

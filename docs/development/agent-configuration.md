@@ -126,7 +126,7 @@ into it.
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py\" --stop-hook",
+            "command": "\"$CLAUDE_PROJECT_DIR/contrib/py\" \"$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py\" --stop-hook",
             "timeout": 120
           }
         ]

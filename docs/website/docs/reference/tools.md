@@ -107,6 +107,15 @@ vouched for, and a processor reads them. A stream, an error and a result's plain
 picture or other data is replaced by a line giving its type and size, and the result is cut at
 20,000 characters.
 
+A `path` that names no file is tried with its last component's spaces written as U+202F, U+00A0
+or an ordinary space, because macOS puts U+202F before `AM` and `PM` in a screenshot's name and it
+looks like a typed space. The first of those that is a file is read, under the same rules as a name
+typed exactly, and the result says another spelling was read without giving either name. If no
+spelling is a file, the error says the file may be named with another kind of space than the one
+given. Other Unicode spaces are not tried, and `path_ref` is not respelled. Only `read_file`
+respells: `edit_file` and `write_file` may name a file that does not exist yet, and the directory
+tools take directories.
+
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
 character cap. The result says so and gives the offset to continue from. A
@@ -574,10 +583,18 @@ the other tools that take a reference name refuse an unknown name the same way. 
 screening, nobody is shown it and it comes back at once, and [`read` on `run`](run-tool.md#reading-the-output-in-the-same-result)
 makes the same release without the extra call.
 
+**Output that holds no bytes is not read.** A `ref` whose output is empty makes no check, asks you
+nothing and releases nothing, and the planner is told the command printed nothing.
+
 **A confined check reads the output before you are asked**, and the word it gave and the sentence it
 wrote are on the screen beside the bytes. The check runs before the question rather than after your
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
 planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
+
+**Being shown output closes processors.** Output you let through is private content, so once the
+planner has been shown some, [`spawn_processor`](#spawn_processor) is refused for it and for every
+delegate it starts afterwards. The tool's description says so where `spawn_processor` is offered, and
+leaves it out where it is not.
 
 **Output the planner may already read is not asked about.** Where a command's output was one the
 planner may read and too long for one result, it saw the beginning and the end, and `read_output`
@@ -714,6 +731,7 @@ Fetches an `http` or `https` URL. **You approve every fetch, unless a rule names
 | Parameter | |
 |---|---|
 | `url` | the one URL to fetch |
+| `read` | `true` to ask for the page in the result of this call, which is given only where the session is offered `vet_content` ([Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call)) |
 
 **Not the tool for a GitHub pull request or issue where `gh` is installed.** The description says so
 and the system prompt names the commands that are, which is
@@ -723,6 +741,11 @@ and the system prompt names the commands that are, which is
 it to [`spawn_processor`](#spawn_processor) or write it to a file with
 [`write_file`](#write_file), and it cannot read it or be told what it says. A page saying "ignore
 your previous instructions" says it to a processor with no tools.
+
+The one exception is a call with `read: true`. Where permissions are bypassed with no screening, or
+auto-vetting is on and its check says the page is safe, the page comes back in that result, released
+the way a `vet_content` call would release it. Anything else keeps the reference. It is described under
+[Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 It is untrusted but **public**, unlike a file of your own: a fetched page is not your data, so writing
 it raises no question about confidentiality and there is nothing of yours in it to release.
@@ -873,11 +896,12 @@ came from when you are asked about that call.
 **Refused once the model has been shown private content.** After [`read_output`](#read_output) or
 [`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
 private, what it writes is private too, and a processor takes no private instruction, so every
-`spawn_processor` call is refused for the rest of the conversation. `run`, `read_output` and the
-file tools keep working. Quarantined results made from then on do not suggest a
-processor, and the refusal names what still works: a filter such as `grep` or `tail` run with
-`stdin_ref` set to the reference, then `read_output` on what it printed, or `vet_content` for a
-reference that holds no text.
+`spawn_processor` call is refused for the rest of the conversation. This includes every delegate it
+starts afterwards, which begins holding the same private content, is not offered `spawn_processor`
+and is told so. `run`, `read_output` and the file tools keep working. Quarantined results made from
+then on do not suggest a processor, and the refusal names what still works, only where the run is
+offered it: a filter such as `grep` or `tail` run with `stdin_ref` set to the reference, then
+`read_output` on what it printed, or `vet_content` for a reference that holds no text.
 
 Everything before the document marker in a processor's reply is a remark for you: it reaches your
 screen and stops there, is part of no file, and cannot be another processor's input. An answer with no
@@ -894,9 +918,9 @@ of capabilities, and gets back one report.
 |---|---|
 | `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md). Only the kinds the run's own capabilities reach are offered: a `checker` is not offered the `worker`, and a `spawns:` line in a definition narrows the list further |
 | `task` | the whole of what the delegate is told |
-| `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
+| `each` | optional; starts one delegate per entry, each told `task` followed by its own entry. One call starts at most eight; a further call with the same `task` starts more |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
-| `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. It can only lower the budget a [definition](../customize/agents.md) sets |
+| `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. Every request counts the whole conversation so far, so a figure buys a few dozen requests, not a few dozen thousand tokens of reading: `2m` is about thirty requests at 70k tokens each. It can only lower the budget a [definition](../customize/agents.md) sets |
 | `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in, and `checkout_with_changes` also copies into it the changes your working tree has now |
 
 | Kind | Holds | For |
@@ -919,6 +943,11 @@ asked again.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
+
+A delegate started after the planner has been shown private content (by `read_output` or
+`vet_content`, or in a delegate's report) starts holding it too, so it cannot run a processor and is
+not offered `spawn_processor`. Start a task that needs a picture or a file looked at before then, or
+leave it to the person. A delegate that is told it cannot say so in its report.
 
 A call that names a kind the run was not offered because it does not hold what the kind needs is
 still answered by the same rules. A delegate started that way is narrowed to what the run holds, and
@@ -1060,7 +1089,8 @@ Puts up to four questions to you and waits. More than four is refused whole rath
 Questions are put one at a time. You may choose an option, answer in your own words, or skip. A
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question, in the terminal and in the desktop application, and a session
-opened, resumed or forked in the desktop application begins with none. The turn's notices name each
+opened, resumed or forked in the desktop application begins with none. An undo (`/undo`, `/rewind`)
+forgets every answer, so each question is asked again. The turn's notices name each
 question it did not put. Only an answer you gave is remembered, so a question that nobody could be asked,
 or that came back with no answer, is put again.
 
@@ -1158,7 +1188,7 @@ not asked: `~`, `/`, a drive root, your home directory and any directory above i
 `~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to write there is refused like the rest of `~/.bravebot`. A path your `denyRead` or `denyWrite` entries cover is
 refused as well. Nothing is accepted under the sandbox mode `off`, in a workspace you have not
 trusted, in a run with nobody to ask, or in the desktop app, which has no question for it yet. No
-settings file can allow one in advance. A request to write is also refused, whatever the mode, under
+settings file can allow one in advance. Under the sandbox mode `off` and in a session that confines no `run`, the description of `run` tells the planner that `request_path` is refused and nobody is asked, so it does not spend a call finding that out. A request to write is also refused, whatever the mode, under
 the sandbox mode `read-only`, and for the shell startup files, the user job directories and git's
 global configuration that [the security page](../security/security.md#confinement) lists. A refused
 request to write says what is true of the path: it holds credentials, a write there could leave code

@@ -907,7 +907,16 @@ That list is put to the person at the start of the first turn they ask for, or o
 tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
 none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
 as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
-drawn above the list.
+drawn above the list. The checks of every list to be put are made at the same time, no more than
+eight at one moment (the number of reads one round makes, [TURN-10](turns.md#TURN-10)) and the next
+begun, in the order the servers are declared, as one is joined. The wait before the planner is asked
+is therefore about one check's and not the sum of them, and the questions are drawn in the order the
+servers are declared, each when the one before it is answered. Which lists are checked depends on
+the servers and the mode, never on what a list or a check says. A turn that spends a subscription
+makes the checks one after another, since the credential is lent to one request at a time. The
+time a person takes over the questions is charged to them as it was when the checks were made one
+after another, and the time spent waiting on a check is not. A turn stopped at a question leaves
+every list it has not put unasked, and the checks already made are still charged.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
@@ -963,6 +972,11 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::the_checks_of_every_unasked_list_are_made_together_and_the_questions_drawn_in_server_order`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_first_of_several_lists_leaves_the_others_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another`
+`verified-by: bravebot_agent::mcp::the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once`
+`verified-by: bravebot_agent::mcp::no_more_checks_are_made_at_once_than_the_reads_of_one_round`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
 `verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
@@ -1317,6 +1331,15 @@ digest recorded in `mcp-approved` is that of the declaration written, and it is 
 session then holds for the server, so a second move in the session finds the declaration the first
 one wrote. A server moved as the session starts is started under the declaration written.
 
+The connection a move makes sends the headers and the bearer token the declaration names, as the
+server's first connection did, with the values the environment gave when the session started the
+server. That holds for the handshake at the new address, the call made again there and every later
+call in the session, including after a second move. They go only to the socket the person approved
+([SERVERS-18](#SERVERS-18)), and a declaration that names none sends none. The prompt for a move
+during a turn does not name the headers or the bearer token that will be sent to the new
+destination. The question put to the person about the declaration at the handshake names them. This
+is a known cost.
+
 A project entry in `mcp-projects` answers for what a checkout requests and never for where a server
 went, so it does not answer this question. Where the session writes nothing, the prompt says so and a
 yes moves the server until the session ends. A vouched list is not carried to the new declaration,
@@ -1356,6 +1379,15 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
 `verified-by: bravebot_agent::mcp::a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces`
 `verified-by: bravebot_agent::mcp::a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote`
+`verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
+`verified-by: bravebot_agent::mcp::a_server_declared_without_credentials_is_moved_without_any`
+`verified-by: bravebot_agent::mcp::a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_move_leaves_the_tools_the_session_holds_for_the_server_as_they_were`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move`
 `verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_keeps_everything_but_its_address`
 `verified-by: bravebot_config::mcp::a_move_changes_the_address_of_a_remote_declaration_and_nothing_else`
 `verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
@@ -1661,6 +1693,8 @@ content.
 `verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_bounds_the_declaration_it_replaces_gave`
+`verified-by: bravebot_agent::mcp::a_move_to_a_server_slower_than_the_startup_bound_is_not_made`
+`verified-by: bravebot_agent::mcp::a_moved_server_is_held_to_the_call_bound_it_had`
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
 
@@ -1776,6 +1810,14 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move`
+`verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
+`verified-by: bravebot_agent::mcp::a_server_declared_without_credentials_is_moved_without_any`
+`verified-by: bravebot_agent::mcp::a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token`
 
 ## Testing this with the weather server
 
@@ -2251,6 +2293,7 @@ answer 2 for the tool, which gives up the property for that server.
 `verified-by: bravebot_agent::servers::a_local_server_declared_to_ask_every_call_is_held_as_one`
 `verified-by: bravebot_agent::servers::a_server_asked_every_call_is_still_asked_every_call_after_it_moves`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_declaration_asking_every_call`
+`verified-by: bravebot_agent::mcp::a_server_asked_every_call_is_still_asked_after_it_moves_during_a_turn`
 `verified-by: bravebot_agent::mcp::a_server_asked_every_call_asks_though_a_rule_and_answer_two_allow_it`
 `verified-by: bravebot_agent::mcp::a_deny_rule_refuses_a_call_to_a_server_asked_every_call_before_anybody_is_asked`
 `verified-by: bravebot_agent::mcp::an_answer_that_would_stand_is_not_recorded_for_a_server_asked_every_call`

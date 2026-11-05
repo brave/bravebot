@@ -665,6 +665,21 @@ pub fn load_vetting() -> Option<bool> {
     parse_vetting(&std::fs::read_to_string(path).ok()?)
 }
 
+/// Whether a check that finds nothing may promote a slot without anybody being asked, for a
+/// session that reads the three routes itself: the command line's `--vet`, the recorded choice and
+/// the `vetting.auto` key in `settings`.
+///
+/// The one place the terminal and one-shot paths gather those inputs, so the notice printed on
+/// entering bypass and the session's setting cannot be resolved from different ones. The rule is
+/// [`bravebot_core::vetting::auto`].
+pub fn auto_vetting(settings: &bravebot_config::Settings) -> bool {
+    bravebot_core::vetting::auto(
+        bravebot_core::vetting::asked_for(),
+        load_vetting(),
+        settings.auto_vetting(),
+    )
+}
+
 /// Read the answer out of the file's contents.
 ///
 /// Separate from the I/O so the rules are testable. Exactly the two words, after trimming: a blank

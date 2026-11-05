@@ -33,7 +33,7 @@ globalThis.matchMedia = () => ({
   get matches() { return reduced.matches },
   addEventListener: (_, listener) => reduced.listeners.push(listener),
 })
-const { lookAt, show, tell, press, letGo, pop, dozing, SLEEP_AFTER, lookFor } = load('../src/renderer/avatar/clock.ts')
+const { lookAt, show, tell, press, letGo, pop, dozing, SLEEP_AFTER, lookFor, faceAt } = load('../src/renderer/avatar/clock.ts')
 const { GESTURES, ARM_LAG, WEIGHTS, NOT_FROM_REST, HELD, gestureFor, fidgetFor, choreographyOf, weightOf } = load('../src/renderer/avatar/gestures.ts')
 
 const SEED = 'v2:clock-1'
@@ -346,6 +346,51 @@ test('a pressed face holds its squash until let go, springs back, and giggles at
   press(svg); letGo(svg)
   assert.ok(same(figures().at(-1).frames, moves('release').figure), 'the count starts again after a giggle')
   stop()
+})
+
+test('choosing a face\'s row giggles at the first press and takes no count towards the next', () => {
+  globalThis.requestAnimationFrame = () => 1
+  const { svg, played } = stage()
+  const stop = show(svg, SEED, 'open', true)
+  const figures = () => played.filter(each => each.name === 'figure')
+  press(svg, true); letGo(svg)
+  assert.ok(same(figures().at(-1).frames, moves('giggle').figure), 'a chosen row giggles')
+  press(svg); letGo(svg)
+  assert.ok(same(figures().at(-1).frames, moves('release').figure), 'the giggle starts the count again')
+  stop()
+})
+
+test('a press on the face itself is not choosing its row, and a press elsewhere on the row is', () => {
+  globalThis.requestAnimationFrame = () => 1
+  const { Node: hadNode, Element: hadElement } = globalThis
+  globalThis.Node = class {}
+  globalThis.Element = class extends globalThis.Node {}
+  try {
+    const { svg, frame } = stage()
+    const other = stage()
+    const stops = [show(svg, SEED, 'open', true), show(other.svg, 'v2:other', 'open', true)]
+    const inside = new globalThis.Element()
+    const row = new globalThis.Element()
+    const beside = new globalThis.Element()
+    // The row holds this face, the face's frame holds `inside`, and the row's other children are `beside`.
+    frame.contains = (node) => node === inside || node === svg
+    other.frame.contains = () => false
+    row.closest = () => row
+    row.contains = (node) => node === svg || node === inside || node === beside || node === frame
+    inside.closest = () => row
+    beside.closest = () => row
+    inside.parentElement = row
+    beside.parentElement = row
+    row.parentElement = null
+    assert.deepEqual({ same: faceAt(inside)?.entry.svg === svg, choosing: faceAt(inside)?.choosing }, { same: true, choosing: false },
+      'a press on the avatar counts towards three, the same as outside a row')
+    assert.deepEqual({ same: faceAt(beside)?.entry.svg === svg, choosing: faceAt(beside)?.choosing }, { same: true, choosing: true },
+      'a press on the rest of the row chooses it')
+    for (const stop of stops) stop()
+  } finally {
+    globalThis.Node = hadNode
+    globalThis.Element = hadElement
+  }
 })
 
 test('a face changed in the editor pops in, and its neighbours notice a cheer', () => {

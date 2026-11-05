@@ -2650,9 +2650,7 @@ fn begin_session(
     // And for the same reason again: a mode that stops a prompt appearing has to be said before
     // the first slot reaches it, since the one thing a person cannot read off the transcript is a
     // question that was never put. `/status` says it too, for the rest of the session.
-    if session.auto_vetting() {
-        session.note(t!(session_vetting_in_force));
-    }
+    session.say_vetting_in_force();
     // After the startup question, and put rather than applied: naming a directory in a settings
     // file asks for it instead of granting it, so one the person accepts is opened on the same
     // terms as one typed at `/add-dir`, and one they decline is not opened at all.
@@ -4346,7 +4344,7 @@ mod tests {
     fn a_gateway_row_says_which_service_answers_it() {
         let models = provider_models(&gateway(r#"{"anthropic/claude-sonnet-4.5": {}}"#));
         assert_eq!(models[0].display_name, "anthropic/claude-sonnet-4.5");
-        assert_eq!(models[0].provider.as_deref(), Some("openrouter"));
+        assert_eq!(models[0].provider.as_deref(), Some("OpenRouter"));
     }
 
     /// The note left when a model is chosen names the service that answers it, because the row that
@@ -4368,7 +4366,7 @@ mod tests {
         let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
         assert!(
             said.iter()
-                .any(|text| text.contains("z-ai/glm-4.6") && text.contains("openrouter")),
+                .any(|text| text.contains("z-ai/glm-4.6") && text.contains("OpenRouter")),
             "{said:?}"
         );
 
@@ -27842,15 +27840,50 @@ mod tests {
         );
     }
 
-    /// A directory whose own name begins with a tilde is not a home-relative path.
+    /// A directory whose own name begins with a tilde is not a home-relative path. Read through
+    /// `named_directory`, since `~` is no longer expanded by a helper of its own: the one
+    /// implementation `--add-dir`, a settings file and `/cd` all share lives in `bravebot-agent`
+    /// (CLI-11, SHARE-001).
     #[test]
     fn a_tilde_is_expanded_only_as_a_whole_first_segment() {
         let home = std::env::var("HOME").expect("a home directory");
-        assert_eq!(expand_home("~/notes"), format!("{home}/notes"));
-        assert_eq!(expand_home("~"), home);
-        assert_eq!(expand_home("~notes"), "~notes");
-        assert_eq!(expand_home("/tmp/notes"), "/tmp/notes");
-        assert_eq!(expand_home("relative/notes"), "relative/notes");
+        let root = std::path::Path::new("/tmp/named-directory-tilde-test-root");
+        let home_path = std::path::Path::new(&home);
+        assert_eq!(
+            named_directory(root, "~/notes", Some(home_path)).ok(),
+            Some(format!("{home}/notes"))
+        );
+        assert_eq!(
+            named_directory(root, "~", Some(home_path)).ok(),
+            Some(home.clone())
+        );
+        assert_eq!(
+            named_directory(root, "~notes", Some(home_path)).ok(),
+            Some(root.join("~notes").display().to_string()),
+            "a directory literally named ~notes was read as the home directory"
+        );
+        assert_eq!(
+            named_directory(root, "/tmp/notes", Some(home_path)).ok(),
+            Some("/tmp/notes".to_string())
+        );
+        assert_eq!(
+            named_directory(root, "relative/notes", Some(home_path)).ok(),
+            Some(root.join("relative/notes").display().to_string())
+        );
+    }
+
+    /// TRUST-9: with no home directory known, a leading `~` is not a refusal, the way a file
+    /// tool's own read of one is; it is a name under the working directory, exactly as a name
+    /// with no leading `~` is. The home has to be a parameter rather than
+    /// [`bravebot_agent::home::profile`] read here, since a machine running this test may have
+    /// one, so there would be no way to hold "no home" fixed otherwise.
+    #[test]
+    fn a_leading_tilde_resolves_as_a_literal_name_with_no_home() {
+        let root = std::path::Path::new("/w/proj");
+        assert_eq!(
+            named_directory(root, "~/x", None).ok(),
+            Some(root.join("~").join("x").display().to_string())
+        );
     }
 
     /// CMDLINE-4: a `~` somebody types and a `~` the planner writes in a command line stand for
@@ -27863,15 +27896,14 @@ mod tests {
     #[test]
     fn a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory() {
         let profile = bravebot_agent::home::profile().expect("a home directory");
+        let root = std::path::Path::new("/tmp/named-directory-tilde-test-root");
 
-        assert_eq!(
-            expand_home("~/notes.txt"),
-            format!("{}/notes.txt", profile.display())
-        );
+        let resolved =
+            named_directory(root, "~/notes.txt", Some(&profile)).expect("a tilde resolves");
+        assert_eq!(resolved, format!("{}/notes.txt", profile.display()));
         assert!(
-            !expand_home("~/notes.txt").contains(".bravebot"),
-            "a typed `~` named the state directory: {}",
-            expand_home("~/notes.txt")
+            !resolved.contains(".bravebot"),
+            "a typed `~` named the state directory: {resolved}"
         );
     }
 
@@ -40012,6 +40044,77 @@ mod tests {
         );
     }
 
+    /// ASK-8: an undo forgets the answers to the planner's questions, so a question the planner
+    /// puts again after it is drawn. Rejects: a rewind that leaves the session's memo as it was.
+    #[test]
+    fn undoing_a_turn_forgets_the_answers_to_the_planners_questions() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_core::ask::Answer;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-answers");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        let start = conversation.recounted().len();
+        type_line(&mut session, "pick a cache");
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+        session.rewind.open(point, "pick a cache".to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("pick a cache"));
+        conversation.push(Message::assistant("done"));
+        session
+            .answers
+            .remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![1]));
+        session.complete("done", vec![], 10);
+        session.record_turn(start, &conversation);
+
+        // A rewind that reaches no point is refused and changes nothing.
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            5,
+        );
+        assert_eq!(
+            session.answers.recall("pick one: Cache: Which?"),
+            Some(Answer::Chosen(vec![1])),
+            "an undo that went back nowhere forgot the answers"
+        );
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+
+        assert_eq!(session.turns, 0, "the turn was not undone");
+        assert_eq!(
+            session.answers.recall("pick one: Cache: Which?"),
+            None,
+            "an answer given in the undone turn outlived the undo"
+        );
+    }
+
     /// FILES-10: `/rewind` removes the edits of the turns it undoes, and the state ends once none is
     /// left, since the list is read from the transcript the rewind cut.
     #[test]
@@ -41489,7 +41592,7 @@ mod tests {
     #[test]
     fn an_absolute_directory_in_a_settings_file_is_not_joined_onto_the_workspace() {
         assert_eq!(
-            named_directory(std::path::Path::new("/tmp/project"), "/opt/other").ok(),
+            named_directory(std::path::Path::new("/tmp/project"), "/opt/other", None).ok(),
             Some("/opt/other".to_string())
         );
     }
@@ -41520,7 +41623,7 @@ mod tests {
             ("/opt/other", "/opt/other"),
         ] {
             assert_eq!(
-                named_directory(root, typed).ok(),
+                named_directory(root, typed, None).ok(),
                 Some(resolved.to_string()),
                 "{typed}"
             );
@@ -41544,7 +41647,7 @@ mod tests {
         let lookalike = std::path::Path::new("/w/proj-\u{FFFD}");
 
         for relative in ["notes", "../notes", ".", "./sub"] {
-            match named_directory(not_text, relative) {
+            match named_directory(not_text, relative, None) {
                 Err(bravebot_agent::WorkspaceError::Invalid { path, reason }) => {
                     assert_eq!(path, relative);
                     assert_eq!(reason, t!(session_directory_root_not_text));
@@ -41554,17 +41657,17 @@ mod tests {
                 }
             }
             assert!(
-                named_directory(lookalike, relative).is_ok(),
+                named_directory(lookalike, relative, None).is_ok(),
                 "{relative} was refused against a working directory that is text"
             );
         }
         assert_eq!(
-            named_directory(lookalike, "../notes").ok(),
+            named_directory(lookalike, "../notes", None).ok(),
             Some("/w/notes".to_string())
         );
         for root in [not_text, lookalike] {
             assert_eq!(
-                named_directory(root, "/opt/other").ok(),
+                named_directory(root, "/opt/other", None).ok(),
                 Some("/opt/other".to_string()),
                 "an absolute name was refused for {root:?}"
             );

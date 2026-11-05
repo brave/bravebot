@@ -1,7 +1,5 @@
 # Mobile prototype implementation plan
 
-Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
-
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
 ## Scope and delivery rule
@@ -53,15 +51,6 @@ Never cut authentication, scope checks, labels, complete approval details, exact
 
 ## Stages
 
-The first Rust block is complete: negotiated fresh-session view, typed row/status updates,
-existing approval semantics, and real stdio tests. The TypeScript package now has the session
-lifecycle (capability refusal, framing and correlation fixtures, view application, trust, send,
-cancel and close) and approval replies for `confirm`, `run`, `fetch` and `ask`, tested against a
-real `bravebot-rpc` (see
-[the implemented client](client-contract.md#implemented-typescript-client)). The local client
-program, composed-workflow and save-failure evidence, and the record of the U1 investigation
-complete stages 1–2a. No native or listener work is included.
-
 ### 1. Define the common client and fixtures
 
 Status: complete.
@@ -88,9 +77,9 @@ Done when this passes on the local host machine without a mobile runtime, produc
 
 Reuse the app shell and package setup owned by stage 3d. Bring forward that shared setup if this track starts first; do not create a separate shell. Only the embedded binding and its proof belong to 2b. Apply the device UI validation and dependency checks when this stage first creates the app shell. Start with a model stub; real model access requires the [embedded credential lifecycle](architecture.md#embedded-model-credentials). Review the selected platform's tool support and distribution limits before advertising them. These on-device agent tool limits do not restrict remote host execution, which remains subject to host permissions and session authorization.
 
-Build on the Android work described in [Current mobile status](README.md#current-mobile-status). At the start of this stage and later integration work that uses the branch, review progress on [android-shell](https://github.com/brave/bravebot/tree/android-shell), compare it with the current reference [`9635f16b`](https://github.com/brave/bravebot/tree/9635f16b49798624e6174b0d15818227773e81a8) (`9635f16b49798624e6174b0d15818227773e81a8`), and record the revision chosen for integration. Revisit relevant branch updates during mobile development to avoid duplicating work.
+The Android Rust/JNI binding on `android-shell` may be a starting point; see [Current mobile status](README.md#current-mobile-status).
 
-Inventory runtime bindings, lifecycle handling, input restrictions, mobile interactions, and relevant tests. Adapt the code and relevant checks needed for the selected proof to current APIs and security specs. Prefer cherry-picking or merging applicable commits to preserve contributor attribution; retain original author credit and source references for adaptations. At the pinned revisions, `android-shell` is 18 commits behind the main baseline. Bring the selected work onto current main and reconcile stage-3a bridge changes, including Android host handling of question IDs, startup trust, and the cancel turn parameter, before judging reuse cost. Do not assume it builds there. Validate builds and device behavior on the integrated revision. The existing `android-host.test.mjs` source checks and `compact-layout.test.mjs` layout/source checks do not cover JNI or Kotlin runtime behavior; add tests through the actual native and React Native boundaries. The Android integration is separate from this plan’s `main` baseline, so bringing it into the implementation is an explicit step. This reuse does not set an Android-first delivery requirement.
+Inventory runtime bindings, lifecycle handling and input restrictions. Bring any selected binding onto current main and reconcile it with the stage-3a bridge changes (question IDs, startup trust, the cancel turn parameter) before judging reuse cost. Do not assume it builds there. Validate builds and device behavior on the integrated revision, and add tests through the actual native and React Native boundaries. Reuse does not set an Android-first delivery requirement.
 
 Build a minimal React Native screen and narrow platform native module reaching the Rust runtime. Do not prescribe Android before iOS: select the first device proof based on integration effort and available hardware, and record tested platforms and gaps. Android can build on the existing Rust/JNI work; iOS needs its own binding. Shared React Native code does not prove either platform’s native behavior. Use the same session interface and domain fixtures. The embedded proof is foreground-only with one app-private workspace, a turn, and a supported question or approval. Audit existing tools to select that path; do not bypass missing platform command confinement.
 
@@ -120,13 +109,15 @@ Done when the host persists across connections, reports truthful closing/closed 
 
 ### 3c. Enable local controller readiness and loss handling
 
-Status: built in the host ([HOST-7](../../specs/local-host.md#HOST-7), [HOST-10](../../specs/local-host.md#HOST-10), [HOST-11](../../specs/local-host.md#HOST-11)). A session has one controller, the connection that opened it or took it over with `session.attach`. A client can answer only after it has the view of the session, and only the kinds the allowlist offers replies for. A question nobody can answer is refused when it is asked, for every kind. When the controller's connection ends, the waiting question is refused and shown as resolved, and the turn goes on, so a later client can take the session over and is told where it stands. A stale answer fails on its question number, and trust stays unanswered until a controller answers it. Not built: the TypeScript client's `attach()`, which still fails locally; takeover from a controller that is still connected, which needs an epoch and is stage 5a; and a bounded history for the returning client, which is stage 4a. Answerable kinds are the same for every local connection, set by the host and not by what a client advertises. The host serves one client at a time, so no test has two connections open at once. The guard that refuses a live controller's session is tested on the host's own state.
+Status: built in the host ([HOST-7](../../specs/local-host.md#HOST-7), [HOST-10](../../specs/local-host.md#HOST-10), [HOST-11](../../specs/local-host.md#HOST-11)). A session has one controller, the connection that opened it or took it over with `session.attach`. A client can answer only after it has the view of the session, and only the kinds the allowlist offers replies for. A question nobody can answer is refused when it is asked, for every kind. When the controller's connection ends, the waiting question is refused and shown as resolved, and the turn goes on, so a later client can take the session over with `session.attach` and receives its status and waiting question, with no rows and the history marked omitted (HOST-11). A stale answer fails on its question number, and trust stays unanswered until a controller answers it. Not built: the TypeScript client's `attach()`, which still fails locally; takeover from a controller that is still connected, which needs an epoch and is stage 5a; and a bounded history for the returning client, which is stage 4a. Answerable kinds are the same for every local connection, set by the host and not by what a client advertises. The host serves one client at a time, so no test has two connections open at once. The guard that refuses a live controller's session is tested on the host's own state.
 
 Use one controller, ordered local attach/detach, and answerable kinds fixed for each connection. Enable readiness only after control state and subscription are established. Coordinate question registration, answer consumption, refusal, and event publication so loss cannot approve an action or resurrect a resolved question.
 
 Done when loss before and after each supported question refuses appropriately, future unavailable questions do not hang, and startup trust remains unanswered. Reattachment recovers current control state with stale actions rejected. Network heartbeats/leases wait until stage 6; local readiness and exact controller identity do not.
 
 ### 3d. Run a thin phone experiment
+
+Status: the app shell and session screens are built in `mobile/` ([app-shell.md](app-shell.md)), with a `Target` interface, approval cards and `make check-mobile` in CI. They are tested against a fake client. Not built: a host target, the loopback development transport with its per-launch token, and the device observations listed below.
 
 This stage owns the minimal React Native app shell, consumption of `packages/agent-client`, and the development transport. Complete the [device UI validation](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes) and [dependency checks](decisions-and-tradeoffs.md#9-mobile-dependencies-and-builds) before expanding the screens. Stage 2b reuses these deliverables and may bring their setup forward, but stage 3d does not depend on embedded execution.
 

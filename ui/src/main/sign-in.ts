@@ -155,6 +155,8 @@ interface Running {
   attempt: Attempt
   way: SignInWay
   id: string | null
+  /** The row's name in the bridge's list, the one the settings page shows. */
+  name: string
   state: SignInWindowState | null
   deadline: number | null
 }
@@ -163,6 +165,7 @@ export class SignIn<W extends Asker = Asker> {
   /** A dialog is up or `accounts.signIn` is on its way. */
   private asking: SignInWay | null = null
   private askingId: string | null = null
+  private askingName: string | null = null
   private running: Running | null = null
   /** An attempt that ended before its `accounts.signIn` was answered. */
   private endedEarly: Attempt | null = null
@@ -201,6 +204,7 @@ export class SignIn<W extends Asker = Asker> {
       const rows = parseAccounts(await this.deps.ask('accounts.list', withSession(named, way === 'bedrock' ? {} : { bedrock: false })))
       if (!rows) return { error: 'The agent did not say which sign-ins are stored. Rebuild or reinstall the app, then retry.' }
       if (way === 'bedrock' && !rows.some((row) => row.way === way && row.id === id && row.command !== null)) return null
+      this.askingName = rows.find((row) => row.way === way && (way !== 'bedrock' || row.id === id))?.name ?? null
       const replace = way !== 'bedrock' && rows.some((row) => row.way === way && row.canSignOut)
       const { response } = await this.deps.showMessageBox(window, dialogOptions(way, replace, this.askingId))
       if (response !== 0) {
@@ -212,7 +216,7 @@ export class SignIn<W extends Asker = Asker> {
       const answer = await this.deps.ask('accounts.signIn', withSession(named, way === 'bedrock' ? { way, id: this.askingId } : { way, replace }))
       const attempt = (answer as { attempt?: unknown } | null)?.attempt
       if (!isAttempt(attempt)) return { error: 'The agent did not start the sign-in. Rebuild or reinstall the app, then retry.' }
-      if (this.endedEarly !== attempt && !this.running) this.running = { attempt, way, id: this.askingId, state: null, deadline: null }
+      if (this.endedEarly !== attempt && !this.running) this.running = { attempt, way, id: this.askingId, name: this.askingName ?? NAMES[way], state: null, deadline: null }
       this.endedEarly = null
       return { attempt }
     } catch (error) {
@@ -220,6 +224,7 @@ export class SignIn<W extends Asker = Asker> {
     } finally {
       this.asking = null
       this.askingId = null
+      this.askingName = null
     }
   }
 
@@ -242,7 +247,7 @@ export class SignIn<W extends Asker = Asker> {
     if (!isAttempt(attempt)) return null
     if (this.running) return this.running.attempt === attempt ? this.running : null
     if (!this.asking) return null
-    this.running = { attempt, way: this.asking, id: this.askingId, state: null, deadline: null }
+    this.running = { attempt, way: this.asking, id: this.askingId, name: this.askingName ?? NAMES[this.asking], state: null, deadline: null }
     return this.running
   }
 
@@ -250,7 +255,7 @@ export class SignIn<W extends Asker = Asker> {
     const text = (value: unknown) => (typeof value === 'string' && value ? value : null)
     const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null)
     return {
-      way: running.way, id: running.id, url: text(data.url), port: count(data.port), code: text(data.code), address: text(data.address), expiresIn: count(data.expiresIn),
+      way: running.way, id: running.id, name: running.name, url: text(data.url), port: count(data.port), code: text(data.code), address: text(data.address), expiresIn: count(data.expiresIn),
     }
   }
 
@@ -342,6 +347,7 @@ export class SignIn<W extends Asker = Asker> {
     this.running = null
     this.asking = null
     this.askingId = null
+    this.askingName = null
     if (running) void this.deps.ask('accounts.cancelSignIn', { attempt: running.attempt }).catch(() => {})
     this.deps.closeWindow()
   }

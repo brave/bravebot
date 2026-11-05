@@ -1,3 +1,5 @@
+import { parseProviderPreferences, type ProviderPreferences } from './model-preferences'
+
 export interface ConversationPreferences {
   botSlug: string | null
   draft: string
@@ -11,6 +13,8 @@ export interface Experience {
   recentModels: string[]
   /** The running version the update banner was dismissed on (UPDATE-12), or nothing. */
   dismissedUpdate: string | null
+  /** What a person chose in Settings › Providers, by service key. */
+  providers: ProviderPreferences
 }
 
 export const EMPTY_CONVERSATION: ConversationPreferences = {
@@ -42,5 +46,6 @@ export function parseExperience(value: unknown): Experience {
   }
   return { conversations,
     recentModels: Array.isArray(v.recentModels) ? [...new Set(v.recentModels.filter((m): m is string => typeof m === 'string' && m.length < 1000))].slice(0, 8) : [],
-    dismissedUpdate: typeof v.dismissedUpdate === 'string' && v.dismissedUpdate.length > 0 && v.dismissedUpdate.length < 1000 ? v.dismissedUpdate : null }
+    dismissedUpdate: typeof v.dismissedUpdate === 'string' && v.dismissedUpdate.length > 0 && v.dismissedUpdate.length < 1000 ? v.dismissedUpdate : null,
+    providers: parseProviderPreferences(v.providers) }
 }

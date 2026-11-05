@@ -20,7 +20,7 @@ use bravebot_core::capability::Capability;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
-use bravebot_core::policy::Policy;
+use bravebot_core::policy::{PathObserved, Policy};
 use bravebot_core::spelling::to_key;
 use bravebot_core::value::Labelled;
 use bravebot_filetype::{Decoded, Decoding, SNIFF_BYTES, decode_text, looks_binary};
@@ -38,6 +38,63 @@ use std::time::{Duration, Instant};
 /// reading on.
 fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The kinds of space a file name is tried with: U+202F (macOS writes it before `AM` and `PM` in a
+/// screenshot's name), U+00A0 and the ordinary space. Other Unicode spaces are not tried.
+const SPACE_KINDS: [char; 3] = ['\u{202f}', '\u{a0}', ' '];
+
+/// How many spaces a name may hold and still be tried with each one replaced alone. A name with
+/// more is tried only with all of them replaced together, which bounds the candidates at a few
+/// dozen `stat` calls however long the name is.
+const MAX_SPACES_VARIED_ALONE: usize = 16;
+
+/// The names that differ from `named` only in the kind of space its last component holds, each
+/// made from `named` alone and none equal to it (READ-11).
+///
+/// Every space of the last component replaced by one kind together, then each space replaced by
+/// one kind alone, so a name with ordinary spaces and a single U+202F before `PM` is a candidate.
+/// The directory part is kept as it was written. Nothing is read from the disk: the caller probes
+/// each candidate by path.
+fn space_variants(named: &str) -> Vec<String> {
+    let split = named
+        .rfind(|c| c == '/' || (BACKSLASH_SEPARATES && c == '\\'))
+        .map_or(0, |at| at + 1);
+    let (directory, last) = named.split_at(split);
+    let spaces: Vec<usize> = last
+        .char_indices()
+        .filter(|(_, c)| SPACE_KINDS.contains(c))
+        .map(|(at, _)| at)
+        .collect();
+    if spaces.is_empty() {
+        return Vec::new();
+    }
+
+    let mut found: Vec<String> = Vec::new();
+    let mut offer = |last: String| {
+        let candidate = format!("{directory}{last}");
+        if candidate != named && !found.contains(&candidate) {
+            found.push(candidate);
+        }
+    };
+    for kind in SPACE_KINDS {
+        offer(
+            last.chars()
+                .map(|c| if SPACE_KINDS.contains(&c) { kind } else { c })
+                .collect(),
+        );
+    }
+    if spaces.len() <= MAX_SPACES_VARIED_ALONE {
+        for kind in SPACE_KINDS {
+            for &at in &spaces {
+                let (before, from_space) = last.split_at(at);
+                let mut after = from_space.chars();
+                after.next();
+                offer(format!("{before}{kind}{}", after.as_str()));
+            }
+        }
+    }
+    found
 }
 
 mod bypass;
@@ -59,7 +116,8 @@ pub use error::{Remedy, WorkspaceError};
 #[cfg(unix)]
 use other_names::{LinkNames, directory_identity};
 pub(crate) use resolve::destination;
-use resolve::{expand_home, named_home, refuse_unkeyable, written_below};
+pub use resolve::expand_home;
+use resolve::{named_home, refuse_unkeyable, written_below};
 pub(crate) use results::MAX_ENTRIES;
 pub use results::{
     ContextLine, FileTally, Listing, MAX_SEARCH_CONTEXT, MAX_SEARCH_FILES, Match, Matches, Page,
@@ -83,7 +141,7 @@ pub use checkouts::{
 };
 use checkouts::{Made, TemporaryCheckouts, WorkingWrites};
 use reach::HostGrants;
-pub use reach::{Moved, PathReach, ReferenceProblem, Referenced};
+pub use reach::{Moved, PathReach, ReferenceProblem, Referenced, named_directory};
 
 /// The most an attachment may weigh.
 ///
@@ -150,6 +208,8 @@ pub struct GitQuestion<'a> {
     pub messages: bool,
     pub since: Option<i64>,
     pub until: Option<i64>,
+    /// Which tools the turn's list holds, which the answer's sentences read before they name one.
+    pub beside: crate::tools::Beside,
 }
 
 /// How far a read of a file may reach.
@@ -169,6 +229,10 @@ enum Reach {
     Dropped,
 }
 
+/// The observation of a path beside the read taken under it. The read can fail after the label
+/// was taken, and the observation is recorded either way.
+type TextMeasured = (PathObserved, Result<Labelled<String>, WorkspaceError>);
+
 /// The directories file operations are confined to.
 ///
 /// One primary root, which every relative path is resolved against, plus any the user added by
@@ -180,6 +244,8 @@ pub struct Workspace {
     after_write: Arc<Mutex<Option<WriteInterruption>>>,
     #[cfg(test)]
     while_reading: Arc<Mutex<Option<ReadingHook>>>,
+    #[cfg(test)]
+    while_backing_up: Arc<Mutex<Option<ReadingHook>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -428,6 +494,8 @@ impl Workspace {
             after_write: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             while_reading: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            while_backing_up: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -715,7 +783,14 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        policy.capture_files(|policy, _capture| self.read_text_captured(policy, path, reach))
+        // The gates read no file and decide nothing about one, so they run before the boundary is
+        // taken. Inside it go the path lookup, the label lookup and the read, which have to agree.
+        let relative = Self::gate_text_read(policy, path)?;
+        let (measured, read) = policy
+            .capture_files_shared(|policy| self.read_text_measured(policy, &relative, reach))?;
+        // After the boundary: the event reaches the sink while no writer waits for it.
+        policy.record_path(Capability::FileRead, measured);
+        read
     }
 
     fn read_text_captured<S: Sink>(
@@ -724,32 +799,50 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        let relative = Self::gate_text_read(policy, path)?;
+        let (measured, read) = self.read_text_measured(policy, &relative, reach)?;
+        policy.record_path(Capability::FileRead, measured);
+        read
+    }
+
+    /// The capability and routing gates of a text read, and the trusted path they admitted.
+    fn gate_text_read<S: Sink>(
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+    ) -> Result<String, WorkspaceError> {
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_read", "path", Role::Routing, path)?;
 
         // Safe to read: before_action just proved this is (T,pub).
-        let relative = path
-            .clone()
+        path.clone()
             .into_trusted()
             .map_err(|_| WorkspaceError::Invalid {
                 path: "<untrusted>".into(),
                 reason: "the path was not trusted",
-            })?;
+            })
+    }
 
+    /// Resolve, label and read `relative`, recording nothing. The observation is returned beside
+    /// the read, which may have failed after the label was taken.
+    fn read_text_measured<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        relative: &str,
+        reach: Reach,
+    ) -> Result<TextMeasured, WorkspaceError> {
         // Not a decision taken from the bytes: the caller says which of the two reads this is,
         // and it says so from the shape of the gesture that produced the path.
         let resolved = match reach {
-            Reach::Confined => self
-                .resolve(&relative)
-                .map_err(WorkspaceError::for_a_read)?,
-            Reach::Dropped => self.resolve_attachment(&relative, reach)?,
+            Reach::Confined => self.resolve(relative).map_err(WorkspaceError::for_a_read)?,
+            Reach::Dropped => self.resolve_attachment(relative, reach)?,
         };
-        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+        let measured = policy.measure_path(&Capability::FileRead, &self.trust_key(relative))?;
+        let label = measured.label();
 
-        let raw = std::fs::read(&resolved)
-            .map_err(|e| read_failure(&e, &resolved, &relative, &self.root))?;
-
-        Ok(Labelled::new(exact_text(raw, &relative)?, label))
+        let read = std::fs::read(&resolved)
+            .map_err(|e| read_failure(&e, &resolved, relative, &self.root))
+            .and_then(|raw| Ok(Labelled::new(exact_text(raw, relative)?, label)));
+        Ok((measured, read))
     }
 
     /// Read a file as a `data:` URI, confined to the workspace like every other read.
@@ -833,6 +926,8 @@ impl Workspace {
         media: &str,
         reach: Reach,
     ) -> Result<(Labelled<String>, usize), WorkspaceError> {
+        // Exclusive: `before_capability` and `observe_path` emit trail lines inside this closure,
+        // and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_read", "path", Role::Routing, path)?;
@@ -1013,21 +1108,32 @@ impl Workspace {
         path: &Labelled<String>,
         read: impl FnOnce(&str, Label, &[PathBuf]) -> Result<R, WorkspaceError>,
     ) -> Result<R, WorkspaceError> {
-        policy.capture_files(|policy, _capture| {
-            policy.before_capability(Capability::FileRead)?;
-            policy.before_action("file_read", "path", Role::Routing, path)?;
+        // The capability and routing gates read no file, so they run before the boundary is taken
+        // and their trail lines are written while no writer waits. Inside it go the label lookup
+        // and the read, which have to agree. The observation is recorded after it is released.
+        policy.before_capability(Capability::FileRead)?;
+        policy.before_action("file_read", "path", Role::Routing, path)?;
 
-            let relative = path
-                .clone()
-                .into_trusted()
-                .map_err(|_| WorkspaceError::Invalid {
-                    path: "<untrusted>".into(),
-                    reason: "the path was not trusted",
-                })?;
+        let relative = path
+            .clone()
+            .into_trusted()
+            .map_err(|_| WorkspaceError::Invalid {
+                path: "<untrusted>".into(),
+                reason: "the path was not trusted",
+            })?;
 
-            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-            read(&relative, label, policy.loaded_skill_directories())
-        })
+        let (measured, read) = policy.capture_files_shared(|policy| {
+            let measured =
+                policy.measure_path(&Capability::FileRead, &self.trust_key(&relative))?;
+            let read = read(
+                &relative,
+                measured.label(),
+                policy.loaded_skill_directories(),
+            );
+            Ok::<_, WorkspaceError>((measured, read))
+        })?;
+        policy.record_path(Capability::FileRead, measured);
+        read
     }
 
     /// [`Workspace::read_page`], answering `Unchanged` where the file is the one a window was
@@ -1236,6 +1342,54 @@ impl Workspace {
             .ok()
             .and_then(|resolved| std::fs::metadata(resolved).ok())
             .is_some_and(|meta| meta.is_file())
+    }
+
+    /// The name of the file that `named` stands for, where nothing is at `named` and a file is at
+    /// the same name spelled with another kind of space in its last component (U+0020, U+00A0 or
+    /// U+202F).
+    ///
+    /// macOS writes U+202F before `AM` and `PM` in a screenshot's name, and it looks like the
+    /// ordinary space a person or a model types. The candidates are made from `named` alone and
+    /// each is probed by path with [`Workspace::names_a_file`]: no directory is listed, so no
+    /// filename read from the disk decides anything, and each candidate passes the same
+    /// containment as any other name. `None` where `named` is there already, or no candidate is a
+    /// file, or the caller has to keep the name it was given.
+    pub(crate) fn respelled_when_missing(&self, named: &str) -> Option<String> {
+        // A name that resolves and is there is read as it is, whatever it is.
+        let resolved = self.resolve(named).ok()?;
+        if std::fs::symlink_metadata(resolved).is_ok() {
+            return None;
+        }
+        space_variants(named)
+            .into_iter()
+            .find(|candidate| self.names_a_file(candidate))
+    }
+
+    /// What `read_file` adds to a failure to read `typed`, a name the planner wrote (READ-11): the
+    /// file may be named with another kind of space than the one given. Empty unless `error` is a
+    /// path that is not there, nothing is at `typed`, and the last component of `typed` holds a
+    /// space.
+    ///
+    /// Decided from the name the planner typed and from `stat` of it, never from a filename read
+    /// from the disk. A caller that reads through a reference does not ask: the name it read is
+    /// an entry of a directory listing, which may not pick a sentence (LIST-2).
+    pub(crate) fn kind_of_space_hint(&self, error: &WorkspaceError, typed: &str) -> &'static str {
+        let last = typed
+            .rsplit(|c| c == '/' || (BACKSLASH_SEPARATES && c == '\\'))
+            .next()
+            .unwrap_or(typed);
+        let holds_a_space = last.chars().any(|c| SPACE_KINDS.contains(&c));
+        let nothing_there = || {
+            self.resolve(typed).map_or(true, |resolved| {
+                std::fs::symlink_metadata(resolved).is_err()
+            })
+        };
+        if matches!(error, WorkspaceError::Io { .. }) && holds_a_space && nothing_there() {
+            "; a space in a name can be U+0020, U+00A0 or U+202F, which look the same, so the \
+             file may be named with another kind of space than the one given"
+        } else {
+            ""
+        }
     }
 
     /// The file `named` names, as the absolute path the file tools reach it at, where it is a regular
@@ -1635,7 +1789,11 @@ impl Workspace {
                 }
             })?;
         }
-        let effect = policy.capture_files(|policy, capture| {
+        // Inside the boundary: the revision check, the trust the path has now, and entry, which
+        // must be atomic with one another. The backup reads the file after it. `begin` has reserved
+        // the path by then, so no other effect can enter it and a reader sees it untrusted, and a
+        // long read of a large file keeps no other capture waiting.
+        let (effect, captured_trust) = policy.capture_files(|policy, capture| {
             let key = self.trust_key(&relative);
             if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
                 return Err(WorkspaceError::Stale {
@@ -1652,9 +1810,9 @@ impl Workspace {
                 .ok_or_else(|| WorkspaceError::Contended {
                     path: relative.clone(),
                 })?;
-            self.record_backup(&resolved, captured_trust);
-            Ok::<_, WorkspaceError>(effect)
+            Ok::<_, WorkspaceError>((effect, captured_trust))
         })?;
+        self.record_backup(&resolved, captured_trust);
 
         // Both gates have passed, so the bytes may be released to the write.
         let proof = policy.authorise_content_release("file_write", "contents");
@@ -1678,10 +1836,26 @@ impl Workspace {
         Ok(resolved)
     }
 
-    /// Run `hook` with the directory, inside the capture of every listing and search from here on.
+    /// Run `hook` with the directory, during the walk of every listing and search from here on.
+    /// The walk holds no file-authority boundary, so the hook sees a reader that has not captured.
     #[cfg(test)]
     pub(crate) fn hold_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
         *locked(&self.while_reading) = Some(ReadingHook(Arc::new(hook)));
+    }
+
+    /// Run `hook` with the file's path, just before a write reads the file it replaces for the
+    /// session's undo. The path is reserved by then and the exclusive boundary is released.
+    #[cfg(test)]
+    pub(crate) fn hold_backup_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *locked(&self.while_backing_up) = Some(ReadingHook(Arc::new(hook)));
+    }
+
+    #[cfg(test)]
+    fn hold_while_backing_up(&self, path: &Path) {
+        let hook = locked(&self.while_backing_up).clone();
+        if let Some(ReadingHook(hook)) = hook {
+            hook(&path.to_string_lossy());
+        }
     }
 
     #[cfg(test)]
@@ -1772,6 +1946,8 @@ impl Workspace {
             .sum();
         let room = MAX_REWIND_BYTES.saturating_sub(held);
 
+        #[cfg(test)]
+        self.hold_while_backing_up(resolved);
         backups.push(Backup {
             captured_trust,
             path: resolved.to_path_buf(),
@@ -2465,7 +2641,7 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        policy.capture_files_shared(|policy| {
+        {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
@@ -2535,8 +2711,16 @@ impl Workspace {
                 .chain(stopped_at.iter())
                 .map(|reported| self.key_below(&relative, &root, reported))
                 .collect();
-            let label =
-                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
+            // The walk above reads directory entries and no file's bytes, and runs outside the
+            // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
+            // names, and the label of a name is the map's answer for its path, taken inside the
+            // boundary and so under one state of the map. An effect that entered after the walk
+            // has already distrusted its path, so the label can only be as trusted as the map says
+            // of the path now. The event is emitted after the boundary is released.
+            let measured = policy.capture_files_shared(|policy| {
+                policy.measure_paths(&Capability::FileRead, keys.iter().map(String::as_str))
+            })?;
+            let label = policy.record_paths(Capability::FileRead, measured);
 
             // `walk` collects one entry past the cap so reaching it is detectable. Which entries
             // survive is down to traversal order, so a truncated listing is a sample of the tree
@@ -2558,7 +2742,7 @@ impl Workspace {
                 },
                 label,
             ))
-        })
+        }
     }
 
     /// A ranked map of the declarations in the source files beneath `directory`.
@@ -2575,6 +2759,8 @@ impl Workspace {
         directory: &Labelled<String>,
         budget: usize,
     ) -> Result<Labelled<RepoMap>, WorkspaceError> {
+        // Exclusive: `before_capability` and `before_action` emit trail lines inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("repo_map", "directory", Role::Routing, directory)?;
@@ -2808,7 +2994,7 @@ impl Workspace {
             context.min(MAX_SEARCH_CONTEXT)
         };
         let offset = if output.summarises() { 1 } else { offset };
-        policy.capture_files_shared(|policy| {
+        {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
                 policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
@@ -2932,8 +3118,14 @@ impl Workspace {
                 .iter()
                 .map(|reported| self.key_below(&relative, &root, reported))
                 .collect();
-            let label =
-                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
+            // The walk above names files and reads none, so it runs outside the boundary and a
+            // long one does not hold an effect out (TRUST-4). The boundary is taken once per file
+            // below, around that file's bytes and the map's answer for its path together. The
+            // result's label is the meet of those answers, so it is no more trusted than any file
+            // was when its bytes were taken. Files the loop never reached were not read and are
+            // asked about after it, as the whole set was before.
+            let mut observed = policy.measure_paths(&Capability::FileRead, [])?;
+            let mut reached = keys.len();
 
             // Collected one past the cap for the same reason as `walk`: reaching the limit has
             // to be distinguishable from happening to have exactly that many matches.
@@ -2949,20 +3141,29 @@ impl Workspace {
             let skip = offset.saturating_sub(1);
             let mut matched = 0usize;
             let started = Instant::now();
-            for path in paths {
+            for (index, path) in paths.iter().enumerate() {
                 if matches.len() > MAX_MATCHES {
+                    reached = index;
                     break;
                 }
                 // Checked per file rather than per line: the clock is here to bound a walk over a
                 // large tree, and a single file cannot be large enough to matter beside that.
                 if started.elapsed() >= self.search_time {
                     timed_out = true;
+                    reached = index;
                     break;
                 }
-                let absolute = self.root.join(&path);
+                let absolute = self.root.join(path);
+                let (looked, read) = policy.capture_files_shared(|policy| {
+                    (
+                        policy.measure_paths(&Capability::FileRead, [keys[index].as_str()]),
+                        std::fs::read_to_string(&absolute),
+                    )
+                });
+                observed = observed.with(looked?);
                 // Unreadable or non-UTF8 files are skipped rather than failing the search:
                 // a binary in the tree should not make grep unusable.
-                let Ok(contents) = std::fs::read_to_string(&absolute) else {
+                let Ok(contents) = read else {
                     continue;
                 };
                 searched += 1;
@@ -3048,6 +3249,13 @@ impl Workspace {
                 matched -= 1;
             }
 
+            // No bytes of these were taken, so there is no pairing of bytes and label for a
+            // boundary to keep (TRUST-4), and none is held while the event is emitted.
+            let unread = policy.measure_paths(
+                &Capability::FileRead,
+                keys[reached..].iter().map(String::as_str),
+            )?;
+            let label = policy.record_paths(Capability::FileRead, observed.with(unread));
             Ok(Labelled::new(
                 Matches {
                     matches,
@@ -3068,7 +3276,7 @@ impl Workspace {
                 },
                 label,
             ))
-        })
+        }
     }
 
     /// The name the trust map holds `.git` under, for the repository the planner called `named`.
@@ -3104,7 +3312,10 @@ impl Workspace {
             messages,
             since,
             until,
+            beside,
         } = *question;
+        // Exclusive: `before_capability` and `before_action` emit trail lines inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("read_git", "repository", Role::Routing, repository)?;
@@ -3179,6 +3390,7 @@ impl Workspace {
                 since,
                 until,
                 every_untracked: false,
+                beside,
                 deadline,
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, &named, inside);
@@ -3506,6 +3718,8 @@ impl Workspace {
         let made = self.session_checkout(id).ok_or(Declined::NoRepository)?;
         let root = made.path.to_string_lossy().into_owned();
         let tree_key = self.trust_key(&root);
+        // Exclusive: `observe_repository` emits the observation and a trail line inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             let git_key = self.trusted_git_dir(policy, ".")?;
             if !policy.trusts_beneath(&tree_key) {
@@ -3527,6 +3741,7 @@ impl Workspace {
                 since: None,
                 until: None,
                 every_untracked: true,
+                beside: crate::tools::Beside::every(),
                 deadline,
             };
             let withheld = |inside: &str| {
@@ -4190,6 +4405,8 @@ mod tests {
     use super::resolve::refuse_misleading_names;
     use super::volume::{FileId, folds_case_by};
     use super::*;
+    #[cfg(unix)]
+    use bravebot_i18n::t;
     use std::collections::HashMap;
     use std::io;
 
@@ -4709,6 +4926,64 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// A write reads the file it replaces for the session's undo after it has reserved the path,
+    /// and not while it holds the exclusive file-authority boundary (TRUST-4). A large file
+    /// would otherwise keep every other capture waiting for the read. The hook runs where the
+    /// backup is read, and a second thread enters an effect there: with the read inside the
+    /// exclusive capture, the entry waits past the timeout.
+    #[test]
+    fn the_backup_read_does_not_hold_the_exclusive_boundary() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        use std::sync::mpsc;
+        let root = crate::testutil::scratch_dir("bravebot-backup-outside-boundary");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let entered = Arc::new(Mutex::new(Vec::new()));
+        {
+            let authority = authority.clone();
+            let entered = entered.clone();
+            workspace.hold_backup_reads(move |_| {
+                let authority = authority.clone();
+                let (done, finished) = mpsc::channel();
+                std::thread::spawn(move || {
+                    drop(authority.capture());
+                    let _ = done.send(());
+                });
+                let got_in = finished.recv_timeout(Duration::from_secs(5)).is_ok();
+                entered.lock().unwrap().push(got_in);
+            });
+        }
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority);
+        let written = workspace.write(
+            &mut policy,
+            &Labelled::trusted("shared.txt".to_string()),
+            &Labelled::new("replacement".to_string(), Label::trusted_public()),
+        );
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(
+            *entered.lock().unwrap(),
+            [true],
+            "the backup was read while the exclusive boundary was held, or not read at all"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Reads during an entered effect cannot use the previous grant, and an error cannot promote it.
     #[test]
     fn reads_before_write_publication_and_failed_replacements_remain_untrusted() {
@@ -5016,6 +5291,54 @@ mod tests {
             Some(Integrity::Untrusted),
             "a rule about a directory holding the project did not reach the project"
         );
+    }
+
+    /// A name is respelled by kind of space in its last component alone (READ-11): the directory
+    /// part is kept, the name is never among its own candidates, and the direction does not matter.
+    #[test]
+    fn space_variants_change_only_the_kind_of_space_in_the_last_component() {
+        assert!(space_variants("nospace.png").is_empty());
+        let variants = space_variants("dir with space/Shot 10.30.12 PM.png");
+        assert!(variants.contains(&"dir with space/Shot\u{a0}10.30.12\u{a0}PM.png".to_string()));
+        assert!(variants.contains(&"dir with space/Shot 10.30.12\u{202f}PM.png".to_string()));
+        assert!(variants.iter().all(|v| v.starts_with("dir with space/")));
+        assert!(
+            variants
+                .iter()
+                .all(|v| v != "dir with space/Shot 10.30.12 PM.png")
+        );
+        let reverse = space_variants("Shot 10.30.12\u{202f}PM.png");
+        assert!(reverse.contains(&"Shot 10.30.12 PM.png".to_string()));
+    }
+
+    /// A name that is not there is respelled to the file that is, and a name that is there is not.
+    #[test]
+    fn a_missing_name_is_respelled_to_the_file_that_differs_in_its_spaces() {
+        let root = crate::testutil::scratch_dir("respelled-when-missing");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("Shot 10.30.12\u{202f}PM.png"), b"x").unwrap();
+        std::fs::write(root.join("Here today.txt"), b"x").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+
+        assert_eq!(
+            workspace
+                .respelled_when_missing("Shot 10.30.12 PM.png")
+                .as_deref(),
+            Some("Shot 10.30.12\u{202f}PM.png")
+        );
+        assert_eq!(
+            workspace
+                .respelled_when_missing("Here\u{a0}today.txt")
+                .as_deref(),
+            Some("Here today.txt")
+        );
+        assert_eq!(
+            workspace.respelled_when_missing("Here today.txt"),
+            None,
+            "a name that exists is never respelled"
+        );
+        assert_eq!(workspace.respelled_when_missing("absent file.txt"), None);
     }
 
     /// The name the workspace hands back and the key it asks the map about are both spelled from
@@ -5826,6 +6149,7 @@ mod tests {
                 messages: false,
                 since: None,
                 until: None,
+                beside: crate::tools::Beside::every(),
             };
             let answer = workspace.read_git(&mut policy, &question).expect("git");
             let proof = policy.authorise_content_release("test", "answer");
@@ -6122,6 +6446,111 @@ mod tests {
             "{error:?}"
         );
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// CLI-11, SHARE-001: `--add-dir`, a settings file's names, and the terminal's `/cd`,
+    /// `/add-dir` and `/add-dir close` all resolve a typed directory name through this one
+    /// function, so a relative name in front of either reads the same way.
+    ///
+    /// An absolute name is left alone. Joining it onto a root would name a path inside the
+    /// project that nobody asked for.
+    #[test]
+    fn an_absolute_directory_name_is_not_joined_onto_a_root() {
+        assert_eq!(
+            named_directory(Path::new("/tmp/project"), "/opt/other").ok(),
+            Some("/opt/other".to_string())
+        );
+    }
+
+    /// TRUST-9: the leading `.` and `..` of a relative name are cleaned against the root and
+    /// nothing after a name is. A root is expected to be canonical, so a leading `..` is exact,
+    /// and `../notes` becomes the spelling an opened directory is recorded under. A `..` after a
+    /// name is left alone because the name may be a link, whose target the file system takes the
+    /// `..` from.
+    ///
+    /// The failure this rejects is a name joined as typed, which `/add-dir close` cannot match
+    /// against the directory it opened without asking where the name leads, and one cleaned
+    /// throughout, which reads `sub/../x` as `x` whether or not `sub` is a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name() {
+        let root = Path::new("/w/proj");
+        for (typed, resolved) in [
+            ("../notes", "/w/notes"),
+            ("./../notes", "/w/notes"),
+            ("../../x", "/x"),
+            ("../../../x", "/x"),
+            (".", "/w/proj"),
+            ("..", "/w"),
+            ("./sub/dir", "/w/proj/sub/dir"),
+            ("sub/../x", "/w/proj/sub/../x"),
+            ("../project/../notes", "/w/project/../notes"),
+            ("/opt/other", "/opt/other"),
+        ] {
+            assert_eq!(
+                named_directory(root, typed).ok(),
+                Some(resolved.to_string()),
+                "{typed}"
+            );
+        }
+    }
+
+    /// TRUST-9 and PATH-003: a relative name is refused against a root whose name is not text,
+    /// and is resolved against its lookalike, the name that spells the replacement character.
+    /// The string made here becomes a reach grant and a trust key, and a rendering of the first
+    /// that substitutes for the bytes it cannot show would name the second. An absolute name
+    /// needs no root and resolves against either.
+    ///
+    /// The names are built in memory, since the file system of a Mac cannot hold the first.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_directory_name_is_refused_against_a_root_whose_name_is_not_text() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let not_text = Path::new(OsStr::from_bytes(b"/w/proj-\xff"));
+        let lookalike = Path::new("/w/proj-\u{FFFD}");
+
+        for relative in ["notes", "../notes", ".", "./sub"] {
+            match named_directory(not_text, relative) {
+                Err(WorkspaceError::Invalid { path, reason }) => {
+                    assert_eq!(path, relative);
+                    assert_eq!(reason, t!(session_directory_root_not_text));
+                }
+                other => {
+                    panic!("{relative} was resolved against a name that is not text: {other:?}")
+                }
+            }
+            assert!(
+                named_directory(lookalike, relative).is_ok(),
+                "{relative} was refused against a root that is text"
+            );
+        }
+        assert_eq!(
+            named_directory(lookalike, "../notes").ok(),
+            Some("/w/notes".to_string())
+        );
+        for root in [not_text, lookalike] {
+            assert_eq!(
+                named_directory(root, "/opt/other").ok(),
+                Some("/opt/other".to_string()),
+                "an absolute name was refused for {root:?}"
+            );
+        }
+    }
+
+    /// `named_directory` has no reading of `~` of its own: a leading `~` means something
+    /// different to each caller (the terminal expands it to the home directory itself for
+    /// CMDLINE-4; `--add-dir` leaves it to the shell), so a caller that wants it expanded does
+    /// so before calling this, and an unexpanded `~` is read as an ordinary relative component.
+    #[test]
+    fn named_directory_does_not_read_a_leading_tilde_itself() {
+        let root = Path::new("/w/proj");
+        assert_eq!(
+            named_directory(root, "~notes").ok(),
+            Some("/w/proj/~notes".to_string()),
+            "a leading `~` was expanded by the function callers must expand it before"
+        );
     }
 
     /// The trust map is asked under the key, so a `~` spelled in the key would be a rule for a
@@ -6474,6 +6903,58 @@ mod tests {
         assert!(!detail.contains("todo.txt"), "{detail}");
         let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
         assert!(!absolute.contains("/work/project"), "{absolute}");
+    }
+
+    /// A typed name whose last component holds a space, with nothing at it, is told it may differ
+    /// in the kind of space, for an absolute path as well as a relative one, and the hint never
+    /// names the file (READ-11). A name without a space, a directory part that holds one, a name
+    /// that is there, and an error other than not-found get no hint. The detail of a failure
+    /// (`io_detail`) never holds it, whatever the name, because a name reached through a reference
+    /// is not the planner's.
+    #[test]
+    fn a_missing_typed_name_with_a_space_says_the_kind_of_space_may_differ() {
+        let scratch = crate::testutil::scratch_dir("kind-of-space-hint");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("with space")).expect("directory");
+        std::fs::write(scratch.join("here today.txt"), "x").expect("file");
+        let workspace = Workspace::new(&scratch).expect("workspace");
+        let root = workspace.root().to_path_buf();
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        let io_error = |named: &str| WorkspaceError::Io {
+            path: named.to_string(),
+            detail: io_detail(&missing, named, &root),
+        };
+        let absolute = root.join("Shot 10.30.12 PM.png");
+        let absolute = absolute.to_str().expect("text path");
+        for named in [
+            "Shot 10.30.12 PM.png",
+            absolute,
+            "dir/Shot\u{a0}PM.png",
+            "Shot\u{202f}PM.png",
+        ] {
+            let error = io_error(named);
+            let hint = workspace.kind_of_space_hint(&error, named);
+            assert!(hint.contains("another kind of space"), "{named}: {hint}");
+            assert!(!hint.contains("Shot"), "{named}: {hint}");
+            assert!(
+                !error.describe(named).contains("kind of space"),
+                "io_detail added the hint for {named}"
+            );
+        }
+        for named in ["todo.txt", "with space/todo.txt", "here today.txt"] {
+            let error = io_error(named);
+            let hint = workspace.kind_of_space_hint(&error, named);
+            assert!(hint.is_empty(), "{named}: {hint}");
+        }
+        let denied = WorkspaceError::Unreadable {
+            path: "Shot PM.png".to_string(),
+            detail: "denied".to_string(),
+        };
+        assert!(
+            workspace
+                .kind_of_space_hint(&denied, "Shot PM.png")
+                .is_empty()
+        );
     }
 
     /// A `~` reference whose home directory is not text is refused. The directory its lossy

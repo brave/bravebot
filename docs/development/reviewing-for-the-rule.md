@@ -131,6 +131,14 @@ this kind checks the same three things: no file is opened, no name or content ap
 condition, and one bounded fact comes out. A measurement that fails any of them is a violation of
 shape 1 or 3 and is not covered by this paragraph.
 
+The choice of a candidate spelling in `read_file` (READ-11, `Workspace::respelled_when_missing`) is
+a measurement of the same kind. The candidates are built from the name the planner typed alone,
+each is probed by path for whether it is a regular file, and the first that is one is chosen. No
+directory is listed, no filename read from disk enters a condition, and the result is one bounded
+fact: which of a fixed few variations of the typed name is there. The spelling chosen carries the
+label of the typed argument. The hint that a space may differ in kind is added by `read_file` from
+the typed name only, and is not added for a read through a reference.
+
 `load_skill` also names the directory a project skill's link lands on inside the workspace. That
 path is file-name content, so the rules and the trust map are asked about it first, and only a path
 they let the planner read is examined further: it is dropped when it equals the name the skill is

@@ -1212,6 +1212,51 @@ fn a_write_step_carries_its_counts_and_the_file_it_landed_on() {
     assert!(counted[0].landed.ends_with("in.md"), "{:?}", counted[0]);
 }
 
+/// A step's finish carries the id its start did, and no two steps share one, so a window that
+/// pairs a finish with its start by that id closes the right row.
+#[test]
+fn each_step_finishes_under_the_id_it_started_with() {
+    let scratch = Scratch::new("step-call-ids");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("shout in.md"),
+        skipping_permissions!(),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let ids = |lines: &[bravebot_agent::report::Activity]| {
+        lines.iter().map(|line| line.call).collect::<Vec<_>>()
+    };
+    let started = ids(&reporter.started);
+    assert_eq!(started.len(), 3, "{:?}", reporter.started);
+    assert!(started.iter().all(Option::is_some), "{started:?}");
+    assert_eq!(ids(&reporter.finished), started);
+    let distinct: std::collections::HashSet<_> = started.iter().collect();
+    assert_eq!(distinct.len(), started.len(), "{started:?}");
+}
+
 /// A page a plan reads goes into a slot that a later step writes. Latin-1 text decoded for the
 /// planner has U+FFFD where a byte was, so writing it would put a replacement character in a copy
 /// of the file that the file never held. The page is read as the file's own UTF-8 or the step

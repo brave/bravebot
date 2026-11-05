@@ -62,6 +62,14 @@ have made it. Where a check makes it, the check is made at the run and nobody is
 Only output from `run` can be read this way. A file's worth is the trust map's answer, and a second
 route to it would be a way to disagree with the first.
 
+**Nothing is released from a slot that holds no bytes.** `read_output` on a slot whose size is 0 makes
+no check, draws no prompt in any mode, writes no release, and answers in the driver's own words that
+the slot printed nothing. The size is the one the slot states for its reference ([LABEL-4](../labels.md#LABEL-4)),
+which the planner was shown, so no byte is read to decide. The trail records under `read_output`
+that the slot holds 0 bytes, so no check was made and nothing was released. A run that asked with
+`read` ([RUN-22](run.md#RUN-22)) over such a slot gets the same treatment in its own result
+([RUN-24](run.md#RUN-24)).
+
 **Why.** This is the strongest assertion in the system and the only one made about bytes rather
 than about a prediction: vouching guesses at output that does not exist yet, while this is a
 statement about text in front of the reader. Errors count: a run that failed put its explanation on
@@ -77,6 +85,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
@@ -117,14 +126,31 @@ where there is one to draw. [CHECK-12](../vetting.md#CHECK-12) is that rule and 
 Where nobody was asked, the row the call leaves says so, and says whether a check released the
 output, in the words [CHECK-12](../vetting.md#CHECK-12) gives.
 
+A check the person stopped is neither a refusal nor an inconclusive check ([CHECK-16](../vetting.md#CHECK-16)).
+The turn ends as stopped, nobody is asked, and the result tells the planner the turn was stopped
+before the check finished, so nothing was decided about the output. The slot is not refused and
+stays readable by a later `read_output`.
+
 A run bypassing permissions draws none, and there the verdict is the whole of the answer: nothing
 found releases the output and every other verdict keeps it back, the refusal being what the screening
 was asked for. Without the screening asked for the output is released unshown and no check is made
 ([MODE-4](../permission-modes.md#MODE-4)).
 
+Output shown to the planner is private content, so the description says that being shown output
+closes `spawn_processor` for the planner and for every delegate it starts afterwards
+([PROC-4](../processors.md#PROC-4), [DELEGATE-8](../delegation.md#DELEGATE-8)). A list that does not
+offer `spawn_processor` does not name it there.
+
+Where the refusal is auto-vetting's, which is bypass with auto-vetting on, the planner reads the
+same refusal it reads in every mode, and the person is also told beside it that auto-vetting kept the
+output back and which setting lifts that ([CHECK-9](../vetting.md#CHECK-9)). The line is drawn from
+the mode and the setting and never from the verdict. Where a person was asked and said no, nothing is
+added.
+
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_started_after_private_content_has_no_processors`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
@@ -132,6 +158,10 @@ was asked for. Without the screening asked for the output is released unshown an
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_command_output_is_not_a_refusal`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_for_no_verdict_says_the_same_to_the_person`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 
 <a id="OUTPUT-4"></a>
 ### OUTPUT-4: output the planner may read, kept whole past a cap, is read a page at a time with nobody asked
@@ -155,6 +185,10 @@ The reference to the whole says the planner may read it and how, not that it is 
 sample says where its middle begins, so the first page can start there. A turn that is not offered
 `read_output` is told only that the length kept the rest out of the result, and the moves it does
 have ([TOOL-6](tool-surface.md#TOOL-6)).
+
+The refusals of `read_output` for a reference no program printed and for a `pattern`, and the refusal
+of `job_output` for a name no run handed back, still name `run` without reading the list. They are
+not yet written from it ([TOOL-6](tool-surface.md#TOOL-6)).
 
 **Why nobody is asked.** The cap is a budget and not an authority ([RUN-21](run.md#RUN-21)). The
 label on these bytes already let the planner read them, and the only thing that kept them out of the

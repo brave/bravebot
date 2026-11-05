@@ -2133,6 +2133,19 @@ pub trait Confirmer {
     /// and the verdict travels with it for the same reason it travels with the other two.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision;
 
+    /// [`Confirmer::confirm_vouch`], and with the answer the name of the mode that gave it where a
+    /// mode approved the vouch without asking anybody (MODE-4, TRACE-7).
+    ///
+    /// One call rather than a question and then a query about it, so the name is the mode in force
+    /// when the question was answered and not at a later read (MODE-8). A confirmer that is not a
+    /// mode, and a wrapper that does not forward this, answers `None`, which the trail reads as a
+    /// person having been offered the chance and agreed.
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_vouch(request), None)
+    }
     /// Ask whether the planner may be given a vouched file the scan found a credential in.
     /// Implementations must default to refusal when they cannot ask.
     ///
@@ -3157,6 +3170,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         self.timing(|inner| inner.confirm_vouch(request))
+    }
+
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_vouch_noting_the_mode(request))
     }
 
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StatusBar, StyleSheet, View } from 'react-native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import type { AgentSession, SessionSummary, ViewState } from '@brave/agent-client'
-import { Drawer } from './components/Drawer'
+import { Drawer, type Listing } from './components/Drawer'
 import { Body, Button, Meta } from './components/primitives'
 import { ChatScreen } from './screens/ChatScreen'
 import { SessionController, describeError } from './session/controller'
@@ -21,6 +21,7 @@ function Shell({ target }: { target: Target }) {
   const client = useMemo(() => target.create(), [target])
   const workspaces = useMemo(() => client.workspaces(), [client])
   const [sessions, setSessions] = useState<readonly SessionSummary[]>([])
+  const [listing, setListing] = useState<Listing>('checking')
   const [current, setCurrent] = useState<SessionController | null>(null)
   const [drawer, setDrawer] = useState(false)
   const [workspace, setWorkspace] = useState(workspaces[0]?.id ?? '')
@@ -33,17 +34,40 @@ function Shell({ target }: { target: Target }) {
   const applied = useRef(0)
   const gone = useRef(false)
 
+  // Whether the target lists sessions, asked once. A failed question is asked again on the next refresh.
+  const canList = useRef<Promise<boolean> | null>(null)
+  const failed = useRef(0)
+
   const refresh = useCallback(() => {
-    // An answer older than one already shown is out of date. A newer request that fails leaves the last list that arrived.
+    // An answer older than one already shown is out of date. A newer request that fails leaves the last list that arrived,
+    // and the drawer says it could not be refreshed until a request newer than the failure succeeds.
     const ticket = ++listed.current
-    client.listSessions().then(
-      (list) => {
+    let asked = canList.current
+    if (asked === null) {
+      const question = client.describe().then((info) => info.sessionList)
+      canList.current = asked = question
+      question.catch(() => {
+        if (canList.current === question) canList.current = null
+      })
+    }
+    asked
+      .then((can) => {
+        if (!can) {
+          if (!gone.current) setListing('unsupported')
+          return
+        }
+        return client.listSessions().then((list) => {
+          if (gone.current || ticket < applied.current) return
+          applied.current = ticket
+          setSessions(list)
+          setListing(failed.current > ticket ? 'failed' : 'listed')
+        })
+      })
+      .catch(() => {
         if (gone.current || ticket < applied.current) return
-        applied.current = ticket
-        setSessions(list)
-      },
-      () => undefined,
-    )
+        failed.current = Math.max(failed.current, ticket)
+        setListing('failed')
+      })
   }, [client])
 
   const controllerFor = useCallback(
@@ -180,6 +204,7 @@ function Shell({ target }: { target: Target }) {
         onClose={() => setDrawer(false)}
         target={{ label: target.label, description: target.description }}
         sessions={sessions}
+        listing={listing}
         workspaces={workspaces}
         workspace={workspace}
         onWorkspace={setWorkspace}

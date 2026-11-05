@@ -463,3 +463,37 @@ reading the reply, and a reply is not read unless a person or a check lets it th
 `verified-by: bravebot_agent::mcp::a_reply_with_no_failure_reported_says_so_and_a_failed_one_does_not`
 `verified-by: bravebot_agent::mcp::a_picture_a_server_returns_is_never_shown_to_the_planner`
 `verified-by: bravebot_agent::browser_group_servers::what_a_tool_of_input_answers_is_a_reference_and_the_planner_never_holds_it`
+
+<a id="MCP-16"></a>
+### MCP-16: a server's tool is offered a boolean `read`, which is the planner's and is never sent to the server
+
+A turn whose tool list holds `vet_content` is offered `read`, a boolean, beside the arguments each
+server tool lists, and asks with `read: true` for the reply in the result of the call
+([VET-6](tools/vet-content.md#VET-6)). A turn whose list does not hold `vet_content` is not offered
+it, as a delegate is not, and a `read` that a call gives there is sent to the server as written.
+A plan is offered the tool's own arguments and no `read`
+([MANIFEST-15](manifest.md#MANIFEST-15)).
+
+The argument is removed from the call before it reaches the server, so a server never receives a
+`read` the planner wrote for the driver. Where the server lists an argument named `read` itself, the
+argument is the server's: the tool is offered it as the server listed it, it is not offered as a
+request to release the reply, a call that gives it is sent as written, and the reply stays behind its
+reference as [MCP-1](#MCP-1) has it. That is the same rule [MCP-14](#MCP-14) applies to a name the
+server listed for itself, for the same reason: the name is the server's to define. A `read` that is
+neither `true` nor `false` is refused before the call is made, nobody is asked, and nothing is
+sent. Absent and null are `false`.
+
+Whether the reply is released in the result, and what the result holds where it is not, are
+[VET-6](tools/vet-content.md#VET-6)'s. A reply the server marked as a failure ([MCP-5](#MCP-5)) is
+released the same way, and a picture is not ([VET-4](tools/vet-content.md#VET-4)).
+
+**Why.** A name the planner writes for the driver must not be mistaken for an argument of the
+server, and an argument the server defined must not be taken from it. The manifest path
+(`crates/agent/src/server_calls.rs`) presents no reply to the planner, so it takes no `read`.
+
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
+`verified-by: bravebot_agent::mcp::a_servers_own_read_argument_is_the_servers_and_asks_for_nothing_to_be_released`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_a_read_that_is_not_a_boolean_is_refused_before_the_server_is_called`
+`verified-by: bravebot_agent::mcp::a_servers_failed_result_called_with_read_in_bypass_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::mcp::a_turn_without_vet_content_is_offered_no_read_on_a_servers_tool`

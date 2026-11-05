@@ -165,7 +165,8 @@ impl Kind {
     pub fn purpose(self) -> &'static str {
         match self {
             Self::Reader => {
-                "reads, lists, searches and runs processors; writes nothing and runs nothing"
+                "reads, lists and searches, and runs processors while the context that started it \
+                 holds nothing private; writes nothing and runs nothing"
             }
             Self::Checker => {
                 "a reader that may also run programs and ask a language server, so it can build, \

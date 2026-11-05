@@ -685,13 +685,13 @@ check-extension:
 	ls extension/tests/*.test.mjs extension-trusted/tests/*.test.mjs >/dev/null && node --test --test-timeout=120000 extension/tests/*.test.mjs extension-trusted/tests/*.test.mjs
 
 # The TypeScript session client under packages/agent-client: its types, its build, and its tests,
-# which drive a real bravebot-rpc against a model service of their own. The bridge is built here
-# because the tests never build it themselves. The package has its own lockfile and is not a pnpm
-# workspace. `ls` first for the reason check-extension gives.
+# which drive a real bravebot-rpc, and bravebot-host with the development relay, against a model
+# service of their own. The binaries are built here because the tests never build them. The
+# package has its own lockfile and is not a pnpm workspace. `ls` first for the reason check-extension gives.
 .PHONY: check-agent-client
 check-agent-client:
 	ls packages/agent-client/test-fixtures/scenarios/*.json >/dev/null
-	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
+	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc --bin bravebot-host
 	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
 	pnpm --dir packages/agent-client run check
 

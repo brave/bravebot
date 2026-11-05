@@ -233,6 +233,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
             sandbox,
             tools::workspace_is_trusted(policy, workspace),
         ),
+        plan.beside.holds(tools::Named::RequestPath),
     ) {
         conversation.push_composed_from(
             Message::user(&notice),
@@ -289,6 +290,19 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         conversation,
     );
 
+    // Once, after that stop, from the same counts (DELEGATE-29): a delegate the stop just left
+    // with no tools is not also told it is near the end. Here rather than after the round so that
+    // what a child spent, collected above, counts toward it as well.
+    warn_near_token_budget(
+        state.may_call_tools,
+        &mut state.warned_of_token_budget,
+        task,
+        state.steps,
+        state.account.tokens,
+        state.account.context_tokens,
+        conversation,
+    );
+
     reporter.spent(crate::outcome::Spent {
         timing: state.spent.finish(),
 
@@ -302,6 +316,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         state.jobs,
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
         read_output_is(),
+        plan.beside,
         policy,
         conversation,
         reporter,
@@ -313,7 +328,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // the session kept from an earlier turn is something the planner has no other way
     // to know is there (RUN-15).
     if !std::mem::replace(&mut state.told_of_kept_jobs, true) {
-        tell_of_kept_jobs(state.jobs, conversation);
+        tell_of_kept_jobs(state.jobs, plan.beside, conversation);
     }
 
     // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
@@ -898,6 +913,64 @@ pub(super) fn stop_at_token_budget<R: Reporter>(
     true
 }
 
+/// Whether `tokens` of a `budget` leave a delegate near the end of it: four fifths spent, or
+/// fewer tokens left than two requests at the current context size cost, since every request
+/// counts the whole context again. False once the budget is spent, which
+/// [`stop_at_token_budget`] decides.
+pub(super) fn near_token_budget(budget: u64, tokens: u64, context_tokens: u64) -> bool {
+    tokens < budget
+        && (tokens.saturating_mul(5) >= budget.saturating_mul(4)
+            || budget - tokens < context_tokens.saturating_mul(2))
+}
+
+/// What a delegate is told when it is near its token budget (DELEGATE-29).
+///
+/// Made of two counts and fixed words, so nothing a tool returned or the delegate wrote reaches
+/// it. It asks what the rounds warning asks, since the tools go in the same way.
+pub(super) fn token_budget_notice(budget: u64, tokens: u64) -> String {
+    format!(
+        "{TOOL_BUDGET_SPENT} You have spent {tokens} of your {budget} tokens. Every request counts \
+         the whole conversation again, so you may have only a few requests left. After them you have \
+         no tools and can only answer. Finish what you have started or undo it, so that the \
+         working tree is consistent when your tools go: complete or abort a rebase, merge or \
+         cherry-pick that is in progress, and commit or discard edits you have made. Then \
+         answer with what you did, what is left, and the state you left the tree in."
+    )
+}
+
+/// Warn a delegate once that it is near its token budget, after at least one round of its own.
+///
+/// Compares the delegate's token total, its context size and the figure its spec fixed; no reply
+/// or tool result is read (DELEGATE-29). Nothing is sent to a run that is not a delegate, that has
+/// no budget, or that has no tools left.
+pub(super) fn warn_near_token_budget(
+    may_call_tools: bool,
+    warned: &mut bool,
+    task: &Task,
+    steps: usize,
+    tokens: u64,
+    context_tokens: u64,
+    conversation: &mut Conversation,
+) {
+    if !may_call_tools || *warned || steps == 0 {
+        return;
+    }
+    let Some(budget) = task
+        .delegate
+        .as_ref()
+        .and_then(bravebot_core::delegate::DelegateSpec::budget)
+        .filter(|budget| near_token_budget(*budget, tokens, context_tokens))
+    else {
+        return;
+    };
+    *warned = true;
+    conversation.push_composed_from(
+        Message::user(token_budget_notice(budget, tokens)),
+        Composed::Notice,
+        Provenance::Driver,
+    );
+}
+
 /// The most rounds a delegate is warned ahead of its limit, when its limit leaves room for that
 /// many.
 pub(super) const WARNED_ROUNDS_AHEAD: usize = 10;
@@ -1078,7 +1151,19 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                 premium_key,
                 shared,
             );
-            (ended, reporter.last_spent(), reporter.take_inference())
+            (
+                ended,
+                reporter.last_spent(),
+                reporter.take_inference(),
+                // Every span this delegate (and the delegates it joined) was blocked at the
+                // boundary, as two instants each, for the parent to clip to its join windows.
+                seeded
+                    .file_authority
+                    .all_waits()
+                    .into_iter()
+                    .map(crate::timing::Interval::from)
+                    .collect::<Vec<_>>(),
+            )
         });
         delegates.push(Working {
             #[cfg(test)]
@@ -1562,6 +1647,7 @@ pub(super) fn tools_for_a_call<'a>(
         scheduling: plan.scheduling,
         arming: plan.arming,
         running: plan.running,
+        beside: plan.beside,
         armed: &mut state.armed,
         home: task.home.as_deref(),
         profile: task.profile.as_deref(),
@@ -1635,6 +1721,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     call: &ToolCall,
     took: std::time::Duration,
     stalled: std::time::Duration,
+    file_wait: std::time::Duration,
     output: &mut tools::Output,
 ) where
     S: Sink + ?Sized + Send,
@@ -1710,6 +1797,11 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         state.effort,
     );
     state.spent.stalled += stalled;
+    // Blocked at the file-authority boundary, which is neither the call's work nor a person's
+    // answer: a call is held there while another effect, or a delegate's, finishes. Clamped to
+    // what is left of the call so the parts cannot exceed it.
+    let file_wait = file_wait.min(took.saturating_sub(stalled));
+    state.spent.file_wait += file_wait;
     // What the model waited for inside the call, which is not what the call spent working:
     // a processor is a request, and its seconds belong with the other requests'.
     let waited = match output.inference_interval {
@@ -1723,7 +1815,10 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // Both taken off, so the four figures partition the turn rather than double-count the
     // parts of it that nest. Saturating because they are separate clocks: a measure of the
     // inside cannot be allowed to make the outside negative.
-    state.spent.tools += took.saturating_sub(stalled).saturating_sub(waited);
+    state.spent.tools += took
+        .saturating_sub(stalled)
+        .saturating_sub(file_wait)
+        .saturating_sub(waited);
     // A processor is a model call of its own, so what it spent belongs in the turn's
     // total. Left out, a turn that did most of its work in processors would report
     // having cost almost nothing.

@@ -118,6 +118,14 @@ only by what the driver called it, never by what it held:
 A question whose answer is already recorded, such as a path's reach or a host's grant, is not
 among them.
 
+A slot a run printed that holds no bytes is neither checked, released nor put to anybody
+([RUN-24](tools/run.md#RUN-24), [OUTPUT-1](tools/read-output.md#OUTPUT-1)), and the trail says so
+as a pass under `read_output`. The same holds for a page `fetch_url` returned or a reply a server's
+tool returned when the call asked to read it ([VET-6](tools/vet-content.md#VET-6)). The entry is
+fixed words naming the call, `run`, `read_output` or `vet_content`, and the reference, `ref:N`, and
+says the slot holds 0 bytes, so no check was made and nothing was released. The size is the one the
+slot states for its reference.
+
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
@@ -176,6 +184,9 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
 `verified-by: bravebot_agent::mcp::a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals`
 `verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -325,9 +336,14 @@ A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is
 `approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
 being asked about, since the policy decides nothing about one. A flagged read the bypassing mode lets through
 ([CRED-15](credential-protection.md#CRED-15)) is one entry under `approval` that names the mode and the path
-and says nobody was asked; a person's yes to the same question is recorded as the user having agreed. Other
-prompts a mode answers, such
-as a fetch, are not named here.
+and says nobody was asked; a person's yes to the same question is recorded as the user having agreed. The
+offer to vouch for a quarantined file ([TRUST-8](trust-map.md#TRUST-8)) that the bypassing mode answers is
+one entry under `approval` that names the mode and the path and says nobody was asked, and one entry under
+`trust` that names the mode and says the user did not name the file. No entry says the user was offered the
+chance, and no `display` entry says the head of the file was shown, since nobody was shown it. A person's yes
+is recorded as the user having been offered the chance, the head of the file shown to them, and the user
+having named the file. A yes that arrives after the file changed writes no trust entry crediting the mode
+or the user, in either case. Other prompts a mode answers, such as a fetch, are not named here.
 
 Each question put to the auto mode's classifier ([AUTO-8](auto-mode.md#AUTO-8)) is one entry under
 `auto_mode`, written before the question is answered. It names the model, the kind of question
@@ -355,6 +371,13 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::turn::a_flagged_read_a_person_agrees_to_is_recorded_as_the_user_agreeing`
 `verified-by: bravebot_core::policy::the_trail_says_who_answered_for_a_flagged_read`
+`verified-by: bravebot_agent::turn::a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_vouch_a_person_agrees_to_is_recorded_as_the_user_naming_the_file`
+`verified-by: bravebot_agent::turn::a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line`
+`verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_core::policy::the_trail_says_who_answered_the_offer_to_vouch`
+`verified-by: bravebot_core::policy::deciding_to_offer_a_vouch_writes_nothing_and_asks_once`
+`verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

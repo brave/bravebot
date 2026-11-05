@@ -3345,8 +3345,13 @@ def test_the_stop_hook():
     ]
     check(
         "the Stop hook in agents/settings.json runs this script in the mode that answers it",
-        commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
-        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
+        commands
+        == ['"$CLAUDE_PROJECT_DIR/contrib/py" "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
+        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file()
+        # The hook runs the script through `contrib/py`, which finds a Python of at least 3.11; a
+        # hook naming a wrapper that is missing or cannot be run would run nothing.
+        and (ROOT / "contrib/py").is_file()
+        and os.access(ROOT / "contrib/py", os.X_OK),
         str(commands),
     )
 

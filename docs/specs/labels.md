@@ -18,9 +18,9 @@ guards:
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 30
+      - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 16
+      - crates/agent/src/workspace.rs: 17
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
@@ -49,7 +49,7 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 40
+      - crates/agent/src/tools.rs: 42
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
@@ -75,9 +75,9 @@ guards:
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
-      - crates/agent/src/tools.rs: 25
+      - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 8
-      - crates/agent/src/workspace.rs: 16
+      - crates/agent/src/workspace.rs: 17
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
@@ -118,11 +118,11 @@ guards:
       - crates/core/src/policy.rs: 3
   - symbol: Policy::release_where_a_slot_came_from
     sites:
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/core/src/policy.rs: 1
   - symbol: Policy::names_for_display
     sites:
-      - crates/agent/src/tools.rs: 4
+      - crates/agent/src/tools.rs: 5
       - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 1
   - symbol: Policy::promote_reference_for_read
@@ -172,7 +172,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
       - crates/agent/src/tools/recall.rs: 3
-      - crates/core/src/policy.rs: 26
+      - crates/core/src/policy.rs: 29
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1
@@ -298,7 +298,10 @@ label is an enum, but the origin is a string that reaches the planner's context,
 transcript verbatim, so it is one the driver chose: a path, a slot, or an argument a person
 approved. It is never taken from the content it describes, nor from anything that answered the
 request for that content. An origin a server wrote is untrusted content in the planner's context
-wearing the driver's attribution, which is the thing this clause exists to stop.
+wearing the driver's attribution, which is the thing this clause exists to stop. The origin of what
+a `run` printed names the directory in the words the planner named it with, and not the directory a
+symbolic link in the tree led to, because whoever wrote a tree nobody vouched for chose that name
+([CMDLINE-12](tools/command-line.md#CMDLINE-12)).
 
 `verified-by: bravebot_core::policy::untrusted_content_is_presented_as_a_reference`
 `verified-by: bravebot_core::policy::trusted_content_is_presented_visibly`
@@ -309,6 +312,8 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_choice_reference_states_its_limit_and_no_count`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
+`verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context
@@ -557,7 +562,9 @@ starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md)
 
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
-wrote, and a delegate starts out holding what the context that wrote its task held. Content restored
+wrote, and a delegate starts out holding what the context that wrote its task held, so a delegate started
+after the planner's context became private is closed to processors from its first call
+([PROC-4](processors.md#PROC-4)). Content restored
 from a resumed session keeps the labels it was given when it first arrived, and what resuming does
 to the integrity of the context is LABEL-9. What the context held is kept the same way: a resumed,
 forked or compacted session holds whatever the original held, and a session file that does not say
@@ -749,8 +756,9 @@ arrives at all.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in. Where nobody
     can be asked, which is a run that bypasses permissions with auto-vetting on, there is no
-    prompt: the verdict alone answers, anything but `safe` is a refusal, and the planner is told
-    the slot was kept back and not to ask again ([CHECK-12](vetting.md#CHECK-12), "nobody to fall
+    prompt: the verdict alone answers, anything but `safe` is a refusal, the planner is told
+    the slot was kept back and not to ask again, and the person is told that auto-vetting kept it
+    back ([CHECK-9](vetting.md#CHECK-9), [CHECK-12](vetting.md#CHECK-12), "nobody to fall
     back to", and the Known cost "A screened run with nobody to ask" in [vetting.md](vetting.md)).
     A `run` that passed `read: true` is the same in every mode: a word other than `safe` keeps the
     output back with no prompt drawn, and the person is asked when the planner calls `read_output`.

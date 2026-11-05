@@ -8,14 +8,17 @@ governs:
   - crates/ui-bridge/src/answerers.rs
   - crates/ui-bridge/src/workers.rs
   - crates/ui-bridge/src/bin/bravebot-host.rs
+  - packages/agent-client/scripts/dev-relay.ts
+  - packages/agent-client/scripts/websocket.ts
+  - packages/agent-client/src/dev-relay/index.ts
 documented-by: none (internal: the host is started by a person from a command line and driven by a program they chose; nothing in the product launches it yet)
 ---
 
 ## Scope
 
-`bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves one client at a time over the anonymous channel of [RPCVIEW-8](session-view.md#RPCVIEW-8). It has no socket path, port or token, and no network or remote client.
+`bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves one client at a time over the anonymous channel of [RPCVIEW-8](session-view.md#RPCVIEW-8). The host itself has no socket path, port or token, and no network or remote client. The development relay of [HOST-12](#HOST-12) is a client program that the host starts like any other. It listens on a loopback port so that an app in development can reach the host.
 
-Not here: a transcript for a client that returns (the snapshot of [HOST-11](#HOST-11) carries none), taking a session from a controller that is still connected, two clients acting at once, pairing, and anything about a phone.
+Not here: a transcript for a client that returns (the snapshot of [HOST-11](#HOST-11) carries none), taking a session from a controller that is still connected, two clients acting at once, pairing, and anything about a phone beyond the development relay.
 
 ## Clauses
 
@@ -189,3 +192,14 @@ The new controller can answer the kinds of [HOST-10](#HOST-10) from the snapshot
 `verified-by: bravebot_ui_bridge::control_tests::a_hand_over_that_fails_sends_nothing_and_changes_who_can_answer_nothing`
 `verified-by: bravebot_ui_bridge::control_tests::updates_during_a_take_over_fall_on_one_side_of_the_snapshot`
 `verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`
+
+<a id="HOST-12"></a>
+### HOST-12: the development relay hands the channel to one app on loopback, behind a code
+
+The development relay is a client program for the host, started after `--` with the same `--workspace` directories the host was given. It is for development only: any program on the computer that can reach 127.0.0.1 can reach it, and the code is the only thing between them. It does not identify a phone or a person and does not authorize control of a real session, so it is run with synthetic data only. The host treats it as any other client: every rule above applies to what arrives through it.
+
+It listens on 127.0.0.1 only, on a port the system picks, and shows the port and a six-digit code drawn for that launch on standard error. Nothing writes the code anywhere else, and the code is not part of the address. It takes one WebSocket connection per launch, and stops listening once that connection arrives, so a second app cannot reach it. The first message on the connection must be the code. A wrong code closes the connection with code 4001, and no code within a minute closes it too. Either ends that relay. After the right code it sends the list of its workspaces, then passes text both ways without reading it. A binary message, an unmasked frame, a reserved bit, a fragmented control frame, text that is not UTF-8, or a message over 32 MiB and 4 bytes (the host's 8 MiB line limit at four bytes a character) closes the connection, and nothing of it is passed on. Either end closing ends the relay, which ends the host's channel and leaves the host running. The next launch has a port and code of its own.
+
+The TypeScript client reaches the relay only through its `./dev-relay` export, which the package's main entry does not import. It refuses a port outside 1 to 65535 or a code that is not six digits before it opens anything, and reports a wrong code apart from a relay that could not be reached.
+
+`verified-by: by-construction (packages/agent-client/tests/dev-relay.test.ts starts a built bravebot-host with the relay as its client against a model service of its own, and checks that an app giving the code drives a session to an approved write that lands, that a wrong code ends that relay and leaves the host running and the next launch has a new port and code, that a second app cannot connect while the first is connected, that the app closing ends the relay and the host quitting ends the app's connection, and that a bad port or code opens nothing; packages/agent-client/tests/websocket.test.ts checks fragment reassembly, ping, and the close code for each frame the relay refuses; make check-agent-client runs both, and the Front end CI job runs that target)`

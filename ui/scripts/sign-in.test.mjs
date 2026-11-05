@@ -316,6 +316,21 @@ test('an AWS sign-in names a row the bridge lists as one a sign-in is the remedy
   }
 })
 
+test('the sign-in window names the row as the settings page lists it', async () => {
+  const g = gate({ stored: [{ ...row('xai', false), name: 'xAI account' }] })
+  await g.signIn.request(g.webContents, 'xai')
+  g.signIn.handle({ event: 'accounts.signIn.started', data: { attempt: 'a1', way: 'xai', ...SECRET } })
+  assert.equal(g.shown[0].name, 'xAI account')
+  const aws = gate({ stored: [awsRow(null), awsRow('work')] })
+  await aws.signIn.request(aws.webContents, 'bedrock', 'work')
+  aws.signIn.handle({ event: 'accounts.signIn.started', data: { attempt: 'a1', way: 'bedrock', id: 'work', url: AWS.url } })
+  assert.equal(aws.shown[0].name, 'AWS Bedrock (work)', 'an AWS row is the profile asked for, not the default chain')
+  const unlisted = gate()
+  await unlisted.signIn.request(unlisted.webContents, 'chatgpt')
+  unlisted.signIn.handle({ event: 'accounts.signIn.started', data: { attempt: 'a1', way: 'chatgpt', url: SECRET.url } })
+  assert.equal(unlisted.shown[0].name, 'ChatGPT', 'a way the list does not name keeps its own word')
+})
+
 test('an AWS sign-in shows its URL, then its code, to the window and neither to the page', async () => {
   const g = gate({ stored: [awsRow('work')] })
   await g.signIn.request(g.webContents, 'bedrock', 'work')
@@ -363,7 +378,7 @@ test('closing the window or quitting cancels an AWS sign-in too', async () => {
   g.signIn.abandon()
   assert.equal(g.signIn.current(g.webContents), null)
   const window = readFileSync('src/main/sign-in-window.ts', 'utf8')
-  assert.match(window, /bedrock: 'Sign in to AWS'/)
+  assert.match(window, /const title = `Sign in to \$\{state\.name\}`/)
   assert.match(window, /smallWindow\('sign-in'\)/)
   assert.match(readFileSync('src/main/small-window.ts', 'utf8'), /on\('closed', \(\) => \{[\s\S]{0,80}if \(!closing\) cancel\(\)/)
 })
@@ -401,7 +416,8 @@ test('no sign-in is asked for while the key window is open or asked for', async 
 test('a sign-in or key window that is open already is told what to show when it is brought back', () => {
   const signInWindow = readFileSync('src/main/sign-in-window.ts', 'utf8')
   assert.match(readFileSync('src/main/small-window.ts', 'utf8'), /if \(open\) \{\s*reuse\(open\)/)
-  assert.match(signInWindow, /reuse: \(window\) => window\.webContents\.send\('bravebot:sign-in-window:changed', state\)/)
+  assert.match(signInWindow, /reuse: \(window\) => \{[\s\S]{0,80}window\.webContents\.send\('bravebot:sign-in-window:changed', state\)/)
+  assert.match(signInWindow, /Math\.min\(SIGN_IN_WINDOW_HEIGHTS\.most, Math\.max\(SIGN_IN_WINDOW_HEIGHTS\.least/, 'the page cannot size its window past the bounds')
   const keyWindow = readFileSync('src/main/key-window.ts', 'utf8')
   assert.match(keyWindow, /reuse: \(window\) => \{[\s\S]{0,80}window\.webContents\.send\('bravebot:key-window:changed', state\)/)
   assert.match(readFileSync('src/preload/key-window.ts', 'utf8'), /ipcRenderer\.on\('bravebot:key-window:changed'/)

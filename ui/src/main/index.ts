@@ -630,6 +630,8 @@ const ALLOWED = new Set([
   'changelog.read',
   'schedule.command',
   'hooks.inspect',
+  'effort.get',
+  'effort.set',
   'language.get',
   'language.set',
   'connectors.list',
@@ -725,6 +727,10 @@ app.whenReady().then(() => {
       const session = (params as { session?: unknown } | null)?.session
       const ok = method === 'models.list'
         ? await listModels(rootForSession(typeof session === 'string' ? session : ''))
+        // The level a checkout's settings name outranks a pick there (BACKEND-43), so the picker is
+        // told about the folder its session works in, which the window names by session alone.
+        : method === 'effort.get'
+          ? await bridge.request(method, { directory: rootForSession(typeof session === 'string' ? session : '') })
         : method === 'language.get'
           // The system's languages answer only where nothing else names one (LOCALE-8), and are
           // read here, since the window cannot ask the system and the bridge has no other way to.
