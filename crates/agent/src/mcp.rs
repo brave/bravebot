@@ -2452,6 +2452,26 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     }
 }
 
+/// `value` as the JSON type `kind` names, where the list gave one: a whole number, a number or a
+/// switch read from its text, and text otherwise. `None` where the text is not that type.
+fn as_declared(value: &str, kind: Option<&str>) -> Option<Value> {
+    match kind {
+        Some("integer") => value.trim().parse::<i64>().ok().map(Value::from),
+        Some("number") => value
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        Some("boolean") => match value.trim() {
+            "true" => Some(Value::Bool(true)),
+            "false" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        _ => Some(Value::String(value.to_string())),
+    }
+}
+
 /// Make call `index` of a list the person approved for an `apply` step, through the gate that
 /// spends the grant their answer minted for exactly that call (`docs/design/manifest-apply.md`).
 ///
@@ -2481,12 +2501,36 @@ pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
     if let Err(denial) = policy.before_mcp_call_rules(alias, &tool) {
         return Called::Problem(format!("refused: {denial}"));
     }
-    let arguments = Value::Object(
-        arguments
-            .into_iter()
-            .map(|(key, value)| (key, Value::String(value)))
-            .collect(),
-    );
+    // Each value is sent as the type the vouched list gives its argument, so a number or a switch
+    // is not sent as text. A value that is not that type is not sent at all.
+    let kinds: BTreeMap<String, Option<String>> = offer
+        .callable()
+        .into_iter()
+        .find(|callable| callable.alias == alias && callable.tool == tool)
+        .map(|callable| {
+            callable
+                .arguments
+                .into_iter()
+                .map(|argument| (argument.name, argument.kind))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut typed = Map::new();
+    for (key, value) in arguments {
+        let kind = kinds.get(&key).cloned().flatten();
+        match as_declared(&value, kind.as_deref()) {
+            Some(value) => {
+                typed.insert(key, value);
+            }
+            None => {
+                return Called::Problem(format!(
+                    "refused: the value given for '{key}' of {name} is not the {} the tool takes",
+                    kind.unwrap_or_default()
+                ));
+            }
+        }
+    }
+    let arguments = Value::Object(typed);
     let session = &offer.session;
     let answered = following_a_move(
         policy,

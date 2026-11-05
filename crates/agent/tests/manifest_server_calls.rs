@@ -2433,3 +2433,150 @@ fn an_apply_step_whose_processor_proposes_nothing_makes_no_call_and_fails_nothin
     let made: Vec<&str> = ran.called.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(made, ["list_marks"], "only the read");
 }
+
+/// A mock issue tracker, nothing to do with bookmarks: `list_issues` (read-only) answers with three
+/// issues whose numbers are JSON numbers, `mark_urgent` and `mark_later` take an issue number,
+/// `retitle` an issue number and a title, and `set_flag` an issue number and a switch. Every call
+/// answers that it was done.
+fn serve_tracker() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let number = json!({"type": "object", "properties": {"issue": {"type": "integer"}},
+                "required": ["issue"]});
+            let result = match request.get("method").and_then(Value::as_str) {
+                Some("initialize") => json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                    "serverInfo": {"name": "tracker", "version": "1"}}),
+                Some("tools/list") => json!({"tools": [
+                    {"name": "list_issues", "description": "Lists.",
+                     "annotations": {"readOnlyHint": true},
+                     "inputSchema": {"type": "object", "properties": {}}},
+                    {"name": "mark_urgent", "description": "Urgent.", "inputSchema": number},
+                    {"name": "mark_later", "description": "Later.", "inputSchema": number},
+                    {"name": "retitle", "description": "Retitles.", "inputSchema": {"type": "object",
+                     "properties": {"issue": {"type": "integer"}, "title": {"type": "string"}},
+                     "required": ["issue", "title"]}},
+                    {"name": "set_flag", "description": "Flags.", "inputSchema": {"type": "object",
+                     "properties": {"issue": {"type": "integer"}, "flagged": {"type": "boolean"}},
+                     "required": ["issue", "flagged"]}},
+                ]}),
+                Some("tools/call") => match request.pointer("/params/name").and_then(Value::as_str)
+                {
+                    Some("list_issues") => json!({"content": [{"type": "text", "text": json!([
+                        {"number": 7, "title": "Crash on start", "state": "open"},
+                        {"number": 9, "title": "Typo in README", "state": "open"},
+                        {"number": 12, "title": "Login fails on Safari", "state": "open"},
+                    ]).to_string()}]}),
+                    _ => json!({"content": [{"type": "text", "text": "done"}]}),
+                },
+                _ => json!({}),
+            };
+            let reply =
+                json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).to_string();
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                )
+                .as_bytes(),
+            );
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// The apply step is not about bookmarks. Over an issue tracker, each row picks one of four tools,
+/// issue numbers are copied from the list and sent as the numbers the tools take, a retitle carries
+/// the processor's new text, and a switch the plan fixed is sent as a switch. The processor's prompt
+/// and the plan line hold the tracker's words and none of the browser's.
+///
+/// Rejects an implementation that sends every value as text, that assumes one tool per step, or
+/// that wrote anything about bookmarks or folders into the step.
+#[test]
+fn an_apply_step_triages_an_issue_tracker_with_a_tool_chosen_per_row() {
+    let scratch = Scratch::new("apply-tracker");
+    let (url, mcp) = serve_tracker();
+    let mut declared = bravebot_config::mcp::ApplyArguments::new();
+    for (tool, argument, kind) in [
+        ("mark_urgent", "issue", "entry"),
+        ("mark_later", "issue", "entry"),
+        ("retitle", "issue", "entry"),
+        ("retitle", "title", "new"),
+        ("set_flag", "issue", "entry"),
+    ] {
+        declared
+            .entry(tool.to_string())
+            .or_default()
+            .insert(argument.to_string(), kind.to_string());
+    }
+    let plan_steps = vec![
+        json!({"capability": "SERVER_READ", "args": {"server": "brave", "tool": "list_issues",
+            "out_slot": "issues"}}),
+        json!({"capability": "APPLY", "args": {
+            "server": "brave",
+            "tools": "mark_urgent,mark_later,retitle,set_flag",
+            "list": "issues",
+            "instruction": "triage the open issues",
+            "arguments": {
+                "mark_urgent": {"issue": {"entry": "number"}},
+                "mark_later": {"issue": {"entry": "number"}},
+                "retitle": {"issue": {"entry": "number"}, "title": "new"},
+                "set_flag": {"issue": {"entry": "number"}, "flagged": {"literal": true}},
+            },
+        }}),
+    ];
+    let rows = r#"new 1 = "App crashes at launch"
+row 1: tool 1 issue=entry:1
+row 2: tool 2 issue=entry:2
+row 3: tool 1 issue=entry:3
+row 4: tool 3 issue=entry:1 title=new:1
+row 5: tool 4 issue=entry:3
+"#;
+    let ran = walk(Walk {
+        session: session_of(reach(&url, false).applying(declared), &scratch, true),
+        mode: PermissionMode::Ask,
+        task: Task::new("triage my open issues"),
+        replies: vec![shape(), plan(plan_steps), says(rows)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(
+        ran.called,
+        vec![
+            ("list_issues".to_string(), json!({})),
+            ("mark_urgent".to_string(), json!({"issue": 7})),
+            ("mark_later".to_string(), json!({"issue": 9})),
+            ("mark_urgent".to_string(), json!({"issue": 12})),
+            (
+                "retitle".to_string(),
+                json!({"issue": 7, "title": "App crashes at launch"})
+            ),
+            (
+                "set_flag".to_string(),
+                json!({"issue": 12, "flagged": true})
+            ),
+        ]
+    );
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(
+        line.contains("retitle (issue: the number of an entry of issues, title: a new name"),
+        "{line}"
+    );
+    let processor = &ran.chat[2];
+    assert!(processor.contains("tool 3: retitle"), "{processor}");
+    for word in ["bookmark", "folder"] {
+        assert!(
+            !processor.to_lowercase().contains(word) && !line.to_lowercase().contains(word),
+            "{word} leaked into a step that is not about it"
+        );
+    }
+}

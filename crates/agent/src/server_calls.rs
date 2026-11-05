@@ -569,6 +569,7 @@ impl Servers {
         let entries = bravebot_choice::number_a_list(
             policy,
             &list,
+            step.text("entries"),
             &shape.entry_fields(),
             numbered.clone(),
             slots,
@@ -868,6 +869,9 @@ fn kind_of(
         Value::Object(object) if object.len() == 1 => match object.iter().next() {
             Some((key, Value::String(value))) if key == "literal" => {
                 Ok(Kind::Literal(value.clone()))
+            }
+            Some((key, value @ (Value::Number(_) | Value::Bool(_)))) if key == "literal" => {
+                Ok(Kind::Literal(value.to_string()))
             }
             Some((key, Value::String(value))) if key == "entry" => Ok(Kind::Entry(value.clone())),
             Some((key, Value::String(value))) if key == "row" => {

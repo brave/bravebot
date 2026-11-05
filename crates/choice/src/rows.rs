@@ -22,10 +22,15 @@ use bravebot_core::apply::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Number the entries of `text` that hold at least one of `fields` as text, keeping the ones each
-/// holds.
-pub fn number(text: &str, fields: &BTreeSet<String>) -> Numbered {
-    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(text) else {
+/// Number the entries of the array at `at` in `text`, a JSON pointer or nothing for the whole
+/// reply, that hold at least one of `fields`, keeping the ones each holds.
+pub fn number(text: &str, at: &str, fields: &BTreeSet<String>) -> Numbered {
+    let read = serde_json::from_str::<Value>(text).ok();
+    let list = match at.is_empty() {
+        true => read,
+        false => read.and_then(|value| value.pointer(at).cloned()),
+    };
+    let Some(Value::Array(items)) = list else {
         return Numbered {
             shown: "(the list holds no entries)".to_string(),
             entries: Entries::default(),
@@ -45,8 +50,8 @@ pub fn number(text: &str, fields: &BTreeSet<String>) -> Numbered {
             .filter_map(|field| {
                 object
                     .get(field)
-                    .and_then(Value::as_str)
-                    .map(|value| (field.clone(), value.to_string()))
+                    .and_then(scalar)
+                    .map(|value| (field.clone(), value))
             })
             .collect();
         if values.is_empty() {
@@ -61,6 +66,17 @@ pub fn number(text: &str, fields: &BTreeSet<String>) -> Numbered {
     Numbered {
         shown: shown.join("\n"),
         entries: Entries(entries),
+    }
+}
+
+/// A field's value as text, where it is a string, a number or a switch: the text is sent as the
+/// type the tool's list gives the argument. Anything else is no value.
+fn scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(switch) => Some(switch.to_string()),
+        _ => None,
     }
 }
 
@@ -363,7 +379,7 @@ mod tests {
     }
 
     fn entries() -> Entries {
-        number(LIST, &BTreeSet::from(["url".to_string()])).entries
+        number(LIST, "", &BTreeSet::from(["url".to_string()])).entries
     }
 
     /// Only the entries with every field an argument takes are numbered, from 1 and in order, and
@@ -371,7 +387,7 @@ mod tests {
     /// number changes nothing.
     #[test]
     fn a_list_numbers_only_the_entries_that_hold_every_field() {
-        let numbered = number(LIST, &BTreeSet::from(["url".to_string()]));
+        let numbered = number(LIST, "", &BTreeSet::from(["url".to_string()]));
         assert_eq!(numbered.entries.0.len(), 3);
         assert_eq!(numbered.entries.0[0]["url"], "https://brave.com/");
         assert_eq!(
@@ -383,7 +399,7 @@ mod tests {
         assert!(lines[1].starts_with("entry 2: "), "{lines:?}");
         assert!(lines[1].contains("entry 9"), "the entry is shown whole");
         assert_eq!(
-            number("not json", &BTreeSet::new()).entries,
+            number("not json", "", &BTreeSet::new()).entries,
             Entries::default()
         );
     }
@@ -480,7 +496,7 @@ row 9: tool 1 title=new:7
             fields,
             BTreeSet::from(["title".to_string(), "url".to_string()])
         );
-        let entries = number(LIST, &fields).entries;
+        let entries = number(LIST, "", &fields).entries;
         assert_eq!(entries.0.len(), 4, "the folder counts, for its title");
         let answer = "new 1 = \"Reading\"\nrow 1: tool 1 title=new:1\n\
                       row 2: tool 2 url=entry:2 folder=row:1\n\
@@ -507,6 +523,41 @@ row 9: tool 1 title=new:7
             Some(&1),
             "a folder has no url"
         );
+    }
+
+    /// A list a server wraps in an object is found at the pointer the plan wrote, entries whose
+    /// field is a number count with the number as text, and a list past 99 entries is addressed
+    /// with three digits.
+    #[test]
+    fn a_wrapped_list_is_found_at_its_pointer_and_numbers_count() {
+        let items: Vec<Value> = (1..=150)
+            .map(|n| serde_json::json!({"number": n, "title": format!("issue {n}")}))
+            .collect();
+        let wrapped = serde_json::json!({"total": 150, "items": items}).to_string();
+        let fields = BTreeSet::from(["number".to_string()]);
+        assert!(
+            number(&wrapped, "", &fields).entries.0.is_empty(),
+            "not the reply itself"
+        );
+        let numbered = number(&wrapped, "/items", &fields);
+        assert_eq!(numbered.entries.0.len(), 150);
+        assert_eq!(numbered.entries.0[149]["number"], "150");
+        let shape = Shape {
+            tools: vec![Tool {
+                name: "close".into(),
+                arguments: vec![("issue".into(), Kind::Entry("number".into()))],
+            }],
+            max_rows: 5,
+            max_new: 0,
+        };
+        let resolved = resolve(
+            "row 1: tool 1 issue=entry:150\nrow 2: tool 1 issue=entry:151\n",
+            &numbered.entries,
+            &shape,
+        );
+        assert_eq!(resolved.calls.len(), 1);
+        assert_eq!(resolved.calls[0].arguments[0].1, "150");
+        assert_eq!(resolved.dropped.get(&Dropped::Entry), Some(&1));
     }
 
     /// New text is one line with nothing that hides or reorders it, at most 64 characters, and the
