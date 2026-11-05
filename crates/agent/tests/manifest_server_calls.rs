@@ -2372,3 +2372,27 @@ fn a_move_may_land_in_a_folder_the_step_made_or_one_the_list_holds() {
         "the folder is the second entry's title, copied from the list"
     );
 }
+
+/// A processor reply with no content is asked for once more, as a process step's is, so one empty
+/// turn from the model does not end the run.
+#[test]
+fn an_apply_step_asks_its_processor_again_after_an_empty_reply() {
+    let scratch = Scratch::new("apply-empty");
+    let (url, mcp) = serve_marks();
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(""), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(
+        ran.chat.len(),
+        4,
+        "shape, plan, the empty reply and the one asked again"
+    );
+    assert_eq!(ran.asked.applies.len(), 1);
+}
