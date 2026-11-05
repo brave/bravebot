@@ -72,6 +72,8 @@ pub enum ToMain {
     ToolList(ToolListRequest),
     /// A call to an MCP server's tool. The main thread must reply.
     McpCall(McpCallRequest),
+    /// The calls a plan's apply step resolved to, as one list. The main thread must reply.
+    Apply(bravebot_agent::confirm::ApplyRequest),
     /// A remote MCP server's reply pointed somewhere it is not declared. The main thread must
     /// reply.
     Move(MoveRequest),
@@ -160,6 +162,7 @@ pub enum Reply {
     Manifest(Decision),
     ToolList(Decision),
     McpCall(CallDecision),
+    Apply(bravebot_agent::confirm::ApplyDecision),
     Move(Decision),
     Path(Decision),
     Host(Decision),
@@ -285,6 +288,16 @@ impl Confirmer for RemoteConfirmer {
         match self.exchange(ToMain::McpCall(request.clone())) {
             Some(Reply::McpCall(decision)) => decision,
             _ => CallDecision::reject(),
+        }
+    }
+
+    fn confirm_apply(
+        &mut self,
+        request: &bravebot_agent::confirm::ApplyRequest,
+    ) -> bravebot_agent::confirm::ApplyDecision {
+        match self.exchange(ToMain::Apply(request.clone())) {
+            Some(Reply::Apply(decision)) => decision,
+            _ => bravebot_agent::confirm::ApplyDecision::reject(),
         }
     }
 
@@ -1175,6 +1188,7 @@ mod tests {
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::ToolList(_) => seen.push("tool list"),
                     ToMain::McpCall(_) => seen.push("mcp call"),
+                    ToMain::Apply(_) => seen.push("apply"),
                     ToMain::Move(_) => seen.push("move"),
                     ToMain::Path(_) => seen.push("path"),
                     ToMain::Host(_) => seen.push("host"),

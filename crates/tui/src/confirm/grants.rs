@@ -1,7 +1,7 @@
 //! The prompts that grant something to the agent: a fetch, a path, a host, a checkout, an exposure and a manifest.
 
 use bravebot_agent::confirm::{
-    ExposureRequest, FetchRequest, HostRequest, ManifestRequest, PathRequest,
+    ApplyRequest, ExposureRequest, FetchRequest, HostRequest, ManifestRequest, PathRequest,
 };
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -394,6 +394,114 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
         // Scrolls as well as answers: a plan longer than the box is the one most worth reading
         // before answering, since approving it approves the steps below the fold as well.
         manifest_answer_for,
+    )
+}
+
+/// Ask about the calls a plan's apply step resolved to, as one list, blocking until answered.
+///
+/// A yes makes every call drawn; anything else makes none. Escape stops the run, as at the plan.
+pub fn ask_apply<B: Backend>(terminal: &mut Terminal<B>, request: &ApplyRequest) -> Answer {
+    ask_plain(
+        terminal,
+        |frame, scroll, seen| draw_apply(frame, request, scroll, seen),
+        manifest_answer_for,
+    )
+}
+
+/// Draw the list of calls an apply step resolved to.
+///
+/// Every call, never a count of them, each with every argument it will send and where its value
+/// came from. A value the plan did not write came from a list a server returned or from a
+/// processor that read it, so it is drawn behind the margin untrusted text is drawn behind, written
+/// out as text. No yes is taken until every call has been drawn.
+pub(super) fn draw_apply(
+    frame: &mut ratatui::Frame,
+    request: &ApplyRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(
+        frame,
+        area,
+        theme::brand_primary(),
+        &t!(apply_title, server = &request.alias),
+    );
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+    let margin = Span::styled("┃ ", Style::default().fg(theme::running()));
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", t!(apply_verb)),
+                Style::default()
+                    .fg(theme::brand_primary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                t!(
+                    apply_calls,
+                    count = request.calls.len(),
+                    server = &request.alias
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+    for (index, call) in request.calls.iter().enumerate() {
+        let after = call
+            .after
+            .map(|before| format!("  {}", t!(apply_after, call = before + 1)))
+            .unwrap_or_default();
+        lines.extend(indented(
+            format!("{}. {}{after}", index + 1, call.tool),
+            Style::default().add_modifier(Modifier::BOLD),
+            width,
+        ));
+        for (name, value, from) in &call.arguments {
+            // What draws as nothing is said, not drawn, so a value is never sent with characters the
+            // person was not told about (PROMPT-13).
+            let (drawn, hidden) = crate::invisible::without_invisible(value);
+            let written = match hidden {
+                0 => drawn,
+                _ => format!("{drawn} {}", t!(apply_hidden, count = hidden)),
+            };
+            match from.as_str() {
+                "the plan" => lines.extend(indented(
+                    format!("    {name}: {written}  ({from})"),
+                    Style::default(),
+                    width,
+                )),
+                _ => lines.extend(crate::render::marked_rows(
+                    &margin,
+                    &[
+                        Span::raw(format!("  {name}: {written}  ")),
+                        Span::styled(format!("({from})"), muted),
+                    ],
+                    width,
+                )),
+            }
+        }
+    }
+    lines.push(Line::raw(""));
+    for (why, count) in &request.dropped {
+        lines.extend(indented(
+            t!(apply_dropped, count = *count, why = why.as_str()),
+            muted,
+            width,
+        ));
+    }
+    for sentence in [t!(apply_explained), t!(apply_nothing_yet)] {
+        lines.extend(indented(sentence, muted, width));
+    }
+    let keys = |answerable| vec![answer_keys(t!(apply_yes), t!(apply_no), answerable)];
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
     )
 }
 

@@ -30,7 +30,9 @@ mod write;
 #[cfg(test)]
 use chrome::centred;
 pub(crate) use chrome::scroll_hint;
-pub use grants::{ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout};
+pub use grants::{
+    ask_apply, ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout,
+};
 #[cfg(test)]
 use grants::{draw_exposure, draw_host, draw_manifest, draw_path};
 pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_tool_list};
@@ -1044,7 +1046,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Path, Host, Ask,
+        Apply, Move, Path, Host, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -1361,6 +1363,36 @@ mod tests {
                     deciding: steps,
                 })
             }
+            Kind::Apply => {
+                let values = numbered('a', 60);
+                let request = bravebot_agent::confirm::ApplyRequest {
+                    alias: "brave-bookmarks-write".into(),
+                    list: "marks".into(),
+                    calls: values
+                        .iter()
+                        .map(|value| bravebot_agent::confirm::ApplyCall {
+                            tool: "move_bookmark".into(),
+                            arguments: vec![(
+                                "url".into(),
+                                format!("https://example.com/{value}"),
+                                "entry 1 of marks".into(),
+                            )],
+                            after: None,
+                        })
+                        .collect(),
+                    dropped: Vec::new(),
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        grants::draw_apply(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: values,
+                })
+            }
             Kind::ToolList => {
                 let names = numbered('t', 60);
                 let descriptions = numbered('e', 60);
@@ -1569,6 +1601,7 @@ mod tests {
             ask_every_call: false,
             choice_arguments: Default::default(),
             backend: bravebot_config::mcp::Backend::Native,
+            apply_arguments: Default::default(),
         };
         let mut deciding = vec!["/opt/tool/serve".to_string()];
         deciding.extend(reads);

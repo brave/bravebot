@@ -1,9 +1,14 @@
-//! Which whole number a processor's answer chose.
+//! What a processor's answer chose: one whole number, or the rows of an `apply` step.
 //!
 //! A processor asked to choose one entry of a numbered list answers in text. This crate decides
 //! from that text which number it chose, from 1 to a limit the planner wrote, or 0 where it chose
 //! none. It is not the driver: the text reaches it only through the policy layer's gate for this
 //! one read, [`Policy::read_a_number`], and what comes back out of the answer is one byte.
+//!
+//! A processor asked for the rows of an `apply` step is shown a list this crate numbered, through
+//! [`Policy::number_a_list`], and its answer comes back here through [`Policy::resolve_proposal`],
+//! which resolves the rows against the plan's shape. What comes back out is the resolved list,
+//! labelled, which the driver carries to the person without reading.
 //!
 //! The crate holds no `declassify` and no `Labelled::new`. A second comparison of an answer's text
 //! anywhere in it is found by reading the diff, and a second reader of an answer anywhere is a
@@ -11,10 +16,13 @@
 #![forbid(unsafe_code)]
 
 mod number;
+mod rows;
 
 pub use number::number_in;
 
-use bravebot_core::{Denial, Labelled, Policy, ProcessorSpec, Sink};
+use bravebot_core::apply::{Entries, Resolved, Shape};
+use bravebot_core::{Denial, Labelled, Policy, ProcessorSpec, Sink, SlotId, SlotStore};
+use std::collections::BTreeSet;
 
 /// Read a processor's answer for the number it chose, labelled as the answer was.
 ///
@@ -26,6 +34,32 @@ pub fn read<S: Sink>(
     answer: Labelled<String>,
 ) -> Result<Labelled<u8>, Denial> {
     policy.read_a_number(spec, answer, number_in)
+}
+
+/// Number the entries of the list in `list` for a processor, into `into`, and give back the
+/// entries the rows will be resolved against, labelled as the list was.
+pub fn number_a_list<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    list: &SlotId,
+    fields: &BTreeSet<String>,
+    into: SlotId,
+    slots: &mut SlotStore,
+) -> Result<Labelled<Entries>, Denial> {
+    policy.number_a_list(list, fields, into, slots, rows::number)
+}
+
+/// Read a processor's answer for the rows it proposed, resolved against `entries` and `shape`.
+///
+/// The one call of [`Policy::resolve_proposal`] outside the policy layer. A spec that was not built
+/// to propose rows is refused.
+pub fn resolve_proposal<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    spec: &ProcessorSpec,
+    answer: Labelled<String>,
+    entries: &Labelled<Entries>,
+    shape: &Shape,
+) -> Result<Labelled<Resolved>, Denial> {
+    policy.resolve_proposal(spec, answer, entries, shape, rows::resolve)
 }
 
 #[cfg(test)]
