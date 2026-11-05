@@ -1261,6 +1261,10 @@ const SOMETHING_ELSE: &str = "sleep 0.2";
 /// fixed number of rounds is sure to come after that. The call is made at least once and at most 150
 /// times, thirty seconds of sleeping and whatever the rounds cost, so a finish that never arrives
 /// fails the test's own assertion before the turn runs out of rounds.
+///
+/// The foreground command alternates spellings between "sleep 0.2" and "sleep 0.20" so the repeated
+/// call guard does not refuse the call on round four, burning out the remaining wait rounds in
+/// milliseconds before the background process exits.
 fn serve_until_job_1_finishes(start: String) -> (String, MockRequests) {
     let mut start = Some(start);
     let mut waited = 0;
@@ -1277,9 +1281,14 @@ fn serve_until_job_1_finishes(start: String) -> (String, MockRequests) {
             return Some(Some(reply_with("done")));
         }
         waited += 1;
+        // Alternating spellings: the same call over and over is refused as a repetition
+        // without running, and then no time passes for the job to end.
         Some(Some(tool_request(
             "run",
-            &format!(r#"{{"command":"{SOMETHING_ELSE}"}}"#),
+            &format!(
+                r#"{{"command":"{SOMETHING_ELSE}{}"}}"#,
+                if waited % 2 == 0 { "" } else { "0" }
+            ),
         )))
     })
 }
