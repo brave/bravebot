@@ -18,10 +18,11 @@ pub(super) fn named_home(named: &str) -> bool {
 ///
 /// Only a whole first component counts, so `~notes/x` stays a relative path (CMD-5). A machine
 /// naming no home refuses the `~` rather than reading it as a directory named `~` (CMDLINE-4).
-pub(super) fn expand_home(
-    named: &str,
-    home: Option<&Path>,
-) -> Result<Option<PathBuf>, &'static str> {
+///
+/// Exported for a caller outside this crate that wants the same reading of `~` a file tool gets,
+/// such as the terminal's `/cd` and `/add-dir` (CMDLINE-4): one function, so a `~` the person
+/// types and a `~` the planner writes in a command line cannot come to resolve apart.
+pub fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'static str> {
     if !named_home(named) {
         return Ok(None);
     }

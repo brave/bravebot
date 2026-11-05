@@ -54,9 +54,14 @@ nothing on the turn says it cannot ask a person. The sentence is fixed text abou
 and holds no byte of the file. It does not tell the planner to use a reference, because `edit_file`
 takes none.
 
+The refusal of an empty `old_text` says what the text to replace must be and, only where the turn
+is offered `write_file`, that `write_file` creates or replaces a whole file.
+
 `verified-by: bravebot_agent::turn::editing_an_untrusted_file_is_refused`
 `verified-by: bravebot_agent::turn::editing_a_file_a_program_wrote_is_refused`
 `verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
+`verified-by: bravebot_agent::tools::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 
 <a id="EDIT-3"></a>
 ### EDIT-3: an edit is approved as a diff, and cannot leave the workspace

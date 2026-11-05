@@ -461,7 +461,7 @@ impl Reporter for RemoteReporter {
         let _ = self.outbound.send(ToMain::Returned(returned));
     }
 
-    fn landed(&mut self, landing: Landing) {
+    fn landed(&mut self, _call: Option<bravebot_agent::report::CallId>, landing: Landing) {
         let _ = self.outbound.send(ToMain::Landed(landing));
     }
 

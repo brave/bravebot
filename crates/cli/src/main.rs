@@ -1237,6 +1237,12 @@ fn prepare_the_run(
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
         .working_towards(goal.clone());
     task = task_from_the_settings(task, &settings, effort);
+    // A one-shot run puts no question to anybody (ASK-7), so the planner is told to say in its
+    // reply what it could not read. A run reading lines sends its questions to the program feeding
+    // it, which answers them.
+    if !input_lines {
+        task = task.with_nobody_answering();
+    }
     // The kept facts a continued session has already had put in front of its planner (RECALL-9).
     if let Some(record) = &continued {
         task = task.with_injected_facts(record.injected_facts.clone());
@@ -1425,10 +1431,10 @@ fn reach_the_servers(
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
     if skip_permissions {
-        eprintln!(
-            "{}",
-            t!(cli_notice, notice = t!(session_permissions_skipped))
-        );
+        let auto_vetting = bravebot_session::store::auto_vetting(settings);
+        for line in progress::bypass_notices(true, auto_vetting) {
+            eprintln!("{line}");
+        }
     }
     reached
 }
@@ -2184,14 +2190,10 @@ fn task_from_the_settings(
         .with_confined_runs(true)
         .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
-        // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
+        // of the three routes by `bravebot_session::store::auto_vetting`, and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so
         // without this every check on this path ends in a refusal.
-        .with_auto_vetting(bravebot_core::vetting::auto(
-            bravebot_core::vetting::asked_for(),
-            bravebot_session::store::load_vetting(),
-            settings.auto_vetting(),
-        ))
+        .with_auto_vetting(bravebot_session::store::auto_vetting(settings))
 }
 
 /// The schema a path names, read and vetted, or the sentence that says why it cannot be used.
@@ -5435,6 +5437,29 @@ mod tests {
         );
         open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
         assert!(workspace.confines(&file).is_ok(), "not reachable after");
+    }
+
+    /// CLI-11: a relative path such as `--add-dir ../notes` is resolved against the working
+    /// directory, the same way `/add-dir ../notes` resolves it in the terminal, rather than
+    /// refused with "must be an absolute path".
+    #[test]
+    fn a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory() {
+        let scratch = Scratch::new("add-dir-relative");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let file = beside.join("notes.md");
+        std::fs::write(&file, "notes").expect("write");
+
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        assert!(
+            workspace.confines(&file).is_err(),
+            "reachable before it was opened"
+        );
+        open_directories(&mut workspace, &["../beside".to_string()]).expect("opens");
+        assert!(
+            workspace.confines(&file).is_ok(),
+            "a relative --add-dir path was not resolved against the working directory"
+        );
     }
 
     /// CHECKOUT-7. `--add-dir` of a directory holding the working directory says so, since a run

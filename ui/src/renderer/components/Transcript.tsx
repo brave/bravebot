@@ -740,7 +740,7 @@ export function Transcript({
         <div className="toast-stack">{toast}<Toasts /></div>
         <div className="empty-body">
           <div className="welcome">
-            <div className="welcome-mark" aria-hidden="true"><Icon name="product-brave-leo" /></div>
+            <img className="welcome-mark" src="./app-icon.svg" alt="" />
             <h1>What should we build?</h1>
             <p className="welcome-lede">Open a project to work with an agent in it. Changes and approvals stay in the conversation.</p>
             <div className="welcome-actions">

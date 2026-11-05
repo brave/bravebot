@@ -41,10 +41,13 @@ name nothing holds.
 ### SPAWN-2: the instruction comes from the planner and may not be private
 
 It is the only thing steering the call, and it comes from a context holding nothing an attacker
-wrote.
+wrote. A context that holds private content cannot start a processor, and that includes a delegate
+started while its parent's context held some ([PROC-4](../processors.md#PROC-4)); such a delegate is
+not offered `spawn_processor`.
 
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
 `verified-by: bravebot_agent::tools::a_processor_cannot_be_started_from_a_context_that_met_untrusted_content`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
 
 <a id="SPAWN-3"></a>
 ### SPAWN-3: the result is a reference, never text
@@ -130,6 +133,11 @@ reaches a program that uses it:
 A turn whose list holds no `run` is told which tool writes such text, to name the form, and when to
 call the text a summary. The rest of the list names a script, a run line or `stdin_ref`, so it is
 left out for that turn. The `run` description's pointer at the processor is in [run.md](run.md).
+
+The pointers the tool writes into its own results follow the list the same way. The error for a
+call that names nothing in `reads` says to write the file with `write_file` only where the list
+holds `write_file`, and the description of `vet_content` names `spawn_processor` only where the list
+holds it ([TOOL-6](tool-surface.md#TOOL-6)).
 
 **What stays true.** A processor is still given only the references named in `reads` and an
 instruction from a context holding nothing private, still holds no tools, and its answer is still

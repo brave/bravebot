@@ -2809,6 +2809,10 @@ status-time = Time
 status-time-inference = on the model
 status-time-tools = running tools
 status-time-stalled = waiting on you
+# Held outside the file-authority boundary while another call, or a delegate, had it. Durations
+# only. Counted apart from the tool figure so a slow tool and a queue for the boundary are not the
+# same number.
+status-time-file-wait = waiting on file access
 status-time-overhead = unaccounted for
 # How much of the last turn's prompt the service did not have to read. Two figures because they are
 # priced differently: a read is a fraction of what a fresh token costs and a write is above it, so a
@@ -3843,6 +3847,18 @@ session-vetting-on =
 # transcript, so it has to be said before the first slot reaches it.
 session-vetting-in-force =
     a check that finds nothing reads content to the model without asking you
+# Said when the mode becomes bypass with auto-vetting on, once for each time the mode is entered,
+# and at the top of a session that opened in bypass with it on. Bypass asks nobody, so what a
+# check objects to or cannot assess has no question to fall back to: it is refused, and the
+# transcript would otherwise show only the planner's sentence about it.
+session-vetting-in-bypass =
+    bypass is on with auto-vetting: content a check objects to or cannot assess is refused and not asked about
+# Drawn beside a read that was kept back under bypass with auto-vetting on, for the person only.
+# The planner is told that the reference was kept back and nothing about what decided it, so this
+# is the one place the transcript says that a check and the mode did, and how to change that.
+# `off` is the word the standing file takes, and `--vet` outranks it, so the flag is named.
+vetting-kept-back =
+    auto-vetting kept this back: bypass asks nobody, and refuses what a check objects to or cannot assess. Leaving bypass would ask you instead. To turn auto-vetting off, write off in ~/.bravebot/vetting and do not pass --vet
 # Said once at the top of a session when a newer release has been published. The command is
 # passed in rather than written here: it is a line somebody pastes into a shell, and which one it
 # is depends on how this copy was installed, so it is not a translator's to reword. The newer
@@ -5559,7 +5575,7 @@ ui-accounts-signed-in-to = Signed in to { $name }.
 ui-accounts-sign-in-failed = Couldn't sign in to { $name }.
 ui-accounts-sign-in-busy = Another sign-in is already running.
 ui-accounts-setup-heading = Sign in to a service
-ui-accounts-setup-pointer = Sign in to a ChatGPT, xAI or AWS account, or enter a key for Brave Premium, OpenRouter or another gateway, under Accounts, below.
+ui-accounts-setup-pointer = Sign in to a ChatGPT, xAI or AWS account, or enter a key for Brave Premium, OpenRouter or another gateway, under Accounts, above.
 ui-accounts-enter-key = Enter key
 ui-accounts-replace-key = Replace key
 ui-accounts-key-window-open = Enter the key in its window.

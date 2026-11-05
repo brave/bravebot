@@ -83,11 +83,19 @@ be private.
 
 What the planner writes is private once its context holds private content, which
 [LABEL-8](labels.md#LABEL-8) lists the ways of reaching: a slot `vet_content` let through, output
-`read_output` read to it, a delegate's report, or a resumed conversation that already held some.
+`read_output` read to it, a delegate's report, a resumed conversation that already held some, or, for
+a delegate, the private content its parent's context held when it was started
+([DELEGATE-8](delegation.md#DELEGATE-8)).
 From then on every `spawn_processor` call is refused. The refusal does not ask for a rewording, since none helps, and
 names what still reaches a quarantined reference: a filter such as `grep` or `tail` run with
 `stdin_ref` set to it, whose printed result `read_output` shows, and `vet_content` for a reference
-that holds no text. `run`, `read_output` and the file tools keep working. A reference made in such a
+that holds no text. `run`, `read_output` and the file tools keep working. The refusal names a route
+only where the run is offered it: the filter where `run` and `read_output` are offered, and
+`vet_content` where it is. A delegate that was shown none of the content is told it was started
+holding what its parent's context held, that no processor can be started in the run, and to say in
+its answer that it could not have a processor look at the content, so whoever asked can. A
+delegate that starts closed is not offered `spawn_processor`, and its prompt does not say it may
+hand files to processors. A reference made in such a
 context is described without the move that names a processor, and the tool's description says that
 `spawn_processor` is refused once the context holds private content and that those tools keep
 working.
@@ -99,6 +107,9 @@ the content the processor was the way to avoid reading.
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
 `verified-by: bravebot_agent::turn::a_planner_shown_private_content_cannot_instruct_a_processor`
 `verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`
+`verified-by: bravebot_core::policy::the_refusal_in_a_private_context_names_only_the_routes_the_run_is_offered`
+`verified-by: bravebot_core::policy::the_refusal_to_a_delegate_started_private_says_so_and_names_only_what_it_is_offered`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
 `verified-by: bravebot_core::policy::a_reference_names_no_processor_exactly_when_the_context_holds_private_content`
 `verified-by: bravebot_core::reference::a_reference_closed_to_processors_names_none_and_keeps_the_other_moves`
 `verified-by: bravebot_agent::tools::the_processor_is_described_as_refused_once_private_content_has_been_shown`
@@ -373,7 +384,9 @@ and never the text ([PROC-5](#PROC-5)).
 
 Looking at a picture through a processor comes before `vet_content` lets it through. A picture
 `vet_content` lets through makes the context private ([PROC-4](#PROC-4)), and from then on a
-processor is refused.
+processor is refused. A delegate started after the planner's context became private starts closed,
+so it cannot look at a picture through a processor either, and a task that needs one looked at is
+started before then or left to the person.
 
 **Why.** A picture carries whatever words are in it, so a planner that could look at one could be
 instructed by it, and a model told to read a data URI reads it as characters. A processor holds no
@@ -382,6 +395,7 @@ picture or its answer entering the planner's context.
 
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::mcp::a_processor_is_given_a_servers_picture_as_a_picture`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
 
 <a id="PROC-16"></a>
 ### PROC-16: a processor may be asked for one number, and a crate outside the driver reads it from the answer

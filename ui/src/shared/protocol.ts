@@ -36,6 +36,8 @@ export type Change =
   | { kind: 'elided'; lines: number }
 
 export interface Activity {
+  /** The id dispatch gave the call, the same on its start and its finish. `null` for a line no dispatch made. */
+  call: number | null
   verb: string
   target: string
   /** `target` spelled so a file's name that is blank or ends in whitespace is visible (PROMPT-1). Draw this and not `target`; match a call to its confirmation on `target`. */
@@ -361,6 +363,14 @@ export interface ModelOption {
   id: string
   name: string
   provider: string
+  /**
+   * The service the row came from, named by where the bridge took it and never by what a listing
+   * said: `brave`, `bedrock`, `chatgpt`, `xai`, `gateway:<id>`, or `default` for the configured model
+   * no service listed. The same key `accountProviderKey` gives an account row.
+   */
+  providerKey: string
+  /** Whether the model takes an effort level. False only where its service said it does not. */
+  readsEffort: boolean
   premium: boolean
   contextWindow: number | null
   /** Provider-reported capabilities; absent when the backend does not report them. */
@@ -376,6 +386,17 @@ export interface ModelCatalogue {
    * warning that names none. Absent from a bridge that sends none.
    */
   warningCommands?: (string | null)[]
+}
+
+/** An effort level `/effort` and the model picker record, cheapest first. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type EffortLevel = typeof EFFORT_LEVELS[number]
+
+/** `effort.get`: the level recorded, the level a turn here asks for, and whether a checkout's settings outrank a pick. */
+export interface EffortReport {
+  recorded: EffortLevel | null
+  inForce: EffortLevel | null
+  outranked: boolean
 }
 
 /** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */
@@ -1071,7 +1092,8 @@ export interface EventMap {
    * printed, its note or its report is sent (VIEW-35).
    */
   agents: { agents: AgentEntry[]; started: number; working: number }
-  landed: { landing: Landing }
+  /** `call` is the id of the call whose result this places, the same as on its `tool.started`; `null` where no dispatch made the line. */
+  landed: { call: number | null; landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }

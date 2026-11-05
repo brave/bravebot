@@ -51,12 +51,17 @@ const planning = async (s: Script, ms = 700): Promise<void> => {
   await s.wait(ms)
 }
 
+/** An id for a call, as dispatch gives one, the same on its start and its finish. */
+let calls = 0
+const callId = (): { call: number } => ({ call: ++calls })
+
 /** One call, from start to its result. */
 async function call(s: Script, verb: string, target: string, why: string, note: string, extra: Partial<ReturnType<typeof tool>> = {}, landing: EventMap['landed']['landing'] = 'context'): Promise<void> {
-  s.emit('tool.started', tool(verb, target, why, null))
+  const id = callId()
+  s.emit('tool.started', tool(verb, target, why, null, id))
   await s.wait(700)
-  s.emit('tool.finished', tool(verb, target, why, note, extra))
-  s.emit('landed', { landing })
+  s.emit('tool.finished', tool(verb, target, why, note, { ...extra, ...id }))
+  s.emit('landed', { ...id, landing })
 }
 
 // ---------------------------------------------------------------- turns
@@ -144,7 +149,7 @@ const WORKING: Described[] = [
     s.emit('phase', { phase: 'planning' })
     s.emit('todos', { rows: TODOS })
     s.emit('tokens', { written: 3_204 })
-    s.emit('tool.started', tool('Search', 'RwLock', 'Find other lock users', null))
+    s.emit('tool.started', tool('Search', 'RwLock', 'Find other lock users', null, callId()))
   }) },
 ].map((entry) => ({ ...entry, group: 'Working row', detail: 'Stays until you stop it.' }))
 
@@ -162,7 +167,7 @@ const TOOLS: Scenario = async (s) => {
   await call(s, 'Search', 'lock', 'Find other lock users', '3 matches')
   await call(s, 'Fetch', 'https://tides.example.org/api', 'Get the live table', 'timed out after 30s', { failed: true })
   await call(s, 'Edit', 'src/cache.ts', 'Split the lock', 'refused: you said no', { failed: true })
-  s.emit('tool.started', tool('Run', 'npm test', 'Still going when the turn ends', null))
+  s.emit('tool.started', tool('Run', 'npm test', 'Still going when the turn ends', null, callId()))
   await s.wait(600)
   s.done('Those are the kinds of call a turn shows: finished, failed, confined, name only and still running.')
 }
@@ -289,7 +294,7 @@ const failing = (label: string, category: string | null, message: string, extra:
 const STOPPED: Scenario = async (s) => {
   s.start()
   await planning(s, 400)
-  s.emit('tool.started', tool('Run', 'npm test', 'Run the suite', null))
+  s.emit('tool.started', tool('Run', 'npm test', 'Run the suite', null, callId()))
   await s.hold()
 }
 
@@ -302,9 +307,10 @@ export const PLAN_RUN: Scenario = async (s) => {
   const answer = await ask(s, card('manifest.request', 'manifest', withId(MANIFEST)), 'approve')
   if (answer === 'reject') { s.emit('manifest.error', PLAN_DECLINED); return }
   for (const step of MANIFEST.steps.slice(0, 4)) {
-    s.emit('tool.started', tool('Step', step, '', null))
+    const id = callId()
+    s.emit('tool.started', tool('Step', step, '', null, id))
     await s.wait(600)
-    s.emit('tool.finished', tool('Step', step, '', 'done'))
+    s.emit('tool.finished', tool('Step', step, '', 'done', id))
   }
   s.emit('manifest.done', {
     run: 1, reply: 'Renamed `cache` to `store` in 6 files. The type checker reports no errors.\n\nNothing in this text was read by the planner.', model: 'sample/fast', steps: 5, clean: true, tokens: 9_000, outputTokens: 800,

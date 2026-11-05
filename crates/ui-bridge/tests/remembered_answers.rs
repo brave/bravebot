@@ -339,3 +339,86 @@ fn a_turn_that_fails_after_a_remembered_answer_still_names_the_question_it_did_n
     );
     assert_eq!(window.shown.len(), 1, "{:?}", window.shown);
 }
+
+/// ASK-8: an undo forgets the answers, so the question the planner puts again after it is shown
+/// and the person can answer it differently. Rejects: a rewind that leaves the session's memo
+/// as it was, which sends the planner the answer given in the turn that was undone.
+#[test]
+fn a_question_answered_in_an_undone_turn_is_put_again() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("remembered-answer-undone-turn");
+    let (config, requests, server) = endpoint::endpoint(
+        vec![
+            asks("Cache", &["Which layer?"]),
+            endpoint::answer(),
+            asks("Cache", &["Which layer?"]),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    window.turn(&session, "pick a cache", &chosen_second());
+    let rewound = window
+        .once_finished(|window| {
+            window.dispatch("session.rewind", json!({"session": session, "steps": 1}))
+        })
+        .unwrap();
+    assert_eq!(rewound["session"], session.as_str(), "{rewound:?}");
+    let second = window.turn(
+        &session,
+        "pick a cache",
+        &[serde_json::from_str(r#"[{"chosen": [0]}]"#).unwrap()],
+    );
+    server.join().unwrap();
+
+    assert_eq!(second.name, "turn.done", "{:?}", second.data);
+    assert_eq!(
+        window.shown.len(),
+        2,
+        "the question after the undo was answered from the undone turn: {:?}",
+        window.shown
+    );
+    let sent: Vec<String> = requests.try_iter().collect();
+    assert!(told(&sent[3]).contains("The user chose: HTTP"));
+    assert!(
+        notices(&second).is_empty(),
+        "the turn named a reused answer: {:?}",
+        second.data
+    );
+}
+
+/// An undo that finds nothing to go back to changes nothing, so the answers stay. Rejects: a
+/// rewind that forgets the answers before it knows it has a point to go back to. This test also
+/// passes on code that never forgets an answer, because it pins the refused case only; the test
+/// that an undone turn's answer is put again is what fails there.
+#[test]
+fn an_undo_that_goes_back_nowhere_keeps_the_answers() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("remembered-answer-refused-undo");
+    let (config, _requests, server) = endpoint::endpoint(
+        vec![
+            asks("Cache", &["Which layer?"]),
+            endpoint::answer(),
+            asks("Cache", &["Which layer?"]),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    window.turn(&session, "pick a cache", &chosen_second());
+    let refused = window.once_finished(|window| {
+        window.dispatch("session.rewind", json!({"session": session, "steps": 5}))
+    });
+    assert!(refused.is_err(), "{refused:?}");
+    let second = window.turn(&session, "pick it again", &[]);
+    server.join().unwrap();
+
+    assert_eq!(second.name, "turn.done", "{:?}", second.data);
+    assert_eq!(window.shown.len(), 1, "{:?}", window.shown);
+}

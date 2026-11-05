@@ -78,6 +78,7 @@
   color: var(--ink-secondary);
   font: var(--type-meta);
 }
+.todos .marker:has(leo-progressring) { width: var(--spinner); height: var(--spinner); }
 .todos .marker {
   flex: none;
   display: grid;
@@ -86,7 +87,6 @@
   height: calc(var(--icon-meta) + var(--leo-spacing-xs));
   color: var(--ink-tertiary);
   --leo-icon-size: var(--icon-meta);
-  --leo-progressring-size: var(--icon-caption);
   --leo-progressring-stroke-width: var(--leo-spacing-xs);
   --leo-progressring-color: var(--accent-text);
 }
@@ -195,7 +195,7 @@
   color: var(--ink-tertiary);
 }
 .tree-status { display: flex; align-items: center; gap: var(--leo-spacing-m); }
-.tree-spinner { display: inline-flex; --leo-progressring-size: var(--icon-caption); }
+.tree-spinner { display: inline-flex; }
 .tree-problem { flex: none; margin: 0 0 var(--leo-spacing-m); }
 
 .tree-body {
@@ -398,7 +398,6 @@
 .bot-servers-list { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
 .bot-server { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
 .bot-servers-note { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
-.bot-servers-loading { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
 /* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
 .bot-details .bot-memory {
   margin: 0;

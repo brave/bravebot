@@ -30,7 +30,7 @@ use bravebot_agent::confirm::{
 };
 use bravebot_agent::conversation::{Address, Composed, Said};
 use bravebot_agent::diff::Change;
-use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
+use bravebot_agent::report::{Activity, CallId, Landing, Phase, Reach, Shown};
 use bravebot_agent::servers::Question;
 use bravebot_aichat::CutOff;
 use bravebot_config::mcp::Declaration;
@@ -223,11 +223,15 @@ pub fn change(change: &Change) -> Value {
 /// list of files, with the slot a reference was drawn under and a leading `./` taken off and then
 /// spelled, so a window lists a file once and draws it as the confirmation for it does.
 ///
+/// `call` is the id dispatch gave the call ([`Activity::call`]), the same on its start and its
+/// finish, so a window pairs the two by it when calls overlap. Null for a line no dispatch made.
+///
 /// `waitedSeconds` is what the call spent at a model of its own, null for the nearly all of
 /// them that asked none. Whole seconds, as `remainingSeconds` is: what it answers is whether a
 /// slow call was slow because a model was, and that question is not decided in milliseconds.
 pub fn activity(activity: &Activity) -> Value {
     json!({
+        "call": activity.call.map(CallId::get),
         "verb": activity.verb,
         "target": activity.target,
         "shownTarget": activity.shown_target(),

@@ -1026,7 +1026,7 @@ export function App(): React.JSX.Element {
         backendReady={backendReady}
         onCheckBackend={() => void checkBackend()}
         onDiagnostics={() => void doctor()}
-        onSetup={() => openSettingsPage('agent')}
+        onSetup={() => openSettingsPage('providers')}
         onThinking={(shown) => setLive((old) => old ? { ...old, showThinking: shown } : old)}
         storageKey={draftKey}
         attachments={live?.attachments ?? []}
@@ -1148,7 +1148,7 @@ export function App(): React.JSX.Element {
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />
       )}
-      {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} onSettings={() => { setUnconfigured(null); openSettingsPage('agent') }} />}
+      {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} onSettings={() => { setUnconfigured(null); openSettingsPage('providers') }} />}
       {rewinding && live?.handle === rewinding.handle && (() => {
         const plan = planRewind(live.rewind ?? [], rewinding.steps)
         return plan && <RewindConfirm plan={plan} bot={live.bot !== null} running={live.running} busy={rewinding.busy}

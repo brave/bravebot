@@ -159,8 +159,11 @@ try {
 
   // 1–2: diagnostics, keyboard navigation, real override validation and clearing.
   await openSettings()
+  // The model service and its build are the Providers page; diagnostics stay on Agent settings.
+  await settings.locator('[data-test="settings-page-providers"]').click()
   await settings.getByText('Model service configured', { exact: true }).waitFor()
   assert.match(await settings.innerText(), new RegExp(version.replaceAll('.', '\\.')))
+  await settings.locator('[data-test="settings-page-agent"]').click()
   await settings.getByRole('button', { name: 'Refresh diagnostics' }).click()
   // One page of stacked sections rather than tabs.
   for (const name of ['Connection', 'Hooks', 'Run settings']) await settings.getByRole('heading', { name, exact: true, level: 2 }).waitFor()
@@ -454,7 +457,7 @@ try {
   // 8: settings narrow layout and cleanup assertions.
   await page.setViewportSize({ width: 560, height: 780 })
   if (await page.locator('.app.left-folded').count()) await page.getByRole('button', { name: 'Chat list', exact: true }).click()
-  await openSettings(); await settings.getByText('Model service configured', { exact: true }).waitFor()
+  await openSettings(); await settings.getByRole('heading', { name: 'Run settings', exact: true, level: 2 }).waitFor()
   await fits(settings.locator('.settings-main')); await inertBehind(); await closeSettings()
   assert.deepEqual(JSON.parse(readFileSync(join(home, '.bravebot/hooks.json'), 'utf8')).hooks, [])
   assert(existsSync(hookLog)); assert.deepEqual(uiErrors, []); assert.deepEqual(failures, [])

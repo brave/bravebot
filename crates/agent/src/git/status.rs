@@ -1299,12 +1299,16 @@ pub(super) fn answer(
         out.listing_partial = true;
     }
     if !not_compared.is_empty() && out.room() {
-        out.text.line(
+        let instead = if out.beside.holds(crate::tools::Named::Run) {
+            "; use run with git status for these:"
+        } else {
+            ":"
+        };
+        out.text.line(&format!(
             "Not compared, since git would convert them on the way into the index (an attribute \
              or core.autocrlf asks for a filter or line-ending conversion, or an attributes file \
-             above them is withheld), they are submodules, or they changed while being read; use \
-             run with git status for these:",
-        );
+             above them is withheld), they are submodules, or they changed while being read{instead}"
+        ));
         for path in not_compared {
             if !out.room() {
                 return Ok(());

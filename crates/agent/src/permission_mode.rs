@@ -605,12 +605,23 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// one a check read, so the answer stays the mode's however the check answered. No check is made
     /// before it either, for the reason it is made before the other two: nothing would read the word.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
-        match self.mode.get() {
-            PermissionMode::Bypass => Decision::Approve,
+        self.confirm_vouch_noting_the_mode(request).0
+    }
+
+    /// The answer and the mode that gave it, read from one look at the mode, so the trail credits
+    /// the mode the question was answered in and not a person naming the file (MODE-4, MODE-8,
+    /// TRACE-7).
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        let mode = self.mode.get();
+        match mode {
+            PermissionMode::Bypass => (Decision::Approve, Some(mode.name())),
             PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
-            | PermissionMode::Auto => self.asking().confirm_vouch(request),
+            | PermissionMode::Auto => (self.asking().confirm_vouch(request), None),
         }
     }
 
@@ -1656,6 +1667,110 @@ mod tests {
         }
         fn interjection(&mut self) -> Option<String> {
             Unattended.interjection()
+        }
+    }
+
+    /// Says yes to offers to vouch for a file; refuses everything else.
+    struct AgreesToVouching;
+
+    impl Confirmer for AgreesToVouching {
+        fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            Decision::Approve
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+            Unattended.confirm_host(request)
+        }
+        fn confirm_message(
+            &mut self,
+            request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            Unattended.confirm_message(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// MODE-4, MODE-8, TRACE-7. Bypassing names itself for the offer to vouch for a file, and the
+    /// answer every other mode gives comes back with none, so the trail credits a person only for
+    /// an answer that went to the confirmer. The inner confirmer refuses under bypass, so a yes can
+    /// only be the mode's; under the other modes an agreeing confirmer and a refusing one show that
+    /// the answer is the confirmer's. The regressions it rejects are a bypass answer that names no
+    /// mode (the trail then records a person naming the file) and a mode that names itself for an
+    /// answer it asked a person for.
+    #[test]
+    fn bypassing_names_itself_for_the_offer_to_vouch_and_no_other_mode_does() {
+        let mut refusing = Unattended;
+        let mut bypassing = Confining::new(&mut refusing, PermissionMode::Bypass, false);
+        assert_eq!(
+            bypassing.confirm_vouch_noting_the_mode(&a_vouch(Verdict::Safe)),
+            (Decision::Approve, Some("bypass"))
+        );
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+        ] {
+            let mut agreeing = AgreesToVouching;
+            let mut confining = Confining::new(&mut agreeing, mode, false);
+            assert_eq!(
+                confining.confirm_vouch_noting_the_mode(&a_vouch(Verdict::Safe)),
+                (Decision::Approve, None),
+                "{mode:?} named itself for an answer the confirmer gave"
+            );
+            let mut refusing = Unattended;
+            let mut confining = Confining::new(&mut refusing, mode, false);
+            assert_eq!(
+                confining.confirm_vouch_noting_the_mode(&a_vouch(Verdict::Safe)),
+                (Decision::Reject, None),
+                "{mode:?} approved an offer to vouch its confirmer refused"
+            );
         }
     }
 

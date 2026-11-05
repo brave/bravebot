@@ -1189,7 +1189,7 @@ mod tests {
     #[test]
     fn a_fetched_row_carries_the_gateway_that_serves_it() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "z-ai/glm-4.6"}]}"#);
-        assert_eq!(models[0].provider.as_deref(), Some("openrouter"));
+        assert_eq!(models[0].provider.as_deref(), Some("OpenRouter"));
         assert_eq!(
             Model::automatic().provider,
             None,

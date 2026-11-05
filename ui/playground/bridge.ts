@@ -11,6 +11,7 @@ import type { Experience } from '../src/shared/experience'
 import { EMPTY_CONVERSATION, parseExperience } from '../src/shared/experience'
 import type { Appearance } from '../src/shared/theme'
 import type { Bot } from '../src/shared/bots'
+import type { EffortLevel } from '../src/shared/protocol'
 import type {
   BridgeEvent, EventMap, EventName, ForkedSession, OpenedSession, RewindPoint, RewoundSession, Said, SessionSummary,
 } from '../src/shared/protocol'
@@ -74,6 +75,7 @@ const themeListeners = new Set<(state: ThemeState) => void>()
 let rows: SessionSummary[] = SESSIONS()
 let bots: Bot[] = BOTS()
 let experience: Experience = parseExperience(null)
+let effort: EffortLevel | null = null
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
 let requests = 100
 let created = 0
@@ -309,6 +311,8 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'update.status': return ok({ check: 'on', running: '0.19.0', newer: false, checked: null })
     case 'session.list': return ok({ sessions: rows })
     case 'models.list': return ok(MODELS)
+    case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false })
+    case 'effort.set': effort = (params.level as EffortLevel | null | undefined) ?? null; return ok({ recorded: effort })
     case 'mentions.named': return ok({ files: [] })
     case 'mentions.offer': {
       const line = String(params.line ?? '')
@@ -439,6 +443,7 @@ const bridge: BravebotApi = {
   writeExperience: async (key, value) => {
     if (key === 'dismissedUpdate') experience = { ...experience, dismissedUpdate: typeof value === 'string' ? value : null }
     else if (key === 'recentModels') experience = { ...experience, recentModels: Array.isArray(value) ? value as string[] : [] }
+    else if (key === 'providers') experience = { ...experience, providers: parseExperience({ providers: value }).providers }
     else if (key.startsWith('[')) experience = { ...experience, conversations: { ...experience.conversations, [key]: { ...EMPTY_CONVERSATION, ...experience.conversations[key], ...(value as object) } } }
     return experience
   },

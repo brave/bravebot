@@ -43,8 +43,25 @@ const GATEWAY_LOGOS: Record<string, string> = { openrouter: 'openrouter', openai
 /** A row's mark in Leo's icon set. */
 export function accountLogo(way: AccountWay, id: string | null): string {
   if (isSignInWay(way)) return SIGN_IN_LOGOS[way]
-  if (way === 'brave') return 'brave-icon-release-color'
+  if (way === 'brave') return 'social-brave-release-favicon-fullheight-color'
   return (way === 'gateway' && id && GATEWAY_LOGOS[id]) || 'key'
+}
+
+/**
+ * The service key the bridge gives the rows of `models.list` from this account (`providerKey`), so a
+ * person's choices about an account in Settings › Providers apply to the models it offers. Every AWS
+ * profile is one Bedrock service, and a row about the gateways as a whole is none of them.
+ */
+export function accountProviderKey(row: Pick<AccountRow, 'way' | 'id'>): string | null {
+  if (row.way === 'gateway') return row.id ? `gateway:${row.id}` : null
+  return row.way
+}
+
+/** A service key's mark in Leo's icon set, the one its account row shows. */
+export function providerLogo(key: string): string {
+  if (key.startsWith('gateway:')) return accountLogo('gateway', key.slice('gateway:'.length))
+  if (key === 'brave' || key === 'bedrock' || key === 'chatgpt' || key === 'xai') return accountLogo(key, null)
+  return 'key'
 }
 
 /** The ways the window takes a key for, and the only words `bravebot:enterKey` accepts. */
@@ -111,6 +128,8 @@ export type SignInAnswer = { attempt: Attempt } | { error: string } | null
 export interface SignInWindowState {
   way: SignInWay
   id: string | null
+  /** The row's name in the bridge's list, the one the settings page shows. */
+  name: string
   url: string | null
   port: number | null
   code: string | null

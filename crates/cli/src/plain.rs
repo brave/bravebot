@@ -133,16 +133,12 @@ fn mode_of(hosting: Option<&crate::host::Hosting>, skip_permissions: bool) -> Pe
     }
 }
 
-/// Whether the vetting prompts are answered from a safe verdict. Never in a background session,
-/// where only the mode the person chose answers in their absence (BG-8): the flag is refused there
-/// and the other two routes are standing answers somebody gave earlier.
-fn standing_vetting(
-    hosted: bool,
-    asked: bool,
-    chosen: Option<bool>,
-    configured: Option<bool>,
-) -> bool {
-    !hosted && bravebot_core::vetting::auto(asked, chosen, configured)
+/// Whether the vetting prompts are answered from a safe verdict, given what the three routes
+/// resolved to (`bravebot_session::store::auto_vetting`). Never in a background session, where only
+/// the mode the person chose answers in their absence (BG-8): the flag is refused there and the
+/// other two routes are standing answers somebody gave earlier.
+fn standing_vetting(hosted: bool, resolved: bool) -> bool {
+    !hosted && resolved
 }
 
 /// The prompt line, the answers, what is said beside the work, and where a background session's
@@ -526,8 +522,11 @@ fn run(
             notice = crate::progress::printable_lines(&failure.to_string())
         ));
     }
-    if skip_permissions {
-        asking.say(&t!(cli_notice, notice = t!(session_permissions_skipped)));
+    // Resolved once, here, where the first line about it is said, and handed to the session below.
+    let standing_vetting =
+        standing_vetting(hosted, bravebot_session::store::auto_vetting(&settings));
+    for line in crate::progress::bypass_notices(skip_permissions, standing_vetting) {
+        asking.say(&line);
     }
 
     // A background session's process has no interface a person opened and leaves, so it fires
@@ -587,12 +586,7 @@ fn run(
         courier,
         // Not a standing answer in a session nobody is watching: only the mode the person chose
         // answers there, so the prompts a safe verdict would have answered are held (BG-8).
-        auto_vetting: standing_vetting(
-            hosted,
-            bravebot_core::vetting::asked_for(),
-            bravebot_session::store::load_vetting(),
-            settings.auto_vetting(),
-        ),
+        auto_vetting: standing_vetting,
     };
 
     // Every question that precedes the first prompt is settled, so the session has begun and the
@@ -1912,6 +1906,7 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
             },
             ..Default::default()
         };
@@ -1937,6 +1932,7 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
             })
         );
     }
@@ -1959,11 +1955,10 @@ mod tests {
     /// prompts and none of a background session's.
     #[test]
     fn a_standing_vetting_answer_does_not_reach_a_hosted_session() {
-        assert!(standing_vetting(false, false, Some(true), None));
-        assert!(standing_vetting(false, false, None, Some(true)));
-        assert!(!standing_vetting(true, false, Some(true), None));
-        assert!(!standing_vetting(true, false, None, Some(true)));
-        assert!(!standing_vetting(true, true, Some(true), Some(true)));
+        assert!(standing_vetting(false, true));
+        assert!(!standing_vetting(false, false));
+        assert!(!standing_vetting(true, true));
+        assert!(!standing_vetting(true, false));
     }
 
     /// BG-8: a hosted session's turns run in the mode its process was started in, whatever the

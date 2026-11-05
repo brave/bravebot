@@ -4,7 +4,7 @@
 //! None of it takes a `Labelled` value, a `Policy`, a `SlotStore` or a `Sink`: the tool bodies that
 //! read, label or declassify content stay in `tools.rs`.
 
-use super::{WHY, offer_runs};
+use super::{MAX_FANOUT, WHY, offer_runs};
 use crate::confine::LOOPBACK_CONNECT_RULE;
 use bravebot_aichat::protocol::Tool;
 use bravebot_core::todo::Status;
@@ -85,6 +85,113 @@ impl Running {
     /// Whether what is said may name `run`.
     pub fn offered(self) -> bool {
         matches!(self, Running::Offered)
+    }
+}
+
+/// Which of the tools that planner-facing text names a turn's list holds.
+///
+/// Built once where the turn settles its list ([`Beside::on`]) and carried on `Tools` and into
+/// the turn-level code that words a result, so a sentence names one of these tools only where the
+/// list holds it and otherwise says what can be done without it, or nothing (TOOL-6). A fact about
+/// the offered list and about nothing a tool printed. [`Beside::every`] is the list that holds
+/// every one, which is what the text was written for, so a turn offered every tool reads the same
+/// bytes as before.
+///
+/// `run` is also [`Running`], which the refusals read; the two always agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Beside {
+    held: u16,
+}
+
+/// A tool that planner-facing text names only where the turn's list holds it. [`Beside`] holds a
+/// fact for each of these and for no other tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Named {
+    Run,
+    ReadOutput,
+    ReadFile,
+    ReadGit,
+    JobOutput,
+    WriteFile,
+    EditFile,
+    SpawnProcessor,
+    VetContent,
+    RequestPath,
+    Search,
+}
+
+impl Named {
+    const ALL: [Named; 11] = [
+        Named::Run,
+        Named::ReadOutput,
+        Named::ReadFile,
+        Named::ReadGit,
+        Named::JobOutput,
+        Named::WriteFile,
+        Named::EditFile,
+        Named::SpawnProcessor,
+        Named::VetContent,
+        Named::RequestPath,
+        Named::Search,
+    ];
+
+    /// The name the tool is offered under. `run` is read as [`Running::on`] reads it, so it has
+    /// no entry here.
+    fn offered_as(self) -> Option<&'static str> {
+        match self {
+            Named::Run => None,
+            Named::ReadOutput => Some("read_output"),
+            Named::ReadFile => Some("read_file"),
+            Named::ReadGit => Some("read_git"),
+            Named::JobOutput => Some("job_output"),
+            Named::WriteFile => Some("write_file"),
+            Named::EditFile => Some("edit_file"),
+            Named::SpawnProcessor => Some("spawn_processor"),
+            Named::VetContent => Some("vet_content"),
+            Named::RequestPath => Some("request_path"),
+            Named::Search => Some("search"),
+        }
+    }
+
+    const fn bit(self) -> u16 {
+        1 << self as u16
+    }
+}
+
+impl Beside {
+    /// What a list of tools holds, read off the list. `run` is read as [`Running::on`] reads it.
+    pub fn on(offered: &[Tool]) -> Self {
+        let running = Running::on(offered).offered();
+        let held = Named::ALL
+            .into_iter()
+            .filter(|named| match named.offered_as() {
+                None => running,
+                Some(name) => offered.iter().any(|tool| tool.function.name == name),
+            })
+            .fold(0, |held, named| held | named.bit());
+        Self { held }
+    }
+
+    /// A list that holds every one of them.
+    pub fn every() -> Self {
+        Self {
+            held: Named::ALL
+                .into_iter()
+                .fold(0, |held, named| held | named.bit()),
+        }
+    }
+
+    /// Whether the list holds this tool.
+    pub fn holds(self, named: Named) -> bool {
+        self.held & named.bit() != 0
+    }
+
+    /// This list without the tool, as a list that lacks it is read.
+    #[must_use]
+    pub fn without(self, named: Named) -> Self {
+        Self {
+            held: self.held & !named.bit(),
+        }
     }
 }
 
@@ -203,7 +310,8 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
          should be is its decision, not yours. It reads the whole document, so it can work out \
          what is wrong and where the fix goes, and leave a file alone if it turns out not to be \
          the one you are after. {derived_text} Once your context holds private content, as it does {shows}after \
-         a delegate reports some, and in a conversation resumed with some, every later \
+         a delegate reports some, in a conversation resumed with some, and in a delegate started \
+         while its parent's context held some, every later \
          spawn_processor call is refused for the rest of the conversation: what you write is \
          private from then on, and a processor takes no private instruction. {working} keep \
          working."
@@ -218,13 +326,19 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     } else {
         ""
     };
+    let closes_processors = if beside("spawn_processor") {
+        "Being shown output closes spawn_processor for you and for every delegate you start \
+         afterwards. "
+    } else {
+        ""
+    };
     format!(
         "Ask to be shown what a command printed. Give the reference a run handed back. Use it \
          whenever you ran something to find something out, which is most of the time: a run's \
          output is quarantined by default, so `which`, `find`, `uname` and the like tell you \
          nothing until you ask for the result. Ask for the errors too when a run fails, or you \
          will not know why it failed and must not claim it succeeded. Only for output from run; \
-         a quarantined file is not readable this way. {anything_else}Output you were shown the \
+         a quarantined file is not readable this way. {closes_processors}{anything_else}Output you were shown the \
          beginning and end of, because the whole was too long for one result, is the exception: \
          you may read all of it, so nobody is asked, and it comes back a page at a time from the \
          offset you give. A pattern searches that output instead of paging it: you get the \
@@ -351,6 +465,179 @@ fn run_background_description(beside: &dyn Fn(&str) -> bool) -> String {
     )
 }
 
+/// What the description of `run` says about watching something: a file by its change token and a
+/// program by `job_output`, naming `read_file` and `job_output` only where `beside` says they are on
+/// the list. A list without `read_file` is not told how a file is compared, and one without
+/// `job_output` is told only that it is told when the job ends.
+///
+/// The table joins this into the description and [`state_what_is_beside`] replaces it there.
+fn run_watching(beside: &dyn Fn(&str) -> bool) -> String {
+    let file = if beside("read_file") {
+        "A file takes no command at all: read_file hands back a change token, and comparing the \
+         token from one look with the token from the next is the whole of the technique."
+    } else {
+        "A file is watched by comparing what one look at it returned with what the next look \
+         returns."
+    };
+    let program = if beside("job_output") {
+        "A program's own output is watched here: start it with background: true and call \
+         job_output with wait_seconds, which is one call covering a window rather than a look \
+         per turn."
+    } else {
+        "A program's own output is watched here: start it with background: true, and you are \
+         told when it ends."
+    };
+    let later = if beside("read_file") {
+        "comparing a token needs a later look."
+    } else {
+        "comparing two looks needs a later look."
+    };
+    format!(
+        "{file} {program} Neither reaches past this turn by itself: a background job is killed \
+         when the turn ends unless the account of its start says the session keeps it, and \
+         {later}"
+    )
+}
+
+/// The description of `run`'s `read` argument, naming `read_output` only where `beside` says it is
+/// on the list. A turn without it is not released output by `read`, so it is told the argument does
+/// nothing there and where the output goes.
+fn run_read_description(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("read_output") {
+        "Ask to read what the command prints in this result. Where read_output would hand it to \
+         you without asking the user, or would hand it back at once, it comes back here as text \
+         you can read, and there is no read_output call to make. Where it would be kept back, \
+         it still comes back as a reference. Output too long for one result still comes back as \
+         a reference, with its size, and read_output is not held to that size. Everywhere else \
+         this changes nothing, and output you may not read still comes back as a reference. \
+         Defaults to false. Not with background: true, which has printed nothing yet."
+            .to_string()
+    } else {
+        "Ask to read what the command prints in this result. This changes nothing in this turn: \
+         output you may not read comes back as a reference. Defaults to false. Not with \
+         background: true, which has printed nothing yet."
+            .to_string()
+    }
+}
+
+/// The paragraph of the `read_file` description on pictures and PDFs, naming `spawn_processor`
+/// only where `beside` says it is on the list.
+fn read_file_pictures(beside: &dyn Fn(&str) -> bool) -> String {
+    let and_then = if beside("spawn_processor") {
+        " Give that reference to spawn_processor with a question about it and the answer comes \
+         back the way any processor's does. That is how to check a screenshot or read a scanned \
+         page."
+    } else {
+        ""
+    };
+    format!(
+        "A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
+         than as anything you can look at, whoever vouched for the directory it is in.{and_then}"
+    )
+}
+
+/// The paragraph of the `read_file` description on notebooks, naming `edit_file` only where
+/// `beside` says it is on the list.
+fn read_file_notebook(beside: &dyn Fn(&str) -> bool) -> String {
+    let cells = if beside("edit_file") {
+        ": edit_file changes a cell by that number."
+    } else {
+        "."
+    };
+    format!(
+        "A .ipynb notebook comes back as its cells, numbered from 1, with their source \
+         only{cells} Saved outputs are not shown unless you ask for one cell's with output_of, \
+         and they come back as a reference like a picture does, because a program or a web page \
+         may have written them."
+    )
+}
+
+/// The `output_of` argument of `read_file`, naming `spawn_processor` only where `beside` says it is
+/// on the list.
+fn read_file_output_of(beside: &dyn Fn(&str) -> bool) -> String {
+    let reference = if beside("spawn_processor") {
+        "a reference for spawn_processor"
+    } else {
+        "a reference"
+    };
+    format!(
+        "In a .ipynb notebook, the number of a code cell, from 1 as a read of the notebook \
+         shows them, to get the cell's saved outputs instead of the cells. They come back as \
+         {reference}, never as text, and a picture in one is a line giving its size. offset and \
+         limit are ignored."
+    )
+}
+
+/// The description of `write_file`'s `contents_ref` argument, naming `spawn_processor` only where
+/// `beside` says it is on the list. Where it is not, no answer of a processor is made in the turn,
+/// so the argument does not say where one may be written. The driver refuses such a write
+/// whatever the description says (PROC-6).
+fn write_file_contents_ref_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let lands = if beside("spawn_processor") {
+        " What spawn_processor produced may be written only over the file that call was about. \
+         When the call read only references that are no file, such as a fetched page or a run's \
+         output, it may be written only to a new file in the scratch directory."
+    } else {
+        ""
+    };
+    format!(
+        "A reference whose quarantined content becomes the whole file, e.g. \"ref:2\". This is \
+         how to write out something you were never shown, such as a fetched page.{lands} A \
+         picture or PDF reference is written as the file it encodes, to a path you name ending \
+         in its extension, such as .png."
+    )
+}
+
+/// The description of `edit_file`, naming `write_file` only where `beside` says it is on the list.
+fn edit_file_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let diff = if beside("write_file") {
+        " Prefer this to write_file when changing part of a file: the user approves a diff, which \
+         is easier to review than a whole body."
+    } else {
+        ""
+    };
+    format!(
+        "Replace an exact passage of text in an existing workspace file.{diff} The user must \
+         approve each edit before it happens, so explain what you are changing. To change \
+         several places in one file, give them together in edits: the user approves one diff. \
+         In a .ipynb notebook, name a cell by the number a read showed instead of a passage: \
+         give cell and new_text to replace that cell's source (its saved outputs are dropped), \
+         or cell_action insert_after or delete."
+    )
+}
+
+/// What `repo_map` says about reading the lines a map points at, naming `read_file` only where
+/// `beside` says it is on the list.
+fn repo_map_bodies(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("read_file") {
+        "never bodies: read_file reads the lines it points at.".to_string()
+    } else {
+        "never bodies.".to_string()
+    }
+}
+
+/// What `lsp` says about a definition in a dependency, naming `read_file` only where `beside` says
+/// it is on the list.
+fn lsp_dependency(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("read_file") {
+        "the line says so, and read_file will not open it.".to_string()
+    } else {
+        "the line says so.".to_string()
+    }
+}
+
+/// What `vet_content` says about the alternative to reading, naming `spawn_processor` only where
+/// `beside` says it is on the list.
+fn vet_content_instead(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("spawn_processor") {
+        "Say plainly in your reply why you need to read it rather than pass it to \
+         spawn_processor."
+            .to_string()
+    } else {
+        "Say plainly in your reply why you need to read it.".to_string()
+    }
+}
+
 /// Write the descriptions that name other tools again for the list a turn settled on, so a run is
 /// not sent to a tool it is not offered.
 ///
@@ -372,12 +659,30 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
         match tool.function.name.as_str() {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
-            "fetch_url" => tool.function.description = fetch_url_description(&beside),
+            "fetch_url" => {
+                tool.function.description = fetch_url_description(&beside);
+                // `read` asks for the release `vet_content` makes, so a list without it has
+                // nothing for the argument to ask.
+                if !beside("vet_content")
+                    && let Some(properties) = tool
+                        .function
+                        .parameters
+                        .pointer_mut("/properties")
+                        .and_then(|properties| properties.as_object_mut())
+                {
+                    properties.remove("read");
+                }
+            }
             "job_output" => tool.function.description = job_output_description(&beside),
             "run" => {
                 tool.function.description = tool.function.description.replacen(
                     &(run_reference_moves(&|_| true) + &run_text_made_from_it(&|_| true)),
                     &(run_reference_moves(&beside) + &run_text_made_from_it(&beside)),
+                    1,
+                );
+                tool.function.description = tool.function.description.replacen(
+                    &run_watching(&|_| true),
+                    &run_watching(&beside),
                     1,
                 );
                 if let Some(background) = tool
@@ -387,6 +692,60 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
                 {
                     *background = json!(run_background_description(&beside));
                 }
+                if let Some(read) = tool
+                    .function
+                    .parameters
+                    .pointer_mut("/properties/read/description")
+                {
+                    *read = json!(run_read_description(&beside));
+                }
+            }
+            "read_file" => {
+                for (full, narrowed) in [
+                    (read_file_pictures(&|_| true), read_file_pictures(&beside)),
+                    (read_file_notebook(&|_| true), read_file_notebook(&beside)),
+                ] {
+                    tool.function.description =
+                        tool.function.description.replacen(&full, &narrowed, 1);
+                }
+                if let Some(output_of) = tool
+                    .function
+                    .parameters
+                    .pointer_mut("/properties/output_of/description")
+                {
+                    *output_of = json!(read_file_output_of(&beside));
+                }
+            }
+            "write_file" => {
+                if let Some(contents_ref) = tool
+                    .function
+                    .parameters
+                    .pointer_mut("/properties/contents_ref/description")
+                {
+                    *contents_ref = json!(write_file_contents_ref_description(&beside));
+                }
+            }
+            "edit_file" => tool.function.description = edit_file_description(&beside),
+            "repo_map" => {
+                tool.function.description = tool.function.description.replacen(
+                    &repo_map_bodies(&|_| true),
+                    &repo_map_bodies(&beside),
+                    1,
+                );
+            }
+            "lsp" => {
+                tool.function.description = tool.function.description.replacen(
+                    &lsp_dependency(&|_| true),
+                    &lsp_dependency(&beside),
+                    1,
+                );
+            }
+            "vet_content" => {
+                tool.function.description = tool.function.description.replacen(
+                    &vet_content_instead(&|_| true),
+                    &vet_content_instead(&beside),
+                    1,
+                );
             }
             _ => {}
         }
@@ -471,13 +830,12 @@ fn table(
     } else {
         "list_files, search or read_file"
     };
-    // What write_file says about where a processor's answer may be written (PROC-6). The same for
-    // a turn with `run` and one without, since writing the file needs no program.
-    let processor_answer_lands = "What spawn_processor produced may be written only over the file \
-         that call was about. When the call read only references that are no file, such as a \
-         fetched page or a run's output, it may be written only to a new file in the scratch \
-         directory.";
+    // The paragraphs of the read_file description that name another tool. The same for a turn with
+    // `run` and one without; `state_what_is_beside` rewrites them for the list a turn settled on.
+    let pictures = read_file_pictures(&|_| true);
+    let notebook = read_file_notebook(&|_| true);
     let mut tools = vec![
+
         Tool::function(
             "read_file",
             format!(
@@ -508,16 +866,9 @@ fn table(
              conversation. A different window, or a file somebody has written since, comes back as \
              lines. \
              \
-             A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
-             than as anything you can look at, whoever vouched for the directory it is in. Give \
-             that reference to spawn_processor with a question about it and the answer comes back \
-             the way any processor's does. That is how to check a screenshot or read a scanned \
-             page. \
+             {pictures} \
              \
-             A .ipynb notebook comes back as its cells, numbered from 1, with their source only: \
-             edit_file changes a cell by that number. Saved outputs are not shown unless you \
-             ask for one cell's with output_of, and they come back as a reference like a \
-             picture does, because a program or a web page may have written them."
+             {notebook}"
             ),
             json!({
                 "type": "object",
@@ -529,12 +880,7 @@ fn table(
                     },
                     "output_of": {
                         "type": "integer",
-                        "description": "In a .ipynb notebook, the number of a code cell, from \
-                                        1 as a read of the notebook shows them, to get the \
-                                        cell's saved outputs instead of the cells. They come \
-                                        back as a reference for spawn_processor, never as \
-                                        text, and a picture in one is a line giving its size. \
-                                        offset and limit are ignored."
+                        "description": read_file_output_of(&|_| true)
                     },
                     "path_ref": {
                         "type": "string",
@@ -644,13 +990,7 @@ fn table(
                     },
                     "contents_ref": {
                         "type": "string",
-                        "description": format!(
-                            "A reference whose quarantined content becomes the whole file, \
-                             e.g. \"ref:2\". This is how to write out something you were never \
-                             shown, such as a fetched page. {processor_answer_lands} A picture \
-                             or PDF reference is written as the file it encodes, to a path you \
-                             name ending in its extension, such as .png."
-                        )
+                        "description": write_file_contents_ref_description(&|_| true)
                     }
                 },
                 "required": []
@@ -658,14 +998,7 @@ fn table(
         ),
         Tool::function(
             "edit_file",
-            "Replace an exact passage of text in an existing workspace file. Prefer this to \
-             write_file when changing part of a file: the user approves a diff, which is \
-             easier to review than a whole body. The user must approve each edit before it \
-             happens, so explain what you are changing. To change several places in one \
-             file, give them together in edits: the user approves one diff. In a .ipynb \
-             notebook, name a cell by the number a read showed instead of a passage: give \
-             cell and new_text to replace that cell's source (its saved outputs are dropped), \
-             or cell_action insert_after or delete.",
+            edit_file_description(&|_| true),
             json!({
                 "type": "object",
                 "properties": {
@@ -1316,14 +1649,9 @@ fn table(
              no moment at which it is up and you can do anything with it. \
              \
              Asked to watch something, or to say when it changes, decide first what is being \
-             watched, because a file and a program are watched by different means. A file takes no \
-             command at all: read_file hands back a change token, and comparing the token from one \
-             look with the token from the next is the whole of the technique. A program's own \
-             output is watched here: start it with background: true and call job_output with \
-             wait_seconds, which is one call covering a window rather than a look per turn. \
-             Neither reaches past this turn by itself: a background job is killed when the turn \
-             ends unless the account of its start says the session keeps it, and comparing a token \
-             needs a later look. "
+             watched, because a file and a program are watched by different means. "
+                + &run_watching(&|_| true)
+                + " "
                 + look_again_after_a_run
                 + " And say which window you watched, or which looks you compared, rather than \
                    a time of day, which you have no clock for. Where the request is to watch \
@@ -1425,17 +1753,7 @@ fn table(
                     },
                     "read": {
                         "type": "boolean",
-                        "description": "Ask to read what the command prints in this result. \
-                                        Where read_output would hand it to you without asking \
-                                        the user, or would hand it back at once, it comes back \
-                                        here as text you can read, and there is no read_output \
-                                        call to make. Where it would be kept back, it still \
-                                        comes back as a reference. Output too long for one \
-                                        result still comes back as a reference, with its size, \
-                                        and read_output is not held to that size. Everywhere \
-                                        else this changes nothing, and output you may not read \
-                                        still comes back as a reference. Defaults to false. Not \
-                                        with background: true, which has printed nothing yet."
+                        "description": run_read_description(&|_| true)
                     }
                 },
                 "required": ["command"]
@@ -1565,7 +1883,10 @@ fn table(
              task to delegates of its own, though not without end: the tree stops a few levels \
              down, and one turn starts only so many however they are arranged. Its writes, its \
              runs and its calls to an MCP server's tools are still shown to the user for \
-             approval, so this saves you context and never an approval. Do not use it for \
+             approval, so this saves you context and never an approval. A delegate started after \
+             you have been shown output from read_output, content from vet_content or a \
+             delegate's report cannot run processors, so start a task that needs a picture or \
+             a file looked at before then, or leave it to the person. Do not use it for \
              something one read would answer: it is a \
              whole second agent and costs like one.",
             json!({
@@ -1574,7 +1895,8 @@ fn table(
                     "kind": {
                         "type": "string",
                         "description": "Which kind of agent, narrowest first. \"reader\" reads, \
-                                        lists, searches and runs processors: use it to find \
+                                        lists, searches and, while the context that started it \
+                                        holds nothing private, runs processors: use it to find \
                                         something out. \"checker\" also runs programs and asks \
                                         a language server, so it can build, test and lint, but \
                                         writes nothing: use it to \
@@ -1596,13 +1918,16 @@ fn table(
                     },
                     "each": {
                         "type": "array",
-                        "description": "Optional. Start one delegate per entry instead of one \
-                                        in total, each told the task followed by its own entry. \
-                                        Put what they share in task and only the differing part \
-                                        here, e.g. one path per entry. Writing the same \
-                                        paragraph out four times costs you the seconds it takes \
-                                        to say it, and the delegates cannot start until you \
-                                        have.",
+                        "description": format!(
+                            "Optional. Start one delegate per entry instead of one in total, \
+                             each told the task followed by its own entry. Put what they share \
+                             in task and only the differing part here, e.g. one path per \
+                             entry. One call starts at most {MAX_FANOUT} delegates and a call \
+                             with more entries is refused; for more, make a further call with \
+                             the same task and the next entries. Writing the same paragraph \
+                             out four times costs you the seconds it takes to say it, and the \
+                             delegates cannot start until you have."
+                        ),
                         "items": {"type": "string"}
                     },
                     "isolation": {
@@ -1639,7 +1964,11 @@ fn table(
                         "description": "Optional. The most tokens each delegate may spend, \
                                         written as \"500000\", \"500k\" or \"2m\". A delegate that has spent it \
                                         loses its tools and answers with what it has, and you \
-                                        are told so beside its report. It can only lower the \
+                                        are told so beside its report. Every request counts \
+                                        the whole conversation so far, so a figure buys a few \
+                                        dozen requests, not a few dozen thousand tokens of \
+                                        reading: 2m is about thirty requests at 70k tokens \
+                                        each. It can only lower the \
                                         bound the delegate's definition sets. Leave it out to \
                                         set none."
                     }
@@ -1656,6 +1985,14 @@ fn table(
                     "url": {
                         "type": "string",
                         "description": "The absolute http or https URL to fetch."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": "Ask to have the page checked and released in this \
+                                        result, as vet_content would, so there is no \
+                                        vet_content call to make. Where it would be kept \
+                                        back, or the page is too long for one result, it \
+                                        still comes back as a reference. Defaults to false."
                     }
                 },
                 "required": ["url"]
@@ -2269,20 +2606,30 @@ pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
 /// Say in the `run` description what its programs are held to, for a turn that confines them.
 ///
 /// Appended to the table's description rather than a parameter of it, so the many callers that
-/// build a table for another reason are untouched. Nothing where the list does not offer `run` or
-/// the turn does not confine, since a planner is not told of a boundary its programs do not have.
+/// build a table for another reason are untouched. Nothing where the list does not offer `run`.
+/// Where the turn does not confine or the mode is `off`, no boundary is stated, since a planner is
+/// not told of a boundary its programs do not have, and the description says only that
+/// `request_path` is refused and nobody is asked.
 ///
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call,
-/// so the description names them only where it would.
+/// so the description names them only where it would. The sentences that name `request_path` are
+/// written only where `tools` holds it: a `--tools run` turn or a definition that leaves it out is
+/// not told of a tool it cannot call, including that the tool is refused (TOOL-6).
 pub fn state_confinement(
     tools: &mut [Tool],
     confine_runs: bool,
     sandbox: bravebot_sandbox::SandboxMode,
     requests_offered: bool,
 ) {
-    let Some(stated) =
-        crate::confine::stated_to_the_planner(confine_runs, sandbox, requests_offered)
-    else {
+    let request_path_listed = tools
+        .iter()
+        .any(|tool| tool.function.name == "request_path");
+    let Some(stated) = crate::confine::stated_in_the_description(
+        confine_runs,
+        sandbox,
+        requests_offered,
+        request_path_listed,
+    ) else {
         return;
     };
     if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {

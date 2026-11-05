@@ -34,8 +34,10 @@
 
   /* Status. Only ever systemfeedback. */
   --status-success: var(--leo-color-systemfeedback-success-icon);
+  --status-success-ink: var(--leo-color-systemfeedback-success-text);
   --status-success-bg: var(--leo-color-systemfeedback-success-background);
   --status-warning: var(--leo-color-systemfeedback-warning-icon);
+  --status-warning-ink: var(--leo-color-systemfeedback-warning-text);
   --status-warning-bg: var(--leo-color-systemfeedback-warning-background);
   --status-error: var(--leo-color-systemfeedback-error-icon);
   --status-error-ink: var(--leo-color-systemfeedback-error-text);
@@ -101,6 +103,10 @@
   --icon-meta: 14px;
   --icon-control: 16px;
   --icon-hero: 20px;
+  /* An account's mark in the Providers list. */
+  --icon-account: 24px;
+  /* Every spinner, wherever it is drawn. */
+  --spinner: var(--icon-hero);
 
   /* Motion. FOLD_MS in columns.ts must match --leo-duration-m. */
   --motion-fast: var(--leo-duration-s) var(--leo-easing-out);

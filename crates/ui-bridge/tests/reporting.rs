@@ -127,8 +127,8 @@ fn every_other_report_is_passed_through_unfiltered() {
     reporter.phase(Phase::Planning);
     reporter.tool_started(Activity::running("read", "a.rs"));
     reporter.tool_finished(Activity::running("read", "a.rs").done("2 lines"));
-    reporter.landed(Landing::Quarantined);
-    reporter.landed(Landing::Quarantined);
+    reporter.landed(None, Landing::Quarantined);
+    reporter.landed(None, Landing::Quarantined);
 
     assert_eq!(
         names(&events),
@@ -525,4 +525,20 @@ fn the_list_lasts_across_the_reporters_of_a_session() {
     );
     assert_eq!(last["started"], 2);
     assert_eq!(last["working"], 1);
+}
+
+/// A window places a landing on the row of the call it is about, so the event names the call the
+/// engine gave it, and a landing no dispatch made names none.
+#[test]
+fn a_landing_names_the_call_it_is_about() {
+    let (mut reporter, events) = harness();
+    let call = bravebot_agent::report::CallId::next();
+
+    reporter.landed(Some(call), Landing::Context);
+    reporter.landed(None, Landing::Reserved);
+
+    let events = events.lock().expect("not poisoned");
+    assert_eq!(events[0].data["call"], serde_json::json!(call.get()));
+    assert_eq!(events[0].data["landing"], "context");
+    assert!(events[1].data["call"].is_null());
 }

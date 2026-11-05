@@ -22,7 +22,8 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 ## Scope
 
 The opt-in Rust display view for fresh local bridge sessions, and the standalone TypeScript client
-that applies it over stdio. The view has no listener, native binding, recovery, or controller
+that applies it over stdio, or in development over the loopback relay that
+[local-host.md](local-host.md) describes. The view has no listener, native binding, recovery, or controller
 model. The view does not grant authority. Exact action targets (RPCVIEW-6) apply to every client of
 the bridge, and RPCVIEW-8 states what the local channel they arrive on is. A client that names no
 turn in a cancel stops whatever is running.
@@ -72,7 +73,7 @@ use the same tag-only projection as saved history. Narration, quarantined previe
 and finishes, approvals, and terminal replies/errors produce rows. Other legacy events, including
 audit, token counts, todos and phases, are outside version 1's transcript.
 
-The engine gives a call no identity, so a tool finish replaces the row of the latest call still running, keeping its ID and position, and a call is one row. No content of a call decides which row that is, because a call's target can be content from outside. Two calls in flight therefore pair by arrival order, and a finish that is not for the latest call lands on the wrong row. A finish with no call running produces a row of its own. A turn's end forgets the calls it left running.
+The engine gives each dispatch an id, `call`, from a counter, carried on both its start and its finish ([phase-0 Activity](../../ui/docs/phase-0-rpc-protocol.md)). A tool finish replaces the row of the running call with the same id, keeping its ID and position, so a call is one row in whichever order overlapping calls finish. No content of a call decides which row that is, because a call's target can be content from outside. A finish whose id names no running call, or that has no id, produces a row of its own. A turn's end forgets the calls it left running.
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Terminal updates clear pending approvals. Completion publication and next-turn
@@ -87,6 +88,7 @@ The bridge retains only current view metadata and the pending payload. Clients r
 `verified-by: bravebot_ui_bridge::emit::completion_is_eligible_before_publication_and_precedes_the_next_turn`
 `verified-by: bravebot_ui_bridge::view::failures_have_authoritative_terminal_status`
 `verified-by: bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends`
+`verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_under_an_id_of_its_own`
 `verified-by: bravebot_ui_bridge::wire::accepted_composed_prompts_cross_without_their_text`
 `verified-by: bravebot_ui_bridge::view::a_terminal_update_clears_the_question_still_waiting`
 
@@ -173,7 +175,7 @@ repeated trust answer, and a client talking to one must not claim the stronger p
 <a id="RPCVIEW-5"></a>
 ### RPCVIEW-5: the TypeScript client applies the view and decides nothing
 
-`packages/agent-client` is the stdio client. Its wire types are checked against the Rust types
+`packages/agent-client` is the stdio client. Its `./dev-relay` export carries the same client over the development relay that [local-host.md](local-host.md) describes, and these rules hold there too. Its wire types are checked against the Rust types
 through a contract file that a Rust test writes and compares. The client requires the advertised
 capability and refuses a runtime that lacks version 1, before it creates a session. It starts the
 view itself and never builds one from legacy events.

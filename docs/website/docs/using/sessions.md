@@ -169,10 +169,11 @@ The record keeps the model that answered and what **each turn** spent, alongside
 recorded is the one that **answered**, not the one you asked for, since an endpoint may serve
 something other than the name it was given.
 
-Every turn's wall clock is written down **split four ways**: waiting on the model, running tools,
-waiting for you to answer a prompt, and whatever is left over. The four are a partition rather than
-four separate measures, so an approval drawn from inside a tool call is taken off the tool figure
-rather than counted in both. `/status` reports the session total and each part that actually
+Every turn's wall clock is written down **split five ways**: waiting on the model, running tools,
+waiting for you to answer a prompt, waiting for another run to leave the file boundary, and whatever
+is left over. The five are a partition rather than five separate measures, so an approval or a wait
+for the file boundary drawn from inside a tool call is taken off the tool figure rather than counted
+in both. `/status` reports the session total and each part that actually
 happened, leaving out a part that did not rather than showing it as zero.
 
 What a [delegate](../how-it-works.md#delegates) spends is counted in the turn's tokens. Its seconds

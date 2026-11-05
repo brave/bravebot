@@ -287,8 +287,8 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
         // A closed receiver means the test observer has already exited.
         let _ = started.send(());
     }
-    let (delegated, ran, partial, requests, work) = match working.handle.join() {
-        Ok((ended, partial, requests)) => {
+    let (delegated, ran, partial, requests, blocked, work) = match working.handle.join() {
+        Ok((ended, partial, requests, blocked)) => {
             // Before anything else, and on both of the ways a run can end. A person who
             // vouched for the build inside this delegate is not asked again by a delegate
             // spawned after it, and one whose run failed had the same person answer the same
@@ -320,7 +320,7 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
             }
             let ran = Some((ended.took, ended.rounds));
             let work = Some((ended.worked.work, working.checkout.is_some()));
-            (ended.delegated, ran, partial, requests, work)
+            (ended.delegated, ran, partial, requests, blocked, work)
         }
         // A thread that panicked is a delegate that stopped, which is all anybody can be
         // told about it: what it was doing died with it, and the turn is still running.
@@ -334,11 +334,26 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
             None,
             Default::default(),
             Vec::new(),
+            Vec::new(),
             None,
         ),
     };
 
-    spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
+    // The spans reach this turn's parent too, if it is a delegate itself, which is joined over a
+    // window that holds this one.
+    policy
+        .file_authority()
+        .record_waits(
+            blocked
+                .iter()
+                .map(|span| bravebot_core::file_authority::Wait {
+                    start: span.start,
+                    end: span.end,
+                }),
+        );
+    let added = waits.collected(crate::timing::Interval::since(joined_at), requests, blocked);
+    spent.inference += added.inference;
+    spent.file_wait += added.file_wait;
 
     let finish = finish_of(&delegated, ran);
     // What its own backend reported it spent, which on a failed run is the part that completed.

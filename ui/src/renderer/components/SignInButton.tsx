@@ -36,12 +36,12 @@ export function signInSentence(result: SignInResult, name: string): string {
  * "Sign in" beside a command that signs in to the ChatGPT or the xAI account, on a failure card
  * or a picker warning (CHATGPT-8, XAI-15, XAI-19). It asks the main process, as the Accounts row does.
  */
-export function SignInButton({ way, session, onSignedIn }: { way: SignInWay; session?: string; onSignedIn?: () => void }): React.JSX.Element {
+export function SignInButton({ way, session, onSignedIn, size = 'small' }: { way: SignInWay; session?: string; onSignedIn?: () => void; size?: 'tiny' | 'small' }): React.JSX.Element {
   const signIn = useSignIn(onSignedIn, session)
   const name = SIGN_IN_NAMES[way]
   if (signIn.waiting?.way === way) return <SignInWaiting waiting={signIn.waiting} onShow={signIn.show} onCancel={signIn.cancel} />
   return <span className="sign-in-ask">
-    <Button size="small" kind="filled" isDisabled={signIn.busy} onClick={() => void signIn.start(way)} data-test={`sign-in-${way}`}>{t.uiAccountsSignIn()}</Button>
+    <Button size={size} kind="filled" isDisabled={signIn.busy} onClick={() => void signIn.start(way)} data-test={`sign-in-${way}`}>{t.uiAccountsSignIn()}</Button>
     {signIn.result && (signIn.result.way ?? way) === way && <span role="status" className="settings-caption">{signInSentence(signIn.result, name)}</span>}
   </span>
 }

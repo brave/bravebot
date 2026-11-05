@@ -2155,3 +2155,279 @@ fn diagnostics_for_a_file_that_is_not_there_start_no_server() {
     assert!(result.contains("src/missing.rs is not a file"), "{result}");
     assert!(!result.contains("language server:"), "{result}");
 }
+
+/// The diagnosing script, recording the uri of every document it is told about in `$OPENED`.
+fn recording_opens() -> String {
+    DIAGNOSING_SERVER.replacen(
+        "  case \"$body\" in\n    *'\"initialize\"'*)",
+        "  case \"$body\" in\n    *'\"textDocument/didOpen\"'*|*'\"textDocument/didChange\"'*) echo \"$uri\" >> \"$OPENED\" ;;\n  esac\n  case \"$body\" in\n    *'\"initialize\"'*)",
+        1,
+    )
+}
+
+/// What the planner is told, and what the session did, after an `lsp` call asks about `path`
+/// from a workspace with `outside/x.rs` beside it and `src/link` a link to that directory.
+///
+/// Returns the `lsp` result, the confinement refusals in the trail, how many times the person was
+/// asked about a server, how many servers started, and the documents the server was told about.
+fn asking_about(
+    name: &str,
+    operation: &str,
+    path: impl FnOnce(&Path) -> String,
+) -> (String, Vec<String>, usize, usize, String) {
+    asking_about_reaching(name, operation, Reach::default(), path)
+}
+
+/// What a session has been told it may reach beyond the workspace root, for [`asking_about_reaching`].
+#[derive(Default, Clone, Copy)]
+struct Reach {
+    /// The person's home directory is the `outside` directory, so `~/x.rs` names `outside/x.rs`.
+    home_is_outside: bool,
+    /// The `outside` directory was added to the workspace, as `/add-dir` does.
+    admit_outside: bool,
+}
+
+/// Puts `$HOME` back when dropped, so a test that panics does not leave its home for the next.
+struct HomeRestored(Option<std::ffi::OsString>);
+
+impl Drop for HomeRestored {
+    fn drop(&mut self) {
+        // SAFETY: the test that made this holds PATH_LOCK until after it is dropped.
+        unsafe {
+            match self.0.take() {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+}
+
+/// [`asking_about`] for a session with the given reach beyond the root.
+fn asking_about_reaching(
+    name: &str,
+    operation: &str,
+    reach: Reach,
+    path: impl FnOnce(&Path) -> String,
+) -> (String, Vec<String>, usize, usize, String) {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let beside = Scratch::new(name);
+    let scratch = Scratch {
+        path: beside.path.join("workspace"),
+    };
+    std::fs::create_dir_all(&scratch.path).expect("create the workspace");
+    let outside = beside.path.join("outside");
+    std::fs::create_dir_all(&outside).expect("create the outside directory");
+    std::fs::write(outside.join("x.rs"), "pub fn elsewhere() {}\n").expect("write x.rs");
+    // The workspace reads the home when it is built, so `$HOME` is set before it.
+    let _home = HomeRestored(std::env::var_os("HOME"));
+    if reach.home_is_outside {
+        // SAFETY: PATH_LOCK is held for the whole of this body, and `_home` puts the value back.
+        // `BRAVEBOT_HOME` answers before `HOME`, so it is cleared for the same reason.
+        unsafe {
+            std::env::set_var("HOME", &outside);
+            std::env::remove_var("BRAVEBOT_HOME");
+        };
+    }
+    let (mut workspace, recorded) = a_workspace_with_a_server(&scratch);
+    if reach.admit_outside {
+        workspace
+            .add_directory(outside.to_str().expect("utf-8 path"))
+            .expect("the directory is added");
+    }
+    std::fs::write(scratch.path.join("bin/rust-analyzer"), recording_opens())
+        .expect("write the server");
+    std::os::unix::fs::symlink(&outside, scratch.path.join("src/link")).expect("link");
+    let opened = beside.path.join("opened");
+    // SAFETY: PATH_LOCK is held for the whole of this body.
+    unsafe { std::env::set_var("OPENED", &opened) };
+
+    let arguments = format!(
+        r#"{{"operation":"{operation}","path":"{}","line":1,"character":1}}"#,
+        path(&beside.path)
+    );
+    let mut planner = vec![tool_request("lsp", &arguments), reply_with("done")].into_iter();
+    let (endpoint, received) = serve(move |body| {
+        if body.contains("prompt-injection classifier") {
+            return Some(reply_with(
+                r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+            ));
+        }
+        planner.next()
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+        approve_writes: false,
+    };
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ask about a file"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let requests: Vec<String> = received
+        .try_iter()
+        .filter(|body| !body.contains("prompt-injection classifier"))
+        .collect();
+    let result = result_of("lsp", requests.last().expect("a request"));
+    let refusals = sink
+        .blocked()
+        .filter_map(|event| match event {
+            bravebot_core::event::Event::GateBlocked {
+                gate: "confine",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    let told = std::fs::read_to_string(&opened).unwrap_or_default();
+    (result, refusals, asking.asked, starts(&recorded), told)
+}
+
+/// LSP-4: a path that lands outside the workspace is refused before a server is started or the
+/// person is asked about one, whichever way it is spelled: absolute, climbing out with `..`, or
+/// through a link inside the root that leads out. The refusal names the cause and the path as
+/// typed, is in the trail once as a confinement refusal, and the server is told of no document.
+///
+/// Each spelling is tried for a query with a position and for `diagnostics`, which take the same
+/// field through different checks afterwards.
+#[test]
+fn a_path_that_lands_outside_the_workspace_is_refused_before_a_server_is_asked() {
+    type Spelling = (&'static str, fn(&Path) -> String);
+    let spellings: [Spelling; 3] = [
+        ("absolute", |beside| {
+            beside.join("outside/x.rs").to_string_lossy().into_owned()
+        }),
+        ("climbing", |_| "../outside/x.rs".to_string()),
+        ("link", |_| "src/link/x.rs".to_string()),
+    ];
+    for (spelling, path) in spellings {
+        for operation in ["goToDefinition", "diagnostics"] {
+            let named = std::cell::RefCell::new(String::new());
+            let (result, refusals, asked, started, told) = asking_about(
+                &format!("agent-lsp-outside-{spelling}-{operation}"),
+                operation,
+                |beside| {
+                    let typed = path(beside);
+                    *named.borrow_mut() = typed.clone();
+                    typed
+                },
+            );
+            let named = named.into_inner();
+            let context = format!("{spelling} {operation}: {result}");
+            assert!(
+                result.contains("resolves outside the workspace"),
+                "the planner is not told the path is outside: {context}"
+            );
+            assert!(result.contains(&named), "{context}");
+            assert_eq!(asked, 0, "the person was asked about a server: {context}");
+            assert_eq!(started, 0, "a server was started: {context}");
+            assert!(told.is_empty(), "the server was told of {told}: {context}");
+            assert_eq!(refusals.len(), 1, "{spelling} {operation}: {refusals:?}");
+            assert!(
+                refusals[0].starts_with(&format!(
+                    "lsp.path: '{named}' resolves outside the workspace; remedy offered:"
+                )),
+                "{spelling} {operation}: {}",
+                refusals[0]
+            );
+        }
+    }
+}
+
+/// LSP-4: a leading `~` is the person's home directory, expanded before the check, so it is refused
+/// as any other absolute path outside the workspace is when the home is not an added directory. It
+/// is not read as a directory named `~` under the root, which would find no file and start the
+/// server's question instead of the refusal.
+#[test]
+fn a_path_through_the_home_directory_is_refused_when_the_home_is_not_added() {
+    for operation in ["goToDefinition", "diagnostics"] {
+        let (result, refusals, asked, started, told) = asking_about_reaching(
+            &format!("agent-lsp-tilde-closed-{operation}"),
+            operation,
+            Reach {
+                home_is_outside: true,
+                admit_outside: false,
+            },
+            |_| "~/x.rs".to_string(),
+        );
+        let context = format!("{operation}: {result}");
+        assert!(
+            result.contains("resolves outside the workspace"),
+            "{context}"
+        );
+        assert!(result.contains("~/x.rs"), "{context}");
+        assert_eq!(asked, 0, "the person was asked about a server: {context}");
+        assert_eq!(started, 0, "a server was started: {context}");
+        assert!(told.is_empty(), "the server was told of {told}: {context}");
+        assert_eq!(refusals.len(), 1, "{operation}: {refusals:?}");
+        assert!(
+            refusals[0]
+                .starts_with("lsp.path: '~/x.rs' resolves outside the workspace; remedy offered:"),
+            "{operation}: {}",
+            refusals[0]
+        );
+    }
+}
+
+/// LSP-4: a directory the person added is part of the workspace, so a file in it is answered
+/// whether the path is spelled absolutely or through a `~` that names it, and the server is told of
+/// exactly that document. Refusing every path outside the root fails it.
+#[test]
+fn a_path_in_an_added_directory_is_answered_and_the_server_is_told_of_it() {
+    type Spelling = (&'static str, bool, fn(&Path) -> String);
+    let spellings: [Spelling; 2] = [
+        ("absolute", false, |beside| {
+            beside.join("outside/x.rs").to_string_lossy().into_owned()
+        }),
+        ("tilde", true, |_| "~/x.rs".to_string()),
+    ];
+    for (spelling, home_is_outside, path) in spellings {
+        let (result, refusals, asked, started, told) = asking_about_reaching(
+            &format!("agent-lsp-added-{spelling}"),
+            "diagnostics",
+            Reach {
+                home_is_outside,
+                admit_outside: true,
+            },
+            path,
+        );
+        assert!(result.contains("language server:"), "{spelling}: {result}");
+        assert!(refusals.is_empty(), "{spelling}: {refusals:?}");
+        assert_eq!((asked, started), (1, 1), "{spelling}: {result}");
+        assert!(
+            told.trim_end().ends_with("outside/x.rs"),
+            "{spelling}: {told}"
+        );
+    }
+}
+
+/// LSP-4: the control for the refusal above. A path inside the workspace is still answered, the
+/// person is asked once, and the server is told of exactly that document. A tool that refuses every
+/// path, or that confines by refusing before it resolves anything, fails it.
+#[test]
+fn a_path_inside_the_workspace_is_still_answered_and_the_server_is_told_of_it() {
+    let (result, refusals, asked, started, told) =
+        asking_about("agent-lsp-inside-control", "diagnostics", |_| {
+            "src/a.rs".to_string()
+        });
+    assert!(result.contains("language server:"), "{result}");
+    assert!(refusals.is_empty(), "{refusals:?}");
+    assert_eq!((asked, started), (1, 1));
+    assert!(told.trim_end().ends_with("src/a.rs"), "{told}");
+}

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDelayedFlag, useFitTextArea } from '../hooks'
-import { Alert, Button, Collapse, ProgressRing, TextArea } from '../nala'
+import { Alert, Button, Collapse, TextArea } from '../nala'
 import { Modal } from './Modal'
+import { Skeleton } from './Skeleton'
 
 type Revision = { at: number; text: string; source: string }
 
@@ -44,7 +45,7 @@ export function BotMemory({ slug, directory }: { slug: string; directory: string
   return <section className="bot-memory-panel" data-test="bot-memory" aria-labelledby={`memory-${slug}`}>
     <span className="bot-field-label" id={`memory-${slug}`}>Memory</span>
     {problem && !open && <Alert type="error" size="small" role="alert">{problem}</Alert>}
-    {loading && <p role="status" className="memory-loading" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading…</p>}
+    {loading && <Skeleton label="Loading…" kind="lines" count={3} delayed={!showLoading} />}
     <pre className="bot-memory"><span className="memory-excerpt">{text || (loading ? '' : 'Nothing remembered yet.')}</span></pre>
     <div className="memory-actions">
       <Button size="small" kind="outline" isDisabled={busy} onClick={() => setOpen(true)} data-test="memory-edit">Edit memory</Button>

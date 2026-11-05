@@ -14,7 +14,8 @@ function start() {
   void window.bravebot.readExperience().then((saved) => {
     state = { ...saved, conversations: { ...saved.conversations, ...state.conversations },
       recentModels: changed.has('recentModels') ? state.recentModels : saved.recentModels,
-      dismissedUpdate: changed.has('dismissedUpdate') ? state.dismissedUpdate : saved.dismissedUpdate }
+      dismissedUpdate: changed.has('dismissedUpdate') ? state.dismissedUpdate : saved.dismissedUpdate,
+      providers: changed.has('providers') ? state.providers : saved.providers }
     emit()
   }).catch(() => { saveError = 'Saved preferences could not be loaded.'; emit() })
 }
@@ -51,7 +52,7 @@ export function dropConversation(key: string) {
   emit()
 }
 
-export function setExperience<K extends 'recentModels' | 'dismissedUpdate'>(key: K, value: Experience[K]) {
+export function setExperience<K extends 'recentModels' | 'dismissedUpdate' | 'providers'>(key: K, value: Experience[K]) {
   state = { ...state, [key]: value }
   persist(key, value)
 }
