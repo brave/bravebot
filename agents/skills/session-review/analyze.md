@@ -12,7 +12,7 @@ repository's own skills and scripts are not reported.
 - Session: `{{session_id}}`
 - Written by build: {{build}}
 - Turns: {{turns}}. Review the turns numbered above {{from_turn}}; earlier turns were reviewed already and are context only.
-- Record: `{{record_file}}`. JSON. It holds the conversation turn by turn, the cost and timing of each turn, and the settings the session ran with. Find the fields yourself.
+- Record: `{{record_file}}`. JSON. It holds the conversation turn by turn, the tokens spent and the timing of each turn (`spend`, `timing`), the tokens the whole session read, wrote and had served from the cache (`split`), and the settings the session ran with. Find the fields yourself.
 - Audit trail: {{audit_file}}. JSON lines, each with a `turn` and an `event`: the tools that ran, what was approved or refused, and what failed.
 - Notes the person typed: {{notes}} in all, of which the first {{from_note}} were considered by an earlier review. File: {{notes_file}}. JSON list of `{number, turn, by, text}`. The record also holds them, apart from the conversation, under `notes`.
 
@@ -114,9 +114,13 @@ signs have one cause, report the cause once.
 ## Waste of context, cost and time
 
 Look for places where the session spent more than the task needed. The record holds the tokens each
-turn read and wrote, the share served from cache, the cost and the timing of each turn, and the
-audit trail holds every tool call. Measure before you report: compare turns in the session with each
-other, and count calls in the trail. A finding with no number or count behind it is not reported.
+turn spent (`spend`) and where each turn's time went (`timing`). It holds the tokens the whole
+session read and wrote under `split`, and under `split.cache` how many of the tokens read the
+service served from its cache (`read_tokens`) and how many it wrote into it (`written_tokens`).
+These are totals for the session: the record has no read, written or cache figure for one turn. The
+audit trail holds every tool call. Measure before you report: compare turns in the session with
+each other, and count calls in the trail. A finding with no number or count behind it is not
+reported.
 
 Context:
 
@@ -129,9 +133,17 @@ Context:
 Cost:
 
 - a turn costing several times the median turn without the person asking for more work;
-- the cached share of a turn falling away because something changed the start of the prompt between turns;
+- the session's cached share (`split.cache.read_tokens` over `split.read`) being low although each request began with the same prompt, which means something changed the start of the prompt between requests;
 - retries and repeated failing calls that each spent a request;
 - a delegate started for work one read would have answered, or several delegates reading the same files.
+
+A prompt prefix that is large and sent with every request costs little when the service serves it
+from its cache, so read `split.cache` before reporting its size. With most of the tokens read served
+from the cache, the prefix is cheap and is not a cost. With a small share, the finding is the cache
+missing, and `fix` names what changed the start of the prompt. A record with no `split.cache` was
+written by a build that did not keep it, or by a session whose service stated no cache figure, and
+the two read the same: say in `summary` that the cached share was not recorded, and do not report
+the prefix, because its cost cannot be stated.
 
 Clock time:
 
@@ -227,7 +239,7 @@ Write this JSON, and nothing else, to `{{results_file}}`:
   "summary": "one or two sentences on what the session was about, then one sentence per new note saying what it was about and what was decided about it, with no names",
   "problems": [
     {
-      "title": "what is wrong and what it costs, in one sentence a person searching the tracker would match",
+      "title": "what is wrong and what it costs, in one complete sentence of at most 110 characters, because the draft step cuts a longer title off at a word; a person searching the tracker should match it",
       "key": "the one distinctive word or symbol in the title",
       "kind": "bug | enhancement (frustration and waste are usually enhancement)",
       "area": "trust | tools | turns | interface | cli | delegation | backends | skus | i18n | (empty)",
