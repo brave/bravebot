@@ -1693,8 +1693,13 @@ own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and remembered write grants
 says that only the person widens it: that `/add-dir` and `--add-dir` add a directory to read, and
 that choosing another sandbox mode lets programs write the project. It also says that the file tools
 write nothing in that mode and that a line redirecting output into a file is refused. On a turn
-that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
-programs do not have stops reaching for paths they can reach.
+that does not confine runs, and under the mode `off`, it states no boundary, since a planner told of a boundary its
+programs do not have stops reaching for paths they can reach. It says one sentence there instead: "The
+`request_path` tool is refused in this session and nobody is asked, so do not call it." That sentence is said only where the turn's list holds `request_path`; a list without it gets no sentence ([TOOL-6](tools/tool-surface.md#TOOL-6)). The words are
+the same in every permission mode, in a trusted workspace and in one that is not, because the tool
+is refused in all of them ([PATHREQ-5](tools/request-path.md#PATHREQ-5)). They say nothing of the file tools, which
+[PATHREQ-7](tools/request-path.md#PATHREQ-7) lets reach outside the workspace under bypass, and nothing of `scopes` or
+`unconfined`, which are accepted and dropped there ([SANDBOX-26](#SANDBOX-26)).
 
 A result whose step did not exit zero, from a run or from a job left running, carries one more
 sentence from the driver after the account of how it ended ([RUN-13](tools/run.md#RUN-13)): the
@@ -1709,13 +1714,15 @@ caches. Where it lists the directories reachable, because the machine is not rea
 session's directories and the scratch directory as read. It also says what the description says of a
 build, a formatter and `git commit`. Under the modes `strict`, `read-only` and `workspace-write`, where the session has a profile directory
 and would accept a request, the description and this sentence also name the menu a `run` call may ask
-from ([SANDBOX-26](#SANDBOX-26)); under `off` they name none, since none is accepted. A session
+from ([SANDBOX-26](#SANDBOX-26)). Under `off`, and on a turn that confines no run, the description names no menu and says only the sentence above, and the sentence after a failed step is not written. A session
 accepts a request only in a workspace the person has trusted ([TRUST-7](trust-map.md#TRUST-7),
 [PATHREQ-5](tools/request-path.md#PATHREQ-5)), so in any other the description and this sentence
 name neither the menu nor `request_path`, and on macOS do not tell the planner to ask for
 `loopback`. They say instead that `run` accepts no `scopes` argument
-and `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
-add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. The description
+and, where the list holds `request_path`, that `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
+add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. Under `off`, or
+on a turn that confines no run, an untrusted workspace gets the sentence above and nothing more, so the
+two never say different things. The description
 reads that fact as each turn starts and this sentence reads it when the result is composed. The
 sentence is the same words for exit 1 and exit 2.
 A result whose steps all
@@ -1728,7 +1735,9 @@ and that where the mode accepts a request, a credential scope is how a line reac
 says that any other path a command needs is asked for with the `request_path` tool
 ([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. Under
 `read-only` it says that of a path a command needs to read, and that a request for a path to write
-is refused in that mode before anyone is asked ([SANDBOX-22](#SANDBOX-22)). A planner
+is refused in that mode before anyone is asked ([SANDBOX-22](#SANDBOX-22)). On a turn whose list
+lacks `request_path` the text stops after the sentence on credential scopes
+([TOOL-6](tools/tool-surface.md#TOOL-6)). A planner
 that meets a refusal on such a location otherwise has no other account of it, and asks the person
 for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
 exit 2. The menu sentence ends the same way, and the `run` description's
@@ -1827,7 +1836,7 @@ every exit status. They name no tool, since a delegate and a turn a person addre
 read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface.md#TOOL-6)).
 
 `verified-by: bravebot_agent::confine::a_confining_turn_tells_the_planner_what_a_refusal_means`
-`verified-by: bravebot_agent::confine::a_turn_that_does_not_confine_says_nothing_of_confinement`
+`verified-by: bravebot_agent::confine::a_turn_that_does_not_confine_states_no_boundary_in_the_description`
 `verified-by: bravebot_agent::confine::a_platform_with_no_base_says_its_programs_are_not_confined`
 `verified-by: bravebot_agent::confine::the_profile_line_names_the_session_directories_the_lists_and_the_scope`
 `verified-by: bravebot_agent::confine::a_step_with_no_list_and_no_scope_says_none_for_both`
@@ -1840,12 +1849,16 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
-`verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
+`verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_states_no_boundary_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_every_mode_but_off`
+`verified-by: bravebot_agent::confine::the_description_says_request_path_is_refused_under_off_and_where_runs_are_not_confined`
+`verified-by: bravebot_agent::confine::the_description_says_nothing_of_the_refusal_where_requests_are_accepted`
+`verified-by: bravebot_agent::turn::the_run_description_says_request_path_is_refused_under_off`
+`verified-by: bravebot_agent::turn::the_run_description_says_request_path_is_refused_where_runs_are_not_confined`
 `verified-by: bravebot_agent::confine::the_planner_is_told_a_read_only_stage_cannot_write_the_project`
 `verified-by: bravebot_agent::confine::under_read_only_the_description_offers_no_remedy_that_cannot_write`
 `verified-by: bravebot_agent::confine::under_read_only_the_failure_sentence_claims_no_write_and_offers_no_remedy_that_cannot_write`
@@ -1853,6 +1866,10 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
+`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 `verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
@@ -2163,7 +2180,9 @@ program already started keeps the profile it started under, whichever way the mo
 description the planner received states the mode the turn began in, so before its next request the
 planner is told of the change in words the driver writes from the two modes: for a mode that
 confines, the sentences the description would have carried under it, and for `off`, that programs
-now start with no sandbox profile. It is told once for each change, and a turn that confines none of
+now start with no sandbox profile, so the limits the description states do not apply to them, and that
+the `request_path` tool is now refused and nobody is asked, where the turn's list holds the tool
+and nothing of it otherwise ([TOOL-6](tools/tool-surface.md#TOOL-6)). It is told once for each change, and a turn that confines none of
 its runs is told nothing. A move to `off` is made when it is typed, like a move to any other mode,
 with no question; the reply says that programs then start with no profile, and a reply made while a
 turn runs says that the turn uses the mode for each program it starts from then on. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
@@ -2356,6 +2375,8 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_agent::turn::a_sandbox_mode_chosen_during_a_turn_applies_to_the_calls_after_it`
 `verified-by: bravebot_agent::turn::a_delegate_follows_a_sandbox_mode_chosen_while_it_runs`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_a_sandbox_mode_chosen_while_its_turn_runs`
+`verified-by: bravebot_agent::confine::the_change_notice_for_a_move_to_off_says_request_path_is_refused`
+`verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_sandbox_mode_chosen_after_it_was_made`
 
 <a id="SANDBOX-23"></a>
@@ -2948,7 +2969,9 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   it names.
 - Accepted and dropped where the stages of the line start with no profile whatever is asked: in a
   session whose mode is `off`, and in a turn that confines none of its runs. The line already runs
-  with the person's own access, so there is nothing to lend. The arguments are still checked, so a
+  with the person's own access, so there is nothing to lend. The `run` description does not mention
+  `scopes` or `unconfined` there. It says that `request_path` is refused and nobody is asked
+  ([SANDBOX-19](#SANDBOX-19)). The arguments are still checked, so a
   name outside the menu, a value that is not an array, and `scopes` with `unconfined` are errors in
   those sessions as in every other. The line is then put to the person as a line that asked for
   nothing is, with no names shown, its output is quarantined as an unvouched line's is, and the
@@ -2956,7 +2979,9 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
 - Refused, with one sentence that does not say which setting withheld it, with no profile directory
   and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)). The trail records
   the refusal under `sandbox`, naming `scopes` and each cause that held ([TRACE-1](trace.md#TRACE-1)).
-  A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
+  The person watching is told the same causes, in a note beside the planner's own sentence, which
+  stays as it is; the two are written from the one list, so neither can name a cause the other does
+  not. A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
   carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
@@ -2987,6 +3012,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
+`verified-by: bravebot_agent::tools::a_refused_scope_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::confine::a_requested_scope_lifts_its_own_directory_for_a_stage_that_names_none`
 `verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
@@ -3252,7 +3278,9 @@ none to add to.
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
   The sentence does not suggest the argument: the planner learns it from the `run` description. The
   trail records the refusal under `sandbox`, naming `unconfined` and each cause that held
-  ([TRACE-1](trace.md#TRACE-1)).
+  ([TRACE-1](trace.md#TRACE-1)), and the person watching is told the same causes in a note beside
+  the planner's unchanged sentence, so they can tell which setting to change without reading the
+  trail.
 - **A line not approved is recorded as not run.** The `sandbox` entry saying the programs ran
   `unconfined` is written only once the person has approved the line. A line they do not approve
   leaves a refusal under `approval` instead ([TRACE-1](trace.md#TRACE-1)).
@@ -3287,7 +3315,9 @@ none to add to.
   sandbox in this turn and exited non-zero, and each such failure earns one request: accepting one
   spends it, so a request the person declines, or a plan the policy then refuses, leaves it. The
   failed line need not be the line the request names. A request with none earned is refused before
-  anybody is asked, with a sentence that says to run the line with the sandbox first, and the trail records the refusal under `sandbox` naming that cause. The count comes from
+  anybody is asked, with a sentence that says to run the line with the sandbox first, and the trail
+  records the refusal under `sandbox` naming that cause, which the person watching is also told in a
+  note beside the sentence. The count comes from
   exit codes and whether the deadline stopped the line, and nothing a program printed is read. A line
   stopped at its deadline or by the person, a line that ran with no sandbox and a line moved to the
   background earn nothing. A line whose own redirection leaves the workspace is accepted without one, since the
@@ -3310,6 +3340,7 @@ The planner is pointed at the argument because it has no other way to learn it w
 refuse the path.
 
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
 `verified-by: bravebot_agent::tools::each_confined_failure_earns_one_request_for_no_sandbox`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`

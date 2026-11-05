@@ -15416,6 +15416,7 @@ mod tests {
                 inference_ms: 300,
                 tools_ms: 100,
                 stalled_ms: 5_000,
+                file_wait_ms: 0,
             });
 
             let first = s
@@ -15535,6 +15536,7 @@ mod tests {
                     inference_ms: 300,
                     tools_ms: 100,
                     stalled_ms: 600_000,
+                    file_wait_ms: 0,
                 }),
             );
 
@@ -15610,6 +15612,7 @@ mod tests {
                     inference_ms: 3_000,
                     tools_ms: 1_000,
                     stalled_ms: 4_000,
+                    file_wait_ms: 0,
                 },
             )]));
 
@@ -15987,6 +15990,87 @@ mod tests {
         assert!(s.auto_vetting());
         s.choose_vetting(false);
         assert!(!s.auto_vetting(), "turning it back off did not take");
+    }
+
+    /// A session that opens in bypass is told the same thing a key press into bypass is told, and
+    /// the line is about what bypass does with auto-vetting on. Rejects a session-open path that
+    /// says only that a check reads content, which leaves a flag-opened session without the line.
+    #[test]
+    fn a_session_opened_in_bypass_with_auto_vetting_says_what_bypass_refuses() {
+        let said = bravebot_agent::report::vetting_in_bypass();
+        let mut s = Session::new("none").starting_in_bypass();
+        s.choose_vetting(true);
+        s.say_vetting_in_force();
+        assert!(
+            s.transcript.iter().any(|e| e.text == said),
+            "a session opened in bypass with auto-vetting on did not say what bypass refuses"
+        );
+
+        // Not in bypass, or not with auto-vetting on: the first line may be said, this one is not.
+        let mut s = Session::new("none");
+        s.choose_vetting(true);
+        s.say_vetting_in_force();
+        assert!(s.transcript.iter().all(|e| e.text != said));
+        let mut s = Session::new("none").starting_in_bypass();
+        s.say_vetting_in_force();
+        assert!(
+            s.transcript.is_empty(),
+            "a session with auto-vetting off said something about it"
+        );
+    }
+
+    /// The step of the mode key that enters bypass says what bypass does with auto-vetting on, once.
+    /// Rejects a note on every step (or none), and a note on the step into bypass whatever the
+    /// setting.
+    #[test]
+    fn entering_bypass_with_auto_vetting_on_says_what_bypass_refuses() {
+        use bravebot_agent::PermissionMode;
+        let said = bravebot_agent::report::vetting_in_bypass();
+        let mut s = Session::new("none");
+        s.choose_vetting(true);
+        let mut told = Vec::new();
+        for _ in 0..4 {
+            s.cycle_permission_mode();
+            told.push(s.transcript.iter().filter(|e| e.text == said).count());
+        }
+        assert_eq!(s.permission_mode(), PermissionMode::Bypass);
+        assert_eq!(
+            told,
+            [0, 0, 0, 1],
+            "the line was not said exactly once, on the step that enters bypass"
+        );
+    }
+
+    /// With auto-vetting off, bypass refuses nothing on a check's word, so the step says nothing.
+    #[test]
+    fn entering_bypass_with_auto_vetting_off_says_nothing_extra() {
+        use bravebot_agent::PermissionMode;
+        let mut s = Session::new("none");
+        for _ in 0..4 {
+            s.cycle_permission_mode();
+        }
+        assert_eq!(s.permission_mode(), PermissionMode::Bypass);
+        assert!(
+            s.transcript.is_empty(),
+            "entering bypass without auto-vetting said something"
+        );
+    }
+
+    /// Leaving bypass, and every step that does not enter it, says nothing about vetting, round the
+    /// ladder more than once. Rejects a note drawn on each step or on leaving.
+    #[test]
+    fn leaving_bypass_and_other_steps_say_nothing_about_vetting() {
+        let said = bravebot_agent::report::vetting_in_bypass();
+        let mut s = Session::new("none").starting_in_bypass();
+        s.choose_vetting(true);
+        // Out of bypass, then round to the step before it again.
+        for _ in 0..4 {
+            s.cycle_permission_mode();
+        }
+        assert!(
+            s.transcript.iter().all(|e| e.text != said),
+            "a step that does not enter bypass said what bypass refuses"
+        );
     }
 
     /// A session editing vi's way, with the choice recorded nowhere: `adopt_editing` reads the store
@@ -19334,6 +19418,7 @@ mod tests {
                     inference_ms: 31,
                     tools_ms: 13,
                     stalled_ms: 7,
+                    file_wait_ms: 0,
                 },
                 ..Default::default()
             });

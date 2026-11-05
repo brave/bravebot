@@ -2457,6 +2457,7 @@ status-time = Temps
 status-time-inference = sur le modèle
 status-time-tools = exécution des outils
 status-time-stalled = en attente de vous
+status-time-file-wait = en attente d'accès aux fichiers
 status-time-overhead = non attribué
 status-cache = Cache du prompt, dernier tour
 status-cache-read = servi depuis le cache
@@ -3144,6 +3145,10 @@ session-vetting-on =
     demander (~/.bravebot/vetting)
 session-vetting-in-force =
     une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
+session-vetting-in-bypass =
+    le contournement est actif avec la vérification automatique : le contenu qu'une vérification juge dangereux ou ne peut pas évaluer est refusé, et non soumis à votre décision
+vetting-kept-back =
+    la vérification automatique a retenu ceci : le contournement ne demande rien à personne et refuse ce qu'une vérification juge dangereux ou ne peut pas évaluer. Quitter le contournement vous poserait la question. Pour désactiver la vérification automatique, écrivez off dans ~/.bravebot/vetting et ne passez pas --vet
 update-available =
     une version plus récente de bravebot est disponible (celle-ci est { $running }) ; pour la
     mettre à jour : { $command }
@@ -4575,7 +4580,7 @@ ui-accounts-signed-in-to = Connecté à { $name }.
 ui-accounts-sign-in-failed = Impossible de se connecter à { $name }.
 ui-accounts-sign-in-busy = Une autre connexion est déjà en cours.
 ui-accounts-setup-heading = Se connecter à un service
-ui-accounts-setup-pointer = Connectez-vous à un compte ChatGPT, xAI ou AWS, ou saisissez la clé de Brave Premium, d’OpenRouter ou d’une autre passerelle, sous Comptes, plus bas.
+ui-accounts-setup-pointer = Connectez-vous à un compte ChatGPT, xAI ou AWS, ou saisissez la clé de Brave Premium, d’OpenRouter ou d’une autre passerelle, sous Comptes, plus haut.
 ui-accounts-enter-key = Saisir la clé
 ui-accounts-replace-key = Remplacer la clé
 ui-accounts-key-window-open = Saisissez la clé dans sa fenêtre.

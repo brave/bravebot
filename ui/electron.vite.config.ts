@@ -1,6 +1,6 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-import { cpSync, createReadStream, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, cpSync, createReadStream, existsSync, mkdirSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import type { Plugin } from 'vite'
 
@@ -40,6 +40,30 @@ export function leoIcons(): Plugin {
   }
 }
 
+/**
+ * Serve and ship the application's own icon, `build/icon.svg`, as `app-icon.svg` beside the page,
+ * so the renderer names it with a plain relative URL. The file the app and installer icons are
+ * rendered from stays the one copy; nothing is committed under `src/`, and nothing in the
+ * renderer imports it, which keeps it out of the esbuild bundles the tests make.
+ */
+export function appIcon(): Plugin {
+  const source = resolve(__dirname, 'build/icon.svg')
+
+  return {
+    name: 'app-icon',
+    configureServer(server) {
+      server.middlewares.use('/app-icon.svg', (_req, res) => {
+        res.setHeader('Content-Type', 'image/svg+xml')
+        createReadStream(source).pipe(res)
+      })
+    },
+    writeBundle(options) {
+      if (!options.dir) return
+      copyFileSync(source, resolve(options.dir, 'app-icon.svg'))
+    },
+  }
+}
+
 export default defineConfig({
   main: { build: { rollupOptions: { input: resolve(__dirname, 'src/main/index.ts') } } },
   // Four preloads and four pages: the window somebody types in, the offscreen one a PDF is
@@ -70,6 +94,6 @@ export default defineConfig({
         },
       },
     },
-    plugins: [react(), leoIcons()],
+    plugins: [react(), leoIcons(), appIcon()],
   },
 })

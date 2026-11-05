@@ -54,6 +54,8 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // The renderer never sends one.
   // The sign-ins are listed for a session and one is forgotten by its way and id, and nothing
   // else crosses, so no field a window adds reaches the bridge as a request to sign in.
+  // A level is the only thing a pick records, so no other field reaches the bridge.
+  if (method === 'effort.set') return { level: held.level }
   if (method === 'accounts.list') return { session: held.session }
   if (method === 'accounts.signOut') return { session: held.session, way: held.way, id: held.id }
   if (method === 'session.list') {

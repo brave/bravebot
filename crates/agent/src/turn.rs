@@ -116,7 +116,7 @@ const TOOL_BUDGET_SPENT: &str = "(from the system, not the user)";
 
 /// Who answers a `read_output` call, which decides what the planner is told about reading what a
 /// program printed (RUN-14).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadOutputIs {
     /// Bypassing with no screening asked for, in a turn offered `read_output`: the answer is yes, with
     /// nobody asked and no check made. A `read` on a run's result is answered in that result.
@@ -576,7 +576,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     let cancel = Cancel::new();
     let mut armed = 0usize;
     let mut jobs = tools::Jobs::default();
-    let mut run_directory = workspace.root().to_path_buf();
+    let mut run_directory = tools::RunDirectory::at(workspace.root());
     let mut confined_failures = tools::ConfinedFailures::default();
     let done = tools::apply_kept_checkout(
         &mut policy,
@@ -594,6 +594,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             scheduling: tools::Scheduling::NoLaterLook,
             arming: crate::watch::Arming::Unavailable,
             running: tools::Running::Offered,
+            beside: tools::Beside::every(),
             armed: &mut armed,
             home: task.home.as_deref(),
             profile: task.profile.as_deref(),
@@ -1142,10 +1143,11 @@ fn admit_named_skill<S: Sink>(
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     skill: &crate::skills::Skill,
+    beside: tools::Beside,
 ) -> Result<(), TurnError> {
     // Recorded here for the reason a context file's is: the turn has seen it from this moment.
     conversation.observed(policy.context_label());
-    let body = tools::opened_skill(policy, skill);
+    let body = tools::opened_skill(policy, skill, beside);
     let slot = conversation.next_reference();
     let presented = policy
         .present(
@@ -1186,9 +1188,10 @@ fn admit_mode_skill<S: Sink>(
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     skill: &crate::skills::Skill,
+    beside: tools::Beside,
 ) -> Result<Option<(String, String)>, TurnError> {
     conversation.observed(policy.context_label());
-    let body = tools::opened_skill(policy, skill);
+    let body = tools::opened_skill(policy, skill, beside);
     let slot = conversation.next_reference();
     let presented = policy
         .present(
@@ -1244,6 +1247,7 @@ struct Working<'scope> {
         (
             crate::delegate::Ended,
             crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
             Vec<crate::timing::Interval>,
         ),
     >,
@@ -1830,6 +1834,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
     output_cap: usize,
     read_output_is: ReadOutputIs,
+    beside: tools::Beside,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
@@ -1971,10 +1976,21 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     (ReadOutputIs::Asked, false) => format!(" {STOP_BEING_ASKED}"),
                     _ => String::new(),
                 };
+                // Each tool named is one the turn's list holds (TOOL-6). A list without
+                // `read_output` has nothing to call for a look at it, so the sentence says only
+                // whose answer the quarantine is about.
+                let to_see = match beside.holds(tools::Named::ReadOutput) {
+                    true => " To see it, call read_output with the reference.",
+                    false => "",
+                };
+                let read_file = match beside.holds(tools::Named::ReadFile) {
+                    true => " To read a file, use read_file.",
+                    false => "",
+                };
                 format!(
                     "{told} What it printed could not be shown to you: {}{looked}\n\nThis is about who \
-                     answered for the command rather than about what it printed. To see it, call \
-                     read_output with the reference.{then} To read a file, use read_file.",
+                     answered for the command rather than about what it printed.{to_see}{then}\
+                     {read_file}",
                     reference.describe()
                 )
             }
@@ -1999,7 +2015,11 @@ fn collect_jobs<S: Sink, R: Reporter>(
 /// says it is still going. Names the driver minted and a count read off a clock, so the sentence is
 /// the driver's own: nothing a job printed reaches it, and what a job printed is read only through
 /// `job_output`, at the label its start gave it (RUN-16).
-fn tell_of_kept_jobs(jobs: &mut tools::Jobs, conversation: &mut Conversation) {
+fn tell_of_kept_jobs(
+    jobs: &mut tools::Jobs,
+    beside: tools::Beside,
+    conversation: &mut Conversation,
+) {
     let running = jobs.running_now();
     if running.is_empty() {
         return;
@@ -2009,13 +2029,19 @@ fn tell_of_kept_jobs(jobs: &mut tools::Jobs, conversation: &mut Conversation) {
         .map(|(name, ran_for)| format!("{name} (running for {}s)", ran_for.as_secs()))
         .collect::<Vec<_>>()
         .join(", ");
+    // `job_output` is the only way to look at a job or stop it, so its sentences are said only
+    // where the turn's list holds it.
+    let looking = if beside.holds(tools::Named::JobOutput) {
+        "Call job_output with a name to see what it has printed since the previous look, which \
+         holds only what arrived after it: the output before that stays in the references of the \
+         earlier looks. Call it with kill set to stop it. "
+    } else {
+        ""
+    };
     conversation.push_composed_from(
         Message::user(format!(
             "{TOOL_BUDGET_SPENT} Background jobs from earlier in this session are still running: \
-             {list}. Call job_output with a name to see what it has printed since the previous \
-             look, which holds only what arrived after it: the output before that stays in the \
-             references of the earlier looks. Call it with kill set to stop it. Do not start one \
-             again that is already running."
+             {list}. {looking}Do not start one again that is already running."
         )),
         Composed::Notice,
         Provenance::Driver,
@@ -2318,6 +2344,10 @@ struct Reported<'a> {
 }
 
 /// What `answer_the_turn` settles before the first round and `run_rounds` only reads.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the tools the turn was offered, read on its own"
+)]
 struct Plan<'p> {
     system: crate::request_view::Prompt,
     system_text: String,
@@ -2325,6 +2355,8 @@ struct Plan<'p> {
     may_write: bool,
     may_run: bool,
     running: tools::Running,
+    /// Which of the tools that results name the turn's list holds, built where the list settles.
+    beside: tools::Beside,
     may_fall_back: bool,
     pinned_by: Option<String>,
     scheduling: tools::Scheduling,
@@ -2336,14 +2368,23 @@ struct Plan<'p> {
     /// Whether the turn was offered `read_output`, which decides who answers a read of what a run
     /// printed.
     offers_read_output: bool,
+    /// Whether the turn was offered `vet_content`, which decides who answers a read of what
+    /// `fetch_url` or a server's tool returned.
+    offers_vet_content: bool,
 }
 
 /// What the rounds change, and what the answer step reads once they are over.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the turn has already said or done, set and read on its own"
+)]
 struct State<'s> {
     steps: usize,
     reminded: round_steps::Reminded,
     worked: Worked,
     may_call_tools: bool,
+    /// Whether a delegate has been warned that it is near its token budget (DELEGATE-29).
+    warned_of_token_budget: bool,
     account: crate::outcome::Spent,
     shown_before: u64,
     may_compact: bool,
@@ -2361,7 +2402,7 @@ struct State<'s> {
     told_of_kept_jobs: bool,
     /// What earlier turns left open, until the first round tells the planner (OPEN-4).
     open_loops: Option<String>,
-    run_directory: std::path::PathBuf,
+    run_directory: tools::RunDirectory,
     confined_failures: tools::ConfinedFailures,
     spent: Elapsed,
     told_mode: crate::permission_mode::PermissionMode,
@@ -2662,6 +2703,12 @@ where
     let resolved = setup::offered_tools(
         task, workspace, &delegates, advisor, scheduling, arming, policy,
     );
+    // What the list holds, read before the skills are shown so the words around a skill's files name
+    // only tools it holds. The list is not changed after this except by adding a server's tools.
+    let beside_skills = match &resolved {
+        Ok((_, offered)) => tools::Beside::on(offered),
+        Err(_) => tools::Beside::every(),
+    };
 
     // A run whose definition named skills is offered those of them this turn found, and is listed
     // and can load no others. Taken after discovery rather than instead of it, so a name can only
@@ -2692,7 +2739,7 @@ where
     let mut skill_mode = None;
     if let (None, Some(name)) = (&task.delegate, task.skill_mode.as_deref()) {
         if let Some(skill) = catalogue.get(name).cloned() {
-            skill_mode = admit_mode_skill(policy, conversation, &skill)?;
+            skill_mode = admit_mode_skill(policy, conversation, &skill, beside_skills)?;
         }
         if skill_mode.is_none() {
             notices.push(crate::skills::Notice::from_message(t!(
@@ -2824,12 +2871,19 @@ where
     let offers_read_output = offered
         .iter()
         .any(|tool| tool.function.name == "read_output");
+    // The same for `vet_content`: it decides whether `fetch_url` and a server's tools are offered
+    // a `read` argument, and who answers one.
+    let offers_vet_content = offered_names(&offered, "vet_content");
 
     // A reference sends its holder to `vet_content`, `spawn_processor`, `write_file` and
     // `read_output` only where the list holds them, and so do the descriptions of the tools that
     // name others. A delegate is never offered the first and a reader the third, and a
     // definition's tools line or the command line can leave any of them out of a turn's.
-    if !offered_names(&offered, "vet_content") {
+    let processors = crate::delegate::Processors::of(
+        policy.processors_closed(),
+        offered_names(&offered, "spawn_processor"),
+    );
+    if !offers_vet_content {
         policy.without_vetting();
     }
     if !offered_names(&offered, "spawn_processor") {
@@ -2885,6 +2939,8 @@ where
         &preamble,
         started_in,
         &kept_facts,
+        offers_vet_content,
+        processors,
         memory,
     );
     let system_text = system.text();
@@ -3129,7 +3185,7 @@ where
     // front of the line takes them too, and before the opening is marked done, so a prompt handed
     // back to the box takes them out with it.
     for skill in &named_skills {
-        admit_named_skill(policy, conversation, skill)?;
+        admit_named_skill(policy, conversation, skill, beside_skills)?;
         let said = t!(skill_named_by_the_person, skill = skill.name.as_str()).to_string();
         reporter.notice(said.clone());
         notices.push(crate::skills::Notice::from_message(said));
@@ -3231,6 +3287,7 @@ where
         reporter,
         &mut subscription,
         &mut notices,
+        offers_vet_content,
     );
     let settled_wait = waiting.waited();
     // What checking the servers' lists spent is this turn's, since this turn is what asked.
@@ -3271,6 +3328,9 @@ where
     // The same question in the form the refusals read it in: a tool that will not answer may say
     // to use `run` only where this turn has one to use.
     let running = tools::Running::on(&offered);
+    // Which of the tools that results and refusals name this turn's list holds, so none of that
+    // text names one the list lacks (TOOL-6).
+    let beside = tools::Beside::on(&offered);
     // The pipelines this turn leaves running. Held here so they end here: dropping this kills
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
@@ -3290,6 +3350,7 @@ where
         may_write,
         may_run,
         running,
+        beside,
         // A delegate and a turn on a definition's model do not move to the fallback model
         // (BACKEND-53): that model is a boundary its file drew.
         may_fall_back: task.delegate.is_none() && pinned_by.is_none(),
@@ -3300,6 +3361,7 @@ where
         addressed,
         premium_key,
         offers_read_output,
+        offers_vet_content,
     };
     let mut state = State {
         steps: 0,
@@ -3319,6 +3381,7 @@ where
         // runs out, so the last request goes out with none offered and the turn ends with an answer
         // rather than with the driver's apology.
         may_call_tools: true,
+        warned_of_token_budget: false,
         // What this turn's requests did, summed from zero: not what the session has done, which the
         // session adds up itself. `output_tokens` is tracked apart from the total because it is what
         // the live count reports, and adding a round's output to a running total that also holds
@@ -3363,7 +3426,7 @@ where
         // further means putting it in the session record and restoring it on `--resume`, the way the
         // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
         // the change that gives a session somewhere to keep one.
-        run_directory: workspace.root().to_path_buf(),
+        run_directory: tools::RunDirectory::at(workspace.root()),
         confined_failures: tools::ConfinedFailures::default(),
         // Seeded with the time the lists' questions kept the turn waiting on the person.
         spent,
@@ -3883,6 +3946,7 @@ where
                 examined = index + reads.max(1);
                 if reads > 0 {
                     let started = Instant::now();
+                    let mark = policy.file_authority().wait_mark();
                     let together: Vec<&ToolCall> =
                         completion.calls[index..index + reads].iter().collect();
                     for (place, read) in tools::read_ahead(
@@ -3901,7 +3965,13 @@ where
                     {
                         ahead[index + place] = read;
                     }
-                    state.spent.tools += started.elapsed();
+                    let blocked = crate::timing::blocked_since(
+                        policy.file_authority().waits_after(mark),
+                        started,
+                    )
+                    .min(started.elapsed());
+                    state.spent.file_wait += blocked;
+                    state.spent.tools += started.elapsed().saturating_sub(blocked);
                 }
             }
 
@@ -3912,6 +3982,7 @@ where
             policy.call_began();
             let mut asking = crate::confirm::Timed::new(confirmer);
             let ran_at = Instant::now();
+            let wait_mark = policy.file_authority().wait_mark();
             let refused = if state.repeats.is_held(call) {
                 match crate::repeated_call::hold(
                     call,
@@ -3985,7 +4056,11 @@ where
             }
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
-            let cancellation = output.cancelled;
+            let file_wait = crate::timing::blocked_since(
+                policy.file_authority().waits_after(wait_mark),
+                ran_at,
+            );
+            let mut cancellation = output.cancelled;
             // The conversation holds it as it holds a write tool asked for, so a stopped turn's
             // next prompt still has it and a completed one does not (TURN-3).
             if output.run_may_change_files {
@@ -4005,6 +4080,7 @@ where
                 call,
                 took,
                 asking.waited(),
+                file_wait,
                 &mut output,
             );
             // As with a context file: what the turn has seen belongs to the conversation the
@@ -4104,7 +4180,7 @@ where
                             )
                         })
                         .collect();
-                reporter.landed(crate::report::Landing::Quarantined);
+                reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 reporter.quarantined(crate::report::Shown {
                     origin: entries.origin.clone(),
                     reach: crate::report::Reach::NotThePlanner,
@@ -4206,7 +4282,7 @@ where
                     }
                     described.push(kept.for_context());
                 }
-                reporter.landed(crate::report::Landing::Quarantined);
+                reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 result_from = Provenance::Reference(ids.join(", "));
                 let left_out = sentences::left_out_note(output.left_out);
                 format!(
@@ -4307,28 +4383,67 @@ where
                 // conversation. A read_output call is made by a planner that has seen the
                 // size; this ask was made before there was one to see. The size is the
                 // slot's, as the reference states it, so no byte is read to decide.
+                //
+                // Not for a slot that states 0 bytes either. There is nothing to release and
+                // nothing for a check to read, so the result takes the route of a run that
+                // printed nothing (RUN-24) and the trail says why no check was made.
                 let output_cap = task.output_cap.unwrap_or(tools::OUTPUT_CAP);
+                // Who answers a read of this result: read_output's answer for a run, and
+                // vet_content's for `fetch_url` and a server's tool, each asked of the list that
+                // holds the release the read makes a round early.
+                let a_run = output.tool == "run";
+                let read_gate = if a_run {
+                    read_output_is()
+                } else {
+                    setup::vet_content_is(task, plan.offers_vet_content)
+                };
+                if output.read_asked
+                    && read_gate != ReadOutputIs::Asked
+                    && let Presentation::Quarantined(reference) = &presented
+                    && reference.bytes == Some(0)
+                {
+                    policy.record_empty_output(
+                        if a_run { "run" } else { "vet_content" },
+                        &reference.slot,
+                    );
+                }
                 let read_from = match &presented {
                     Presentation::Quarantined(reference)
                         if output.read_asked
-                            && read_output_is() != ReadOutputIs::Asked
-                            && reference.bytes.is_some_and(|bytes| bytes <= output_cap) =>
+                            && read_gate != ReadOutputIs::Asked
+                            && reference
+                                .bytes
+                                .is_some_and(|bytes| bytes != 0 && bytes <= output_cap) =>
                     {
                         let mut chat =
                             crate::processor::Chat::new(config, egress, task.account_session())
                                 .spending(state.subscription.as_mut())
                                 .on(state.turn_model.as_deref())
                                 .stoppable_by(cancel);
-                        let released = tools::read_in_the_result(
-                            policy,
-                            conversation.quarantine(),
-                            task.permission_mode.get(),
-                            task.auto_vetting,
-                            confirmer,
-                            &mut chat,
-                            reporter,
-                            &reference.slot,
-                        );
+                        let released = if a_run {
+                            tools::read_in_the_result(
+                                policy,
+                                conversation.quarantine(),
+                                task.permission_mode.get(),
+                                task.auto_vetting,
+                                confirmer,
+                                &mut chat,
+                                reporter,
+                                &reference.slot,
+                            )
+                        } else {
+                            tools::vet_in_the_result(
+                                policy,
+                                conversation.quarantine(),
+                                task.permission_mode.get(),
+                                task.auto_vetting,
+                                confirmer,
+                                &mut chat,
+                                reporter,
+                                &reference.slot,
+                                plan.beside,
+                            )
+                        };
                         // A check made here is a model call like the one read_output makes, so
                         // its tokens and the time spent waiting on it are the turn's.
                         if let Some(interval) = released.waited {
@@ -4336,6 +4451,12 @@ where
                             state.spent.inference += interval.duration();
                         }
                         state.account.add_usage(released.usage);
+                        // A stop during the check ends the turn once this run's result is
+                        // recorded. The slot stays quarantined and unrefused, so the next turn
+                        // can ask for it again.
+                        if released.stopped.is_some() {
+                            cancellation = released.stopped;
+                        }
                         reporter.spent(crate::outcome::Spent {
                             timing: state.spent.finish(),
                             ..state.account
@@ -4446,11 +4567,16 @@ where
                 // reporting that the model has read *that* is true, useless, and read by a
                 // person as a claim about their file.
                 if output.content && !printed_nothing {
-                    reporter.landed(match (&presented, &output.deferred) {
-                        (_, Some(_)) => crate::report::Landing::Reserved,
-                        (Presentation::Visible(_), _) => crate::report::Landing::Context,
-                        (Presentation::Quarantined(_), _) => crate::report::Landing::Quarantined,
-                    });
+                    reporter.landed(
+                        output.reported_as,
+                        match (&presented, &output.deferred) {
+                            (_, Some(_)) => crate::report::Landing::Reserved,
+                            (Presentation::Visible(_), _) => crate::report::Landing::Context,
+                            (Presentation::Quarantined(_), _) => {
+                                crate::report::Landing::Quarantined
+                            }
+                        },
+                    );
                 }
 
                 // What a command printed, kept whole enough for a person to open. Sent
@@ -4541,8 +4667,9 @@ where
                             }
                             _ => String::new(),
                         };
+                        let respelled = sentences::respelled_note(output.respelled);
                         format!(
-                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}",
+                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
                             output.tool
                         )
                     }
@@ -4650,11 +4777,25 @@ where
                             output.printed_by.is_some(),
                             output.covered_by_record,
                             read_output_is(),
+                            plan.beside,
                             &output.tool,
                             output.read_asked,
                             reference.bytes,
                             output_cap,
                         );
+                        // `read: true` asked of `fetch_url` or a server's tool that still came
+                        // back as a reference: said once, so it does not read as an unexplained
+                        // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
+                        let not_returned = if a_run {
+                            ""
+                        } else {
+                            sentences::read_not_returned(
+                                output.read_asked,
+                                read_gate,
+                                reference.bytes,
+                                output_cap,
+                            )
+                        };
                         // Only where git ran in a directory whose repository read_git
                         // opens: the output of git log or show is what read_git answers
                         // with nobody asked, and for any other program, or a repository
@@ -4665,8 +4806,10 @@ where
                                 .ran_git_in
                                 .iter()
                                 .any(|directory| workspace.read_git_opens(policy, directory)),
+                            plan.beside,
                         );
                         let left_out = sentences::left_out_note(output.left_out);
+                        let respelled = sentences::respelled_note(output.respelled);
                         // Which lines of the job's whole output this reference holds and which
                         // references the earlier looks became: counts and names the driver minted.
                         let looked = match (&output.printed_by, &output.look) {
@@ -4676,7 +4819,7 @@ where
                             _ => String::new(),
                         };
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{advice}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
                             output.tool,
                             reference.describe()
                         )
@@ -4901,6 +5044,7 @@ mod tests {
             &mut policy,
             &mut conversation,
             catalogue.get("notes").expect("found"),
+            crate::tools::Beside::every(),
         )
         .expect("supplied");
 
@@ -4937,8 +5081,13 @@ mod tests {
         .unwrap();
         let mut conversation = Conversation::new();
 
-        let refused = admit_named_skill(&mut policy, &mut conversation, &skill)
-            .expect_err("a skill the gate held back was supplied anyway");
+        let refused = admit_named_skill(
+            &mut policy,
+            &mut conversation,
+            &skill,
+            crate::tools::Beside::every(),
+        )
+        .expect_err("a skill the gate held back was supplied anyway");
 
         match refused {
             TurnError::Precommit(said) => assert!(
@@ -4985,8 +5134,13 @@ mod tests {
         .unwrap();
         let mut conversation = Conversation::new();
 
-        let admitted = admit_mode_skill(&mut policy, &mut conversation, &skill)
-            .expect("a quarantined mode is not a failed turn");
+        let admitted = admit_mode_skill(
+            &mut policy,
+            &mut conversation,
+            &skill,
+            crate::tools::Beside::every(),
+        )
+        .expect("a quarantined mode is not a failed turn");
 
         assert_eq!(admitted, None, "words the gate held back were applied");
         drop(policy);
@@ -5188,6 +5342,7 @@ mod tests {
                         ..Default::default()
                     },
                     vec![crate::timing::Interval::since(began)],
+                    Vec::new(),
                 )
             });
             ready_rx.recv_timeout(LIMIT).expect("request started");
@@ -5248,6 +5403,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5274,6 +5430,7 @@ mod tests {
                         worked: Default::default(),
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5355,6 +5512,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5398,6 +5556,7 @@ mod tests {
                         },
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5569,6 +5728,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5603,6 +5763,7 @@ mod tests {
                         worked: Default::default(),
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5658,6 +5819,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5696,6 +5858,7 @@ mod tests {
                         worked: Default::default(),
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5751,6 +5914,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5792,6 +5956,7 @@ mod tests {
                                 worked: Default::default(),
                             },
                             Default::default(),
+                            Vec::new(),
                             Vec::new(),
                         )
                     });
@@ -5859,6 +6024,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         // Returns how many one wake collected and what the planner was told about each.
         let wake_once = |clean: Vec<bool>| -> (usize, Vec<String>) {
@@ -5907,6 +6073,7 @@ mod tests {
                                     worked: Default::default(),
                                 },
                                 Default::default(),
+                                Vec::new(),
                                 Vec::new(),
                             )
                         });
@@ -6030,6 +6197,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let a_total = |tokens: u64| crate::outcome::Spent {
             tokens,
@@ -6088,6 +6256,7 @@ mod tests {
                             worked: Default::default(),
                         },
                         Default::default(),
+                        Vec::new(),
                         Vec::new(),
                     )
                 });
@@ -6192,6 +6361,7 @@ mod tests {
                 &mut jobs,
                 tools::OUTPUT_CAP,
                 ReadOutputIs::Asked,
+                tools::Beside::every(),
                 &mut policy,
                 &mut conversation,
                 &mut reporter,

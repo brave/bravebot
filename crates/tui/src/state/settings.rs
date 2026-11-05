@@ -94,13 +94,44 @@ impl Session {
         self.began_in_bypass
     }
 
-    /// Move to the next mode, and say nothing: the line under the box is the answer.
+    /// Move to the next mode, and say nothing unless the move enters bypass with auto-vetting on.
     ///
-    /// A note in the transcript would be a running commentary on a key somebody is pressing to see
-    /// what the modes are, and the one place a mode has to be legible is while it is in force.
+    /// A note in the transcript for every step would be a running commentary on a key somebody is
+    /// pressing to see what the modes are, and the one place a mode has to be legible is while it
+    /// is in force. Entering bypass with auto-vetting on is the exception: the line under the box
+    /// cannot say that a read a check does not pass is refused with nobody asked, and the person
+    /// finds out otherwise only from a refusal written for the planner. Said on the step that
+    /// enters it, not on the others and not on leaving.
     pub fn cycle_permission_mode(&mut self) {
-        self.permission_mode
-            .set(self.permission_mode.get().cycle(self.bypass_reachable));
+        let was = self.permission_mode.get();
+        let next = was.cycle(self.bypass_reachable);
+        self.permission_mode.set(next);
+        self.say_bypass_screens(was, next);
+    }
+
+    /// What a session says when it opens with auto-vetting on: that a check finding nothing reads
+    /// content without asking, and, where the session opened in bypass (the flag), that a read a
+    /// check does not pass is refused and not asked about, since no mode change happens to say it.
+    pub fn say_vetting_in_force(&mut self) {
+        if !self.vetting {
+            return;
+        }
+        self.note(t!(session_vetting_in_force));
+        if self.permission_mode.get() == bravebot_agent::PermissionMode::Bypass {
+            self.note(bravebot_agent::report::vetting_in_bypass());
+        }
+    }
+
+    /// The one line for entering bypass with auto-vetting on, from a mode that was not bypass.
+    fn say_bypass_screens(
+        &mut self,
+        was: bravebot_agent::PermissionMode,
+        now: bravebot_agent::PermissionMode,
+    ) {
+        use bravebot_agent::PermissionMode::Bypass;
+        if now == Bypass && was != Bypass && self.vetting {
+            self.note(bravebot_agent::report::vetting_in_bypass());
+        }
     }
 
     /// Move to the next mode the ladder has short of the two that stop asking a person, which is

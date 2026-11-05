@@ -6,6 +6,7 @@
 use crate::protocol::Event;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -74,8 +75,8 @@ pub(crate) struct View {
     status: Status,
     next_row: u64,
     pending: Option<Pending>,
-    /// Rows of calls that have started and not finished, oldest first.
-    running_calls: Vec<u64>,
+    /// Calls that have started and not finished, by the call's id, with the row each is drawn on.
+    running_calls: HashMap<u64, u64>,
 }
 
 impl View {
@@ -91,7 +92,7 @@ impl View {
             },
             next_row: 0,
             pending: None,
-            running_calls: Vec::new(),
+            running_calls: HashMap::new(),
         }
     }
 
@@ -188,15 +189,21 @@ impl View {
             "quarantined" => RowKind::Quarantined,
             "tool.started" => {
                 let row = self.row(RowKind::Activity, Some(event.name), event.data.clone());
-                self.running_calls.push(row.id);
+                // The call id is the engine's dispatch counter, written by the bridge, never by
+                // content. A start without one is not waited on.
+                if let Some(call) = event.data["call"].as_u64() {
+                    self.running_calls.insert(call, row.id);
+                }
                 return Some(self.changed(vec![row]));
             }
             "tool.finished" => {
-                // The engine gives calls no identity, so a finish belongs to the latest call still
-                // running, as the desktop transcript pairs them. Nothing in a call's content decides
-                // the row, because a call's target can be content from outside. A finish with none
-                // running is a row of its own.
-                let row = match self.running_calls.pop() {
+                // A finish replaces the row of the call with its id. Nothing in a call's content
+                // decides the row, because a call's target can be content from outside. A finish
+                // for no call still running is a row of its own.
+                let running = event.data["call"]
+                    .as_u64()
+                    .and_then(|call| self.running_calls.remove(&call));
+                let row = match running {
                     Some(id) => self.row_with(
                         id,
                         RowKind::Activity,
@@ -403,56 +410,68 @@ mod tests {
         );
     }
 
-    /// One call is one row: the finish replaces the row of the call it ends, and a finish with
-    /// nothing running stands alone.
+    /// One call is one row: a finish replaces the row of the call with its id, whichever order
+    /// overlapping calls finish in, and a finish for no call still running stands alone.
     #[test]
     fn a_finished_call_replaces_the_row_of_the_call_it_ends() {
         let mut view = View::new(true);
         view.started(1, 1, json!({"text": "prompt"}));
-        let started = |view: &mut View, target: &str| {
-            let data = json!({"verb": "read", "target": target, "note": null});
+        // Every call reads the same file, so only the id can tell them apart.
+        let started = |view: &mut View, call: Value| {
+            let data = json!({"call": call, "verb": "read", "target": "a.rs", "note": null});
             view.event(&Event::new("tool.started", "s1", data))
                 .unwrap()
                 .rows[0]
                 .id
         };
-        let finish = |view: &mut View, target: &str| {
-            let data = json!({"verb": "read", "target": target, "note": "2 lines"});
+        let finish = |view: &mut View, call: Value, note: &str| {
+            let data = json!({"call": call, "verb": "read", "target": "a.rs", "note": note});
             view.event(&Event::new("tool.finished", "s1", data))
                 .unwrap()
         };
 
-        let first = started(&mut view, "a.rs");
-        let finished = finish(&mut view, "a.rs");
+        let first = started(&mut view, json!(1));
+        let finished = finish(&mut view, json!(1), "2 lines");
         assert_eq!(finished.rows.len(), 1);
         assert_eq!(finished.rows[0].id, first);
         assert_eq!(finished.rows[0].event.as_deref(), Some("tool.finished"));
         assert_eq!(finished.rows[0].data["note"], "2 lines");
 
-        // Two calls in flight: a finish ends the later one, as the desktop transcript pairs them.
-        let outer = started(&mut view, "b.rs");
-        let inner = started(&mut view, "c.rs");
-        assert_eq!(finish(&mut view, "c.rs").rows[0].id, inner);
-        assert_eq!(finish(&mut view, "b.rs").rows[0].id, outer);
+        // Two calls in flight, the earlier finishing first and then the later finishing first.
+        let earlier = started(&mut view, json!(2));
+        let later = started(&mut view, json!(3));
+        assert_eq!(finish(&mut view, json!(2), "earlier").rows[0].id, earlier);
+        assert_eq!(finish(&mut view, json!(3), "later").rows[0].id, later);
+        let earlier = started(&mut view, json!(4));
+        let later = started(&mut view, json!(5));
+        assert_eq!(finish(&mut view, json!(5), "later").rows[0].id, later);
+        assert_eq!(finish(&mut view, json!(4), "earlier").rows[0].id, earlier);
 
-        // Nothing is running, so the finish gets a row of its own, after every earlier one.
-        let alone = finish(&mut view, "d.rs");
-        assert!(alone.rows[0].id > inner);
+        // A finish for a call already finished, for one never started, or without an id gets a
+        // row of its own, after every earlier one, and leaves a call still running in place.
+        let running = started(&mut view, json!(6));
+        for call in [json!(4), json!(99), Value::Null] {
+            let alone = finish(&mut view, call, "alone");
+            assert!(alone.rows[0].id > running);
+        }
+        assert_eq!(finish(&mut view, json!(6), "done").rows[0].id, running);
 
-        // A turn that ends with a call unfinished forgets it, so a finish after the end is a row of
-        // its own and does not reuse the row of the call the turn left running.
-        let unfinished = started(&mut view, "e.rs");
+        // A start without an id is not waited on, so a finish without one does not take its row.
+        let unnumbered = started(&mut view, Value::Null);
+        assert!(finish(&mut view, Value::Null, "alone").rows[0].id > unnumbered);
+
+        // A turn that ends with a call unfinished forgets it, so its finish after the end is a row
+        // of its own and does not reuse the row of the call the turn left running.
+        let unfinished = started(&mut view, json!(7));
         view.event(&Event::new("turn.done", "s1", json!({"reply": "ok"})));
-        let after_end = finish(&mut view, "f.rs");
-        assert!(after_end.rows[0].id > unfinished);
+        assert!(finish(&mut view, json!(7), "late").rows[0].id > unfinished);
 
         // A new turn forgets a call the earlier one left running, even when that turn never
         // reported an end.
         view.started(2, 2, json!({"text": "again"}));
-        let left = started(&mut view, "g.rs");
+        let left = started(&mut view, json!(8));
         view.started(3, 3, json!({"text": "once more"}));
-        let after_start = finish(&mut view, "h.rs");
-        assert!(after_start.rows[0].id > left);
+        assert!(finish(&mut view, json!(8), "late").rows[0].id > left);
     }
 
     /// A failed model request must not leave a client showing a running turn.

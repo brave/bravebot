@@ -179,7 +179,7 @@ test('ChatGPT, xAI and AWS sign in from the window; every other row shows its co
 test('every row carries its mark, hidden from assistive technology, and its standing as a label', () => {
   const row = (fields) => AccountRowView(rowProps(account(fields)))
   const logo = (fields) => byTest(row(fields), 'account-logo')?.props
-  const marks = [[{ way: 'chatgpt' }, 'openai'], [{ way: 'xai' }, 'xai'], [{ way: 'brave' }, 'brave-icon-release-color'], [{ way: 'bedrock' }, 'amazon-color'],
+  const marks = [[{ way: 'chatgpt' }, 'openai'], [{ way: 'xai' }, 'xai'], [{ way: 'brave' }, 'social-brave-release-favicon-fullheight-color'], [{ way: 'bedrock' }, 'amazon-color'],
     [{ way: 'gateway', id: 'openrouter' }, 'openrouter'], [{ way: 'gateway', id: 'work' }, 'key'], [{ way: 'gateways' }, 'key']]
   for (const [fields, name] of marks) {
     assert.equal(logo(fields)?.name, name, JSON.stringify(fields))
@@ -240,7 +240,7 @@ test('what a key window came to is said with the row\'s name, and a key stored b
 test('an AWS row waits on its own sign-in, and coming back to the window reads no AWS row again', async () => {
   const source = readFileSync('src/renderer/components/Accounts.tsx', 'utf8')
   assert.match(source, /if \(rowsNow\.current\?\.some\(\(row\) => row\.way === 'bedrock'\)\) return/)
-  assert.match(source, /signIn\.waiting\?\.way === row\.way && \(row\.way !== 'bedrock' \|\| signIn\.waiting\.id === row\.id\)/)
+  assert.match(source, /signIn\.waiting\?\.way === current\.way && \(current\.way !== 'bedrock' \|\| signIn\.waiting\.id === current\.id\)/)
   const { signInSentence } = await loadComponents('src/renderer/components/SignInButton.tsx')
   assert.equal(signInSentence({ way: 'bedrock', id: null, outcome: 'signedIn', sentence: null }, 'AWS Bedrock'), 'Signed in to AWS Bedrock.')
   assert.equal(signInSentence({ way: 'bedrock', id: null, outcome: 'signedIn', sentence: 'Your settings set BRAVEBOT_USE_BEDROCK=1 now.' }, 'AWS Bedrock'),
@@ -315,27 +315,27 @@ test('Sign in is offered beside a command the window can run itself, and no othe
   assert.doesNotMatch(html, /sign-in-gateway/)
 })
 
-test('setting up a model service starts with the sign-ins and keys under Accounts, which is below it', async () => {
-  const { SetupRoutes } = await loadComponents('src/renderer/components/AgentSettings.tsx')
+test('setting up a model service starts with the sign-ins and keys under Accounts, which is above it', async () => {
+  const { SetupRoutes } = await loadComponents('src/renderer/components/ProvidersSettings.tsx')
   const html = renderToStaticMarkup(React.createElement(SetupRoutes))
   const headings = [...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((m) => m[1])
   assert.deepEqual(headings, ['Sign in to a service', 'A local model or another service', 'AWS Bedrock'])
-  assert.match(html, /data-test="settings-setup-accounts">Sign in to a ChatGPT, xAI or AWS account, or enter a key for Brave Premium, OpenRouter or another gateway, under Accounts, below\.</)
+  assert.match(html, /data-test="settings-setup-accounts">Sign in to a ChatGPT, xAI or AWS account, or enter a key for Brave Premium, OpenRouter or another gateway, under Accounts, above\.</)
   assert.match(html, /data-test="settings-setup-gateway-key">For a service that needs a key, enter it on its row under Accounts, or name/)
-  const page = readFileSync('src/renderer/components/AgentSettings.tsx', 'utf8')
-  assert.ok(page.indexOf('<SetupRoutes />') < page.indexOf('<Accounts '), 'Accounts is drawn after the routes that point to it')
+  const page = readFileSync('src/renderer/components/ProvidersSettings.tsx', 'utf8')
+  assert.ok(page.indexOf('<Accounts ') < page.indexOf('<SetupRoutes />'), 'Accounts is drawn before the routes that point to it')
 })
 
 test('AWS Bedrock is set up by naming the account and signing in to it', async () => {
-  const { SetupRoutes } = await loadComponents('src/renderer/components/AgentSettings.tsx')
+  const { SetupRoutes } = await loadComponents('src/renderer/components/ProvidersSettings.tsx')
   const html = renderToStaticMarkup(React.createElement(SetupRoutes))
   assert.doesNotMatch(html, /<pre>BRAVEBOT_USE_BEDROCK/, 'signing in records the switch, so it is not the first line to copy')
   assert.match(html, /data-test="settings-setup-bedrock">Then sign in to the profile under Accounts, which turns Bedrock on\. Where the profile needs no sign-in, set <code>BRAVEBOT_USE_BEDROCK=1<\/code> as well\./)
 })
 
 test('a sign-in or a key stored under Accounts reads the connection again as well as the models', () => {
-  const page = readFileSync('src/renderer/components/AgentSettings.tsx', 'utf8')
-  assert.match(page, /<Accounts session=\{session\} refresh=\{refresh\} onChanged=\{\(\) => \{ onChanged\(\); void load\(\) \}\} \/>/)
+  const page = readFileSync('src/renderer/components/ProvidersSettings.tsx', 'utf8')
+  assert.match(page, /<Accounts session=\{session\} refresh=\{0\} onChanged=\{\(\) => \{ onChanged\(\); void load\(\) \}\} pick=\{pick\} \/>/)
 })
 
 test('a sign-in from a picker warning lists the models again, in the session the picker lists for', async () => {

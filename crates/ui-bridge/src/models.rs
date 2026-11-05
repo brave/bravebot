@@ -6,8 +6,26 @@ use bravebot_config::{Config, ModelRefusal, RosterScope};
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
-    let (rows, warnings) = roster(config, RosterScope::for_a_picker());
-    catalogue(config, rows, warnings)
+    let (rows, warnings, origins) = roster(config, RosterScope::for_a_picker());
+    catalogue(config, rows, warnings, &origins)
+}
+
+/// Which service each row came from, by row key: `brave`, `bedrock`, `chatgpt`, `xai` or
+/// `gateway:<id>` for a provider block or known service.
+///
+/// Named from where `roster` took the row and never from anything a listing said, so a window can
+/// group rows under the account that offers them and keep a person's preferences about that account
+/// against a key the account list names the same way. A row nothing here took (the configured
+/// default put back by `catalogue`) has none, and is `default`.
+type Origins = std::collections::HashMap<String, String>;
+
+/// Record `origin` for every row from `from` onwards.
+fn took(origins: &mut Origins, rows: &[Model], from: usize, origin: &str) {
+    for row in &rows[from..] {
+        origins
+            .entry(row.key.clone())
+            .or_insert_with(|| origin.to_string());
+    }
 }
 
 /// Take the window of the model a turn will be answered by, the one `model` names or, where it names
@@ -37,7 +55,7 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 /// text built here. The window reads the reference catalog whatever language the machine is set to
 /// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so a person reads the same words from
 /// either.
-fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>) {
+fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>, Origins) {
     use bravebot_aichat::roster::Entry;
 
     // Every request goes out at once, so what the window waits for is the slowest service and not
@@ -53,17 +71,38 @@ fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>) {
         });
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
+    let mut origins = Origins::new();
     for entry in roster.entries {
+        let from = rows.len();
         match entry {
             // An entry naming AWS is served by the Bedrock backend under the bare id it is keyed by,
             // and there is no listing to ask, so a block that named no models offers none.
-            Entry::Bedrock(bedrock) => rows.extend(bedrock_rows(bedrock)),
-            Entry::Named(provider) => rows.extend(named_rows(provider)),
+            Entry::Bedrock(bedrock) => {
+                rows.extend(bedrock_rows(bedrock));
+                took(&mut origins, &rows, from, "bedrock");
+            }
+            Entry::Named(provider) => {
+                rows.extend(named_rows(provider));
+                took(
+                    &mut origins,
+                    &rows,
+                    from,
+                    &format!("gateway:{}", provider.id),
+                );
+            }
             Entry::NoCredential(provider) => warnings.push(Said::plain(format!(
                 "No credential configured for {}.",
                 provider.display_name()
             ))),
-            Entry::Asked(_, Ok(listed)) => rows.extend(listed),
+            Entry::Asked(provider, Ok(listed)) => {
+                rows.extend(listed);
+                took(
+                    &mut origins,
+                    &rows,
+                    from,
+                    &format!("gateway:{}", provider.id),
+                );
+            }
             Entry::Asked(provider, Err(_)) => warnings.push(Said::plain(format!(
                 "Could not load models from {}. Try again.",
                 provider.display_name()
@@ -73,17 +112,25 @@ fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>) {
     // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away, and so
     // does a stored xAI sign-in ([XAI-19](../../../docs/specs/xai-sign-in.md#XAI-19)).
     if let Some(account) = chatgpt {
+        let from = rows.len();
         with_account(&mut rows, &mut warnings, account);
+        took(&mut origins, &rows, from, "chatgpt");
     }
     if let Some(account) = xai {
+        let from = rows.len();
         with_xai_account(&mut rows, &mut warnings, account);
+        took(&mut origins, &rows, from, "xai");
     }
     match roster.brave {
-        Some(Ok(listed)) => rows.extend(listed),
+        Some(Ok(listed)) => {
+            let from = rows.len();
+            rows.extend(listed);
+            took(&mut origins, &rows, from, "brave");
+        }
         Some(Err(_)) => warnings.push(Said::plain("Could not load Brave models. Try again.")),
         None => {}
     }
-    (rows, warnings)
+    (rows, warnings, origins)
 }
 
 /// The rows of the models a gateway's block names, which it describes none of.
@@ -243,7 +290,7 @@ pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     ))
 }
 
-fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<Said>) -> Value {
+fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<Said>, origins: &Origins) -> Value {
     let default = config.default_model.as_str();
     // Dropped before the default is put back, so a refused configured model is not offered either: a
     // row this window cannot start a turn on is a row that fails on being picked (BACKEND-48).
@@ -278,8 +325,10 @@ fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<Said>) -> Value {
         .into_iter()
         .filter(|row| seen.insert(row.key.clone()))
         .map(|row| {
+            let from = origins.get(&row.key).map_or("default", String::as_str);
             json!({ "id": row.key, "name": row.display_name,
             "provider": row.provider.unwrap_or_else(|| "Brave".into()),
+            "providerKey": from, "readsEffort": row.reads_effort,
             "premium": row.premium, "contextWindow": row.conversation_tokens,
             "capabilities": badges(&row.advertised) })
         })
@@ -486,7 +535,12 @@ mod tests {
         assert_eq!(keys, ["openrouter/z-ai/glm-4.6", "chatgpt/gpt-5.5"]);
         assert!(warnings.is_empty());
 
-        let result = catalogue(&configured("the-configured-model", None), rows, warnings);
+        let result = catalogue(
+            &configured("the-configured-model", None),
+            rows,
+            warnings,
+            &Origins::new(),
+        );
         let row = result["models"]
             .as_array()
             .expect("rows")
@@ -550,7 +604,12 @@ mod tests {
         let (mut rows, mut warnings) = (Vec::new(), Vec::new());
         with_account(&mut rows, &mut warnings, AccountModels::Unreadable);
         warnings.push(Said::plain("Could not load Brave models. Try again."));
-        let result = catalogue(&configured("the-configured-model", None), rows, warnings);
+        let result = catalogue(
+            &configured("the-configured-model", None),
+            rows,
+            warnings,
+            &Origins::new(),
+        );
         assert_eq!(result["warnings"].as_array().map(Vec::len), Some(2));
         assert_eq!(
             result["warningCommands"],
@@ -600,7 +659,12 @@ mod tests {
             ["openrouter/z-ai/glm-4.6", "xai/grok-4.5", "xai/grok-4.6"]
         );
         assert!(warnings.is_empty());
-        let result = catalogue(&configured("the-configured-model", None), rows, warnings);
+        let result = catalogue(
+            &configured("the-configured-model", None),
+            rows,
+            warnings,
+            &Origins::new(),
+        );
         let row = result["models"]
             .as_array()
             .expect("rows")
@@ -624,6 +688,7 @@ mod tests {
             &configured("the-configured-model", None),
             Vec::new(),
             warnings,
+            &Origins::new(),
         );
         assert_eq!(
             warned["warningCommands"],
@@ -790,6 +855,7 @@ mod tests {
             &configured("openrouter/anthropic/claude-haiku-4.5", None),
             Vec::new(),
             vec![Said::plain("offline")],
+            &Origins::new(),
         );
         assert_eq!(result["models"][0]["id"], result["defaultModel"]);
         assert_eq!(result["warnings"][0], "offline");
@@ -820,6 +886,7 @@ mod tests {
             &config,
             vec![listed("an-allowed-model"), listed("denied-model")],
             Vec::new(),
+            &Origins::new(),
         );
         let offered: Vec<&str> = result["models"]
             .as_array()
@@ -861,6 +928,62 @@ mod tests {
         assert_eq!(config.providers.len(), 1, "the block configured no service");
         config.default_model = "ollama/tiny".into();
         config
+    }
+
+    /// Each row names the service it came from by a key the account list names the same way, so a
+    /// window can keep a person's choices about one account (shown, hidden, in what order) against
+    /// the rows that account offers. A key derived from the display name would move when a gateway is
+    /// renamed, and two gateways sharing a display name would share one.
+    #[test]
+    fn each_row_names_the_service_it_came_from_and_whether_it_reads_a_level() {
+        let mut config = a_config_with_a_gateway_stating_a_window(8_192);
+        config.default_model = "a-model-nothing-lists".into();
+        let result = list(&config);
+        let key_of = |id: &str| {
+            result["models"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .find(|row| row["id"] == id)
+                .map(|row| (row["providerKey"].clone(), row["readsEffort"].clone()))
+                .unwrap_or_else(|| panic!("no row {id}: {result}"))
+        };
+        assert_eq!(
+            key_of("ollama/tiny"),
+            (json!("gateway:ollama"), json!(true))
+        );
+        assert_eq!(
+            key_of("a-model-nothing-lists"),
+            (json!("default"), json!(true)),
+            "the configured default put back is from no service"
+        );
+
+        // The accounts and Brave are tagged where their rows join, and a row the service says takes
+        // no level says so.
+        let mut origins = Origins::new();
+        let (mut rows, mut warnings) = (Vec::new(), Vec::new());
+        with_account(
+            &mut rows,
+            &mut warnings,
+            bravebot_agent::chatgpt::AccountModels::Offered(vec![Model {
+                reads_effort: false,
+                ..account_row("chatgpt/gpt-5.5")
+            }]),
+        );
+        took(&mut origins, &rows, 0, "chatgpt");
+        let from = rows.len();
+        rows.push(xai_row("xai/grok-4"));
+        took(&mut origins, &rows, from, "xai");
+        let result = catalogue(
+            &configured("chatgpt/gpt-5.5", None),
+            rows,
+            warnings,
+            &origins,
+        );
+        let rows = result["models"].as_array().expect("rows");
+        assert_eq!(rows[0]["providerKey"], "chatgpt");
+        assert_eq!(rows[0]["readsEffort"], false);
+        assert_eq!(rows[1]["providerKey"], "xai");
     }
 
     /// BACKEND-7, BACKEND-14 and COMPACT-9 in the window: every turn is built from a fresh
@@ -1021,6 +1144,17 @@ mod tests {
                 .collect()
         };
         let named = with(r#", "models": {"openai.gpt-5.6-sol": {}}"#);
+        let row = list(&named)["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["id"] == "openai.gpt-5.6-sol")
+            .cloned()
+            .expect("the AWS entry's row");
+        assert_eq!(
+            row["providerKey"], "bedrock",
+            "an AWS entry is the Bedrock account's, not a gateway's"
+        );
         let listed = ids(&named);
         assert!(
             listed.contains(&"openai.gpt-5.6-sol".to_string()),

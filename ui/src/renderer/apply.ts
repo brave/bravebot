@@ -67,7 +67,7 @@ export function apply(
       case 'tool.finished':
         return { ...old, entries: t.finish(old.entries, message.data) }
       case 'landed':
-        return { ...old, entries: t.land(old.entries, message.data.landing) }
+        return { ...old, entries: t.land(old.entries, message.data.landing, message.data.call) }
       case 'quarantined':
         return {
           ...old,

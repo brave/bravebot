@@ -2,10 +2,10 @@
  * The small window that shows what a sign-in needs a person to act on (CHATGPT-16, XAI-21,
  * BACKEND-70).
  *
- * A fixed local page with a preload of its own that reaches four channels: read what to show,
- * copy one of its fields, open the browser at the recorded address, and cancel, and is told when
- * what to show has grown. It loads no session and cannot reach the bridge. Closing it cancels the
- * sign-in.
+ * A fixed local page with a preload of its own that reaches five channels: read what to show,
+ * copy one of its fields, open the browser at the recorded address, cancel, and say how tall it is
+ * drawn, and is told when what to show has grown. It loads no session and cannot reach the
+ * bridge. Closing it cancels the sign-in.
  */
 
 import { BrowserWindow, clipboard, ipcMain } from 'electron'
@@ -15,19 +15,24 @@ import type { SignInWindowState } from '../shared/accounts'
 
 const signInWindow = smallWindow('sign-in')
 
-const TITLES = { chatgpt: 'Sign in to ChatGPT', xai: 'Sign in to xAI', bedrock: 'Sign in to AWS' } as const
+const SIGN_IN_WINDOW_WIDTH = 460
+const SIGN_IN_WINDOW_HEIGHTS = { least: 220, most: 720 }
 
-/** Each way's content height, measured from its page, so the window opens without a scroll bar. */
-const HEIGHTS = { chatgpt: 346, xai: 332, bedrock: 358 } as const
+/** Each way's first guess at its height; the page says its height once drawn, and again when it grows. */
+const HEIGHTS = { chatgpt: 380, xai: 400, bedrock: 400 } as const
 
 export function showSignInWindow(state: SignInWindowState, parent: BrowserWindow | null, cancel: () => void): void {
+  const title = `Sign in to ${state.name}`
   signInWindow.show({
-    title: TITLES[state.way],
-    width: 460,
+    title,
+    width: SIGN_IN_WINDOW_WIDTH,
     height: HEIGHTS[state.way],
     parent,
     cancel,
-    reuse: (window) => window.webContents.send('bravebot:sign-in-window:changed', state),
+    reuse: (window) => {
+      window.setTitle(title)
+      window.webContents.send('bravebot:sign-in-window:changed', state)
+    },
   })
 }
 
@@ -50,4 +55,8 @@ export function handleSignInWindow(signIn: SignIn<BrowserWindow>): void {
   })
   ipcMain.handle('bravebot:sign-in-window:open', (event) => (ours(event) ? signIn.open().catch(() => false) : false))
   ipcMain.handle('bravebot:sign-in-window:cancel', (event) => (ours(event) ? signIn.cancelShown() : undefined))
+  ipcMain.handle('bravebot:sign-in-window:fit', (event, height: unknown) => {
+    if (!ours(event) || typeof height !== 'number' || !Number.isFinite(height)) return
+    signInWindow.current()?.setContentSize(SIGN_IN_WINDOW_WIDTH, Math.min(SIGN_IN_WINDOW_HEIGHTS.most, Math.max(SIGN_IN_WINDOW_HEIGHTS.least, Math.ceil(height))))
+  })
 }

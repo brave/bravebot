@@ -58,8 +58,11 @@ fn a_session_of_the_account_is_begun_only_where_a_session_begins() {
         // The terminal's session, when it opens and when `/clear` or a handoff begins another.
         ("crates/tui/src/state.rs", 1),
         ("crates/tui/src/state/settings.rs", 1),
-        // The desktop's session, begun once in `State::blank`, which the opened, resumed and
-        // forked constructors all use.
+        // The desktop's session. `State::blank`, which the opened, resumed and forked constructors
+        // all use, begins one with the recorded level. The bridge begins it again when it opens,
+        // resumes or forks a session, with the level the project's settings settle on, which only
+        // the bridge can read (BACKEND-43), before any request is made in it.
+        ("crates/ui-bridge/src/bridge.rs", 1),
         ("crates/ui-bridge/src/running.rs", 1),
     ]
     .into_iter()

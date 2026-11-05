@@ -8,7 +8,9 @@ description: Put the session back to before a turn with /undo, read a rewind bef
 
 [`/undo`](../reference/commands.md#undo) puts the session back where it stood before the most recent
 turn: the files that turn wrote go back to what they held, a file it created is removed, and the
-conversation, turn count, spend, timing and remembered command approvals go back with them. The prompt
+conversation, turn count, spend, timing and remembered command approvals go back with them. Your
+answers to the planner's questions are forgotten, all of them, so a question the planner puts again is
+asked again. An undo that finds no turn to go back to forgets none. The prompt
 of the earliest turn taken back returns to the input box, as a prompt, when the box is empty and no
 turn is running.
 **Saying it again goes back another turn**, as far as the last five.

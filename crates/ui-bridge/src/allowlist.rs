@@ -142,6 +142,9 @@ pub const DENIED: &[&str] = &[
     "hooks.inspect",
     "language.get",
     "language.set",
+    // The machine's recorded effort level, which the terminal shares.
+    "effort.get",
+    "effort.set",
     "connectors.list",
     "connectors.preview",
     "connectors.connect",

@@ -1351,7 +1351,9 @@ skill's file or in any other way, because the service was seen to miss its promp
 of level inside a session. The service accepts a change of level, and holding one level is this program's
 rule. A request that asks for none, as a summary, a goal check and a commit message do,
 carries none, and a session that began with none sends none. A delegate begins at the level of the turn that
-spawned it, or its definition's. The desktop offers no way to choose a level, so its sessions begin at none.
+spawned it, or its definition's. A desktop session begins at the level a turn in its folder asks for when
+the window opens, resumes or forks it: the one its model picker or `/effort` recorded, ranked against the
+folder's settings as [BACKEND-43](backends.md#BACKEND-43) ranks them.
 
 A model of the account that refuses a body carrying a level and takes the same body without it reads none
 ([BACKEND-22](backends.md#BACKEND-22)), and that refusal outranks the level a session began with. The model is
@@ -1454,6 +1456,7 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_tui::panel::the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at`
 `verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
 
 <a id="CHATGPT-11"></a>
 ### CHATGPT-11: logging out, status and doctor never print the sign-in

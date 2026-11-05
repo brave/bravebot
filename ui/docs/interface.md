@@ -170,18 +170,26 @@ through the terminal's `--sandbox off` flag or `/sandbox off`. A change applies 
 and a turn already running keeps the mode it began with. Every session opens in the mode the
 settings and the managed file give, never in another session's choice.
 
-The model control in the composer opens the conversation's model picker.
-Search by name, provider, or reported capability (for example, `text` or `tools`),
-then click a model or use the arrow keys and Enter. Escape closes the picker.
+The model control in the composer opens the conversation's model picker: a search field and
+**Refresh** across the top, then a rail of service marks, the models, and a **Reasoning** column.
+The first mark lists every service's models, each row with its service's mark; another mark lists
+that service's models alone. Search by name, provider, or reported capability (for example, `text`
+or `tools`); a search covers every service whichever mark is chosen. Click a model to choose it and
+keep the picker open, or use the arrow keys and Enter to choose and close. Escape closes the picker.
 
-Models are grouped by provider. **ArrowLeft** on any row collapses that provider's section;
-**ArrowRight** on a collapsed section expands it. Clicking the provider heading toggles
-it the same way. **PageDown** and **PageUp** jump six rows at a time through the visible
-list. **Home** and **End** jump to the first and last visible row. Changing the search
-query resets all collapsed sections. New conversations use the agent's configured default when available;
-the default is also marked in the list. A choice applies to subsequent messages and is
-remembered locally for that conversation across app restarts. Forks inherit the current
+With the search field empty, **ArrowLeft** and **ArrowRight** move between the rail, the models and
+the Reasoning column, and **ArrowUp** and **ArrowDown** move within the one the highlight is in.
+**PageDown** and **PageUp** jump six models at a time, and **Home** and **End** jump to the first and
+last. The models a service shows, and their order, are chosen under **Settings › Providers**; the
+model in use is listed whatever was hidden. New conversations use the agent's configured default
+when available; the default is also marked in the list. A choice applies to subsequent messages
+and is remembered locally for that conversation across app restarts. Forks inherit the current
 choice. The picker is disabled while a turn is running.
+
+The Reasoning column is **Default** and five levels, Low to Ultra. A level is recorded where the
+terminal's `/effort` records it, so it applies to every conversation and to the terminal, and
+**Default** removes it. The column is locked, with a line saying why, where the model in use takes
+no level or the conversation's folder names one in its settings, which outranks a pick.
 
 Available models come from the agent's configured backends, including OpenRouter.
 Badges show the capabilities the app exposes: **Text** and **Tools**. The catalogue
@@ -193,10 +201,10 @@ Refresh retries discovery if a provider is unavailable; the configured default r
 selectable. Choosing a model does not change the agent's global default.
 
 Where the models of a service could not be listed, the picker says so above the list, one sentence
-for each service, in the picker's status type. The bridge words each sentence. A sentence that names
+for each service, as a small warning alert. The bridge words each sentence. A sentence that names
 a command to run, such as the one that signs in to ChatGPT again, has that command drawn as code. The
 bridge sends it beside the sentence (`warningCommands`, in the order of `warnings`), so the picker does
-not read a sentence to find it. A warning that names no command is a plain line.
+not read a sentence to find it. A warning that names no command is a plain sentence in the alert.
 
 ### Turn notices, usage and audit
 
@@ -430,7 +438,8 @@ while it looks away. Asked a question, it opens its eyes wide and bounces every 
 it is answered. The crown and arms trail the body and overshoot it.
 
 It answers the pointer too. It perks up when the pointer arrives over it, squashes under a press
-and springs back when let go, and giggles at the third quick press. The open bot's face watches
+and springs back when let go, and giggles at the third quick press. Choosing a bot in the
+sidebar, by pointer or by Enter or Space, makes its face giggle. The open bot's face watches
 the message box while you type. A face glances toward a neighbour that cheers, startles or
 giggles. A face in a list that nothing has happened to for 40 seconds dozes off, with heavy lids
 and a slow breath, and wakes with a stretch when the pointer reaches it. About every half minute
@@ -869,15 +878,21 @@ stay in English.
 ## Agent 0.9 controls
 
 **Settings** at the foot of the sidebar replaces the chat view with the settings: pages on the
-left (**General** and **Agent settings**) and **Back to
+left (**General**, **Providers**, **Connectors** and **Agent settings**) and **Back to
 BraveBot**, which `Esc` also does. The chat view stays as it was underneath. The setup button on
-the backend notice opens Agent settings.
+the backend notice opens Providers.
 
-**Agent settings** shows Connection, Hooks and Run settings, one after another. Connection
-shows the bundled agent build, model services, certificate/proxy details and administrator
-pins, with setup instructions for gateways and AWS Bedrock. Secrets are not shown.
+**Providers** shows **Accounts** first, then the model service, with the bundled agent build, the
+default model and each configured provider's credential, a **Fix** beside one that is missing which
+chooses its account above, and setup instructions for gateways and AWS Bedrock. **Agent settings**
+shows Connection (certificate and proxy details, diagnostics and administrator pins), Hooks and Run
+settings, one after another. Secrets are not shown.
 
-**Accounts**, after Connection, lists the sign-ins `bravebot auth status` reports: Brave Premium,
+**Accounts** is a list of the sign-ins beside the one chosen, which the arrow keys move through. A
+signed-in account shows its models: **Show in model picker** shows or hides all of them, each model
+has a switch of its own and a handle that moves it, by dragging or by Alt with the up or down arrow,
+and **Reset to defaults** forgets those choices for that service and leaves it signed in. The
+choices are kept by the desktop window alone. The list holds the sign-ins `bravebot auth status` reports: Brave Premium,
 each gateway, OpenRouter wherever a key could be stored for it, AWS Bedrock, ChatGPT and xAI, each
 with its mark and its standing (signed in, key stored, key from the environment, no key needed, not
 signed in, can't be used, or misconfigured) and the reason a sign-in can't be used. No row shows
@@ -886,14 +901,15 @@ Cancel and `Esc` forget nothing, and a gateway's question names its host. A Chat
 is not signed in, or can't be used, has **Sign in**, and so does an AWS Bedrock row whose sign-in
 is the remedy. The Brave Premium row and a gateway row whose key can be stored have **Enter key**,
 or **Replace key** where one is stored. Any other row that is not signed in shows the command that
-signs in, with a copy button; a key row shows its button instead. Refresh diagnostics reads the
-rows again, and so does the window coming back, at most every five seconds and not where an AWS
+signs in, with a copy button; a key row shows its button instead. The window coming back reads the
+rows again, at most every five seconds and not where an AWS
 Bedrock row is listed, since reading it runs the AWS command-line tool. A failure card or picker
 warning that names `bravebot auth login chatgpt` or `bravebot auth login xai` has the same
 **Sign in** button.
 
 Sign in asks in a dialog of the main process's own, with Cancel as the default. A yes starts the
-sign-in and opens a small **Sign in to ChatGPT** or **Sign in to xAI** window. For ChatGPT the
+sign-in and opens a small **Sign in to** window titled with the row's name as Accounts lists it
+(**Sign in to ChatGPT account**, **Sign in to xAI account**). For ChatGPT the
 browser opens at OpenAI, and the window shows the address, with a copy button and **Open browser
 again**, and the local port that waits for it. For xAI the window shows the code to enter, with a
 copy button, how long it lasts, and **Open in browser**. The row shows that it is waiting, until
@@ -903,7 +919,7 @@ again.
 
 An AWS Bedrock row signs in to the account it names, its profile or the default chain, with
 `aws sso login`, as `bravebot auth login bedrock` does. The dialog says that the AWS command-line
-tool opens a browser at AWS and keeps the session. The **Sign in to AWS** window shows the profile,
+tool opens a browser at AWS and keeps the session. The **Sign in to** window, titled with the row's name, shows the profile,
 the code to confirm, with a copy button, once the AWS command-line tool has written it, and
 **Open browser again**. Cancel, closing the window and quitting stop the AWS command-line tool.
 Afterwards the account is checked again, as a turn would, and a sign-in it did not complete says

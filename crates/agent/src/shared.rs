@@ -325,7 +325,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn quarantined(&mut self, shown: Shown);
         fn printed(&mut self, output: Printed);
         fn returned(&mut self, returned: Returned);
-        fn landed(&mut self, landing: Landing);
+        fn landed(&mut self, call: Option<crate::report::CallId>, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
         fn movable(&mut self, handoff: bravebot_core::cancel::Handoff);
@@ -430,6 +430,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         self.asked(
             |held| held.confirm_vouch(request),
             |refuse| refuse.confirm_vouch(request),
+        )
+    }
+
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |held| held.confirm_vouch_noting_the_mode(request),
+            |refuse| refuse.confirm_vouch_noting_the_mode(request),
         )
     }
 

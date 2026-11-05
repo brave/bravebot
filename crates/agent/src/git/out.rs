@@ -63,6 +63,8 @@ pub(super) struct Out<'w> {
     pub(super) listing_partial: bool,
     /// From [`Request::every_untracked`].
     pub(super) every_untracked: bool,
+    /// From [`Request::beside`].
+    pub(super) beside: crate::tools::Beside,
 }
 
 impl Out<'_> {

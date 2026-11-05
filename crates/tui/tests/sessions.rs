@@ -96,6 +96,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 inference_ms: 11_000,
                 tools_ms: 500,
                 stalled_ms: 0,
+                file_wait_ms: 0,
             },
         ),
         (
@@ -105,6 +106,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 inference_ms: 2_000,
                 tools_ms: 37_000,
                 stalled_ms: 0,
+                file_wait_ms: 0,
             },
         ),
         (
@@ -114,6 +116,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 inference_ms: 4_000,
                 tools_ms: 1_000,
                 stalled_ms: 294_000,
+                file_wait_ms: 0,
             },
         ),
     ])

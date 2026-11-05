@@ -1,12 +1,12 @@
 # Mobile prototype open questions
 
-Status: proposal with Q2 resolved for the first Rust block. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
+Status: proposal. Q2 and Q6 are resolved, and U1 is decided for host-launched clients. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
 
 **Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
 
 ## What can proceed
 
-Stages 1–2a are complete; Q2 records the placement of the view. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
+Each question below names the capability that needs its answer. Work that does not depend on it can proceed. The restricted stage-3d synthetic experiment runs under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). See the [README](README.md) for what is built.
 
 ## Unresolved security decisions
 
@@ -110,11 +110,10 @@ These are not accepted risks or implementation details that can be skipped. The 
 
 ### Q6. How does a tool finish name the call it ends?
 
-- **Status:** unresolved. Arrival order is used meanwhile.
-- **Question and reason:** the engine gives a call no identity. The session view pairs a tool finish with the latest call still running, because no content of a call may decide the row: a call's target can be content from outside. When two calls are in flight and finish out of order, each row shows the other call's verb, target and note until the turn ends, and the Calls made list and the transcript are wrong for that time. Pairing by verb and target was tried and removed, because it branches on content.
-- **Current assumption:** a review of the engine's call sites found calls running one at a time, so the swap needs overlapping calls. This is not yet confirmed by a test of the engine.
-- **Evidence needed:** an id the engine assigns to a call and carries on both events, the change to the session view's wire shape and its spec, and a test with overlapping calls that finish in either order.
-- **Before:** any engine work that runs calls in parallel, and before the Calls made list is relied on as a record of what touched content from outside.
+- **Status:** resolved.
+- **Decision:** the engine gives each dispatch an id from a process-wide counter, never from the call or the provider's reply, and carries it as `call` on both `tool.started` and `tool.finished`. The session view, the ACP bridge and the desktop transcript pair a finish with its start by that id alone. A finish whose id names no running call, or that has none, is a row of its own. Calls already overlap without parallel dispatch: a delegate runs on a thread of its own and reports through the same reporter as the turn that started it.
+- **Evidence:** `bravebot_agent::turn::each_call_is_announced_and_summarised_under_an_id_of_its_own` checks that two calls in one reply get different ids and that each finish carries its start's id. `bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends` and `bravebot_ui_bridge::acp::a_finished_call_closes_the_editor_entry_with_its_call_id` finish two calls with the same verb and target in either order. `ui/scripts/tool-pairing.test.mjs` does the same for the desktop transcript, for finishes and for landings. `bravebot_agent::tools::tests::a_held_call_finishes_under_the_id_it_started_with` and `bravebot_agent::manifest::each_step_finishes_under_the_id_it_started_with` check the held-call and manifest paths.
+- **Remaining:** the TUI pairs a finish and a landing with the call still running for the same delegate, which is not a defect because a delegate runs one call at a time, and the CLI only prints. Neither reads the id. The `landed` event carries the same `call`, and the desktop transcript places a landing on the row of that call.
 - **Issue:** [#2769](https://github.com/brave/bravebot/issues/2769), "Give tool calls an id in the session view, so a finish lands on its own call's row when calls overlap".
 
 ### Q7. When does the mobile app close a session it opened?
@@ -128,11 +127,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 
 ### Q8. How does the app know a target can list its sessions?
 
-- **Status:** unresolved.
-- **Question and reason:** the app asks for the session list on every change and does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
-- **Current assumption:** the first target implements listing, so no gate is needed yet.
-- **Evidence needed:** read `sessionList` once from `describe()`, which can itself reject; hide the list or explain its absence when it is `false`; show a failed load differently from an empty list. Tests with a client that reports `false` and one whose list fails.
-- **Before:** a target built on the stdio client, or any target without listing.
+- **Status:** resolved. The app reads `TargetInfo.sessionList` from `describe()` before its first list request, and asks again on the next refresh if that question fails. For a target that reports `false`, the drawer says "This target does not keep a list of sessions." and never requests a list. A failed list request, or a failed `describe()`, shows "Sessions could not be listed." when no list has arrived, and otherwise keeps the last list with a note that it could not be refreshed, until a request newer than the failure succeeds. An empty list still says "No sessions yet." Tests: `mobile/src/__tests__/sessionList.test.tsx`.
 - **Issue:** [#2771](https://github.com/brave/bravebot/issues/2771), "Show the mobile sessions drawer by target capability, and tell a person when listing fails".
 
 ## Keeping this record current

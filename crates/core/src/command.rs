@@ -370,13 +370,17 @@ impl Step {
     }
 
     fn render(&self, program: &str) -> String {
-        self.render_args(program, self.args.iter().map(|arg| quoted(arg)).collect())
+        self.render_args(
+            program,
+            self.args.iter().map(|arg| quoted(arg)).collect(),
+            None,
+        )
     }
 
     /// [`Step::display`] with the arguments already rendered, for a caller whose arguments are not
     /// all text. The caller owns the quoting of what it passes.
     pub(crate) fn display_args(&self, args: Vec<String>) -> String {
-        self.render_args(&self.binary(), args)
+        self.render_args(&self.binary(), args, None)
     }
 
     /// [`Step::display_args`] naming the program by the path it was started as and not the file
@@ -387,11 +391,15 @@ impl Step {
     ///
     /// [TOOL-4]: ../../../docs/specs/tools/tool-surface.md
     /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
-    pub(crate) fn told_args(&self, args: Vec<String>) -> String {
-        self.render_args(&self.started_as.to_string_lossy(), args)
+    ///
+    /// `targets` holds the file each redirection of the step names, as the line wrote it and
+    /// already quoted, in the order of the routes that name a file. A route's own path was joined
+    /// onto the directory the line landed in, which is where a link led.
+    pub(crate) fn told_args(&self, args: Vec<String>, targets: &[String]) -> String {
+        self.render_args(&self.started_as.to_string_lossy(), args, Some(targets))
     }
 
-    fn render_args(&self, program: &str, args: Vec<String>) -> String {
+    fn render_args(&self, program: &str, args: Vec<String>, targets: Option<&[String]>) -> String {
         let mut out = String::new();
         for (name, value) in &self.environment {
             out.push_str(&format!("{name}={} ", quoted(value)));
@@ -401,21 +409,22 @@ impl Step {
             out.push(' ');
             out.push_str(&arg);
         }
+        let mut targets = targets.map(|targets| targets.iter());
         for route in &self.routes {
             out.push(' ');
+            let mut file = |path: &Path| match targets.as_mut() {
+                Some(targets) => targets.next().cloned().unwrap_or_default(),
+                None => quoted(&path.to_string_lossy()),
+            };
             out.push_str(&match route {
-                Route::Stdout { path, append } => format!(
-                    "{} {}",
-                    if *append { ">>" } else { ">" },
-                    quoted(&path.to_string_lossy())
-                ),
-                Route::Stdin { path } => format!("< {}", quoted(&path.to_string_lossy())),
-                Route::Stderr { path, append } => format!(
-                    "{} {}",
-                    if *append { "2>>" } else { "2>" },
-                    quoted(&path.to_string_lossy())
-                ),
-                Route::Both { path } => format!("&> {}", quoted(&path.to_string_lossy())),
+                Route::Stdout { path, append } => {
+                    format!("{} {}", if *append { ">>" } else { ">" }, file(path))
+                }
+                Route::Stdin { path } => format!("< {}", file(path)),
+                Route::Stderr { path, append } => {
+                    format!("{} {}", if *append { "2>>" } else { "2>" }, file(path))
+                }
+                Route::Both { path } => format!("&> {}", file(path)),
                 Route::StderrToStdout => "2>&1".to_string(),
             });
         }
@@ -523,10 +532,18 @@ impl Steps {
     /// For a caller that holds the operands as the line spelled them. The operands of a compiled
     /// step are what a pattern matched, which is a listing of a directory, and a sentence the
     /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
-    /// [`Step::told_args`].
-    /// `None` where `written` does not hold exactly one list per step.
-    pub fn display_with_operands(&self, written: &[Vec<String>]) -> Option<String> {
-        let mut rest = written.iter();
+    /// [`Step::told_args`], and passes the file each redirection names, as the line wrote it, in
+    /// `targets`: one list per step, in the order of the routes that name a file.
+    /// `None` where `written` or `targets` does not hold exactly one list per step.
+    pub fn display_with_operands(
+        &self,
+        written: &[Vec<String>],
+        targets: &[Vec<String>],
+    ) -> Option<String> {
+        if written.len() != targets.len() {
+            return None;
+        }
+        let mut rest = written.iter().zip(targets.iter());
         let shown = self.draw_with_operands(&mut rest)?;
         rest.next().is_none().then_some(shown)
     }
@@ -576,13 +593,17 @@ impl Steps {
 
     fn draw_with_operands(
         &self,
-        written: &mut std::slice::Iter<'_, Vec<String>>,
+        written: &mut std::iter::Zip<
+            std::slice::Iter<'_, Vec<String>>,
+            std::slice::Iter<'_, Vec<String>>,
+        >,
     ) -> Option<String> {
         Some(match self {
             Self::Pipeline(steps) => {
                 let mut drawn = Vec::with_capacity(steps.len());
                 for step in steps {
-                    drawn.push(step.told_args(written.next()?.clone()));
+                    let (args, targets) = written.next()?;
+                    drawn.push(step.told_args(args.clone(), targets));
                 }
                 drawn.join(" | ")
             }
@@ -1223,7 +1244,10 @@ mod tests {
         cargo.resolved = PathBuf::from("/home/me/.cargo/bin/HOSTILE-landed");
         let steps = Steps::Pipeline(vec![cargo, step("tail", &["-n", "5"])]);
         let told = steps
-            .display_with_operands(&[vec!["test".into()], vec!["-n".into(), "5".into()]])
+            .display_with_operands(
+                &[vec!["test".into()], vec!["-n".into(), "5".into()]],
+                &[vec![], vec![]],
+            )
             .expect("one list per step");
         assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
         assert!(steps.display().contains("HOSTILE-landed"));

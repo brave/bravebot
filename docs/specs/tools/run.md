@@ -845,7 +845,11 @@ where it also cannot tell success from failure.
 Where the output could not be shown, the planner is also told how to see this result and how to
 stop being asked: it calls `read_output` with the reference, and a person vouching for every stage
 of the exact command makes what it prints visible from then on. It is also pointed at `read_file`
-for a file. Who answers a `read_output` call is a fact about the session, so it is said once, in the
+for a file. Each of these names is said only where the turn's list holds the tool
+([TOOL-6](tool-surface.md#TOOL-6)): `read_output` for the reference, `spawn_processor` for working
+with the output, `read_file` for a file. Where the list holds none of them the planner is told only
+that the quarantine is about the command and not about running programs, and, where it applies, the
+vouching sentence, which names no tool. Who answers a `read_output` call is a fact about the session, so it is said once, in the
 `read_output` description, and not in each result (below). Only where a command produced the result: a quarantined read carries no advice about
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
@@ -929,6 +933,13 @@ with its own three wordings ([VET-5](vet-content.md#VET-5)).
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_stop_being_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
+`verified-by: bravebot_agent::turn::sentences::a_list_holding_every_tool_reads_the_text_it_always_did`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_pointed_at_it_in_any_arm`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_file_is_not_pointed_at_it`
+`verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and what started it ends it
@@ -1851,7 +1862,16 @@ and a check that could not be made, leaves the output behind its reference with 
 mode that asks as in one that does not: the person is asked when the planner calls `read_output`, as
 it would have been without `read`. The result then says that `read: true` did not return the output
 and that `read_output` is the way to see it ([RUN-14](#RUN-14)), and nothing of the word or the
-reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)).
+reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)). Where the mode is bypass and auto-vetting
+is on, nobody will be asked when the planner calls `read_output`, so the person is also told, as a
+notice of the driver's own and not in the result, that auto-vetting kept the output back and which
+setting lifts that. The notice is drawn from the mode and the setting and never from the word, so a
+word other than `safe` and a check that could not be made read alike. In a mode that asks nothing is
+added.
+
+A check the person stops is neither of those ([CHECK-16](../vetting.md#CHECK-16)). The turn ends as
+stopped once the run's result is recorded, the output stays quarantined and is not refused, and
+`read_output` can be called for it in a later turn.
 
 [RUN-21](#RUN-21)'s cap bounds the release, where it does not bound `read_output`. A `read_output`
 call is made by a planner that has seen the reference and the size it states, and `read` is asked
@@ -1862,6 +1882,13 @@ is: `read_output` is not held to the cap, and a filter given the reference as `s
 of it without the line being run again. The size is tested before any check
 is made, so no model call is spent on output that cannot be returned. The size is the slot's, as its
 reference states it, so no byte the program printed is read to decide.
+
+A slot whose size is 0 is not released and no check is made over it, whether the mode or screening
+would have answered. There is nothing to read and nothing for a check to read, so the run takes
+[RUN-24](#RUN-24)'s route: the result says how the line ended and that it printed nothing, names no
+reference and gives none of [RUN-14](#RUN-14)'s advice. The trail records, under `read_output`, that
+the slot holds 0 bytes and so no check was made and nothing was released, and it names the slot and
+nothing the program printed. No model call is made and nothing is announced as a check.
 
 Everywhere else `read` changes nothing. Where a person answers `read_output` and screening was not
 asked for, the output is quarantined, nobody is asked and no check is made, since a prompt made here
@@ -1898,8 +1925,12 @@ existed, and a planner offered `read_output` may call it on any reference it hol
 branch `read_output` makes. No byte the program printed and no reason the check wrote is read to
 decide it.
 
+`fetch_url` and a server's tool take the same argument and release by `vet_content`'s path
+([VET-6](vet-content.md#VET-6)).
+
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
@@ -1908,10 +1939,13 @@ decide it.
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
 `verified-by: bravebot_agent::turn::asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why`
 `verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
 `verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 
 <a id="RUN-23"></a>
 ### RUN-23: how long a command may run is configurable
@@ -2008,7 +2042,14 @@ the reference would have put in front of the planner as `0 bytes`
 ([LABEL-4](../labels.md#LABEL-4)). "It printed nothing" is that same number in other words, and a
 program choosing to print nothing chose what the planner is told no more than it did before.
 
+The same holds where the planner asked to read what it printed. `read: true` on a run whose slot
+holds no bytes gets this result and not a release of nothing ([RUN-22](#RUN-22)), and `read_output`
+on such a slot answers that it printed nothing, with no check and no question to anybody
+([OUTPUT-1](read-output.md#OUTPUT-1)).
+
 `verified-by: bravebot_agent::turn::a_run_that_printed_nothing_says_so_and_hands_back_no_reference`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference`
 `verified-by: bravebot_agent::turn::an_empty_look_after_earlier_looks_lists_them_and_hands_back_no_reference`
 
