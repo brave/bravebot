@@ -2466,7 +2466,7 @@ fn declared(directory: &Path, group: Option<&str>) -> String {
         // The arguments a row of a plan's apply step may fill, with their kinds.
         Some("bookmarks-write") => " --apply create_bookmark_folder:title=new \
                                     --apply move_bookmark:url=entry \
-                                    --apply move_bookmark:folder=row"
+                                    --apply move_bookmark:folder=row,entry"
             .split_whitespace()
             .fold(String::new(), |line, word| line + " " + word),
         _ => String::new(),

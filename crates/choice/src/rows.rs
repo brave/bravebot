@@ -22,7 +22,8 @@ use bravebot_core::apply::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Number the entries of `text` that hold every one of `fields` as text.
+/// Number the entries of `text` that hold at least one of `fields` as text, keeping the ones each
+/// holds.
 pub fn number(text: &str, fields: &BTreeSet<String>) -> Numbered {
     let Ok(Value::Array(items)) = serde_json::from_str::<Value>(text) else {
         return Numbered {
@@ -39,18 +40,18 @@ pub fn number(text: &str, fields: &BTreeSet<String>) -> Numbered {
         let Value::Object(object) = &item else {
             continue;
         };
-        let values: Option<BTreeMap<String, String>> = fields
+        let values: BTreeMap<String, String> = fields
             .iter()
-            .map(|field| {
+            .filter_map(|field| {
                 object
                     .get(field)
                     .and_then(Value::as_str)
                     .map(|value| (field.clone(), value.to_string()))
             })
             .collect();
-        let Some(values) = values else {
+        if values.is_empty() {
             continue;
-        };
+        }
         entries.push(values);
         shown.push(format!("entry {}: {item}", entries.len()));
     }
@@ -243,44 +244,11 @@ fn row(
     let mut after = None;
     for (name, kind) in &tool.arguments {
         let given_value = given_values.get(name.as_str()).copied();
-        let (value, source) = match (kind, given_value) {
-            (Kind::Literal(value), None) => (value.clone(), Source::Plan),
-            (Kind::Entry(field), Some(Given::Entry(number))) => {
-                let entry = number
-                    .checked_sub(1)
-                    .and_then(|at| entries.0.get(at))
-                    .ok_or(Dropped::Entry)?;
-                let value = entry.get(field).ok_or(Dropped::Entry)?;
-                (value.clone(), Source::Entry(number))
-            }
-            (Kind::New, Some(Given::New(number))) => match news.get(&number) {
-                Some(text) => (text.clone(), Source::Processor),
-                None if capped.contains(&number) => return Err(Dropped::Cap),
-                None => return Err(Dropped::Reference),
-            },
-            (
-                Kind::Row {
-                    tool: from,
-                    argument,
-                },
-                Some(Given::Row(number)),
-            ) => {
-                let at = *rows.get(&number).ok_or(Dropped::Reference)?;
-                let earlier = &calls[at];
-                if earlier.tool != *from {
-                    return Err(Dropped::Argument);
-                }
-                let value = earlier
-                    .arguments
-                    .iter()
-                    .find(|(name, _, _)| name == argument)
-                    .map(|(_, value, _)| value.clone())
-                    .ok_or(Dropped::Argument)?;
-                after = Some(after.map_or(at, |before: usize| before.max(at)));
-                (value, Source::Call(at))
-            }
-            _ => return Err(Dropped::Argument),
-        };
+        let (value, source, depends) =
+            value_of(kind, given_value, entries, news, capped, rows, calls)?;
+        if let Some(at) = depends {
+            after = Some(after.map_or(at, |before: usize| before.max(at)));
+        }
         arguments.push((name.clone(), value, source));
     }
     Ok(Call {
@@ -289,6 +257,68 @@ fn row(
         arguments,
         after,
     })
+}
+
+/// The value one argument of `kind` takes from what the row gave it, where it came from, and the
+/// earlier call it depends on, if any. A choice of kinds takes the first that fits what was given.
+fn value_of(
+    kind: &Kind,
+    given_value: Option<Given>,
+    entries: &Entries,
+    news: &BTreeMap<usize, String>,
+    capped: &BTreeSet<usize>,
+    rows: &BTreeMap<usize, usize>,
+    calls: &[Call],
+) -> Result<(String, Source, Option<usize>), Dropped> {
+    match (kind, given_value) {
+        (Kind::Literal(value), None) => Ok((value.clone(), Source::Plan, None)),
+        (Kind::Entry(field), Some(Given::Entry(number))) => {
+            let entry = number
+                .checked_sub(1)
+                .and_then(|at| entries.0.get(at))
+                .ok_or(Dropped::Entry)?;
+            let value = entry.get(field).ok_or(Dropped::Entry)?;
+            Ok((value.clone(), Source::Entry(number), None))
+        }
+        (Kind::New, Some(Given::New(number))) => match news.get(&number) {
+            Some(text) => Ok((text.clone(), Source::Processor, None)),
+            None if capped.contains(&number) => Err(Dropped::Cap),
+            None => Err(Dropped::Reference),
+        },
+        (
+            Kind::Row {
+                tool: from,
+                argument,
+            },
+            Some(Given::Row(number)),
+        ) => {
+            let at = *rows.get(&number).ok_or(Dropped::Reference)?;
+            let earlier = &calls[at];
+            if earlier.tool != *from {
+                return Err(Dropped::Argument);
+            }
+            let value = earlier
+                .arguments
+                .iter()
+                .find(|(name, _, _)| name == argument)
+                .map(|(_, value, _)| value.clone())
+                .ok_or(Dropped::Argument)?;
+            Ok((value, Source::Call(at), Some(at)))
+        }
+        (Kind::Either(kinds), Some(given)) => {
+            let fits = |kind: &&Kind| {
+                matches!(
+                    (kind, given),
+                    (Kind::Entry(_), Given::Entry(_))
+                        | (Kind::New, Given::New(_))
+                        | (Kind::Row { .. }, Given::Row(_))
+                )
+            };
+            let kind = kinds.iter().find(fits).ok_or(Dropped::Argument)?;
+            value_of(kind, Some(given), entries, news, capped, rows, calls)
+        }
+        _ => Err(Dropped::Argument),
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +459,53 @@ row 9: tool 1 title=new:7
             count(Dropped::Repeated),
             2,
             "a repeated call and repeated text"
+        );
+    }
+
+    /// An argument that may take one of several kinds takes whichever the row gave: a move may
+    /// land in a folder an earlier row made or in one the list holds, and a list entry that lacks
+    /// the field the row names it for is dropped.
+    #[test]
+    fn an_argument_of_several_kinds_takes_the_one_the_row_gave() {
+        let mut shape = bookmarks();
+        shape.tools[1].arguments[1].1 = Kind::Either(vec![
+            Kind::Row {
+                tool: 0,
+                argument: "title".into(),
+            },
+            Kind::Entry("title".into()),
+        ]);
+        let fields = shape.entry_fields();
+        assert_eq!(
+            fields,
+            BTreeSet::from(["title".to_string(), "url".to_string()])
+        );
+        let entries = number(LIST, &fields).entries;
+        assert_eq!(entries.0.len(), 4, "the folder counts, for its title");
+        let answer = "new 1 = \"Reading\"\nrow 1: tool 1 title=new:1\n\
+                      row 2: tool 2 url=entry:2 folder=row:1\n\
+                      row 3: tool 2 url=entry:4 folder=entry:1\n\
+                      row 4: tool 2 url=entry:1 folder=entry:1\n";
+        let resolved = resolve(answer, &entries, &shape);
+        assert_eq!(resolved.calls.len(), 3, "{:?}", resolved.dropped);
+        assert_eq!(resolved.calls[1].arguments[1].1, "Reading");
+        assert_eq!(resolved.calls[1].after, Some(0));
+        assert_eq!(
+            resolved.calls[2].arguments,
+            vec![
+                (
+                    "url".to_string(),
+                    "https://github.com/brave/bravebot".to_string(),
+                    Source::Entry(4)
+                ),
+                ("folder".to_string(), "Work".to_string(), Source::Entry(1)),
+            ]
+        );
+        assert_eq!(resolved.calls[2].after, None);
+        assert_eq!(
+            resolved.dropped.get(&Dropped::Entry),
+            Some(&1),
+            "a folder has no url"
         );
     }
 

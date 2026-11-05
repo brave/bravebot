@@ -113,6 +113,23 @@ but the number is read as 0."
 /// alone: the two forms its answer may take, and each tool with the arguments a row fills.
 fn rows_prompt(shape: &bravebot_core::apply::Shape) -> String {
     use bravebot_core::apply::Kind;
+    /// How a row gives an argument of `kind`, as `name=kind:N` and what N names.
+    fn form(name: &str, kind: &Kind) -> String {
+        match kind {
+            Kind::Literal(_) => format!("{name} is fixed, so leave it out"),
+            Kind::Entry(field) => format!("{name}=entry:N, the {field} of entry N of the list"),
+            Kind::New => format!("{name}=new:N, the text of a new line"),
+            Kind::Row { tool, argument } => format!(
+                "{name}=row:N, the {argument} an earlier row of tool {} gave",
+                tool + 1
+            ),
+            Kind::Either(kinds) => kinds
+                .iter()
+                .map(|kind| form(name, kind))
+                .collect::<Vec<_>>()
+                .join(", or "),
+        }
+    }
     let tools: Vec<String> = shape
         .tools
         .iter()
@@ -121,17 +138,7 @@ fn rows_prompt(shape: &bravebot_core::apply::Shape) -> String {
             let arguments: Vec<String> = tool
                 .arguments
                 .iter()
-                .map(|(name, kind)| match kind {
-                    Kind::Literal(_) => format!("{name} is fixed, so leave it out"),
-                    Kind::Entry(field) => {
-                        format!("{name}=entry:N, the {field} of entry N of the list")
-                    }
-                    Kind::New => format!("{name}=new:N, the text of a new line"),
-                    Kind::Row { tool, argument } => format!(
-                        "{name}=row:N, the {argument} an earlier row of tool {} gave",
-                        tool + 1
-                    ),
-                })
+                .map(|(name, kind)| form(name, kind))
                 .collect();
             format!(
                 "  tool {}: {}. {}",
