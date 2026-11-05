@@ -29,7 +29,7 @@ import { forgetFork, forks, noteFork } from './forks'
 import {
   bot,
   bots,
-  ensureHome,
+  ensureBotHome,
   worksIn,
   ground,
   memory,
@@ -52,7 +52,7 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, isServerSelection, type Bot } from '../shared/bots'
+import { botFolders, isServerSelection, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, noteAnsweredFolders, open as openInApp, preview, search, chooseAttachments, chooseFolder, attachmentPaths } from './files'
@@ -758,7 +758,7 @@ app.whenReady().then(() => {
     if (method === 'session.new' || method === 'session.open') {
       const directory = (params as { directory?: unknown } | null)?.directory
       const owner = (await bots()).find((each) => each.home === directory)
-      if (owner && !ensureHome(owner)) {
+      if (owner && !(await ensureBotHome(owner.slug))) {
         return { error: { code: 'bad_request', message: `could not make the folder for ${owner.name}` } }
       }
     }
@@ -960,8 +960,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = await bot(slug)
-    if (!held || !isBotModel(model)) return null
-    return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
+    if (!held || (model !== null && typeof model !== 'string')) return null
+    return saveBotModel(held.slug, model)
   })
 
   // The window names a bot and a selection; the definition is the row's, so no window chooses which
@@ -979,15 +979,8 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
-    // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
-    // field on this channel that decides where files land, and the check that it is a folder
-    // somebody opened belongs beside the code that writes there.
-    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
-    // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
-    // agent does, and `saveFormBot` keeps the name it answers with. Saves run one at a time.
-    const next = await saveForm(value, bridge ? (method, params) => bridge!.request(method, params) : null)
+    const next = await saveForm(value)
     if (!next) return null
-    ensureHome(next)
     offerDirectories(botFolders(next))
     return next
   })

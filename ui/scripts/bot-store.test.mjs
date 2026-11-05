@@ -167,17 +167,33 @@ test('the first read of the bots is waited for only so long, and preferences sta
 })
 
 test('a save answers with the row the agent wrote, not the one it was sent', async () => {
-  const { file, main, clean } = fixture([botRow({ slug: 'plain', definition: null })])
+  const { file, main, clean } = fixture([botRow({ slug: 'plain', name: 'Plain', purpose: 'Stored purpose', avatar: 'v2:stored', model: 'provider/stored', definition: 'plain', created: 5, updated: 5 })])
   try {
-    file.repair = (row) => ({ ...row, model: row.model === 'inherit' ? null : row.model, avatar: row.avatar.trim() === '' ? row.slug : row.avatar })
-    const stored = (await main.bot('plain'))
-    const form = await main.saveFormBot({ ...stored, model: 'inherit', avatar: ' ' }, null)
-    assert.equal(form.model, null, 'a model the agent did not keep is not shown as kept')
-    assert.equal(form.avatar, 'plain', 'nor an avatar')
-    assert.equal(file.rows[0].model, null)
+    const made = await main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' })
+    const [, sent] = file.calls.filter(([method]) => method === 'bot.make').at(-1)
+    assert.deepEqual(Object.keys(sent).sort(), ['avatar', 'dataFolder', 'name', 'purpose'])
+    assert.equal(made.slug, 'form-bot', 'the slug is the agent\'s')
+    assert.equal(made.definition, 'form-bot')
+    assert.match(made.home, /bot-homes[\\/]form-bot$/)
+    assert.ok(made.created > 0 && made.updated > 0)
+    assert.equal(made.avatar, sent.avatar, 'the seed the window sent is the avatar the agent kept')
+    assert.deepEqual(made, main.withoutFigures(file.rows.find((each) => each.slug === 'form-bot')))
 
-    const picked = await main.saveBotModel(await main.bot('plain'), 'inherit', null)
-    assert.equal(picked.model, null)
+    const edited = await main.saveForm({ slug: 'plain', purpose: 'New purpose' })
+    assert.equal(edited.purpose, 'New purpose')
+    assert.equal(edited.name, 'Plain', 'a field the edit did not name is the stored one')
+    assert.equal(edited.avatar, 'v2:stored')
+    assert.equal(edited.model, 'provider/stored')
+    assert.equal(edited.created, 5)
+    assert.ok(edited.updated > 5, 'the agent stamped the change')
+    assert.deepEqual(edited, main.withoutFigures(file.rows.find((each) => each.slug === 'plain')))
+
+    const picked = await main.saveBotModel('plain', 'provider/other')
+    assert.equal(picked.model, 'provider/other')
+    assert.equal(picked.purpose, 'New purpose', 'the rest of the stored row comes back with it')
+    assert.deepEqual(picked, main.withoutFigures(file.rows.find((each) => each.slug === 'plain')))
+    const cleared = await main.saveBotModel('plain', null)
+    assert.equal(cleared.model, null)
   } finally { clean() }
 })
 
@@ -210,7 +226,7 @@ test('a write the agent refuses is not shown as saved, and says why', async () =
     assert.deepEqual((await main.bots()).map((each) => each.slug), ['kept'], 'the refused bot is not in the list')
     assert.match(main.botsProblem(), /bots\.json: the disk is full/, 'and a read after it does not make the failure vanish')
 
-    await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }, async () => ({ name: 'form-bot' })), /the disk is full/)
+    await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }), /the disk is full/)
     assert.deepEqual((await main.bots()).map((each) => each.slug), ['kept'])
 
     file.refuse = null
@@ -220,16 +236,16 @@ test('a write the agent refuses is not shown as saved, and says why', async () =
   } finally { clean() }
 })
 
-test('a bots file that cannot be read is never written over, and a bot is not defined for it', async () => {
+test('a bots file that cannot be read is never written over, and a bot is not made for it', async () => {
   const { file, main, clean } = fixture([botRow({ slug: 'kept' })])
   try {
     file.unreadable = { path: '/home/someone/.bravebot/bots.json', reason: 'expected value at line 1' }
     await assert.rejects(main.saveBot(botRow({ slug: 'new' })), /bots\.json.*expected value/)
     assert.equal(file.calls.some(([method]) => method === 'bot.replace'), false, 'a list that is empty because the file did not parse is not the base of a write')
 
-    let defined = false
-    await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }, async () => { defined = true; return { name: 'form-bot' } }), /bots\.json/)
-    assert.equal(defined, false, 'no definition is written for a bot that cannot be kept')
+    await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }), /bots\.json.*expected value/)
+    assert.equal(file.calls.some(([method]) => method === 'bot.replace'), false, 'a make is not made from the empty list either')
+    assert.deepEqual(file.rows.map((each) => each.slug), ['kept'], 'and the agent, which refuses it, leaves the rows as they were')
   } finally { clean() }
 })
 
@@ -259,6 +275,31 @@ test('with no agent running the bots are none, and nothing is written', async ()
   } finally { clean() }
 })
 
+test('with no agent running a make, an edit and a model change are refused as not running, and nothing is written', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'held' })])
+  try {
+    const before = structuredClone(file.rows)
+    const calls = file.calls.length
+    main.useBotsBridge(null)
+    await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }), /not running/)
+    await assert.rejects(main.saveForm({ slug: 'held', purpose: 'New purpose' }), /not running/)
+    await assert.rejects(main.saveBotModel('held', 'provider/model'), /not running/)
+    assert.equal(file.calls.length, calls, 'no request reached the agent')
+    assert.deepEqual(file.rows, before)
+  } finally { clean() }
+})
+
+test('the methods that make, edit and set the model of a bot, and ensure its home, are not among those a window may send', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const allowed = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
+  assert.ok(allowed, 'the list of methods the window may send is still one literal')
+  const methods = [...allowed[1].matchAll(/'([^']+)'/g)].map((each) => each[1])
+  assert.ok(methods.includes('session.list'), 'the pattern read the list')
+  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home']) {
+    assert.equal(methods.includes(method), false, `${method} is a method only the main process calls`)
+  }
+})
+
 test('the methods that list and replace the bots are not among those a window may send', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   const allowed = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
@@ -269,4 +310,143 @@ test('the methods that list and replace the bots are not among those a window ma
   }
   assert.ok(methods.includes('session.list'), 'the pattern read the list')
   assert.equal(existsSync('src/main/bot-store.ts'), true)
+})
+
+test('the data folder Electron names is sent with each method that makes, edits or sets the model of a bot, and with the home', async () => {
+  const { profile, file, main, clean } = fixture([])
+  try {
+    await main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' })
+    await main.saveForm({ slug: 'form-bot', purpose: 'Changed' })
+    await main.saveBotModel('form-bot', 'provider/model-a')
+    await main.ensureBotHome('form-bot')
+    for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home']) {
+      const sent = file.calls.filter(([each]) => each === method)
+      assert.equal(sent.length, 1, `${method} was sent once`)
+      assert.equal(sent[0][1].dataFolder, profile, `${method} carries the folder Electron names, never one composed here`)
+    }
+  } finally { clean() }
+})
+
+test('a make, an edit and a model change the agent refuses are not shown as saved, and say why with the path', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    file.refuse = '/home/someone/.bravebot/bots.json: the disk is full'
+    const attempts = {
+      make: () => main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }),
+      edit: () => main.saveForm({ slug: 'kept', purpose: 'Changed' }),
+      model: () => main.saveBotModel('kept', 'provider/model-a'),
+    }
+    for (const [name, attempt] of Object.entries(attempts)) {
+      await assert.rejects(attempt(), /bots\.json: the disk is full/, name)
+      const [kept, ...others] = await main.bots()
+      assert.deepEqual([kept.slug, kept.purpose, kept.model, others.length], ['kept', 'Build websites', null, 0], `${name} changed nothing`)
+      assert.match(main.botsProblem(), /\/home\/someone\/\.bravebot\/bots\.json: the disk is full/, `${name} is still reported after a read`)
+    }
+    file.refuse = null
+    await main.saveForm({ slug: 'kept', purpose: 'Changed' })
+    assert.equal(main.botsProblem(), null, 'a write that works clears it')
+  } finally { clean() }
+})
+
+test('a make, an edit and a model change wait their turn behind the writes of the rows and lose none', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'review' })])
+  try {
+    main.useBotsBridge(async (method, params) => {
+      await new Promise((resolve) => setImmediate(resolve))
+      return file.request(method, params)
+    })
+    await Promise.all([
+      main.noteBotSession('review', ids[0], '/project'),
+      main.saveForm({ name: 'Second', purpose: 'Another bot' }),
+      main.noteBotSession('review', ids[1], '/other'),
+      main.saveForm({ slug: 'review', purpose: 'Changed' }),
+      main.saveBotModel('review', 'provider/model-a'),
+      main.noteBotArchived('review', 3),
+      main.saveForm({ name: 'Third', purpose: 'Yet another' }),
+    ])
+    const review = file.rows.find((each) => each.slug === 'review')
+    assert.deepEqual(review.conversations.map((each) => each.id).sort(), [...ids].sort())
+    assert.equal(review.archived, 3)
+    assert.equal(review.purpose, 'Changed')
+    assert.equal(review.model, 'provider/model-a')
+    assert.deepEqual(file.rows.map((each) => each.slug), ['review', 'second', 'third'])
+  } finally { clean() }
+})
+
+test('the main process no longer composes a bot, writes its definition or makes its home itself', () => {
+  for (const path of ['src/main/bots.ts', 'src/main/index.ts']) {
+    const source = readFileSync(path, 'utf8')
+    for (const gone of ['botFromForm', 'saveFormBot', 'ensureHome(', 'bot.define', 'bot.redefine', 'slugFor', 'isBotModel']) {
+      assert.equal(source.includes(gone), false, `${path} still has ${gone}`)
+    }
+  }
+})
+
+test('a refusal of what was asked for is thrown and is not kept as a problem with the bots file', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    const refused = {
+      'a blank name': () => main.saveForm({ name: ' ', purpose: 'Fill in forms' }),
+      'a model that is not a string': () => main.saveForm({ slug: 'kept', model: 7 }),
+      'a model change to one that is not a string': () => main.saveBotModel('kept', 7),
+      'a model change of a bot the agent does not hold': () => main.saveBotModel('ghost', 'provider/model-a'),
+      'a make with no name': () => main.saveForm({ purpose: 'Fill in forms' }),
+    }
+    for (const [name, attempt] of Object.entries(refused)) {
+      await assert.rejects(attempt(), (error) => error.code === 'bad_request', name)
+      assert.equal(main.botsProblem(), null, `${name} sets no problem`)
+    }
+
+    file.refuse = 'there are already 100 bots'
+    file.refuseCode = 'bad_request'
+    await assert.rejects(main.saveForm({ name: 'One too many', purpose: 'p' }), /already 100 bots/)
+    assert.equal(main.botsProblem(), null, 'a ceiling refusal sets no problem')
+  } finally { clean() }
+})
+
+test('a write of the bots file that fails keeps its problem with the path, whatever code the bridge gave', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    for (const code of ['state_unusable', 'no_home', 'agent_gone', null]) {
+      file.refuse = `/home/someone/.bravebot/bots.json: it failed (${code})`
+      file.refuseCode = code
+      await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' }), /it failed/)
+      assert.match(main.botsProblem(), new RegExp(`/home/someone/\\.bravebot/bots\\.json: it failed \\(${code}\\)`), `${code} is kept`)
+      file.refuse = null
+      await main.saveForm({ slug: 'kept', purpose: 'Changed' })
+      assert.equal(main.botsProblem(), null, 'a write that works clears it')
+    }
+  } finally { clean() }
+})
+
+test('a refusal of what was asked for leaves the problem an earlier failed write set', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    file.refuse = '/home/someone/.bravebot/bots.json: the disk is full'
+    await assert.rejects(main.saveForm({ slug: 'kept', purpose: 'Changed' }), /disk is full/)
+    file.refuse = null
+    await assert.rejects(main.saveForm({ name: ' ', purpose: 'p' }), (error) => error.code === 'bad_request')
+    assert.match(main.botsProblem(), /the disk is full/)
+  } finally { clean() }
+})
+
+test('a field sent as null reaches the agent as sent for the name, the purpose and the avatar, and a null model is a request to clear it', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'kept', model: 'provider/model-a' })])
+  try {
+    for (const field of ['name', 'purpose', 'avatar']) {
+      const before = structuredClone(file.rows)
+      await assert.rejects(main.saveForm({ slug: 'kept', [field]: null }), (error) => error.code === 'bad_request', `edit ${field}`)
+      const [, params] = file.calls.filter(([method]) => method === 'bot.edit').at(-1)
+      assert.deepEqual(params, { slug: 'kept', dataFolder: params.dataFolder, [field]: null }, `${field} null was sent, not dropped`)
+      assert.deepEqual(file.rows, before, `edit ${field} changed nothing`)
+    }
+    await assert.rejects(main.saveForm({ name: 'Form bot', purpose: 'Fill in forms', avatar: null }), (error) => error.code === 'bad_request')
+    const [, made] = file.calls.filter(([method]) => method === 'bot.make').at(-1)
+    assert.equal(made.avatar, null, 'a null avatar of a make was sent as null')
+    assert.deepEqual(file.rows.map((each) => each.slug), ['kept'])
+
+    const cleared = await main.saveForm({ slug: 'kept', model: null })
+    assert.equal(cleared.model, null)
+    assert.equal(main.botsProblem(), null)
+  } finally { clean() }
 })
