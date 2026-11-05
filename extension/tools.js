@@ -1111,6 +1111,18 @@ async function builtInFolders(chrome) {
 // bookmarks), so those are read from the tree and counted with the search's
 // finds, once each.
 async function bookmarkFolder(chrome, title) {
+  const found = await foldersTitled(chrome, title);
+  if (found.length === 0) {
+    throw new ToolError(`no bookmark folder is titled ${title}`);
+  }
+  if (found.length > 1) {
+    throw new ToolError(`more than one bookmark folder is titled ${title}`);
+  }
+  return found[0];
+}
+
+// Every folder with exactly this title, the built-in ones included, each once.
+async function foldersTitled(chrome, title) {
   const searched = await chrome.bookmarks.search({ title });
   const found = [];
   for (const node of [...searched, ...(await builtInFolders(chrome))]) {
@@ -1122,13 +1134,7 @@ async function bookmarkFolder(chrome, title) {
       found.push(node);
     }
   }
-  if (found.length === 0) {
-    throw new ToolError(`no bookmark folder is titled ${title}`);
-  }
-  if (found.length > 1) {
-    throw new ToolError(`more than one bookmark folder is titled ${title}`);
-  }
-  return found[0];
+  return found;
 }
 
 // The one bookmark at exactly this URL, which is how a bookmark is named. Two
@@ -3143,14 +3149,20 @@ export const TOOLS = {
 
   // Adds a folder, inside the folder with exactly the title given as `parent`
   // or, where none is given, where the browser puts a new folder. A title that
-  // is already a folder's gets another, as it does in the browser, and then
-  // names neither until one is renamed. The reply carries the title and parent
-  // the browser holds for it.
+  // is already a folder's is refused and nothing is made: a folder is named by
+  // its title, so a second would leave the title naming neither, and a later
+  // move to it would fail. The reply carries the title and parent the browser
+  // holds for it.
   async create_bookmark_folder(chrome, params) {
     const title = text(params, "title");
     const inside = optionalText(params, "parent");
     const parent =
       inside === undefined ? undefined : await bookmarkFolder(chrome, inside);
+    if ((await foldersTitled(chrome, title)).length > 0) {
+      throw new ToolError(
+        `a bookmark folder is already titled ${title}, and a second would leave the title naming neither`,
+      );
+    }
     const made = await chrome.bookmarks.create({
       title,
       ...(parent === undefined ? {} : { parentId: parent.id }),

@@ -6701,10 +6701,9 @@ test("create_bookmark_folder adds a folder with the title asked for, inside the 
   assert.deepEqual(writes(anywhere, "bookmarks.create"), [
     ["bookmarks.create", { title: "Recipes" }],
   ]);
-  assert.ok(!reached(anywhere, "bookmarks.search"));
 });
 
-test("create_bookmark_folder refuses a title or parent that is not text and a parent that is not exactly one folder, and adds nothing", async () => {
+test("create_bookmark_folder refuses a title or parent that is not text, a parent that is not exactly one folder and a title a folder already has, and adds nothing", async () => {
   for (const [tree, params, code, message] of [
     [saved, {}, -32602, undefined],
     [saved, { title: "" }, -32602, undefined],
@@ -6714,6 +6713,8 @@ test("create_bookmark_folder refuses a title or parent that is not text and a pa
     [saved, { title: "Recipes", parent: "Wor" }, -32000, /no bookmark folder is titled Wor$/],
     [saved, { title: "Recipes", parent: "Docs" }, -32000, /no bookmark folder is titled Docs$/],
     [workTwice, { title: "Recipes", parent: "Work" }, -32000, /more than one bookmark folder is titled Work$/],
+    [saved, { title: "Work" }, -32000, /a bookmark folder is already titled Work, and a second/],
+    [saved, { title: "Other bookmarks" }, -32000, /a bookmark folder is already titled Other bookmarks/],
   ]) {
     const chrome = browser({ bookmarkTree: tree, stored: writingOn });
     const reply = await call(chrome, "create_bookmark_folder", params);
