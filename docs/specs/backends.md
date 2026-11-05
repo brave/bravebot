@@ -1822,8 +1822,9 @@ last turn's until then. The last turn rather than a total over the
 session, because caching is a property of a request: a session that compacted part way through has
 turns whose prefix survived and turns whose prefix was rewritten, and a total averages away the
 thing the figures are for. The footer shows the cached read as a percentage of the turn's prompt
-tokens. Nothing about a cache is kept in a session record, so a resumed session reports nothing
-until a turn has run. Clearing goes with what the conversation spent rather than with the model the
+tokens. The session record keeps the cache read and write totals ([SESSION-11](sessions.md#SESSION-11)),
+but the panel does not read them back, so a resumed session reports nothing until a turn has run.
+Clearing goes with what the conversation spent rather than with the model the
 user chose, the figures describing a prompt that has been thrown away. Anything else that changes
 which turn is the last one moves the figures with it: rewinding a turn puts back what the turn
 before it read, and a turn that failed or was stopped reports nothing rather than leaving the turn
@@ -1877,6 +1878,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::state::the_cache_figure_follows_which_turn_is_the_last_one`
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`
 `verified-by: bravebot_aichat::client::an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
+`verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
 
 <a id="BACKEND-32"></a>
 ### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
