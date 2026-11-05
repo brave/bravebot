@@ -71,6 +71,9 @@ enum Chat {
     /// Answers "done", saying the prompt it was sent was far past any window, so the next turn has a
     /// conversation to summarise.
     AnswersAtLength,
+    /// Answers "done", saying 6 of the 10 prompt tokens came out of its cache and 2 were written
+    /// into it.
+    AnswersFromTheCache,
     /// Says it is overloaded (529, which a client does not send again) to every request naming
     /// [`STUB_MODEL`], and answers "done" to a request naming any other model.
     OverloadedForTheStubModel,
@@ -183,10 +186,14 @@ fn answer(mut stream: std::net::TcpStream, chat: Chat, held: &mpsc::Sender<()>) 
         };
         let delta = json!({"role": "assistant", "content": "done"});
         let finish = "stop";
+        let mut usage = json!({"prompt_tokens": prompt_tokens, "completion_tokens": 1});
+        if matches!(chat, Chat::AnswersFromTheCache) {
+            usage["prompt_tokens_details"] = json!({"cached_tokens": 6, "cache_write_tokens": 2});
+        }
         let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
             "model": "stub-model",
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-            "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 1}});
+            "usage": usage});
         (
             "200 OK",
             "text/event-stream",
@@ -494,15 +501,60 @@ fn a_turn_records_its_split_and_a_resumed_one_adds_to_it() {
     assert_eq!(twice["split"], json!({"read": 20, "written": 2}), "{twice}");
 }
 
+/// A turn taken in the desktop records how much of its prompt the service answered out of its own
+/// cache and how much it wrote there, inside the split, and a turn taken after a resume adds to
+/// them (SESSION-11).
+///
+/// The faults this rejects: saving the split without the cache figures, saving the last turn's
+/// cache figures alone, and resuming without reading the record's. The service says 6 of each
+/// turn's 10 prompt tokens came from its cache and 2 were written to it.
+#[test]
+fn a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_them() {
+    let scratch = Scratch::new("bridge-history-cache");
+    let (endpoint, _) = stub_service(Chat::AnswersFromTheCache);
+
+    let id = take_turn(
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        None,
+        "first question",
+    );
+    let once = record(&scratch.home());
+    assert_eq!(
+        once["split"],
+        json!({"read": 10, "written": 1,
+               "cache": {"read_tokens": 6, "written_tokens": 2}}),
+        "{once}"
+    );
+
+    take_turn(
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        Some(&id),
+        "second question",
+    );
+    let twice = record(&scratch.home());
+    assert_eq!(
+        twice["split"],
+        json!({"read": 20, "written": 2,
+               "cache": {"read_tokens": 12, "written_tokens": 4}}),
+        "{twice}"
+    );
+}
+
 /// Undoing a turn in the desktop takes its split back with its tokens, so the record saved after
-/// the undo does not say the session wrote more than it spent (SESSION-11, SESSION-19).
+/// the undo does not say the session wrote more than it spent (SESSION-11, SESSION-19). The cache
+/// figures go back with the rest of the split.
 ///
 /// The fault this rejects: restoring the total and spend from the rewind point and leaving the
-/// split as the undone turn made it, which saves 20 read and 2 written against a total of 11.
+/// split as the undone turn made it, which saves 20 read and 2 written against a total of 11, and
+/// 12 tokens read from the cache against 6.
 #[test]
 fn undoing_a_desktop_turn_takes_its_split_back_with_its_tokens() {
     let scratch = Scratch::new("bridge-history-undo-split");
-    let (endpoint, _) = stub_service(Chat::Answers);
+    let (endpoint, _) = stub_service(Chat::AnswersFromTheCache);
     let mut window = Window::open(&scratch.home(), &scratch.project(), &endpoint, None);
     for prompt in ["first question", "second question"] {
         let ended = window.turn(prompt);
@@ -526,7 +578,12 @@ fn undoing_a_desktop_turn_takes_its_split_back_with_its_tokens() {
 
     let saved = record(&scratch.home());
     assert_eq!(saved["tokens"], 11, "{saved}");
-    assert_eq!(saved["split"], json!({"read": 10, "written": 1}), "{saved}");
+    assert_eq!(
+        saved["split"],
+        json!({"read": 10, "written": 1,
+               "cache": {"read_tokens": 6, "written_tokens": 2}}),
+        "{saved}"
+    );
 }
 
 /// A turn that failed in the desktop is recorded as failed, with the reason the interface composed

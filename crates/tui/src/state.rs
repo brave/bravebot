@@ -4281,7 +4281,7 @@ impl Session {
     /// charged with how it divides into what was read and what was written.
     pub fn end_aside_of(&mut self, usage: bravebot_aichat::protocol::Usage) {
         self.end_aside(usage.total());
-        self.charged_split(usage.total(), usage.completion_tokens);
+        self.charged_split(bravebot_session::sessions::Split::of_usage(usage));
     }
 
     /// Leave a manifest run the session started, adding what it cost to the session's total.
@@ -15259,13 +15259,13 @@ mod tests {
             s.type_char('a');
             s.submit();
             s.complete("first", Vec::new(), 400);
-            s.charged_split(400, 100);
+            s.charged_split(bravebot_session::sessions::Split::of(400, 100));
             assert_eq!(split(&s), (300, 100));
 
             s.type_char('b');
             s.submit();
             s.complete("second", Vec::new(), 1_600);
-            s.charged_split(1_600, 1_000);
+            s.charged_split(bravebot_session::sessions::Split::of(1_600, 1_000));
             assert_eq!(
                 split(&s),
                 (900, 1_100),
@@ -15291,7 +15291,10 @@ mod tests {
             s.end_aside_of(bravebot_aichat::protocol::Usage {
                 prompt_tokens: 200,
                 completion_tokens: 50,
-                ..Default::default()
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 120,
+                    written_tokens: 30,
+                },
             });
 
             assert_eq!(s.tokens, 250);
@@ -15299,7 +15302,11 @@ mod tests {
                 s.split(),
                 bravebot_session::sessions::Split {
                     read: 200,
-                    written: 50
+                    written: 50,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 120,
+                        written_tokens: 30,
+                    },
                 }
             );
         }
@@ -15316,7 +15323,10 @@ mod tests {
             s.charge_aside_beside_a_turn(bravebot_aichat::protocol::Usage {
                 prompt_tokens: 200,
                 completion_tokens: 50,
-                ..Default::default()
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 120,
+                    written_tokens: 30,
+                },
             });
 
             assert_eq!(s.tokens, 250);
@@ -15329,7 +15339,11 @@ mod tests {
                 s.split(),
                 bravebot_session::sessions::Split {
                     read: 200,
-                    written: 50
+                    written: 50,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 120,
+                        written_tokens: 30,
+                    },
                 }
             );
             assert_eq!(
@@ -15354,7 +15368,10 @@ mod tests {
             s.end_aside_of(bravebot_aichat::protocol::Usage {
                 prompt_tokens: 200,
                 completion_tokens: 50,
-                ..Default::default()
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 120,
+                    written_tokens: 30,
+                },
             });
 
             s.restore_spend(100, std::collections::BTreeMap::from([(1, 100)]));
@@ -15370,7 +15387,12 @@ mod tests {
             s.type_char('a');
             s.submit();
             s.complete("reply", Vec::new(), 400);
-            s.charged_split(400, 100);
+            s.charged_split(bravebot_session::sessions::Split::of(400, 100).with_cache(
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 250,
+                    written_tokens: 20,
+                },
+            ));
 
             s.clear();
 
@@ -15386,20 +15408,82 @@ mod tests {
             s.restore_split(bravebot_session::sessions::Split {
                 read: 700,
                 written: 300,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 500,
+                    written_tokens: 40,
+                },
             });
 
             s.type_char('a');
             s.submit();
             s.complete("reply", Vec::new(), 100);
-            s.charged_split(100, 40);
+            s.charged_split(bravebot_session::sessions::Split::of(100, 40).with_cache(
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 30,
+                    written_tokens: 5,
+                },
+            ));
 
             assert_eq!(
                 s.split(),
                 bravebot_session::sessions::Split {
                     read: 760,
-                    written: 340
+                    written: 340,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 530,
+                        written_tokens: 45,
+                    },
                 }
             );
+        }
+
+        /// The record's cache totals are a history for a reader of the file. The status panel
+        /// reports what the last turn run in this process read out of the cache, and a resume that
+        /// fed it the saved totals would report a cache the session never used here
+        /// (SESSION-11, Known costs).
+        #[test]
+        fn a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty() {
+            let mut s = Session::new("none");
+            let record: bravebot_session::sessions::Record =
+                serde_json::from_value(serde_json::json!({
+                    "id": "1-2",
+                    "directory": "/tmp/x",
+                    "title": "a session",
+                    "started": 1,
+                    "updated": 1,
+                    "turns": 1,
+                    "tokens": 100,
+                    "split": {
+                        "read": 70,
+                        "written": 30,
+                        "cache": {"read_tokens": 50, "written_tokens": 10},
+                    },
+                    "conversation": {
+                        "messages": [],
+                        "context": "trusted",
+                        "references": 0,
+                        "archive": [],
+                        "measured": 0,
+                    },
+                }))
+                .expect("a record parses");
+
+            s.restore_accounts(&record);
+
+            assert_eq!(
+                s.split().cache,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 50,
+                    written_tokens: 10,
+                },
+                "the cache totals did not come back from the record"
+            );
+            assert_eq!(
+                s.cached(),
+                None,
+                "the panel reported a cache nothing here used"
+            );
+            assert_eq!(s.cached_prompt_tokens(), None);
         }
 
         /// The whole point of keeping the split: a turn's wall clock alone cannot say whether it was

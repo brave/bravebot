@@ -367,6 +367,17 @@ the total, and clearing the conversation resets it. A record written before the 
 neither figure, and a session continued from one holds the split of its later turns only, so the two
 can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
 
+The split also holds, under `cache`, how many of the tokens read the service answered out of its own
+cache (`read_tokens`) and how many it wrote into the cache (`written_tokens`). They are two more
+running totals that each charge adds to with the rest of its split, and they are undone, cleared,
+restored and carried by a resume with it. The session's cache hit rate is `read_tokens` over the
+tokens read. They are totals for the session and not for each turn. They are left out of the record
+while both are zero, which a service that states no cache figure reports as much as a charge that
+missed ([BACKEND-31](backends.md#BACKEND-31)), and a record written before they were kept has none.
+The status panel does not read them back. It reports the last turn run in this process, so a
+resumed session shows no cache until a turn has run in it
+([PANEL-8](info-panel.md#PANEL-8)).
+
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
 session, and `schedule history` reads the tokens it spent from the record.
@@ -413,6 +424,15 @@ than the one in force at the time.
 `verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
 `verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`
 `verified-by: bravebot_cli::plain::a_failed_turn_is_charged_what_its_completed_requests_cost`
+`verified-by: bravebot_session::sessions::a_split_writes_its_cache_figures_only_when_it_has_some`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_cache_figures_reads_them_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_cache_figure_stating_one_half_reads_the_other_as_zero`
+`verified-by: bravebot_session::sessions::adding_a_split_sums_its_cache_figures_and_saturates`
+`verified-by: bravebot_session::sessions::cutting_a_split_to_its_total_keeps_the_cache_figures`
+`verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_them`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them`
+`verified-by: bravebot_cli::running::a_background_session_adds_the_cache_figures_of_its_turn_to_the_record_it_resumed`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -1649,11 +1669,12 @@ stay behind because they were given for work that the brief describes only in wo
 - **The per-turn breakdown counts what a turn sent, which is not what it cost.** A cached prompt
   token is charged at a fraction of a fresh one, so two turns recorded at the same figure can differ
   about tenfold in money. How much of a prompt a service answered out of its own cache is a figure
-  [backends.md](backends.md) carries out of a reply that states one, and it is not kept here. What is
-  written stays comparable across turns and across sessions, which is what the record is read for,
-  and it cannot be read as a bill. Keeping the split would mean a resumed session reporting a cache
-  it never used; the figures are on the status panel for the turn that just ran, where they are a
-  measurement rather than a history.
+  [backends.md](backends.md) carries out of a reply that states one. The record keeps it as a total
+  for the session, in the split, and not for each turn, so the breakdown cannot say which turn missed
+  the cache and none of the figures can be read as a bill. A service that states no cache figure
+  reads the same as one that missed. The status panel does not read the totals back, because a
+  resumed session would then report a cache it never used here; it shows the turn that just ran,
+  where the figures are a measurement rather than a history.
 
 - **An imported session is read and not continued from.** Its words are drawn on a resume and are
   not in any request, so a prompt that refers back to the old session is answered by a model that

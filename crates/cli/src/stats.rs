@@ -241,7 +241,11 @@ mod tests {
     /// The same, for sessions that recorded how the tokens divided.
     fn spent_split(sessions: u64, turns: u64, read: u64, written: u64) -> Spent {
         Spent {
-            split: bravebot_session::sessions::Split { read, written },
+            split: bravebot_session::sessions::Split {
+                read,
+                written,
+                ..Default::default()
+            },
             ..spent(sessions, turns, read + written)
         }
     }

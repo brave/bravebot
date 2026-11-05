@@ -1698,7 +1698,7 @@ pub(super) fn refusal_note(
 
 /// Record a finished turn in the session, charging what it cost along with how that divides into
 /// what the model read and what it wrote, which only the worker's own count (`output_tokens`)
-/// says.
+/// says, and how much of the reading the service's cache served or was written.
 ///
 /// Split out from `fold_outcome` so a test can call it: that function takes a whole
 /// [`turn::Outcome`], which nothing outside the agent crate can build.
@@ -1708,10 +1708,13 @@ pub(super) fn complete_turn(
     trail: Vec<bravebot_session::audit::TrailLine>,
     tokens: u64,
     output_tokens: u64,
+    cached: bravebot_aichat::protocol::Cached,
     answered_as: Option<String>,
 ) {
     session.complete_as(reply, trail, tokens, answered_as);
-    session.charged_split(tokens, output_tokens);
+    session.charged_split(
+        bravebot_session::sessions::Split::of(tokens, output_tokens).with_cache(cached),
+    );
 }
 
 /// Fold a finished turn into the session.
@@ -1740,6 +1743,7 @@ pub(super) fn fold_outcome(
                 trail,
                 outcome.tokens,
                 outcome.output_tokens,
+                outcome.cached,
                 outcome
                     .addressed
                     .as_ref()

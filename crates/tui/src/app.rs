@@ -34438,15 +34438,19 @@ mod tests {
         );
     }
 
-    /// Each request made beside the work reports what it read and wrote, and the session's split
-    /// has to hold both, whichever command made it: a caller that charged the total alone would
-    /// leave those tokens in neither column of `stats`.
+    /// Each request made beside the work reports what it read and wrote and what the cache served,
+    /// and the session's split has to hold all of it, whichever command made it: a caller that
+    /// charged the total alone would leave those tokens in neither column of `stats`, and one that
+    /// left the cache figures out would record a session that used its cache as one that did not.
     #[test]
     fn every_request_beside_the_work_is_charged_with_what_it_read_and_wrote() {
         let usage = bravebot_aichat::protocol::Usage {
             prompt_tokens: 70,
             completion_tokens: 30,
-            ..Default::default()
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 50,
+                written_tokens: 10,
+            },
         };
         let charged = |session: &Session| (session.tokens, session.split());
         let expected = (
@@ -34454,6 +34458,10 @@ mod tests {
             bravebot_session::sessions::Split {
                 read: 70,
                 written: 30,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 50,
+                    written_tokens: 10,
+                },
             },
         );
 
@@ -34523,7 +34531,9 @@ mod tests {
     fn a_finished_turn_is_charged_with_what_it_read_and_wrote() {
         let mut session = Session::new("none");
 
-        for (prompt, tokens, written) in [("first", 100, 30), ("second", 250, 40)] {
+        for (prompt, tokens, written, cached) in
+            [("first", 100, 30, (60, 10)), ("second", 250, 40, (100, 0))]
+        {
             type_line(&mut session, prompt);
             handle_key(&mut session, key(KeyCode::Enter));
             complete_turn(
@@ -34532,6 +34542,10 @@ mod tests {
                 Vec::new(),
                 tokens,
                 written,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: cached.0,
+                    written_tokens: cached.1,
+                },
                 None,
             );
         }
@@ -34541,7 +34555,11 @@ mod tests {
             session.split(),
             bravebot_session::sessions::Split {
                 read: 280,
-                written: 70
+                written: 70,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 160,
+                    written_tokens: 10,
+                },
             },
             "a finished turn was not charged with how its tokens divide"
         );
@@ -34557,7 +34575,10 @@ mod tests {
         session.end_aside_of(bravebot_aichat::protocol::Usage {
             prompt_tokens: 70,
             completion_tokens: 30,
-            ..Default::default()
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 50,
+                written_tokens: 10,
+            },
         });
 
         let standing = with_standing(
@@ -34575,7 +34596,11 @@ mod tests {
                 100,
                 bravebot_session::sessions::Split {
                     read: 70,
-                    written: 30
+                    written: 30,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 50,
+                        written_tokens: 10,
+                    },
                 }
             )
         );
@@ -43364,7 +43389,11 @@ mod tests {
                 session.split(),
                 bravebot_session::sessions::Split {
                     read: 25,
-                    written: 12
+                    written: 12,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 5,
+                        written_tokens: 0,
+                    },
                 },
                 "the split was charged more than once, or not at all"
             );
@@ -43506,7 +43535,11 @@ mod tests {
             session.split(),
             bravebot_session::sessions::Split {
                 read: 33,
-                written: 10
+                written: 10,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 7,
+                    written_tokens: 0,
+                },
             },
             "a failed turn's split was not the latest report's"
         );
@@ -43836,7 +43869,10 @@ mod tests {
         session.charge_suggestion(bravebot_aichat::protocol::Usage {
             prompt_tokens: 90,
             completion_tokens: 30,
-            ..Default::default()
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 60,
+                written_tokens: 0,
+            },
         });
         assert_eq!(session.tokens, 120);
         assert_eq!(session.spend_by_turn().get(&0).copied(), Some(120));
@@ -43844,7 +43880,11 @@ mod tests {
             session.split(),
             bravebot_session::sessions::Split {
                 read: 90,
-                written: 30
+                written: 30,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 60,
+                    written_tokens: 0,
+                },
             },
             "a suggestion's request was charged without how it divided"
         );
