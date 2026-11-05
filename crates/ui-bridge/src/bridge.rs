@@ -3426,10 +3426,9 @@ fn work(work: Work) {
                 }
             }
             state.tokens += outcome.tokens;
-            state.split.add(bravebot_session::sessions::Split::of(
-                outcome.tokens,
-                outcome.output_tokens,
-            ));
+            state
+                .split
+                .add(bravebot_session::sessions::Split::of_outcome(&outcome));
             // Added to rather than set: a turn that compacted part way through has already put
             // that cost here under the same number, and the breakdown has to add up to the total.
             *state.spend.entry(turn).or_insert(0) += outcome.tokens;

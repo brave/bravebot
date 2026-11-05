@@ -866,10 +866,8 @@ impl Kept {
     ) {
         self.turns += 1;
         self.tokens += outcome.tokens;
-        self.split.add(bravebot_session::sessions::Split::of(
-            outcome.tokens,
-            outcome.output_tokens,
-        ));
+        self.split
+            .add(bravebot_session::sessions::Split::of_outcome(outcome));
         *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
         self.timing
             .entry(self.turns)
@@ -1898,7 +1896,7 @@ mod tests {
             .join("../../target/test-scratch")
             .join(format!("plain-failed-{}", std::process::id()));
         let mut kept = Kept::opening(&root, "id", None).expect("a new session holds nothing");
-        let spent = bravebot_agent::Spent {
+        let mut spent = bravebot_agent::Spent {
             tokens: 107,
             output_tokens: 40,
             timing: Timing {
@@ -1910,18 +1908,23 @@ mod tests {
             },
             ..Default::default()
         };
+        spent.cached.read_tokens = 60;
+        spent.cached.written_tokens = 10;
 
         assert!(!kept.charge_failure(Default::default(), std::time::Duration::ZERO));
         assert_eq!((kept.turns, kept.tokens), (0, 0));
 
         assert!(kept.charge_failure(spent, std::time::Duration::from_millis(500)));
         assert_eq!((kept.turns, kept.tokens), (1, 107));
+        let mut divided = bravebot_session::sessions::Split {
+            read: 67,
+            written: 40,
+            ..Default::default()
+        };
+        divided.cache.read_tokens = 60;
+        divided.cache.written_tokens = 10;
         assert_eq!(
-            kept.split,
-            bravebot_session::sessions::Split {
-                read: 67,
-                written: 40
-            },
+            kept.split, divided,
             "the failed turn's tokens were not divided as the report counted them"
         );
         assert_eq!(kept.spend.get(&1), Some(&107));

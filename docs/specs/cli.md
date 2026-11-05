@@ -2481,7 +2481,8 @@ reading the answer, so none of it goes to a planner.
 **Known costs.**
 
 - Nothing is printed in money. [sessions.md](sessions.md) gives the reason a price is not composed:
-  no model listing carries one, and the record keeps no cache split.
+  no model listing carries one, and the record keeps the cache figures as session totals and not
+  per turn.
 - Read is the tokens the model was sent, which is the total less what it wrote, so a prompt the
   service answered out of its own cache is counted as read. A record that holds tokens and no
   split counts all of those tokens in the unsplit column.

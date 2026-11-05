@@ -35,7 +35,7 @@ that the session spent context, cost or time it did not need to. Judge those by 
 with these additions:
 
 - **Frustration.** Open the trigger turn and the events before the reaction. The claim stands only if the trigger is something bravebot did or failed to do, and the reaction follows from it. A blunt message with no bravebot event before it, a repeat the person made because the request was ambiguous, or a trigger in the model's choice where bravebot offered the right route, kills it. The `fix` must be a change in bravebot that would have shown, prevented or shortened the trigger.
-- **Waste.** Recompute the figure the claim gives from the record's token, cost and timing fields or from the count of events in the audit trail. A figure you cannot reproduce, a comparison with turns that did different work, or a cost the task needed kills it. Check that the spec does not list it under `## Known costs`, that bravebot did not already offer the cheaper route the claim says was missing (batched calls, a ranged read, a search), and that the `fix` is a change in bravebot that would save the stated amount.
+- **Waste.** Recompute the figure the claim gives from the record's `spend`, `split` and `timing` fields or from the count of events in the audit trail. A figure you cannot reproduce, a comparison with turns that did different work, or a cost the task needed kills it. Check that the spec does not list it under `## Known costs`, that bravebot did not already offer the cheaper route the claim says was missing (batched calls, a ranged read, a search), and that the `fix` is a change in bravebot that would save the stated amount.
 
 ## The questions, in order
 

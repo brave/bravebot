@@ -411,7 +411,7 @@ impl Session {
     /// are the turn's and are left alone.
     pub fn charge_aside_beside_a_turn(&mut self, usage: bravebot_aichat::protocol::Usage) {
         self.charge(usage.total());
-        self.charged_split(usage.total(), usage.completion_tokens);
+        self.charged_split(bravebot_session::sessions::Split::of_usage(usage));
     }
 
     /// A row put ahead of every delegate in the list, with the place of the row the view is on moved
