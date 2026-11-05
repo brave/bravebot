@@ -2713,6 +2713,29 @@ mod tests {
         }
     }
 
+    /// A manifest run's call reports what it returned while it is still running and finishes
+    /// after, the other way round from a turn's. What it returned is still drawn under it.
+    #[test]
+    fn a_reply_shown_while_its_call_runs_is_still_drawn_once_the_call_finishes() {
+        let mut session = Session::new("kernel-enforced");
+        let call = Activity::running("SERVER_CALL", "call web-helper:page_title");
+        session.start_activity(call.clone());
+        session.show(Shown {
+            origin: "web-helper:page_title".to_string(),
+            reach: bravebot_agent::report::Reach::NoModel,
+            label: "(U,priv)".to_string(),
+            preview: vec!["https://example.com/: Example Domain".to_string()],
+            lines: 1,
+        });
+        session.finish_activity(call.done("web-helper:page_title replied"));
+
+        let screen = rendered(&session);
+        assert!(
+            screen.contains("Example Domain"),
+            "what the call returned was dropped when it finished: {screen}"
+        );
+    }
+
     /// Render into a test backend and return the visible text.
     fn rendered(session: &Session) -> String {
         let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");

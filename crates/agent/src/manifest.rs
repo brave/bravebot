@@ -299,7 +299,8 @@ const REGISTRY: &[Advertised] = &[
         // The capability names the server, which only the step says, so the handler asks for it.
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for. The arguments are \
-                  written out in full here and fixed; the call is put to the person as it comes up",
+                  written out in full here and fixed; the call is put to the person as it comes up, \
+                  and what it returns is shown to them",
         args: "server* (an alias from the list below), tool*, arguments (a JSON object; nothing \
                a step read can be named in it)",
     },

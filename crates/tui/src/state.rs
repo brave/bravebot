@@ -2304,10 +2304,13 @@ impl Session {
         match self.call_where(Self::still_running) {
             Some(entry) => {
                 // What the call put under itself while it ran, such as the questions an
-                // `ask_user` call had settled, belongs to the call that finishes.
+                // `ask_user` call had settled, or what a manifest run's server call returned
+                // before it reported finishing, belongs to the call that finishes.
                 let held = entry.returned.take();
+                let shown = entry.shown.take();
                 *entry = Entry::tool(activity);
                 entry.returned = held;
+                entry.shown = shown;
             }
             // Straight into the delegate's own count where it has one, since a call that
             // finished without this side seeing it start is still a call it made.
