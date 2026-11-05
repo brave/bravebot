@@ -250,6 +250,7 @@ version = "0.21.0"
 dependencies = [
  "landlock",
  "libc",
+ "rustix",
  "windows-sys 0.61.2",
 ]
 

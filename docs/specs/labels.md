@@ -61,6 +61,7 @@ guards:
       - crates/core/src/policy.rs: 70
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
+      - crates/mcp/tests/openshell.rs: 1
       - crates/mcp/tests/stdio.rs: 9
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
