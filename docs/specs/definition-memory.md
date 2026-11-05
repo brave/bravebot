@@ -131,7 +131,8 @@ calls the bot is free text they may change, like its avatar.
 
 `verified-by: bravebot_agent::agents::making_a_bot_writes_a_worker_keeping_a_project_memory`
 `verified-by: bravebot_agent::agents::nothing_typed_into_the_form_becomes_a_key`
-`verified-by: by-construction (the desktop's store is ui/src/shared/bots.ts, written only by the main process, and the definition file is written only by the agent crate; ui/scripts/bot-model.test.mjs pins that a window cannot name the definition a turn is addressed to and that a row keeps only a definition name that is a slug; make check-ui runs it)`
+`verified-by: bravebot_agent::bots::a_row_with_a_repairable_field_is_listed_repaired`
+`verified-by: by-construction (the desktop's store is ui/src/shared/bots.ts, written only by the main process, and the definition file is written only by the agent crate; ui/scripts/bot-model.test.mjs pins that a window cannot name the definition a turn is addressed to; make check-ui runs it)`
 
 ## The memory
 
@@ -392,8 +393,8 @@ home folder and the folder each of its conversations ran in in its own store
 ([SESSION-1](sessions.md#SESSION-1)).
 
 The desktop sends a bot's turn only in a folder the agent confirmed the session runs in, and only
-when that folder is one of three: the bot's home folder, which the main process composes from the
-bot's slug under its own data directory; a folder the native picker handed over in this run; or a
+when that folder is one of three: the bot's home folder, which the module of the bots composes from the
+bot's slug under the data directory the main process names; a folder the native picker handed over in this run; or a
 folder the bot's store records a conversation in. The store records a folder only when a turn sent
 there under this rule ends, so a window cannot add one by opening a session somewhere
 ([TRUST-20](trust-map.md#TRUST-20)). The home folder is beside the directory that holds the
@@ -418,7 +419,9 @@ works in the working directory, and a delegate in a checkout keeps no memory
 says so when it loads, so its author learns that only an addressed turn keeps one.
 
 `verified-by: by-construction (a definition is read for its named keys alone, none of which is a directory, and every run works in the session's workspace or in a checkout the driver made of it)`
-`verified-by: by-construction (the desktop is not a crate this workspace compiles, so the folder rule is pinned instead by ui/scripts/bot-directory.test.mjs, which asserts that a new bot's home is composed under the app's data directory whatever the window sent, that a bot works in its home and in a folder the picker handed over and in no other absolute path, that a cancelled picker grants nothing, that a recorded folder survives a restart, and that an edit cannot move the home; ui/scripts/bot-grounding.test.mjs asserts that each folder keeps its own memory, and ui/scripts/bot-model.test.mjs that a bot written before home folders keeps its conversations in the folder it was pinned to; make check-ui and the Front end CI job run them)`
+`verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
+`verified-by: bravebot_agent::bots::operations::a_home_the_row_names_is_the_one_made_whatever_the_data_folder`
+`verified-by: by-construction (the desktop is not a crate this workspace compiles, so the folder rule is pinned instead by ui/scripts/bot-directory.test.mjs, which asserts that a make and an edit send the agent no home and no directory the window named, that a bot works in its home and in a folder the picker handed over and in no other absolute path, that a cancelled picker grants nothing, and that a recorded folder survives a restart; ui/scripts/bot-operations-bridge.test.mjs asserts through the real bravebot-rpc that the home of a new bot is under the app's data directory; ui/scripts/bot-grounding.test.mjs asserts that each folder keeps its own memory, and ui/scripts/bot-model.test.mjs that a bot written before home folders keeps its conversations in the folder it was pinned to; make check-ui and the Front end CI job run them)`
 
 ## The desktop's bots
 
@@ -452,9 +455,10 @@ reached ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), less a later look a
 addressed run is never offered ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A person
 narrows it further by editing the file.
 
-The crate that reads the person's definitions writes it (`bravebot_agent::agents::make_definition`),
-and the desktop asks for it through the bridge method `bot.define` when a bot is made. The row
-keeps the name the agent answers with. A bot's turns are addressed to that definition
+The crate that reads the person's definitions writes it (`bravebot_agent::agents::make_definition`).
+The desktop makes a bot through the bridge method `bot.make`, and the module behind it calls
+`make_definition` and then writes the row. `bot.define` remains as a bridge method. The row keeps
+the name the agent answers with. A bot's turns are addressed to that definition
 ([MEMORY-10](#MEMORY-10)); moving the briefing's purpose into it for a bot made before this is
 [MEMORY-11](#MEMORY-11).
 
@@ -467,7 +471,13 @@ keeps the name the agent answers with. A bot's turns are addressed to that defin
 `verified-by: bravebot_agent::agents::a_numbered_name_is_still_a_slug`
 `verified-by: bravebot_ui_bridge::definitions::a_bot_is_answered_with_the_name_its_definition_was_given`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_bot_writes_nothing`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a new bot is saved only with the name the agent answers with, and nothing is saved when the agent is absent, refuses, or answers with something that is not a slug; an edit does not define again; a stored definition name that is not a slug is dropped; make check-ui runs it)`
+`verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
+`verified-by: bravebot_agent::bots::operations::a_taken_name_is_numbered_and_each_bot_has_a_definition_of_its_own`
+`verified-by: bravebot_agent::bots::operations::a_definition_the_agent_refuses_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::a_definition_name_that_is_not_a_slug_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::a_definition_that_cannot_be_written_saves_no_row`
+`verified-by: bravebot_agent::bots::a_row_with_a_repairable_field_is_listed_repaired`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a form for a bot that is not kept is sent to the agent through bot.make, a make the agent refuses leaves no row, and an edit sends bot.edit and never bot.make; ui/scripts/bot-operations-bridge.test.mjs asserts through the real bravebot-rpc that the row keeps the name of the definition file the agent wrote; make check-ui runs both)`
 
 <a id="MEMORY-9"></a>
 ### MEMORY-9: editing a bot rewrites only the fields the form shows
@@ -485,14 +495,20 @@ purpose and the model, and returns the text with the description, the `model:` l
 replaced and every other line as it was. It writes the description and the model in single quotes
 and reads the result back, refusing a text that would not read back as what was given.
 `bravebot_agent::agents::redefine` applies it to the file [MEMORY-8](#MEMORY-8) wrote, and the
-desktop asks for it through the bridge method `bot.redefine` when a bot's purpose or model is
-edited. The row is saved only if the file was rewritten.
+module behind the bridge methods `bot.edit` and `bot.set_model` calls it when the desktop edits a
+bot's purpose or model. `bot.redefine` remains as a bridge method. The row is saved only if the file
+was rewritten.
 
 `verified-by: bravebot_agent::agents::editing_a_definition_rewrites_the_description_the_model_and_the_body_alone`
 `verified-by: bravebot_agent::agents::editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen`
 `verified-by: bravebot_agent::agents::a_purpose_or_model_typed_as_yaml_is_written_as_text_and_reads_back`
 `verified-by: bravebot_agent::agents::an_edit_that_cannot_be_written_as_asked_is_refused`
 `verified-by: bravebot_agent::agents::a_wrapped_description_is_replaced_whole`
+`verified-by: bravebot_agent::bots::operations::an_edit_rewrites_the_definition_and_keeps_what_happened`
+`verified-by: bravebot_agent::bots::operations::an_edit_that_names_no_model_leaves_it_and_one_that_clears_it_removes_it`
+`verified-by: bravebot_agent::bots::operations::setting_the_model_rewrites_the_definition_then_the_row_and_clears_with_none`
+`verified-by: bravebot_agent::bots::operations::an_edit_whose_definition_is_refused_saves_no_row_change`
+`verified-by: bravebot_agent::bots::operations::an_edit_of_a_bot_whose_definition_is_gone_saves_nothing`
 
 <a id="MEMORY-10"></a>
 ### MEMORY-10: every turn in a bot's conversation addresses the bot's definition
@@ -552,7 +568,7 @@ turns stops counting for it and never asks for a briefing, and the bot's memory 
 `.bravebot/memory/<definition>.md`, where the agent keeps it ([MEMORY-2](#MEMORY-2)). The desktop
 sends the definition name on the turn it composes after a compaction like any other, and the panel
 saves the memory to the same file. Editing a bot's purpose or model, or changing its model, rewrites
-its definition through the bridge method `bot.redefine`, which calls
+its definition through the bridge methods `bot.edit` and `bot.set_model`, whose module calls
 `bravebot_agent::agents::redefine` ([MEMORY-9](#MEMORY-9)); the row is saved only if the file was.
 
 **What is not built.** A bot made before definitions existed has none, and keeps the briefing, the
@@ -570,7 +586,9 @@ this clause.
 `verified-by: bravebot_ui_bridge::definitions::an_edit_the_agent_refuses_or_cannot_find_is_a_bad_request`
 `verified-by: bravebot_agent::agents::editing_a_bot_rewrites_its_definition_file_and_keeps_a_hand_added_tools_line`
 `verified-by: bravebot_agent::agents::editing_a_bot_whose_definition_is_gone_or_whose_purpose_is_blank_writes_nothing`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: the definition name a turn carries is the row's and a window's definition parameter is stripped by sanitised, a bot with a definition keeps its memory at the definition's path and is never counted quiet or sent a briefing, and an edit or a model change is saved only when the agent rewrote the file; make check-ui runs it)`
+`verified-by: bravebot_agent::bots::operations::an_edit_whose_definition_is_refused_saves_no_row_change`
+`verified-by: bravebot_agent::bots::operations::an_edit_of_a_bot_whose_definition_is_gone_saves_nothing`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: the definition name a turn carries is the row's and a window's definition parameter is stripped by sanitised, a bot with a definition keeps its memory at the definition's path and is never counted quiet or sent a briefing, and an edit sends bot.edit and a change of model sends bot.set_model; make check-ui runs it)`
 
 <a id="MEMORY-11"></a>
 ### MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them

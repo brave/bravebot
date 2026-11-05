@@ -316,6 +316,10 @@ impl Bridge {
             "bot.define" => crate::definitions::make(request),
             "bot.list" => crate::bots::list(request),
             "bot.replace" => crate::bots::replace(request),
+            "bot.make" => crate::bots::make(request),
+            "bot.edit" => crate::bots::edit(request),
+            "bot.set_model" => crate::bots::set_model(request),
+            "bot.ensure_home" => crate::bots::ensure_home(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(

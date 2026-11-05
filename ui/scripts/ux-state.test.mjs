@@ -756,3 +756,11 @@ test('the sidebar lists sessions from the record, the open windows and unsent dr
   assert.equal(listing.attention, 1)
   assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
 })
+
+test('a model the agent refuses for a bot is put on the banner and the list is read again', () => {
+  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  const start = source.indexOf('onBotModel={(bot, model) => {')
+  assert.ok(start > 0, 'the handler is not where this test looks for it')
+  const handler = source.slice(start, source.indexOf('\n        }}', start))
+  assert.match(handler, /settleBotModelWrite\(window\.bravebot\.writeBotModel\(bot\.slug, model\), setProblem, readBots\)/)
+})

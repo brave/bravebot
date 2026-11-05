@@ -5,6 +5,7 @@ status: proposed
 governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/bots.rs
+  - crates/agent/src/bots/operations.rs
   - crates/agent/src/memory.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/main.rs
@@ -42,9 +43,12 @@ what a bot is, how its memory is kept and what the GUI does with it today, and t
 that as given.
 
 Built so far are the module that reads and writes the rows and the bridge methods the GUI calls
-it through (slice 1), the layout seam and the phase with no session (slice 2a), and the bots layout
-that lists the bots, opened by `--layout bots` and `/layout bots` (slice 2b). Not built is everything
-that needs a session as a bot, the forms and the memory. The reasoning and the trust analysis are in
+it through (slice 1), the layout seam and the phase with no session (slice 2a), the bots layout
+that lists the bots, opened by `--layout bots` and `/layout bots` (slice 2b), and the module's make,
+edit, set the model and home folder operations with the bridge methods the GUI calls them through
+(slice 3a). Not built are archive, restore and delete, the operations that record what happened to a
+row (a conversation, the archive length, a released session), everything that needs a session as a
+bot, the forms and the memory. The reasoning and the trust analysis are in
 [../design/bots-layer.md](../design/bots-layer.md). Where each clause is built, and in what order,
 is in [../PLAN.md](../PLAN.md).
 
@@ -112,6 +116,11 @@ folds case.
 
 `verified-by: bravebot_agent::bots::a_slug_is_runs_of_lowercase_letters_and_digits_joined_by_single_hyphens`
 `verified-by: bravebot_agent::bots::every_entry_the_rules_drop_is_reported_with_its_reason`
+`verified-by: bravebot_agent::bots::operations::a_slug_is_composed_from_the_name_as_the_spec_says`
+`verified-by: bravebot_agent::bots::operations::a_slug_another_row_holds_takes_a_number`
+`verified-by: bravebot_agent::bots::operations::a_composed_slug_is_always_a_slug`
+`verified-by: bravebot_agent::bots::operations::a_taken_name_is_numbered_and_each_bot_has_a_definition_of_its_own`
+`verified-by: by-construction (the GUI's slug composition, slugFor, is deleted, so ui/scripts/bot-operations-bridge.test.mjs makes two bots with one name through the real bravebot-rpc and asserts that the slugs are custodian and custodian-2 and that each has a definition of its own, and ui/scripts/bot-store.test.mjs asserts that ui/src/main/bots.ts and ui/src/main/index.ts hold no slugFor; make check-ui runs both)`
 
 <a id="BOT-3"></a>
 ### BOT-3: a name, a purpose, a model and an avatar are bounded text, and 100 bots is the ceiling
@@ -194,8 +203,19 @@ it.
 `verified-by: bravebot_agent::bots::rows_past_the_hundredth_are_reported_with_their_slugs`
 `verified-by: bravebot_agent::bots::rows_are_written_in_the_byte_order_of_the_slug`
 `verified-by: bravebot_agent::bots::a_hundred_and_first_row_is_refused_and_every_row_is_kept`
+`verified-by: bravebot_agent::bots::operations::a_form_that_breaks_a_bound_is_refused_and_nothing_is_written`
+`verified-by: bravebot_agent::bots::operations::a_model_and_an_avatar_at_their_bounds_are_accepted`
+`verified-by: bravebot_agent::bots::operations::an_edit_that_breaks_a_bound_or_names_no_bot_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_model_that_breaks_the_bound_or_a_missing_bot_is_refused_when_setting_it`
+`verified-by: bravebot_agent::bots::operations::the_hundred_and_first_bot_is_refused_and_no_definition_is_written`
+`verified-by: bravebot_agent::bots::operations::the_hundredth_bot_is_made`
+`verified-by: bravebot_agent::bots::operations::a_row_the_read_drops_is_removed_by_the_write`
+`verified-by: bravebot_agent::bots::operations::rows_come_out_in_the_byte_order_of_the_slug`
+`verified-by: bravebot_ui_bridge::bots::a_refused_make_edit_or_home_is_answered_with_the_reason_and_the_code_for_it`
+`verified-by: bravebot_ui_bridge::bots::a_null_name_purpose_or_avatar_is_a_bad_request_and_a_null_model_is_none`
 `verified-by: bravebot_ui_bridge::bots::what_a_read_dropped_and_a_file_it_could_not_use_are_answered_beside_the_rows`
 `verified-by: by-construction (localeCompare is JavaScript's and a Rust test cannot run it, so ui/scripts/bot-rows-bridge.test.mjs writes slugs of digits and hyphens through the real bravebot-rpc and asserts that the file holds them in byte order and that this is the order localeCompare gives in English, that a hand-edited file is listed in file order, a repaired row is listed repaired and a Windows path is accepted, and that a dropped row and a row past the 100th are each reported; ui/scripts/bot-store.test.mjs asserts the report reaches the window as one text naming each entry with its reason, and the path of a file that could not be read; make check-ui runs both)`
+`verified-by: by-construction (the GUI's validation of a form, botFromForm, is deleted, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a make with a null character in the name or in the purpose is refused and writes no bots file and no definition, that the 101st make is refused with every row kept and no definition written for it, and that the refusal is shown with its reason; make check-ui runs it)`
 
 <a id="BOT-4"></a>
 ### BOT-4: the rows are the file `~/.bravebot/bots.json`, which the terminal and the GUI read and write
@@ -309,8 +329,29 @@ face from. A bot the terminal makes takes its slug as the seed, so both programs
 `verified-by: bravebot_agent::bots::nothing_to_move_leaves_no_bots_file`
 `verified-by: bravebot_agent::bots::an_old_file_that_cannot_be_converted_is_named_and_nothing_is_written`
 `verified-by: bravebot_agent::bots::nothing_is_moved_where_nothing_may_be_written`
+`verified-by: bravebot_agent::bots::operations::the_first_make_creates_the_state_directory_the_file_the_data_folder_and_the_home_privately`
+`verified-by: bravebot_agent::bots::operations::a_row_saved_while_its_home_cannot_be_made_is_kept_and_says_so`
+`verified-by: bravebot_agent::bots::operations::a_make_is_refused_naming_the_old_file_while_it_cannot_be_converted`
+`verified-by: bravebot_agent::bots::operations::a_make_after_the_rows_moved_from_the_old_file_keeps_them`
+`verified-by: bravebot_agent::bots::operations::a_file_that_does_not_parse_is_never_overwritten`
+`verified-by: bravebot_agent::bots::operations::a_data_folder_that_cannot_be_written_into_a_row_refuses_the_make`
+`verified-by: bravebot_agent::bots::operations::a_write_that_fails_before_the_rename_leaves_the_file_as_it_was`
+`verified-by: bravebot_agent::bots::operations::two_writers_at_once_lose_no_row`
+`verified-by: bravebot_agent::bots::operations::a_lock_a_stopped_program_left_behind_is_not_held`
+`verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_refuses_every_write_naming_the_lock_and_writes_nothing`
+`verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_leaves_a_definition_as_it_was_for_an_edit_and_a_model_change`
+`verified-by: bravebot_agent::bots::operations::a_data_folder_that_cannot_be_text_refuses_an_edit_a_model_change_and_an_ensure_before_any_row_is_dropped`
+`verified-by: bravebot_agent::bots::operations::an_edit_makes_a_home_that_was_removed_by_hand`
+`verified-by: bravebot_agent::bots::operations::setting_the_model_does_not_make_a_home_that_is_missing`
+`verified-by: bravebot_agent::bots::operations::ensuring_a_home_makes_a_missing_one_privately`
+`verified-by: bravebot_agent::bots::operations::ensuring_a_home_changes_no_row_and_says_when_it_could_not_be_made`
+`verified-by: bravebot_agent::bots::operations::ensuring_the_home_of_a_bot_nobody_made_or_from_a_file_that_does_not_parse_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_home_the_row_names_is_the_one_made_whatever_the_data_folder`
+`verified-by: bravebot_agent::incognito::a_private_session_refuses_to_make_edit_or_ensure_a_bot_and_writes_nothing`
+`verified-by: bravebot_agent::home::a_machine_that_names_no_state_directory_refuses_to_make_edit_or_ensure_a_bot`
 `verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-rows-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes is in bots.json and not in bravebot-ui.json, that a bot is listed again by a bridge started afterwards, that the rows of an old bravebot-ui.json written in the old forms move unchanged and in order and the old file is left as it was, that a second start does not read the old key again, that an absent or empty key leaves no bots file, and that an old file that does not parse, or whose bots key is not an array, gives no rows, names its path and refuses a make; ui/scripts/bot-store.test.mjs asserts that the desktop sends the data folder Electron names and never reads or writes the bots key of bravebot-ui.json, that a write the agent refuses is shown with its reason and the bot is not shown as saved, and that a file that could not be read is never written over; make check-ui runs both)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes has its home folder, that an edit makes a home that was removed by hand and a change of model does not, that ensuring the home makes it again and answers false for a bot that does not exist, and that bravebot-ui.json never holds a bots key; ui/scripts/bot-store.test.mjs asserts that bot.make, bot.edit, bot.set_model and bot.ensure_home each carry the data folder Electron names; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs all three)`
 
 <a id="BOT-5"></a>
 ### BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
@@ -362,7 +403,13 @@ come from"), whichever crate holds the code.
 
 `verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
 `verified-by: bravebot_ui_bridge::bots::the_methods_are_denied_to_the_host_and_offered_to_no_client`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads and writes the rows only through bot.list and bot.replace, with changes made at the same moment each reaching the file, that the agent not running gives no rows and writes nothing, and that neither method is among those a window may send; make check-ui runs it)`
+`verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
+`verified-by: bravebot_ui_bridge::bots::a_bot_made_edited_and_given_a_model_through_the_bridge_is_listed_after_a_restart`
+`verified-by: bravebot_ui_bridge::bots::a_refused_make_edit_or_home_is_answered_with_the_reason_and_the_code_for_it`
+`verified-by: bravebot_ui_bridge::bots::each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code`
+`verified-by: bravebot_ui_bridge::bots::a_wrongly_typed_or_missing_field_is_a_bad_request_before_anything_is_written`
+`verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads the rows through bot.list and replaces them through bot.replace, that it makes, edits and changes the model of a bot through bot.make, bot.edit and bot.set_model and makes a home folder through bot.ensure_home, each with the data folder Electron names, that changes made at the same moment, a make, an edit and a change of model among them, each reach the file, that the agent not running gives no rows and writes nothing, that ui/src/main/bots.ts and ui/src/main/index.ts no longer hold botFromForm, saveFormBot, ensureHome, bot.define or bot.redefine, and that none of bot.list, bot.replace, bot.make, bot.edit, bot.set_model and bot.ensure_home is among those a window may send; ui/scripts/bot-operations-bridge.test.mjs runs a make, an edit, a change of model and the making of a home folder through the real bravebot-rpc and asserts the rows, the definition and the folder they leave; make check-ui runs both)`
 
 ## Making and changing a bot
 
@@ -401,7 +448,8 @@ the methods this design adds follow it.
 person first. Nothing here shows that the renderer displays fetched pages, which is what would let a
 window be taken over.
 
-`verified-by: none`
+`verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the four methods added here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test. The terminal's form is not built)`
 
 <a id="BOT-7"></a>
 ### BOT-7: the definition is written first, and the row only after it
@@ -417,8 +465,9 @@ offered while a turn of the bot is running, as the GUI's model picker is disable
 belongs to the bot, so the change applies to every conversation of the bot, and the next turn of an
 open session runs under it. The make form has no model field. An edit changes the row's name, purpose, model and avatar only,
 and not the fields that record what happened. A bot that has no definition has its row written and no
-definition made. After the definition is rewritten the row is read again and only those four fields
-are laid over it, so a conversation recorded while the rewrite ran is kept. Saves run one at a time,
+definition made. The module reads the row once, under the lock of [BOT-4](#BOT-4), and writes the
+definition and then the row before it releases the lock, so a conversation another program records
+meanwhile is kept: that program waits for the lock, or finished before the read. Saves run one at a time,
 and each reads the row as the save before left it. A write of the file that fails is reported with the
 path and the reason, and the save is shown as failed. The definition is written before the row, so a
 make whose row fails leaves a definition with no row, and an edit whose row fails leaves the new
@@ -450,7 +499,22 @@ evaluated before the migration. The GUI calls both through the bridge and no lon
 `migrateBot`, `owesCarryOver` or `oldMemoryFolder`. The terminal does not refuse a bot that has no
 definition.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
+`verified-by: bravebot_agent::bots::operations::a_definition_the_agent_refuses_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::a_definition_name_that_is_not_a_slug_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::a_definition_that_cannot_be_written_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::the_definition_is_written_first_and_stays_when_the_row_cannot_be_saved`
+`verified-by: bravebot_agent::bots::operations::an_edit_rewrites_the_definition_and_keeps_what_happened`
+`verified-by: bravebot_agent::bots::operations::an_edit_that_names_no_model_leaves_it_and_one_that_clears_it_removes_it`
+`verified-by: bravebot_agent::bots::operations::an_edit_whose_definition_is_refused_saves_no_row_change`
+`verified-by: bravebot_agent::bots::operations::an_edit_of_a_bot_whose_definition_is_gone_saves_nothing`
+`verified-by: bravebot_agent::bots::operations::an_edit_of_a_bot_with_no_definition_writes_the_row_and_makes_none`
+`verified-by: bravebot_agent::bots::operations::setting_the_model_rewrites_the_definition_then_the_row_and_clears_with_none`
+`verified-by: bravebot_ui_bridge::bots::a_bot_made_edited_and_given_a_model_through_the_bridge_is_listed_after_a_restart`
+`verified-by: bravebot_ui_bridge::bots::each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code`
+`verified-by: bravebot_ui_bridge::bots::a_set_model_request_without_a_model_is_refused_and_leaves_the_bots_model_alone`
+`verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_leaves_a_definition_as_it_was_for_an_edit_and_a_model_change`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. Archive, restore and the stamping of retired, the recording operations and the migration of a bot made before definitions are not built)`
 
 <a id="BOT-8"></a>
 ### BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
@@ -1052,6 +1116,12 @@ list later if the list looks too packed.
   its memory is withheld, and from `/memory`, which lists the memory as withheld
   ([MEMORY-12](definition-memory.md#MEMORY-12)). The memory pane does not mark the folder, so a bot that does not mention it
   looks as if it keeps nothing. The GUI behaves the same today.
+- **A write removes the entries the read dropped.** The read drops a row that fails the rules of
+  [BOT-3](#BOT-3) and every row past the 100th, and the next write does not put them back. A hand-edited
+  mistake in a row loses that row on the next write. [COMPAT-001](../best-practices/compatibility.md#COMPAT-001)
+  says a reader must not discard data it cannot parse, and this clause does. The owner accepted it on
+  2026-10-22. The read reports each dropped entry with its reason, and the GUI shows the report before
+  the write removes the entry. The GUI's own save did the same before the module existed.
 - **A purpose has no length bound.** It is the body of the definition read into every turn, so a long
   one costs tokens on every turn and can exceed the model's context. It is also stored in the shared
   file, which is read whole ([BOT-3](#BOT-3)).

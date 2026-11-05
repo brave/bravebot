@@ -548,3 +548,28 @@ fn a_machine_that_names_no_state_directory_says_whether_old_rows_are_waiting() {
 
     let _ = std::fs::remove_dir_all(&data_folder);
 }
+
+#[test]
+fn a_machine_that_names_no_state_directory_refuses_to_make_edit_or_ensure_a_bot() {
+    use bravebot_agent::bots::{Changes, NewBot, Refused};
+    let data_folder = std::path::Path::new("/gui");
+    let new = || NewBot {
+        name: "Dev".to_string(),
+        purpose: "Does a thing.".to_string(),
+        model: None,
+        avatar: None,
+    };
+
+    let refusals = with_no_home(|| {
+        [
+            bravebot_agent::bots::make(data_folder, new()).map(|_| ()),
+            bravebot_agent::bots::edit(data_folder, "dev", Changes::default()).map(|_| ()),
+            bravebot_agent::bots::set_model(data_folder, "dev", None).map(|_| ()),
+            bravebot_agent::bots::ensure_home(data_folder, "dev").map(|_| ()),
+        ]
+    });
+
+    for refused in refusals {
+        assert!(matches!(refused, Err(Refused::NoFolder)), "{refused:?}");
+    }
+}

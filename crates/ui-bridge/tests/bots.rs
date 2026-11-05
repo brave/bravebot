@@ -272,3 +272,257 @@ fn a_refused_replacement_writes_nothing_and_says_why() {
     );
     assert!(!bots_file().exists());
 }
+
+#[test]
+fn the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client() {
+    for method in ["bot.make", "bot.edit", "bot.set_model", "bot.ensure_home"] {
+        assert!(
+            DENIED.contains(&method),
+            "{method} is not denied to the host"
+        );
+        assert!(
+            OFFERED.iter().all(|operation| operation.method != method),
+            "{method} is offered to a client of the host"
+        );
+    }
+}
+
+fn listed_slugs(bridge: &mut Bridge, data: &PathBuf) -> Vec<String> {
+    let listed = call(bridge, "bot.list", json!({"dataFolder": data})).unwrap();
+    listed["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["slug"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_bot_made_edited_and_given_a_model_through_the_bridge_is_listed_after_a_restart() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let state = bravebot_agent::home::directory().unwrap();
+    let mut first = bridge();
+
+    let made = call(
+        &mut first,
+        "bot.make",
+        json!({"dataFolder": data, "name": "Code Reviewer", "purpose": "Reviews code.\nCarefully.", "model": null}),
+    )
+    .unwrap();
+    assert_eq!(made["bot"]["slug"], json!("code-reviewer"));
+    assert_eq!(made["bot"]["avatar"], json!("code-reviewer"));
+    assert_eq!(made["bot"]["definition"], json!("code-reviewer"));
+    assert_eq!(made["bot"]["model"], Value::Null);
+    assert_eq!(made["homeMade"], json!(true));
+    let home = data.join("bot-homes/code-reviewer");
+    assert_eq!(made["bot"]["home"], json!(home.to_str().unwrap()));
+    assert!(home.is_dir());
+    let definition = state.join("agents/code-reviewer.md");
+    assert!(
+        std::fs::read_to_string(&definition)
+            .unwrap()
+            .contains("Reviews code.\nCarefully.")
+    );
+
+    let edited = call(
+        &mut first,
+        "bot.edit",
+        json!({"dataFolder": data, "slug": "code-reviewer", "name": "Reviewer", "purpose": "Reviews prose.", "avatar": "seed"}),
+    )
+    .unwrap();
+    assert_eq!(edited["bot"]["name"], json!("Reviewer"));
+    assert_eq!(edited["bot"]["slug"], json!("code-reviewer"));
+    assert_eq!(edited["bot"]["avatar"], json!("seed"));
+    assert_eq!(edited["homeMade"], json!(true));
+    assert!(
+        std::fs::read_to_string(&definition)
+            .unwrap()
+            .contains("Reviews prose.")
+    );
+
+    let set = call(
+        &mut first,
+        "bot.set_model",
+        json!({"dataFolder": data, "slug": "code-reviewer", "model": "provider/model-a"}),
+    )
+    .unwrap();
+    assert_eq!(set["bot"]["model"], json!("provider/model-a"));
+    assert!(
+        std::fs::read_to_string(&definition)
+            .unwrap()
+            .contains("model: 'provider/model-a'")
+    );
+    let untouched = call(
+        &mut first,
+        "bot.edit",
+        json!({"dataFolder": data, "slug": "code-reviewer", "name": "Reviewer Two"}),
+    )
+    .unwrap();
+    assert_eq!(untouched["bot"]["model"], json!("provider/model-a"));
+    let cleared = call(
+        &mut first,
+        "bot.edit",
+        json!({"dataFolder": data, "slug": "code-reviewer", "model": null}),
+    )
+    .unwrap();
+    assert_eq!(cleared["bot"]["model"], Value::Null);
+    let cleared_by_method = call(
+        &mut first,
+        "bot.set_model",
+        json!({"dataFolder": data, "slug": "code-reviewer", "model": null}),
+    )
+    .unwrap();
+    assert_eq!(cleared_by_method["bot"]["model"], Value::Null);
+
+    std::fs::remove_dir_all(&home).unwrap();
+    let ensured = call(
+        &mut first,
+        "bot.ensure_home",
+        json!({"dataFolder": data, "slug": "code-reviewer"}),
+    )
+    .unwrap();
+    assert_eq!(ensured, json!({"homeMade": true}));
+    assert!(home.is_dir());
+
+    let mut restarted = bridge();
+    assert_eq!(listed_slugs(&mut restarted, &data), ["code-reviewer"]);
+    let listed = call(&mut restarted, "bot.list", json!({"dataFolder": data})).unwrap();
+    assert_eq!(listed["bots"][0]["name"], json!("Reviewer Two"));
+    assert_eq!(listed["bots"][0]["purpose"], json!("Reviews prose."));
+    assert_eq!(listed["bots"][0]["model"], Value::Null);
+}
+
+#[test]
+fn a_refused_make_edit_or_home_is_answered_with_the_reason_and_the_code_for_it() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let mut bridge = bridge();
+    let refuse = |bridge: &mut Bridge, method: &str, params: Value| {
+        call(bridge, method, params).expect_err("refused")
+    };
+
+    let blank = refuse(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": " ", "purpose": "P."}),
+    );
+    assert_eq!(blank.code, ErrorCode::BadRequest);
+    assert!(blank.message.contains("name"), "{}", blank.message);
+    let model = refuse(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": "N", "purpose": "P.", "model": "inherit"}),
+    );
+    assert_eq!(model.code, ErrorCode::BadRequest);
+    assert!(model.message.contains("model"), "{}", model.message);
+    let no_definition = refuse(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": "N", "purpose": "\u{85}"}),
+    );
+    assert_eq!(no_definition.code, ErrorCode::BadRequest);
+    assert!(
+        no_definition.message.contains("definition"),
+        "{}",
+        no_definition.message
+    );
+    assert!(!bots_file().exists());
+
+    let unknown = refuse(
+        &mut bridge,
+        "bot.edit",
+        json!({"dataFolder": data, "slug": "ghost", "name": "G"}),
+    );
+    assert_eq!(unknown.code, ErrorCode::BadRequest);
+    assert!(unknown.message.contains("ghost"), "{}", unknown.message);
+    for (method, params) in [
+        (
+            "bot.set_model",
+            json!({"dataFolder": data, "slug": "ghost", "model": "m"}),
+        ),
+        (
+            "bot.ensure_home",
+            json!({"dataFolder": data, "slug": "ghost"}),
+        ),
+    ] {
+        let refused = refuse(&mut bridge, method, params);
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{method}");
+        assert!(refused.message.contains("ghost"), "{}", refused.message);
+    }
+
+    let ceiling: Vec<Value> = (0..100).map(|n| bot(&format!("b{n:03}"))).collect();
+    call(
+        &mut bridge,
+        "bot.replace",
+        json!({"dataFolder": data, "bots": ceiling}),
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(bots_file()).unwrap();
+    let full = refuse(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": "One Too Many", "purpose": "P."}),
+    );
+    assert_eq!(full.code, ErrorCode::BadRequest);
+    assert!(full.message.contains("100"), "{}", full.message);
+    assert_eq!(std::fs::read_to_string(bots_file()).unwrap(), before);
+
+    std::fs::write(bots_file(), "{ not json").unwrap();
+    let unreadable = refuse(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": "N", "purpose": "P."}),
+    );
+    assert_eq!(unreadable.code.as_str(), "state_unusable");
+    assert!(
+        unreadable
+            .message
+            .contains(&bots_file().display().to_string()),
+        "{}",
+        unreadable.message
+    );
+    assert_eq!(std::fs::read_to_string(bots_file()).unwrap(), "{ not json");
+}
+
+#[test]
+fn a_set_model_request_without_a_model_is_refused_and_leaves_the_bots_model_alone() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let mut bridge = bridge();
+    call(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": "Modeled", "purpose": "P.", "model": "provider/model-a"}),
+    )
+    .unwrap();
+    let before = call(&mut bridge, "bot.list", json!({"dataFolder": data})).unwrap();
+    assert_eq!(before["bots"][0]["model"], json!("provider/model-a"));
+
+    let refused = call(
+        &mut bridge,
+        "bot.set_model",
+        json!({"dataFolder": data, "slug": "modeled"}),
+    )
+    .expect_err("refused");
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert!(refused.message.contains("model"), "{}", refused.message);
+
+    let after = call(&mut bridge, "bot.list", json!({"dataFolder": data})).unwrap();
+    assert_eq!(after["bots"][0]["model"], json!("provider/model-a"));
+    assert_eq!(after["bots"][0]["updated"], before["bots"][0]["updated"]);
+
+    let cleared = call(
+        &mut bridge,
+        "bot.set_model",
+        json!({"dataFolder": data, "slug": "modeled", "model": null}),
+    )
+    .unwrap();
+    assert_eq!(cleared["bot"]["model"], Value::Null);
+}

@@ -6,7 +6,7 @@
 // from rather than about the shape of a path, and the fault it rejects is the well-formedness
 // check standing in for it: `isProjectPath` accepts every absolute path on the account.
 //
-// A bot may work in its home folder, which the main process composes, in a folder it has recorded
+// A bot may work in its home folder, which the agent composes, in a folder it has recorded
 // a conversation in, and in one the picker handed over in this run. Nothing else.
 //
 // One bundle for both modules, because the folders the picker handed over are one module's state
@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fakeBots } from './fake-bots.mjs'
@@ -45,17 +45,34 @@ function load(userData, showOpenDialog, store = fakeBots()) {
 const scratch = (name) => mkdtempSync(join(tmpdir(), `bravebot-${name}-`))
 const form = (extra) => ({ name: 'Custodian', purpose: 'Keep the harbour lights lit', ...extra })
 
-test('a new bot gets a home folder composed from its slug, whatever the window sent', async () => {
+test('a new bot gets a home folder the agent composes from its slug, whatever the window sent', async () => {
   const userData = scratch('bot-home-app')
   const elsewhere = scratch('bot-home-elsewhere')
   try {
-    const main = load(userData, async () => ({ canceled: true, filePaths: [] }))
-    // A window that names a folder of its own is ignored: the home is never a field it can send.
-    const made = await main.botFromForm(form({ home: elsewhere, directory: elsewhere }))
-    assert.equal(made.home, join(userData, 'bot-homes', made.slug))
-    assert.equal(main.ensureHome(made), true)
-    assert.ok(statSync(made.home).isDirectory())
+    const store = fakeBots()
+    const main = load(userData, async () => ({ canceled: true, filePaths: [] }), store)
+    const made = await main.saveForm(form({ home: elsewhere, directory: elsewhere }))
+    const [, params] = store.calls.find(([method]) => method === 'bot.make')
+    assert.deepEqual(Object.keys(params).sort(), ['avatar', 'dataFolder', 'name', 'purpose'], 'neither folder the window named is sent to the agent')
+    assert.equal(made.home, join(userData, 'bot-homes', made.slug), 'the home is the one the agent composed')
   } finally { for (const at of [userData, elsewhere]) rmSync(at, { recursive: true, force: true }) }
+})
+
+test('a bot home is made through the agent, and a home it cannot make is reported as false', async () => {
+  const userData = scratch('bot-ensure-app')
+  try {
+    const store = fakeBots()
+    const main = load(userData, async () => ({ canceled: true, filePaths: [] }), store)
+    const made = await main.saveForm(form())
+    store.calls.length = 0
+    assert.equal(await main.ensureBotHome(made.slug), true)
+    assert.deepEqual(store.calls, [['bot.ensure_home', { dataFolder: userData, slug: made.slug }]])
+    store.homeRefused = true
+    assert.equal(await main.ensureBotHome(made.slug), false)
+    assert.equal(await main.ensureBotHome('no-such-bot'), false, 'a refusal is a home that was not made')
+    main.useBotsBridge(null)
+    assert.equal(await main.ensureBotHome(made.slug), false, 'and so is an agent that is not running')
+  } finally { rmSync(userData, { recursive: true, force: true }) }
 })
 
 test('a bot works in its home, a folder the picker handed over, and nowhere else', async () => {
@@ -64,7 +81,7 @@ test('a bot works in its home, a folder the picker handed over, and nowhere else
   const elsewhere = scratch('bot-folder-elsewhere')
   try {
     const main = load(userData, async () => ({ canceled: false, filePaths: [chosen] }))
-    const made = await main.botFromForm(form())
+    const made = await main.saveForm(form())
     // Both are absolute and hold no NUL, so `isProjectPath` cannot tell them apart. Nothing has
     // been opened yet, so neither is a folder anybody pointed at.
     assert.equal(main.worksIn(made, made.home), true)
@@ -85,8 +102,7 @@ test('a folder a bot has worked in stays one it may work in after a restart', as
     const file = fakeBots()
     const first = load(userData, async () => ({ canceled: false, filePaths: [chosen] }), file)
     await first.chooseDirectory({})
-    const made = await first.botFromForm(form())
-    await first.saveBot(made)
+    const made = await first.saveForm(form())
     await first.noteBotSession(made.slug, 'a1b2c3d4-0000-4000-8000-000000000001', chosen)
     // A fresh load has an empty picker record, so only the recorded conversation can answer.
     const second = load(userData, async () => ({ canceled: true, filePaths: [] }), file)
@@ -102,7 +118,7 @@ test('a cancelled picker leaves nothing a window may name', async () => {
     // the answer afterwards is the answer from before.
     const main = load(userData, async () => ({ canceled: true, filePaths: [offered] }))
     assert.equal(await main.chooseDirectory({}), null)
-    assert.equal(main.worksIn(await main.botFromForm(form()), offered), false)
+    assert.equal(main.worksIn(await main.saveForm(form()), offered), false)
   } finally { for (const at of [userData, offered]) rmSync(at, { recursive: true, force: true }) }
 })
 
@@ -110,11 +126,14 @@ test('editing a bot cannot move its home', async () => {
   const userData = scratch('bot-move-app')
   const elsewhere = scratch('bot-move-elsewhere')
   try {
-    const main = load(userData, async () => ({ canceled: true, filePaths: [] }))
-    const made = await main.botFromForm(form())
-    await main.saveBot(made)
+    const store = fakeBots()
+    const main = load(userData, async () => ({ canceled: true, filePaths: [] }), store)
+    const made = await main.saveForm(form())
+    store.calls.length = 0
     // A payload only something bypassing the form composes.
-    const edited = await main.botFromForm(form({ slug: made.slug, name: 'Keeper', home: elsewhere }))
+    const edited = await main.saveForm(form({ slug: made.slug, name: 'Keeper', home: elsewhere }))
+    const [, params] = store.calls.find(([method]) => method === 'bot.edit')
+    assert.deepEqual(Object.keys(params).sort(), ['dataFolder', 'name', 'purpose', 'slug'], 'no home is sent to the agent')
     assert.equal(edited.slug, made.slug)
     assert.equal(edited.name, 'Keeper')
     assert.equal(edited.home, made.home, 'a rename is not a move')

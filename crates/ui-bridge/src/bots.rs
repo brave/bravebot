@@ -32,6 +32,82 @@ pub fn replace(request: &Request) -> Result<Value, Failure> {
     }
 }
 
+pub fn make(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let new = bots::NewBot {
+        name: request.string("name")?,
+        purpose: request.string("purpose")?,
+        model: optional_text(request, "model")?,
+        avatar: text_unless_null(request, "avatar")?,
+    };
+    match bots::make(&data_folder, new) {
+        Ok(saved) => Ok(saved_answer(&saved)),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn edit(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    let changes = bots::Changes {
+        name: text_unless_null(request, "name")?,
+        purpose: text_unless_null(request, "purpose")?,
+        model: match request.params.get("model") {
+            None => None,
+            Some(_) => Some(optional_text(request, "model")?),
+        },
+        avatar: text_unless_null(request, "avatar")?,
+    };
+    match bots::edit(&data_folder, &slug, changes) {
+        Ok(saved) => Ok(saved_answer(&saved)),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn set_model(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    if request.params.get("model").is_none() {
+        return Err(Failure::bad_request(
+            "`model` must be a string, or null to clear it",
+        ));
+    }
+    let model = optional_text(request, "model")?;
+    match bots::set_model(&data_folder, &slug, model.as_deref()) {
+        Ok(row) => Ok(json!({ "bot": row.to_value() })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn ensure_home(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    match bots::ensure_home(&data_folder, &slug) {
+        Ok(home_made) => Ok(json!({ "homeMade": home_made })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+fn saved_answer(saved: &bots::Saved) -> Value {
+    json!({ "bot": saved.row.to_value(), "homeMade": saved.home_made })
+}
+
+fn optional_text(request: &Request, name: &str) -> Result<Option<String>, Failure> {
+    match request.params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(Failure::bad_request(format!("`{name}` must be a string"))),
+    }
+}
+
+fn text_unless_null(request: &Request, name: &str) -> Result<Option<String>, Failure> {
+    match request.params.get(name) {
+        None => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(Failure::bad_request(format!("`{name}` must be a string"))),
+    }
+}
+
 fn data_folder(request: &Request) -> Result<PathBuf, Failure> {
     let named = request.string("dataFolder")?;
     if !bots::is_absolute_path(&named) {
@@ -44,11 +120,21 @@ fn data_folder(request: &Request) -> Result<PathBuf, Failure> {
 
 fn failure(refused: &Refused) -> Failure {
     let code = match refused {
-        Refused::Ceiling | Refused::Entry { .. } => ErrorCode::BadRequest,
+        Refused::Ceiling
+        | Refused::Entry { .. }
+        | Refused::Name
+        | Refused::Purpose
+        | Refused::Model
+        | Refused::Avatar
+        | Refused::NoSuchBot(_)
+        | Refused::DataFolder(_)
+        | Refused::Definition(_) => ErrorCode::BadRequest,
         Refused::Unreadable(_) | Refused::OldFile(_) | Refused::Locked(_) => {
             ErrorCode::StateUnusable
         }
-        Refused::NoFolder | Refused::Incognito | Refused::Io(_) => ErrorCode::NoHome,
+        Refused::NoFolder | Refused::Incognito | Refused::Io(_) | Refused::DefinitionIo(_) => {
+            ErrorCode::NoHome
+        }
     };
     Failure::new(code, refused.to_string())
 }
@@ -64,6 +150,147 @@ mod tests {
             path: Path::new("/state/bots.json").to_path_buf(),
             reason: "it is not JSON".to_string(),
         }
+    }
+
+    #[test]
+    fn each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code() {
+        let cases = [
+            (Refused::Name, "bad_request"),
+            (Refused::Purpose, "bad_request"),
+            (Refused::Model, "bad_request"),
+            (Refused::Avatar, "bad_request"),
+            (Refused::NoSuchBot("ghost".to_string()), "bad_request"),
+            (
+                Refused::DataFolder(Path::new("relative").to_path_buf()),
+                "bad_request",
+            ),
+            (Refused::Definition("no purpose".to_string()), "bad_request"),
+            (Refused::DefinitionIo(problem()), "no_home"),
+        ];
+        for (refused, code) in cases {
+            let answered = failure(&refused);
+            assert_eq!(answered.code.as_str(), code, "{refused:?}");
+            assert_eq!(answered.message, refused.to_string(), "{refused:?}");
+        }
+        let io = failure(&Refused::DefinitionIo(problem()));
+        assert!(io.message.contains("/state/bots.json"), "{}", io.message);
+        assert!(
+            failure(&Refused::NoSuchBot("ghost".into()))
+                .message
+                .contains("ghost")
+        );
+    }
+
+    fn request(method: &str, params: Value) -> Request {
+        Request::parse(&json!({"id": 1, "method": method, "params": params}).to_string())
+            .expect("a request")
+    }
+
+    #[test]
+    fn a_wrongly_typed_or_missing_field_is_a_bad_request_before_anything_is_written() {
+        let folder = "/gui";
+        let cases = [
+            ("bot.make", json!({"dataFolder": folder, "purpose": "P."})),
+            ("bot.make", json!({"dataFolder": folder, "name": "N"})),
+            (
+                "bot.make",
+                json!({"dataFolder": folder, "name": 3, "purpose": "P."}),
+            ),
+            (
+                "bot.make",
+                json!({"dataFolder": folder, "name": "N", "purpose": "P.", "model": 4}),
+            ),
+            (
+                "bot.make",
+                json!({"dataFolder": folder, "name": "N", "purpose": "P.", "avatar": []}),
+            ),
+            ("bot.edit", json!({"dataFolder": folder})),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "name": 1}),
+            ),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "purpose": {}}),
+            ),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "model": false}),
+            ),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "avatar": 2}),
+            ),
+            ("bot.set_model", json!({"dataFolder": folder, "slug": "a"})),
+            (
+                "bot.set_model",
+                json!({"dataFolder": folder, "slug": "a", "model": 5}),
+            ),
+            ("bot.set_model", json!({"dataFolder": folder, "model": "m"})),
+            ("bot.ensure_home", json!({"dataFolder": folder})),
+            ("bot.ensure_home", json!({"slug": "a"})),
+        ];
+        for (method, params) in cases {
+            let call = request(method, params.clone());
+            let refused = match method {
+                "bot.make" => make(&call),
+                "bot.edit" => edit(&call),
+                "bot.set_model" => set_model(&call),
+                _ => ensure_home(&call),
+            }
+            .expect_err("refused");
+            assert_eq!(refused.code.as_str(), "bad_request", "{method} {params}");
+        }
+    }
+
+    #[test]
+    fn a_null_name_purpose_or_avatar_is_a_bad_request_and_a_null_model_is_none() {
+        let folder = "/gui";
+        let cases = [
+            (
+                "bot.make",
+                json!({"dataFolder": folder, "name": null, "purpose": "P."}),
+            ),
+            (
+                "bot.make",
+                json!({"dataFolder": folder, "name": "N", "purpose": null}),
+            ),
+            (
+                "bot.make",
+                json!({"dataFolder": folder, "name": "N", "purpose": "P.", "avatar": null}),
+            ),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "name": null}),
+            ),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "purpose": null}),
+            ),
+            (
+                "bot.edit",
+                json!({"dataFolder": folder, "slug": "a", "avatar": null}),
+            ),
+        ];
+        for (method, params) in cases {
+            let call = request(method, params.clone());
+            let refused = match method {
+                "bot.make" => make(&call),
+                _ => edit(&call),
+            }
+            .expect_err("refused");
+            assert_eq!(refused.code.as_str(), "bad_request", "{method} {params}");
+            assert!(
+                refused.message.contains("must be a string"),
+                "{method} {params}: {}",
+                refused.message
+            );
+        }
+
+        let model = request("bot.edit", json!({"slug": "a", "model": null}));
+        assert_eq!(optional_text(&model, "model").unwrap(), None);
+        let absent = request("bot.edit", json!({"slug": "a"}));
+        assert_eq!(text_unless_null(&absent, "name").unwrap(), None);
     }
 
     #[test]

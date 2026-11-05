@@ -672,3 +672,28 @@ fn a_private_session_refuses_to_write_the_bots_and_says_why() {
     assert!(refused.to_string().contains("incognito"), "{refused}");
     assert!(!scratch.home.join("bots.json").exists());
 }
+
+#[test]
+fn a_private_session_refuses_to_make_edit_or_ensure_a_bot_and_writes_nothing() {
+    use bravebot_agent::bots::{Changes, NewBot, Refused};
+    let scratch = Scratch::new("bots-operations");
+    let data_folder = scratch.home.join("gui");
+    let new = NewBot {
+        name: "Dev".to_string(),
+        purpose: "Does a thing.".to_string(),
+        model: None,
+        avatar: None,
+    };
+
+    let refusals = [
+        bravebot_agent::bots::make(&data_folder, new).map(|_| ()),
+        bravebot_agent::bots::edit(&data_folder, "dev", Changes::default()).map(|_| ()),
+        bravebot_agent::bots::set_model(&data_folder, "dev", None).map(|_| ()),
+        bravebot_agent::bots::ensure_home(&data_folder, "dev").map(|_| ()),
+    ];
+
+    for refused in refusals {
+        assert!(matches!(refused, Err(Refused::Incognito)), "{refused:?}");
+    }
+    assert!(!data_folder.exists());
+}

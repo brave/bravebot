@@ -111,11 +111,10 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botFolders, botOf, isBotModel, isSlug, slugFor, withBot, withoutBot } from '../shared/bots'
+import { type Bot, botFolders, botOf, isSlug, withBot, withoutBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
 import { isOpenedDirectory } from './opened'
-import { readBots, updateBots, usableBots } from './bot-store'
-import { botHome } from './state'
+import { type BotRow, type BridgeWrite, bridgeRequest, readBots, updateBots, withoutFigures, writeThroughBridge } from './bot-store'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
 const HOME = '.bravebot-ui'
@@ -153,111 +152,21 @@ export async function bot(slug: unknown): Promise<Bot | null> {
   return isSlug(slug) ? botOf(await bots(), slug) : null
 }
 
-/**
- * The bot a window's form describes, or `null` if what it sent is not a bot this app may keep.
- *
- * Four fields cross from a window (a name, a purpose, a model and a face), and none of them is
- * a path. The home folder is composed here from the slug, so no field a window sends decides where
- * on the disk this app writes. Which project a conversation runs in is decided per conversation,
- * by `worksIn`.
- *
- * An existing bot keeps everything this road cannot say: its id, its watermark, its home, its
- * conversations, when it was made. Its seed changes only when the window sends a new one. A new one is given a slug composed here from the
- * name, so the thing that becomes a path segment is never a string that arrived as one.
- */
-export async function botFromForm(value: unknown): Promise<Bot | null> {
+const FORM_FIELDS = ['name', 'purpose', 'model', 'avatar'] as const
+
+async function writeBot(prepare: () => Promise<BridgeWrite> | BridgeWrite): Promise<Bot> {
+  const answer = (await writeThroughBridge(prepare)) as { bot: BotRow }
+  return withoutFigures(answer.bot)
+}
+
+export async function saveForm(value: unknown): Promise<Bot | null> {
   if (typeof value !== 'object' || value === null) return null
   const sent = value as Record<string, unknown>
-  const { slug, avatar, model } = sent
-  if (model !== undefined && !isBotModel(model)) return null
-  const held = isSlug(slug) ? await bot(slug) : null
-  // An edit of a bot that is kept names only what it changes. A new bot needs both.
-  const name = sent.name === undefined && held ? held.name : sent.name
-  const purpose = sent.purpose === undefined && held ? held.purpose : sent.purpose
-  if (typeof name !== 'string' || typeof purpose !== 'string') return null
-  if (!name.trim() || !purpose.trim()) return null
-  if (avatar !== undefined && (typeof avatar !== 'string' || !avatar.trim() || avatar.length > 128)) {
-    return null
-  }
-
-  // A new face is kept only when the window asks for one; a rename leaves the face as it was.
-  if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model, avatar: typeof avatar === 'string' ? avatar : held.avatar }
-  const made = slugFor(name, new Set((await bots()).map((each) => each.slug)))
-  return {
-    slug: made,
-    name,
-    purpose,
-    model: typeof model === 'string' ? model : null,
-    // Use the draft's preview seed so creation keeps the face already shown. Older callers may
-    // omit it; either way it is stored and survives a rename.
-    avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
-    home: botHome(made),
-    // Named once the agent has written the definition, in the handler that calls this.
-    definition: null,
-    session: null,
-    conversations: [],
-    archived: 0,
-    // Nothing has been remembered and nothing has gone unremembered, so a new bot starts owing no
-    // nudge. See `noteBotMemory`, which takes its first reading when its first turn ends.
-    remembered: 0,
-    quiet: 0,
-    // In use, which is what a bot somebody just filled in a form for is.
-    retired: 0,
-    created: Date.now(),
-    updated: Date.now(),
-  }
-}
-
-/** The agent request that writes or rewrites a bot's definition (MEMORY-8, MEMORY-9). */
-export type DefineRequest = (method: 'bot.define' | 'bot.redefine', params: Record<string, unknown>) => Promise<unknown>
-
-/**
- * Save the bot a form described. A new bot is first defined by the agent (MEMORY-8), which names
- * what it wrote; that name is kept as `definition`. An existing bot with a definition has the
- * description, the body and the model of that file rewritten (MEMORY-9), and nothing else in it.
- * A refusal, an absent agent or an answer that is not a slug throws and saves nothing, so the row
- * and the file never disagree about what the bot is for.
- */
-export async function saveFormBot(next: Bot, define: DefineRequest | null): Promise<Bot> {
-  let kept = next
-  const stored = await bot(next.slug)
-  if (!stored) {
-    if (!define) throw new Error('The agent is not running, so a bot cannot be made.')
-    await usableBots()
-    const made = (await define('bot.define', {
-      slug: next.slug,
-      purpose: next.purpose,
-      ...(next.model === null ? {} : { model: next.model }),
-    })) as { name?: unknown } | null
-    if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
-    kept = { ...next, definition: made.name }
-  } else if (stored.definition !== null) {
-    if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(stored.definition, next, define)
-    // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
-    // a session released. Only the fields the form carries are laid over it.
-    kept = { ...((await bot(next.slug)) ?? stored), name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
-  } else {
-    kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
-  }
-  return saveBot(kept)
-}
-
-let saving: Promise<unknown> = Promise.resolve()
-
-/**
- * Save what a window's form sent, one save at a time.
- *
- * Each save reads the bot as the one before left it, so a face chosen while a rename is being
- * written to the agent is not undone by the rename finishing, nor the rename by the face.
- */
-export function saveForm(value: unknown, define: DefineRequest | null): Promise<Bot | null> {
-  const run = saving.then(async () => {
-    const form = await botFromForm(value)
-    return form ? saveFormBot(form, define) : null
+  return writeBot(async () => {
+    const fields = Object.fromEntries(FORM_FIELDS.filter((key) => sent[key] !== undefined).map((key) => [key, sent[key]]))
+    if (isSlug(sent.slug) && (await bot(sent.slug))) return { method: 'bot.edit', params: { slug: sent.slug, ...fields } }
+    return { method: 'bot.make', params: { avatar: newAvatarSeed(randomUUID()), ...fields } }
   })
-  saving = run.catch(() => undefined)
-  return run
 }
 
 /**
@@ -310,28 +219,8 @@ export async function migrateBot(
   return next
 }
 
-/**
- * Change a bot's model, in its definition as well where it has one.
- *
- * The same rule as an edit from the form: the file is written first and the row only if that
- * worked, so a bot's turns, which run under the file, never run on a model the row no longer names.
- */
-export async function saveBotModel(held: Bot, model: string | null, define: DefineRequest | null): Promise<Bot> {
-  const next = { ...held, model }
-  if (held.definition !== null) {
-    if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(held.definition, next, define)
-  }
-  return saveBot(next)
-}
-
-async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {
-  const answer = (await define('bot.redefine', {
-    name,
-    purpose: bot.purpose,
-    ...(bot.model === null ? {} : { model: bot.model }),
-  })) as { name?: unknown } | null
-  if (answer?.name !== name) throw new Error('The agent did not rewrite the bot’s definition.')
+export function saveBotModel(slug: string, model: string | null): Promise<Bot> {
+  return writeBot(() => ({ method: 'bot.set_model', params: { slug, model } }))
 }
 
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
@@ -340,16 +229,10 @@ export async function saveBot(next: Bot): Promise<Bot> {
   return written.find((each) => each.slug === next.slug) ?? next
 }
 
-/**
- * Make a bot's home folder if it is not there yet.
- *
- * Called when a bot is made and when a conversation is started in its home, so a home deleted by
- * hand is back before anything runs in it. `false` when it cannot be made.
- */
-export function ensureHome(held: Bot): boolean {
+export async function ensureBotHome(slug: string): Promise<boolean> {
   try {
-    mkdirSync(held.home, { recursive: true, mode: 0o700 })
-    return true
+    const answer = (await bridgeRequest('bot.ensure_home', { slug })) as { homeMade?: unknown }
+    return answer.homeMade === true
   } catch {
     return false
   }

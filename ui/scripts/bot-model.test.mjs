@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url)
 const source = buildSync({ entryPoints: ['src/shared/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
 const module = { exports: {} }
 new Function('require', 'module', 'exports', source)(require, module, module.exports)
-const { withBot, isBotModel, isSlug, slugFor } = module.exports
+const { withBot } =module.exports
 const definition = botRow()
 
 /** The main-process store over the bots `file` holds, with the profile Electron would name. */
@@ -30,11 +30,6 @@ test('model selection survives updates and unrelated bot edits', () => {
   assert.equal(renamed.model, 'provider/model-b')
 })
 
-test('IPC model validation accepts opaque IDs and rejects malformed inputs', () => {
-  for (const value of [null, 'openrouter/provider/model:free', 'custom-model']) assert.equal(isBotModel(value), true)
-  for (const value of [undefined, '', ' ', 1, {}, 'a\0b', 'x'.repeat(513)]) assert.equal(isBotModel(value), false)
-})
-
 test('main-process storage retains model changes across a fresh module load, in the bots file and not in bravebot-ui.json', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-model-storage-'))
   const file = fakeBots()
@@ -48,98 +43,112 @@ test('main-process storage retains model changes across a fresh module load, in 
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
-test('making a bot saves nothing unless the agent names the definition it wrote', async () => {
+test('a form is made, edited and given a model by the agent, and a refusal saves no row', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-define-'))
-  const storage = load(profile)
-  const fresh = botRow({ model: null, definition: null })
+  const file = fakeBots()
+  const storage = load(profile, file)
+  const sent = () => file.calls.filter(([method]) => method.startsWith('bot.') && !['bot.list', 'bot.replace'].includes(method))
   try {
-    await assert.rejects(storage.saveFormBot(fresh, null), /not running/)
-    await assert.rejects(storage.saveFormBot(fresh, async () => { throw new Error('refused') }), /refused/)
-    for (const answer of [null, {}, { name: '../x' }, { name: 42 }]) {
-      await assert.rejects(storage.saveFormBot(fresh, async () => answer), /did not name/)
-    }
-    assert.equal(await storage.bot(fresh.slug), null)
+    file.refuse = '/data/agents/web-dev.md: permission denied'
+    await assert.rejects(storage.saveForm({ name: 'Web dev', purpose: 'Build websites' }), /permission denied/)
+    assert.equal(await storage.bot('web-dev'), null)
+    assert.deepEqual(file.rows, [], 'a make the agent refuses leaves no row')
+    file.refuse = null
+    file.calls.length = 0
 
-    const calls = []
-    const saved = await storage.saveFormBot({ ...fresh, model: 'provider/model-a' }, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
-    assert.equal(saved.definition, 'web-dev-2')
-    assert.equal((await storage.bot(fresh.slug)).definition, 'web-dev-2')
-    assert.deepEqual(calls, [['bot.define', { slug: 'web-dev', purpose: 'Build websites', model: 'provider/model-a' }]])
+    const saved = await storage.saveForm({ name: 'Web dev', purpose: 'Build websites', model: 'provider/model-a', avatar: 'seed-a', slug: 'not-held', home: '/elsewhere', directory: '/elsewhere', definition: 'other', session: 'x' })
+    assert.deepEqual(sent(), [['bot.make', { dataFolder: profile, name: 'Web dev', purpose: 'Build websites', model: 'provider/model-a', avatar: 'seed-a' }]])
+    assert.equal(saved.slug, 'web-dev', 'a slug the window names for a bot that is not kept is not used')
+    assert.equal(saved.definition, 'web-dev')
+    assert.equal(saved.home, join(profile, 'bot-homes', 'web-dev'))
+    assert.equal((await storage.bot('web-dev')).purpose, 'Build websites')
 
-    // MEMORY-9: an edit rewrites the definition it has, and defines nothing new.
-    calls.length = 0
-    const edited = await storage.saveFormBot({ ...saved, purpose: 'Build sites', model: null }, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
-    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites' }]])
-    assert.equal(edited.definition, 'web-dev-2')
-    assert.equal((await storage.bot(fresh.slug)).purpose, 'Build sites')
+    file.calls.length = 0
+    const seeded = await storage.saveForm({ name: 'Web dev', purpose: 'Another' })
+    const [[, made]] = sent()
+    assert.match(made.avatar, /^v2:./, 'the desktop chooses the seed of a new face when the window sent none')
+    assert.equal(seeded.slug, 'web-dev-2')
+    assert.equal(seeded.avatar, made.avatar)
+    assert.equal('model' in made, false, 'a model the form did not name is not sent')
 
-    // A rewrite the agent refuses, or answers for another file, saves nothing: the row and the
-    // file say the same thing or the edit did not happen.
-    await assert.rejects(storage.saveFormBot({ ...edited, purpose: 'Changed' }, async () => { throw new Error('refused') }), /refused/)
-    await assert.rejects(storage.saveFormBot({ ...edited, purpose: 'Changed' }, async () => ({ name: 'other' })), /did not rewrite/)
-    await assert.rejects(storage.saveFormBot({ ...edited, purpose: 'Changed' }, null), /not running/)
-    assert.equal((await storage.bot(fresh.slug)).purpose, 'Build sites')
+    file.calls.length = 0
+    const edited = await storage.saveForm({ slug: 'web-dev', purpose: 'Build sites', model: null })
+    assert.deepEqual(sent(), [['bot.edit', { dataFolder: profile, slug: 'web-dev', purpose: 'Build sites', model: null }]])
+    assert.equal(edited.model, null, 'null clears the model')
+    assert.equal(edited.name, 'Web dev')
 
-    // The model picker is an edit too, and names the model the file is to carry.
-    calls.length = 0
-    const switched = await storage.saveBotModel(await storage.bot(fresh.slug), 'provider/model-b', async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
-    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites', model: 'provider/model-b' }]])
+    file.calls.length = 0
+    await storage.saveForm({ slug: 'web-dev', name: 'Web builder' })
+    assert.deepEqual(sent(), [['bot.edit', { dataFolder: profile, slug: 'web-dev', name: 'Web builder' }]], 'an edit names only what it changes, so a model is left as it was')
+
+    file.refuse = '/data/agents/web-dev.md: permission denied'
+    await assert.rejects(storage.saveForm({ slug: 'web-dev', purpose: 'Changed' }), /permission denied/)
+    file.refuse = null
+    assert.equal((await storage.bot('web-dev')).purpose, 'Build sites', 'an edit the agent refuses changes nothing')
+
+    file.calls.length = 0
+    const switched = await storage.saveBotModel('web-dev', 'provider/model-b')
+    assert.deepEqual(sent(), [['bot.set_model', { dataFolder: profile, slug: 'web-dev', model: 'provider/model-b' }]])
     assert.equal(switched.model, 'provider/model-b')
-    await assert.rejects(storage.saveBotModel(switched, null, async () => { throw new Error('refused') }), /refused/)
-    assert.equal((await storage.bot(fresh.slug)).model, 'provider/model-b')
+    assert.equal(switched.remembered, 0)
+    await storage.saveBotModel('web-dev', null)
+    assert.equal((await storage.bot('web-dev')).model, null)
+    file.refuse = 'refused'
+    await assert.rejects(storage.saveBotModel('web-dev', 'provider/model-c'), /refused/)
+    file.refuse = null
+    assert.equal((await storage.bot('web-dev')).model, null)
 
-    // A bot made before definitions existed has no file to rewrite and the agent is not asked.
-    const legacy = botRow({ slug: 'old-bot', model: null })
-    assert.equal(legacy.definition, null)
-    await storage.saveBot(legacy)
-    await storage.saveFormBot({ ...legacy, purpose: 'Still old' }, async () => { throw new Error('a bot with no definition is not rewritten') })
-    await storage.saveBotModel(await storage.bot('old-bot'), 'provider/model-c', null)
-    assert.equal((await storage.bot('old-bot')).definition, null)
-    assert.equal((await storage.bot('old-bot')).model, 'provider/model-c')
+    await storage.saveBot(botRow({ slug: 'old-bot', model: null }))
+    await storage.saveForm({ slug: 'old-bot', purpose: 'Still old' })
+    await storage.saveBotModel('old-bot', 'provider/model-c')
+    const old = await storage.bot('old-bot')
+    assert.equal(old.definition, null)
+    assert.equal(old.purpose, 'Still old')
+    assert.equal(old.model, 'provider/model-c')
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
 test('saves from a window run one at a time and an edit changes only the fields it names', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-saves-'))
-  const storage = load(profile)
+  const file = fakeBots()
+  const storage = load(profile, file)
   try {
-    const made = await storage.saveForm({ name: 'Form bot', purpose: 'Fill in forms', avatar: 'seed-a' }, async () => ({ name: 'form-bot' }))
-    const { slug } = made
-    assert.equal(await storage.saveForm({ name: '   ', purpose: 'x' }, null), null, 'a new bot still needs a name')
-    assert.equal(await storage.saveForm({ purpose: 'no name' }, null), null, 'and a purpose, and a name')
+    assert.equal(await storage.saveForm(null), null)
+    assert.equal(await storage.saveForm('a bot'), null)
+    await assert.rejects(storage.saveForm({ name: '   ', purpose: 'x' }), /blank/, 'the refusal of a blank name is the agent’s and reaches the caller')
+    await assert.rejects(storage.saveForm({ purpose: 'no name' }), /name/)
 
-    // A rename is held in the agent while a new face is chosen. The face waits for it, then is
-    // applied to the row the rename left, and the rename does not bring the old face back.
     const events = []
     let release
     const held = new Promise((resolve) => { release = resolve })
     let started
-    const renaming = new Promise((resolve) => { started = resolve })
-    const rename = storage.saveForm({ slug, name: 'Renamed' }, async (method, params) => {
-      events.push(['rename', params.purpose]); started(); await held
-      // The row changes during the wait, as it does when a conversation is recorded.
-      await storage.saveBot({ ...(await storage.bot(slug)), session: 'a1b2c3d4-0000-4000-8000-000000000001' })
-      return { name: 'form-bot' }
+    const making = new Promise((resolve) => { started = resolve })
+    storage.useBotsBridge(async (method, params) => {
+      if (method === 'bot.make') { events.push([method, params.name]); started(); await held }
+      else if (method === 'bot.edit') events.push([method, params.slug, params.avatar])
+      return file.request(method, params)
     })
-    const face = storage.saveForm({ slug, avatar: 'seed-b' }, async (method, params) => { events.push(['face', params.purpose]); return { name: 'form-bot' } })
-    await renaming
+    const first = storage.saveForm({ name: 'Form bot', purpose: 'Fill in forms', avatar: 'seed-a' })
+    const second = storage.saveForm({ slug: 'form-bot', avatar: 'seed-b' })
+    await making
     await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(events, [['rename', 'Fill in forms']], 'the second save has not reached the agent')
+    assert.deepEqual(events, [['bot.make', 'Form bot']], 'the second save has not reached the agent')
     release()
-    await Promise.all([rename, face])
+    await Promise.all([first, second])
 
-    assert.deepEqual(events, [['rename', 'Fill in forms'], ['face', 'Fill in forms']])
-    const row = await storage.bot(slug)
-    assert.equal(row.name, 'Renamed')
+    assert.deepEqual(events, [['bot.make', 'Form bot'], ['bot.edit', 'form-bot', 'seed-b']])
+    assert.deepEqual(file.rows.map((row) => row.slug), ['form-bot'], 'the second save read the row the first left')
+    const row = await storage.bot('form-bot')
     assert.equal(row.avatar, 'seed-b')
     assert.equal(row.purpose, 'Fill in forms')
-    assert.equal(row.session, 'a1b2c3d4-0000-4000-8000-000000000001', 'what changed during the wait is kept')
 
     // A save the agent refuses does not stop the ones after it.
-    await assert.rejects(storage.saveForm({ slug, purpose: 'Refused' }, async () => { throw new Error('refused') }), /refused/)
-    const after = await storage.saveForm({ slug, purpose: 'Allowed' }, async () => ({ name: 'form-bot' }))
+    file.refuse = 'refused'
+    await assert.rejects(storage.saveForm({ slug: 'form-bot', purpose: 'Refused' }), /refused/)
+    file.refuse = null
+    const after = await storage.saveForm({ slug: 'form-bot', purpose: 'Allowed' })
     assert.equal(after.purpose, 'Allowed')
-    assert.equal(after.name, 'Renamed')
+    assert.equal(after.avatar, 'seed-b')
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
@@ -236,15 +245,4 @@ test('a migrated bot is asked to carry its old notes over only in the folder the
     assert.ok(prompt.includes('`.bravebot/memory/web-dev-2.md`'), prompt)
     assert.ok(!prompt.includes('—'), 'no em-dash')
   } finally { rmSync(profile, { recursive: true, force: true }) }
-})
-
-test('a slug the desktop composes is always one the agent accepts, even when the cut falls on a word break', () => {
-  const names = ['a'.repeat(47) + ' b', 'a'.repeat(47) + ' --- b', 'a'.repeat(60), '???', '', 'Web dev']
-  for (const name of names) {
-    const slug = slugFor(name)
-    assert.equal(isSlug(slug), true, `${JSON.stringify(name)} -> ${slug}`)
-    assert.ok(slug.length <= 48)
-    for (const taken of [new Set([slug]), new Set([slug, `${slug}-2`])]) assert.equal(isSlug(slugFor(name, taken)), true)
-  }
-  assert.equal(slugFor('a'.repeat(47) + ' b'), 'a'.repeat(47))
 })

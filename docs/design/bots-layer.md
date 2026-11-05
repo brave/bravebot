@@ -390,3 +390,23 @@ The known costs are listed once, under "Known costs" in [bots.md](../specs/bots.
 governs them. The decisions about the memory history ([BOT-13](../specs/bots.md#BOT-13)) and about
 where the rows come from ("Where the rows come from", above) are recorded there as costs and as the
 alternatives that were not adopted.
+
+## Unresolved questions
+
+Slice 3a of [PLAN.md](../PLAN.md) raised these questions. None is decided and none is a Known cost. The
+plan lists each one, with the slice that raised it, under "Questions slice 3a raised for the owner".
+
+- Which operation of the module takes the row write of `migrate` and the counter writes of
+  `noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` in the GUI, or whether those writes are
+  removed. The first slice that removes the replace method needs the answer.
+- Whether `bot.define` and `bot.redefine` leave the bridge once no client calls them.
+- What the GUI shows when a make or an edit saves the row and the home folder cannot be made. The
+  module reports it ([BOT-4](../specs/bots.md#BOT-4)) and the GUI does not show it.
+- Whether the model picker's default entry clears a bot's model. Today it writes the string of the
+  configured default model.
+- Whether the operations of the module log a refused write or a home folder that could not be made.
+  That needs a logging dependency in `bravebot-agent`.
+- Whether an edit of a bot whose definition file was removed by hand writes the row. Today it is
+  refused.
+- Whether a bot made after the read dropped a row avoids that row's slug. Today it takes the slug and
+  the home folder of the dropped row.

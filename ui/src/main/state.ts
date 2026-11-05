@@ -31,14 +31,6 @@ import { SYSTEM } from '../shared/theme'
 const file = (): string => join(app.getPath('userData'), 'bravebot-ui.json')
 
 /**
- * The folder a bot's conversations with no project run in.
- *
- * Beside `bots/<slug>`, never inside it. That folder holds the briefing, and the agent may write
- * anywhere in the folder it runs in, so a home inside it would let a bot rewrite its own purpose.
- */
-export const botHome = (slug: string): string => join(app.getPath('userData'), 'bot-homes', slug)
-
-/**
  * Everything remembered, or the defaults for anything that is not.
  *
  * Never throws. A file that cannot be read is a window that has never been arranged, which is a

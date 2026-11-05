@@ -43,6 +43,7 @@ import { useAudit } from './use-audit'
 import { useExport } from './use-export'
 import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
+import { settleBotModelWrite } from './bot-model-write'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
@@ -1232,7 +1233,9 @@ export function App(): React.JSX.Element {
         botView={botPage}
         onOpenBotConversation={(bot, summary) => void showSession(summary, undefined, { slug: bot.slug, model: bot.model })}
         onStartBotChat={startBotChat}
-        onBotModel={(bot, model) => { void window.bravebot.writeBotModel(bot.slug, model).then(() => readBots()) }}
+        onBotModel={(bot, model) => {
+          void settleBotModelWrite(window.bravebot.writeBotModel(bot.slug, model), setProblem, readBots)
+        }}
         footer={footer}
         noProject={noProject}
       />

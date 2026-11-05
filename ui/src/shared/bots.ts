@@ -125,13 +125,6 @@ export interface Bot {
   updated: number
 }
 
-/** Model IDs are opaque provider identifiers, never paths or commands. */
-export function isBotModel(value: unknown): value is string | null {
-  return value === null || (
-    typeof value === 'string' && value.trim().length > 0 && value.length <= 512 && !value.includes('\0')
-  )
-}
-
 /** A conversation a bot has had, and the folder it ran in. */
 export interface BotConversationRef {
   id: string
@@ -173,32 +166,6 @@ const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
  */
 export function isSlug(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 64 && SLUG.test(value)
-}
-
-/**
- * A slug for a name somebody typed.
- *
- * Lossy on purpose. It is not a rendering of the name and is never shown — the name is shown, and
- * this is what the files are called. A name with nothing usable in it at all still gets a slug,
- * because refusing to make a bot called `???` would be a validator making a product decision.
- *
- * The cut comes before the trailing trim: a name whose 48th character falls on a word break would
- * otherwise end in a dash, which is not a slug and which the agent refuses as a definition name.
- */
-export function slugFor(name: string, taken: ReadonlySet<string> = new Set()): string {
-  const base =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+/, '')
-      .slice(0, 48)
-      .replace(/-+$/, '') || 'bot'
-  if (!taken.has(base)) return base
-  for (let n = 2; n < 1000; n++) {
-    const tried = `${base}-${n}`
-    if (!taken.has(tried)) return tried
-  }
-  return `${base}-${Date.now()}`
 }
 
 /** The one with this slug, or `null`. */
