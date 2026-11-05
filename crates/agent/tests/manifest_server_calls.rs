@@ -2256,6 +2256,22 @@ fn an_apply_step_makes_the_calls_the_person_approved_as_one_list() {
         ]
     );
     assert_eq!(outcome.reach, bravebot_agent::report::Reach::NoModel);
+    // The run ends by pointing at that list, not by saying there is nothing to show.
+    let closing = ran
+        .outcome
+        .as_ref()
+        .map(|outcome| outcome.reply_for_display())
+        .unwrap();
+    assert!(
+        closing.contains("What became of each call you approved"),
+        "{closing}"
+    );
+    // The processor is told to make only what a later row uses, from the plan's shape.
+    assert!(
+        ran.chat[2].contains("Give a row of tool 1 only where a later row uses what it creates."),
+        "{}",
+        ran.chat[2]
+    );
     // The planner saw neither the list nor the rows; the processor saw the numbered list.
     assert_eq!(ran.chat.len(), 3, "shape, plan and one processor call");
     assert!(ran.chat[..2].iter().all(|body| !body.contains(STEERING)));
