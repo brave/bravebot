@@ -218,7 +218,9 @@ impl OpenShell {
         })
     }
 
-    /// The sandbox's name.
+    /// The name `openshell sandbox list` shows for this sandbox, and the one to record in a
+    /// [`Ledger`] before the sandbox is made, so a sandbox left by a process that ended can be
+    /// found and deleted.
     pub fn name(&self) -> &str {
         &self.name
     }
