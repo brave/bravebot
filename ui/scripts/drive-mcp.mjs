@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON } from './drive-support.mjs'
 
 const WIRE = 'mcp__weather__get_forecast'
 
@@ -71,7 +71,7 @@ try {
   assert.equal((await server.locator('.confirm-head .path').innerText()).trim(), 'weather')
   assert.match(await server.innerText(), new RegExp(url.replace(/[.]/g, '\\.')))
   assert.match(await server.innerText(), /\.bravebot\/settings\.json/)
-  assert.deepEqual(await server.locator('.confirm-actions button').allInnerTexts(), ['Continue without it', 'Use it and all future servers in this project', 'Use this server'])
+  assert.deepEqual(await server.locator(CONFIRM_BUTTON).allInnerTexts(), ['Continue without it', 'Use it and all future servers in this project', 'Use this server'])
   assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the MCP server')
   assert.equal(methods.length, 0, 'nothing reached the server before the answer')
   await page.screenshot({ path: join(output, 'mcp-server.png') })
