@@ -265,7 +265,8 @@ pub type ChoiceArguments = BTreeMap<String, BTreeSet<String>>;
 /// (`docs/design/manifest-apply.md`).
 pub type ApplyArguments = BTreeMap<String, BTreeMap<String, String>>;
 
-/// The kinds an argument of [`ApplyArguments`] may take.
+/// The kinds an argument of [`ApplyArguments`] may take. A declaration may name several for one
+/// argument, joined by commas, and a row then gives whichever of them it chooses.
 pub const APPLY_KINDS: [&str; 3] = ["entry", "new", "row"];
 
 /// How long a server has for its handshake and for each call, where a declaration says.
@@ -1065,7 +1066,9 @@ impl Declaration {
             let fine = arguments.iter().all(|(argument, kind)| {
                 is_tool_word(argument)
                     && argument.len() <= MAX_CHOICE_ARGUMENT
-                    && APPLY_KINDS.contains(&kind.as_str())
+                    && kind
+                        .split(',')
+                        .all(|word| APPLY_KINDS.contains(&word.trim()))
             });
             if !is_tool_word(tool) || arguments.is_empty() || !fine {
                 return Err(Problem::Apply);

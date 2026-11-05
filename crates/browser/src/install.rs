@@ -234,11 +234,12 @@ const CHOICES: &[(&str, &str, &str)] = &[
 /// The arguments of a group's tools a row of a plan's `apply` step may fill, with their kind, which
 /// `install` declares with `--apply`: a bookmark's `url` copied from a list a read returned, a
 /// folder's `title` the processor writes for the folder the call creates, and the `folder` a
-/// bookmark moves to taken from the row that made it (`docs/design/manifest-apply.md`).
+/// bookmark moves to, taken from the row that made it or from a folder the list holds
+/// (`docs/design/manifest-apply.md`).
 const APPLIES: &[(&str, &str, &str, &str)] = &[
     ("bookmarks-write", "create_bookmark_folder", "title", "new"),
     ("bookmarks-write", "move_bookmark", "url", "entry"),
-    ("bookmarks-write", "move_bookmark", "folder", "row"),
+    ("bookmarks-write", "move_bookmark", "folder", "row,entry"),
 ];
 
 impl Installed {
@@ -674,7 +675,7 @@ mod tests {
             installed.declaration(Some("bookmarks-write")),
             "bravebot mcp add brave-bookmarks-write -s user \
              --apply create_bookmark_folder:title=new --apply move_bookmark:url=entry \
-             --apply move_bookmark:folder=row --dir /d -- /p/bravebot-browser mcp --group \
+             --apply move_bookmark:folder=row,entry --dir /d -- /p/bravebot-browser mcp --group \
              bookmarks-write"
         );
         for other in tools::ids().filter(|id| *id != "bookmarks-write") {

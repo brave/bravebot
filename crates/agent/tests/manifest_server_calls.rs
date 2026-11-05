@@ -2239,6 +2239,23 @@ fn an_apply_step_makes_the_calls_the_person_approved_as_one_list() {
         ],
         "the move into the folder whose making failed was not made"
     );
+    // What became of each call is drawn after them, with the values the question showed.
+    let outcome = ran
+        .reporter
+        .shown
+        .iter()
+        .find(|shown| shown.origin.contains("what became of the calls"))
+        .expect("the outcome is drawn");
+    assert_eq!(
+        outcome.preview,
+        vec![
+            "✓ make_folder (parent: Organised, title: Work) made",
+            "✗ make_folder (parent: Organised, title: Broken) failed",
+            "✓ move_mark (folder: Work, url: https://brave.com/) made",
+            "↷ move_mark (folder: Broken, url: https://example.com/a) skipped, as it depended on one that failed",
+        ]
+    );
+    assert_eq!(outcome.reach, bravebot_agent::report::Reach::NoModel);
     // The planner saw neither the list nor the rows; the processor saw the numbered list.
     assert_eq!(ran.chat.len(), 3, "shape, plan and one processor call");
     assert!(ran.chat[..2].iter().all(|body| !body.contains(STEERING)));
@@ -2304,4 +2321,54 @@ fn an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked() 
     assert!(failure.contains("does not let a row give"), "{failure}");
     assert!(ran.asked.plans.is_empty());
     assert!(ran.called.is_empty());
+}
+
+/// An argument the declaration names with two kinds takes whichever a row gives: a bookmark may
+/// move into a folder the step makes or into one the list already holds, and the plan line says
+/// both in words rather than as the plan's JSON.
+#[test]
+fn a_move_may_land_in_a_folder_the_step_made_or_one_the_list_holds() {
+    let scratch = Scratch::new("apply-either");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["arguments"]["move_mark"]["folder"] =
+        json!([{"row": "make_folder.title"}, {"entry": "title"}]);
+    let rows = "new 1 = \"Work\"\nrow 1: tool 1 title=new:1\n\
+                row 2: tool 2 url=entry:1 folder=row:1\n\
+                row 3: tool 2 url=entry:3 folder=entry:2\n";
+    let ran = walk(Walk {
+        session: marks_session(
+            &url,
+            &scratch,
+            &[
+                ("make_folder", "title", "new"),
+                ("move_mark", "url", "entry"),
+                ("move_mark", "folder", "row,entry"),
+            ],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps), says(rows)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(
+        line.contains(
+            "move_mark (folder: the title given by an earlier make_folder or the title of an \
+             entry of marks, url: the url of an entry of marks)"
+        ),
+        "{line}"
+    );
+    assert!(!line.contains("{\""), "no JSON on the line: {line}");
+    assert_eq!(
+        ran.called[3],
+        (
+            "move_mark".to_string(),
+            json!({"url": "https://github.com/brave/bravebot", "folder": STEERING})
+        ),
+        "the folder is the second entry's title, copied from the list"
+    );
 }

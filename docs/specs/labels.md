@@ -31,7 +31,7 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 141
+      - crates/core/src/policy.rs: 143
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -60,7 +60,7 @@ guards:
       - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 70
+      - crates/core/src/policy.rs: 76
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
       - crates/mcp/tests/openshell.rs: 1
@@ -76,7 +76,7 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/manifest.rs: 13
       - crates/agent/src/preamble.rs: 1
-      - crates/agent/src/server_calls.rs: 1
+      - crates/agent/src/server_calls.rs: 2
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 26
@@ -96,7 +96,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 66
+      - crates/core/src/policy.rs: 71
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5

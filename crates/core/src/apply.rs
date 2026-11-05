@@ -22,6 +22,31 @@ pub enum Kind {
     New,
     /// The value an earlier row of the tool at this index gave the named argument.
     Row { tool: usize, argument: String },
+    /// Any one of these, chosen by each row, as a folder a bookmark moves to may be one an
+    /// earlier row made or one the list holds. None of them is a literal or another choice.
+    Either(Vec<Kind>),
+}
+
+impl Kind {
+    /// The word a declaration names this kind by, or each word of a choice joined by commas.
+    pub fn word(&self) -> String {
+        match self {
+            Self::Literal(_) => "literal".to_string(),
+            Self::Entry(_) => "entry".to_string(),
+            Self::New => "new".to_string(),
+            Self::Row { .. } => "row".to_string(),
+            Self::Either(kinds) => kinds.iter().map(Kind::word).collect::<Vec<_>>().join(","),
+        }
+    }
+
+    /// The fields of a list's entries this kind may take a value from.
+    fn fields(&self) -> Vec<String> {
+        match self {
+            Self::Entry(field) => vec![field.clone()],
+            Self::Either(kinds) => kinds.iter().flat_map(Kind::fields).collect(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// One tool an `apply` step may call, with the kind of each of its arguments.
@@ -40,16 +65,13 @@ pub struct Shape {
 }
 
 impl Shape {
-    /// The fields an entry must have, as text, to count as an entry of the list: those an
-    /// argument of any tool takes.
+    /// The fields an argument of any tool may take from an entry. An entry counts where it holds
+    /// at least one of them as text, and a row naming it for a field it lacks is dropped.
     pub fn entry_fields(&self) -> BTreeSet<String> {
         self.tools
             .iter()
             .flat_map(|tool| &tool.arguments)
-            .filter_map(|(_, kind)| match kind {
-                Kind::Entry(field) => Some(field.clone()),
-                _ => None,
-            })
+            .flat_map(|(_, kind)| kind.fields())
             .collect()
     }
 }

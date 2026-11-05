@@ -220,7 +220,9 @@ impl Servers {
                  required). A call is an action, so it comes after every read and transform. What \
                  it returns is shown to the person as the call answers, so a task that asks only \
                  to see a tool's answer is done by the call. It fills no slot, so no later step \
-                 can read, transform or answer with what it returned.{}{}",
+                 can read, transform or answer with what it returned. Never guess the name of a \
+                 folder, file or other thing the task does not give: use a tool that needs no \
+                 name, or leave an optional name out.{}{}",
                 match self.any_read_only() {
                     true =>
                         " A tool marked read-only may instead be called by a SERVER_READ \
@@ -320,13 +322,27 @@ impl Servers {
             .enumerate()
             .filter_map(|(index, step)| match step.tool() {
                 manifest::APPLY => shape_of(step).ok().map(|shape| {
-                    let kinds: Value =
-                        serde_json::from_str(step.text("arguments")).unwrap_or(Value::Null);
+                    let list = step.text("list");
+                    let tools: Vec<String> = shape
+                        .tools
+                        .iter()
+                        .map(|tool| {
+                            let arguments: Vec<String> = tool
+                                .arguments
+                                .iter()
+                                .map(|(name, kind)| {
+                                    format!("{name}: {}", kind_in_words(kind, &shape, list))
+                                })
+                                .collect();
+                            format!("{} ({})", tool.name, arguments.join(", "))
+                        })
+                        .collect();
                     (
                         index,
                         format!(
-                            "at most {} calls and {} new names, each put to you in one list \
-                             first; arguments {kinds}; the processor is told \"{}\"",
+                            "{}; up to {} calls and {} new names, all put to you as one list \
+                             first; the processor is told \"{}\"",
+                            tools.join(", then "),
                             shape.max_rows,
                             shape.max_new,
                             step.text("instruction")
@@ -455,7 +471,9 @@ item of a list a SERVER_READ step read: an isolated processor proposes the calls
 the person approves the whole list before any is made. Its arguments give each argument of each \
 tool a kind: a fixed value {\"literal\": \"text\"}, a field of a list entry {\"entry\": \"field\"}, \
 new text for a thing the call creates \"new\", or the value an earlier row of another tool gave \
-{\"row\": \"tool.argument\"}. Only the kinds the tool is listed with may be used, besides literal.";
+{\"row\": \"tool.argument\"}, or a list of those kinds where the tool is listed with several, \
+any one of which a row may give. Only the kinds the tool is listed with may be used, besides \
+literal.";
 
 impl Servers {
     /// Hold an apply step to the list a person vouched for and to the server's declaration: the
@@ -495,20 +513,15 @@ impl Servers {
                         "step {number}: {name} takes no argument '{argument}'"
                     ));
                 }
-                let wanted = match kind {
-                    bravebot_core::apply::Kind::Literal(_) => continue,
-                    bravebot_core::apply::Kind::Entry(_) => "entry",
-                    bravebot_core::apply::Kind::New => "new",
-                    bravebot_core::apply::Kind::Row { .. } => "row",
-                };
-                if declared
-                    .and_then(|kinds| kinds.get(argument))
-                    .map(String::as_str)
-                    != Some(wanted)
-                {
+                if matches!(kind, bravebot_core::apply::Kind::Literal(_)) {
+                    continue;
+                }
+                let words = declared_words(declared.and_then(|kinds| kinds.get(argument)));
+                let wanted = kind.word();
+                if let Some(missing) = wanted.split(',').find(|word| !words.contains(word)) {
                     return Err(format!(
                         "step {number}: the declaration of {alias} does not let a row give \
-                         {name}'s '{argument}' as {wanted}"
+                         {name}'s '{argument}' as {missing}"
                     ));
                 }
             }
@@ -625,13 +638,26 @@ impl Servers {
         policy.endorse_applied(alias, &resolved, &kept);
         let mut skipped: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         let (mut made, mut failed) = (0, 0);
+        let mut came: Vec<Came> = (0..shown.calls.len())
+            .map(|at| match kept.contains(&at) {
+                true => Came::Unmade,
+                false => Came::LeftOut,
+            })
+            .collect();
         for at in kept.iter().copied() {
             if skipped.contains(&at) {
+                came[at] = Came::Skipped;
                 continue;
             }
-            match crate::mcp::call_applied(
+            let called = crate::mcp::call_applied(
                 policy, offer, egress, confirmer, reporter, alias, at, &resolved,
-            ) {
+            );
+            came[at] = match &called {
+                crate::mcp::Called::Answered(_) => Came::Made,
+                crate::mcp::Called::Problem(_) => Came::Unmade,
+                _ => Came::Failed,
+            };
+            match called {
                 crate::mcp::Called::Answered(_) => made += 1,
                 crate::mcp::Called::Failed(text) => {
                     failed += 1;
@@ -650,9 +676,13 @@ impl Servers {
                     failed += 1;
                     skipped.extend(shown.dependants(at));
                 }
-                crate::mcp::Called::Problem(problem) => return Err(problem),
+                crate::mcp::Called::Problem(problem) => {
+                    show_what_came(policy, reporter, alias, &resolved, &came);
+                    return Err(problem);
+                }
             }
         }
+        show_what_came(policy, reporter, alias, &resolved, &came);
         Ok((
             format!(
                 "made {made} of {} calls to {alias}; {failed} failed, {} skipped as depending on \
@@ -664,6 +694,62 @@ impl Servers {
             usage,
         ))
     }
+}
+
+/// What became of one call of an approved list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Came {
+    /// The server answered with no failure reported.
+    Made,
+    /// The server reported a failure, or its reply could not be used.
+    Failed,
+    /// It depended on a call that failed, so it was not made.
+    Skipped,
+    /// The person left it out, or a call it depended on.
+    LeftOut,
+    /// The run stopped before it, or at it.
+    Unmade,
+}
+
+/// Draw every call of the list with what became of it, so the person sees what the step did as a
+/// turn's calls show it. The values are the ones the question showed, released for display there,
+/// so they are drawn behind the margin untrusted content is drawn behind and reach no model.
+fn show_what_came<S: Sink, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    reporter: &mut R,
+    alias: &str,
+    resolved: &bravebot_core::value::Labelled<bravebot_core::apply::Resolved>,
+    came: &[Came],
+) {
+    // Through the same display release the question used, which the trail records.
+    let shown = policy.proposal_for_display(resolved);
+    let preview: Vec<String> = shown
+        .calls
+        .iter()
+        .zip(came)
+        .map(|(call, came)| {
+            let arguments: Vec<String> = call
+                .arguments
+                .iter()
+                .map(|(name, value, _)| format!("{name}: {value}"))
+                .collect();
+            let (mark, said) = match came {
+                Came::Made => ("✓", "made"),
+                Came::Failed => ("✗", "failed"),
+                Came::Skipped => ("↷", "skipped, as it depended on one that failed"),
+                Came::LeftOut => ("·", "not made: left out of the list"),
+                Came::Unmade => ("·", "not made: the run stopped"),
+            };
+            format!("{mark} {} ({}) {said}", call.name, arguments.join(", "))
+        })
+        .collect();
+    reporter.quarantined(Shown {
+        origin: format!("what became of the calls to {alias} you approved"),
+        reach: Reach::NoModel,
+        label: resolved.label().to_string(),
+        lines: preview.len(),
+        preview,
+    });
 }
 
 /// Where a value of a resolved call came from, in this process's own words.
@@ -688,7 +774,7 @@ fn dropped_note(resolved: &bravebot_core::apply::Resolved) -> String {
 /// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
 /// argument the kind its `arguments` object gives it. Read from the plan's own text.
 pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, String> {
-    use bravebot_core::apply::{Kind, Shape, Tool};
+    use bravebot_core::apply::{Shape, Tool};
     let names: Vec<&str> = step
         .text("tools")
         .split(',')
@@ -711,45 +797,7 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
                 return Err(format!("the arguments of {name} must be a JSON object"));
             };
             for (argument, kind) in given {
-                let kind = match kind {
-                    Value::String(word) if word == "new" => Kind::New,
-                    Value::Object(object) if object.len() == 1 => match object.iter().next() {
-                        Some((key, Value::String(value))) if key == "literal" => {
-                            Kind::Literal(value.clone())
-                        }
-                        Some((key, Value::String(value))) if key == "entry" => {
-                            Kind::Entry(value.clone())
-                        }
-                        Some((key, Value::String(value))) if key == "row" => {
-                            let (tool, field) = value.split_once('.').ok_or_else(|| {
-                                format!("{name}'s '{argument}': a row is written tool.argument")
-                            })?;
-                            let at = tools
-                                    .iter()
-                                    .position(|earlier| earlier.name == tool)
-                                    .ok_or_else(|| {
-                                        format!(
-                                            "{name}'s '{argument}' names a row of {tool}, which is not an earlier tool of the step"
-                                        )
-                                    })?;
-                            let made = tools[at]
-                                .arguments
-                                .iter()
-                                .any(|(earlier, kind)| earlier == field && *kind == Kind::New);
-                            if !made {
-                                return Err(format!(
-                                    "{name}'s '{argument}' names {tool}'s '{field}', which is not new text"
-                                ));
-                            }
-                            Kind::Row {
-                                tool: at,
-                                argument: field.to_string(),
-                            }
-                        }
-                        _ => return Err(format!("{name}'s '{argument}' has no kind it can take")),
-                    },
-                    _ => return Err(format!("{name}'s '{argument}' has no kind it can take")),
-                };
+                let kind = kind_of(name, argument, kind, &tools, true)?;
                 arguments.push((argument.clone(), kind));
             }
         }
@@ -768,6 +816,102 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
         max_rows: cap("max_rows", 50, 100),
         max_new: cap("max_new", 12, 50),
     })
+}
+
+/// The kind the plan gives `argument` of `name`: `"new"`, `{"literal": text}`, `{"entry": field}`,
+/// `{"row": "tool.argument"}` naming new text an earlier tool of the step gives, or, where
+/// `choice` is allowed, a list of the kinds but a literal, any one of which a row may give.
+fn kind_of(
+    name: &str,
+    argument: &str,
+    value: &Value,
+    tools: &[bravebot_core::apply::Tool],
+    choice: bool,
+) -> Result<bravebot_core::apply::Kind, String> {
+    use bravebot_core::apply::Kind;
+    let none = || format!("{name}'s '{argument}' has no kind it can take");
+    match value {
+        Value::String(word) if word == "new" => Ok(Kind::New),
+        Value::Array(kinds) if choice && kinds.len() > 1 => {
+            let kinds = kinds
+                .iter()
+                .map(|kind| kind_of(name, argument, kind, tools, false))
+                .collect::<Result<Vec<_>, _>>()?;
+            match kinds.iter().any(|kind| matches!(kind, Kind::Literal(_))) {
+                true => Err(none()),
+                false => Ok(Kind::Either(kinds)),
+            }
+        }
+        Value::Object(object) if object.len() == 1 => match object.iter().next() {
+            Some((key, Value::String(value))) if key == "literal" => {
+                Ok(Kind::Literal(value.clone()))
+            }
+            Some((key, Value::String(value))) if key == "entry" => Ok(Kind::Entry(value.clone())),
+            Some((key, Value::String(value))) if key == "row" => {
+                let (tool, field) = value.split_once('.').ok_or_else(|| {
+                    format!("{name}'s '{argument}': a row is written tool.argument")
+                })?;
+                let at = tools
+                    .iter()
+                    .position(|earlier| earlier.name == tool)
+                    .ok_or_else(|| {
+                        format!(
+                            "{name}'s '{argument}' names a row of {tool}, which is not an earlier \
+                             tool of the step"
+                        )
+                    })?;
+                let made = tools[at]
+                    .arguments
+                    .iter()
+                    .any(|(earlier, kind)| earlier == field && *kind == Kind::New);
+                if !made {
+                    return Err(format!(
+                        "{name}'s '{argument}' names {tool}'s '{field}', which is not new text"
+                    ));
+                }
+                Ok(Kind::Row {
+                    tool: at,
+                    argument: field.to_string(),
+                })
+            }
+            _ => Err(none()),
+        },
+        _ => Err(none()),
+    }
+}
+
+/// The words of the kinds a declaration names for an argument, one word or several joined by
+/// commas.
+fn declared_words(declared: Option<&String>) -> Vec<&str> {
+    declared
+        .map(|words| words.split(',').map(str::trim).collect())
+        .unwrap_or_default()
+}
+
+/// How a kind reads on the line a person approves, in this process's own words.
+fn kind_in_words(
+    kind: &bravebot_core::apply::Kind,
+    shape: &bravebot_core::apply::Shape,
+    list: &str,
+) -> String {
+    use bravebot_core::apply::Kind;
+    match kind {
+        Kind::Literal(value) => format!("\"{value}\""),
+        Kind::Entry(field) => format!("the {field} of an entry of {list}"),
+        Kind::New => "a new name the processor writes".to_string(),
+        Kind::Row { tool, argument } => format!(
+            "the {argument} given by an earlier {}",
+            shape
+                .tools
+                .get(*tool)
+                .map_or("call", |tool| tool.name.as_str())
+        ),
+        Kind::Either(kinds) => kinds
+            .iter()
+            .map(|kind| kind_in_words(kind, shape, list))
+            .collect::<Vec<_>>()
+            .join(" or "),
+    }
 }
 
 /// The arguments a call step carries: the JSON object its text holds, or an empty one where the
