@@ -1277,9 +1277,14 @@ fn serve_until_job_1_finishes(start: String) -> (String, MockRequests) {
             return Some(Some(reply_with("done")));
         }
         waited += 1;
+        // Alternating spellings: the same call over and over is refused as a repetition
+        // without running, and then no time passes for the job to end.
         Some(Some(tool_request(
             "run",
-            &format!(r#"{{"command":"{SOMETHING_ELSE}"}}"#),
+            &format!(
+                r#"{{"command":"{SOMETHING_ELSE}{}"}}"#,
+                if waited % 2 == 0 { "" } else { "0" }
+            ),
         )))
     })
 }
