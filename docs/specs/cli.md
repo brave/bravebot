@@ -139,6 +139,8 @@ pessimistic label is the only one that holds without knowing what fed it.
 `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private`
 `verified-by: bravebot_core::policy::piped_input_is_quarantined_when_presented`
 `verified-by: bravebot_agent::turn::piped_input_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::turn::piped_input_with_no_prompt_sends_no_empty_message`
+`verified-by: bravebot_agent::turn::piped_input_with_a_real_prompt_still_sends_both_messages`
 
 <a id="CLI-4"></a>
 ### CLI-4: input over the cap is refused, and says what to do instead
