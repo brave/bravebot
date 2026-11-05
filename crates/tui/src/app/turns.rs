@@ -223,6 +223,22 @@ pub(super) fn manifest_animated(
                 crate::remote_confirm::ToMain::McpCall(request) => {
                     answer_mcp_call_in_a_turn(terminal, session, &replying, &request);
                 }
+                // The calls an apply step resolved to, as one list: a yes makes every call drawn,
+                // and nothing but the person answers it (`docs/design/manifest-apply.md`).
+                crate::remote_confirm::ToMain::Apply(request) => {
+                    let answer = crate::confirm::ask_apply(terminal, &request);
+                    let every: Vec<usize> = (0..request.calls.len()).collect();
+                    replying.plainly(session, answer, |decision| {
+                        crate::remote_confirm::Reply::Apply(match decision {
+                            bravebot_agent::confirm::Decision::Approve => {
+                                bravebot_agent::confirm::ApplyDecision::keep(every)
+                            }
+                            bravebot_agent::confirm::Decision::Reject => {
+                                bravebot_agent::confirm::ApplyDecision::reject()
+                            }
+                        })
+                    });
+                }
                 // The questions a turn asks that this mode cannot. There is no shell and no `run` in
                 // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
                 // there is no step that asks to be shown a slot; and there is no planner left to pose

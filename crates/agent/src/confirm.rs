@@ -1622,6 +1622,65 @@ pub enum MessageDecision {
     Decline,
 }
 
+/// The calls a plan's `apply` step resolved to, put to the person as one list before any is made
+/// (`docs/design/manifest-apply.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyRequest {
+    /// The alias of the server every call goes to.
+    pub alias: String,
+    /// The slot the list was read from, as the plan named it.
+    pub list: String,
+    /// Each call in order. Every value not written by the plan is untrusted content.
+    pub calls: Vec<ApplyCall>,
+    /// How many of the processor's rows were dropped, and why, in words this process wrote.
+    pub dropped: Vec<(String, usize)>,
+}
+
+/// One call of an [`ApplyRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyCall {
+    /// The tool's word on the list a person vouched for.
+    pub tool: String,
+    /// Each argument as its name, its value, and where the value came from in this process's own
+    /// words: the plan, an entry of the list, the processor, or an earlier call.
+    pub arguments: Vec<(String, String, String)>,
+    /// The earlier call this one depends on, by its index, which unticking takes with it.
+    pub after: Option<usize>,
+}
+
+/// What the person decided about the calls of an [`ApplyRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyDecision {
+    /// The calls to make, by their index. Empty where none is to be made.
+    pub kept: Vec<usize>,
+    /// Whether the client refused without a person being asked, because it has no way to put the
+    /// list. Only set with nothing kept.
+    pub unasked: bool,
+}
+
+impl ApplyDecision {
+    /// Make these calls.
+    pub fn keep(kept: Vec<usize>) -> Self {
+        Self {
+            kept,
+            unasked: false,
+        }
+    }
+
+    /// Make none of them.
+    pub fn reject() -> Self {
+        Self::keep(Vec::new())
+    }
+
+    /// Make none of them, because nobody could be asked.
+    pub fn unasked() -> Self {
+        Self {
+            kept: Vec::new(),
+            unasked: true,
+        }
+    }
+}
+
 /// What the person decided about a call to a server's tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallDecision {
@@ -2240,6 +2299,13 @@ pub trait Confirmer {
     /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and
     /// to recording nothing, when they cannot ask.
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision;
+
+    /// Ask about the calls a plan's `apply` step resolved to, as one list. Nothing but a person
+    /// answers it: no mode, rule or earlier answer does, and a client that cannot put the list
+    /// refuses it unasked, which is the default.
+    fn confirm_apply(&mut self, _request: &ApplyRequest) -> ApplyDecision {
+        ApplyDecision::unasked()
+    }
 
     /// Ask whether a remote MCP server is now where its request was redirected. Implementations must
     /// refuse when they cannot ask, and bypassing every check refuses too (SERVERS-13).
@@ -3249,6 +3315,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.timing(|inner| inner.confirm_tool_list(request))
+    }
+
+    fn confirm_apply(&mut self, request: &ApplyRequest) -> ApplyDecision {
+        self.timing(|inner| inner.confirm_apply(request))
     }
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {

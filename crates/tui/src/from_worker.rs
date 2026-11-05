@@ -99,6 +99,7 @@ pub(crate) fn show_in_a_turn(
         | ToMain::Manifest(_)
         | ToMain::ToolList(_)
         | ToMain::McpCall(_)
+        | ToMain::Apply(_)
         | ToMain::Move(_)
         | ToMain::Path(_)
         | ToMain::Host(_)

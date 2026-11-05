@@ -160,6 +160,17 @@ impl Servers {
             .is_some_and(|offer| offer.callable().iter().any(|tool| tool.read_only))
     }
 
+    /// Whether any offered tool has an argument its server's declaration lets a row of an `apply`
+    /// step fill, which decides whether the planner is told an apply is a step.
+    pub(crate) fn any_applicable(&self) -> bool {
+        self.offer.as_ref().is_some_and(|offer| {
+            offer
+                .callable()
+                .iter()
+                .any(|tool| offer.apply_arguments(&tool.alias, &tool.tool).is_some())
+        })
+    }
+
     /// The tools a plan may call, one per line: `alias:tool`, then each argument by name, `*` after
     /// a required one, and its type where the list gave one.
     pub(crate) fn listing(&self) -> String {
@@ -179,8 +190,18 @@ impl Servers {
                     }
                 })
                 .collect();
+            let applies = offer
+                .apply_arguments(&tool.alias, &tool.tool)
+                .map(|kinds| {
+                    let kinds: Vec<String> = kinds
+                        .iter()
+                        .map(|(name, kind)| format!("{name}: {kind}"))
+                        .collect();
+                    format!(" apply ({})", kinds.join(", "))
+                })
+                .unwrap_or_default();
             lines.push_str(&format!(
-                "  {}:{} ({}){}\n",
+                "  {}:{} ({}){}{applies}\n",
                 tool.alias,
                 tool.tool,
                 arguments.join(", "),
@@ -199,8 +220,7 @@ impl Servers {
                  required). A call is an action, so it comes after every read and transform. What \
                  it returns is shown to the person as the call answers, so a task that asks only \
                  to see a tool's answer is done by the call. It fills no slot, so no later step \
-                 can read, transform or answer with what it returned.{}
-{}",
+                 can read, transform or answer with what it returned.{}{}",
                 match self.any_read_only() {
                     true =>
                         " A tool marked read-only may instead be called by a SERVER_READ \
@@ -208,7 +228,13 @@ impl Servers {
                              out_slot, for a TRANSFORM or an ANSWER to use.",
                     false => "",
                 },
-                self.listing()
+                match self.any_applicable() {
+                    true => APPLY_CATALOGUE,
+                    false => "",
+                }
+                .to_string()
+                    + "\n"
+                    + &self.listing()
             ),
         }
     }
@@ -217,7 +243,7 @@ impl Servers {
     pub(crate) fn grants(plan: &Manifest) -> Vec<Capability> {
         plan.steps()
             .iter()
-            .filter(|step| manifest::is_server_call(step.tool()))
+            .filter(|step| manifest::is_server_call(step.tool()) || step.tool() == manifest::APPLY)
             .map(|step| Capability::McpCall(ServerAlias::new(step.text("server"))))
             .collect()
     }
@@ -231,6 +257,10 @@ impl Servers {
     /// a server answered takes part.
     pub(crate) fn check(&self, plan: &Manifest) -> Result<(), String> {
         for (index, step) in plan.steps().iter().enumerate() {
+            if step.tool() == manifest::APPLY {
+                self.check_apply(index, step)?;
+                continue;
+            }
             if !manifest::is_server_call(step.tool()) {
                 continue;
             }
@@ -288,11 +318,25 @@ impl Servers {
         plan.steps()
             .iter()
             .enumerate()
-            .filter(|(_, step)| manifest::is_server_call(step.tool()))
-            .filter_map(|(index, step)| {
-                arguments_of(step)
+            .filter_map(|(index, step)| match step.tool() {
+                manifest::APPLY => shape_of(step).ok().map(|shape| {
+                    let kinds: Value =
+                        serde_json::from_str(step.text("arguments")).unwrap_or(Value::Null);
+                    (
+                        index,
+                        format!(
+                            "at most {} calls and {} new names, each put to you in one list \
+                             first; arguments {kinds}; the processor is told \"{}\"",
+                            shape.max_rows,
+                            shape.max_new,
+                            step.text("instruction")
+                        ),
+                    )
+                }),
+                tool if manifest::is_server_call(tool) => arguments_of(step)
                     .ok()
-                    .map(|arguments| (index, format!("arguments {}", Value::Object(arguments))))
+                    .map(|arguments| (index, format!("arguments {}", Value::Object(arguments)))),
+                _ => None,
             })
             .collect()
     }
@@ -403,6 +447,327 @@ impl Servers {
             }
         }
     }
+}
+
+/// What the planner is told an apply step is, where an offered tool lets a row fill an argument.
+const APPLY_CATALOGUE: &str = " A tool listed with apply may be called by an APPLY step for each \
+item of a list a SERVER_READ step read: an isolated processor proposes the calls, row by row, and \
+the person approves the whole list before any is made. Its arguments give each argument of each \
+tool a kind: a fixed value {\"literal\": \"text\"}, a field of a list entry {\"entry\": \"field\"}, \
+new text for a thing the call creates \"new\", or the value an earlier row of another tool gave \
+{\"row\": \"tool.argument\"}. Only the kinds the tool is listed with may be used, besides literal.";
+
+impl Servers {
+    /// Hold an apply step to the list a person vouched for and to the server's declaration: the
+    /// server is offered and does not ask every call, each tool is on its list, every argument the
+    /// tool requires is given a kind and no other argument is, and each kind but a literal is one
+    /// the declaration names for that argument. Read from the plan alone.
+    fn check_apply(&self, index: usize, step: &Step) -> Result<(), String> {
+        let number = index + 1;
+        let alias = step.text("server");
+        let Some(offer) = &self.offer else {
+            return Err(format!(
+                "step {number}: no server's tools are offered to this run"
+            ));
+        };
+        if offer.asks_every_call(alias) {
+            return Err(format!(
+                "step {number}: every call to {alias} is put to the person on its own, so an \
+                 APPLY step cannot call it"
+            ));
+        }
+        let shape = shape_of(step)?;
+        let offered = offer.callable();
+        for tool in &shape.tools {
+            let name = format!("{alias}:{}", tool.name);
+            let Some(listed) = offered
+                .iter()
+                .find(|listed| listed.alias == alias && listed.tool == tool.name)
+            else {
+                return Err(format!(
+                    "step {number}: {name} is not a tool a person vouched for"
+                ));
+            };
+            let declared = offer.apply_arguments(alias, &tool.name);
+            for (argument, kind) in &tool.arguments {
+                if !listed.arguments.iter().any(|known| &known.name == argument) {
+                    return Err(format!(
+                        "step {number}: {name} takes no argument '{argument}'"
+                    ));
+                }
+                let wanted = match kind {
+                    bravebot_core::apply::Kind::Literal(_) => continue,
+                    bravebot_core::apply::Kind::Entry(_) => "entry",
+                    bravebot_core::apply::Kind::New => "new",
+                    bravebot_core::apply::Kind::Row { .. } => "row",
+                };
+                if declared
+                    .and_then(|kinds| kinds.get(argument))
+                    .map(String::as_str)
+                    != Some(wanted)
+                {
+                    return Err(format!(
+                        "step {number}: the declaration of {alias} does not let a row give \
+                         {name}'s '{argument}' as {wanted}"
+                    ));
+                }
+            }
+            if let Some(missing) = listed.arguments.iter().find(|known| {
+                known.required && !tool.arguments.iter().any(|(given, _)| given == &known.name)
+            }) {
+                return Err(format!(
+                    "step {number}: {name} requires the argument '{}'",
+                    missing.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Run an apply step: number the list for a processor, ask it for rows, put the calls they
+    /// resolve to to the person as one list, and make the ones they keep, in order.
+    ///
+    /// The note for the step's line, or the reason the run stops here. A list nobody could be
+    /// asked about, one the person declined, or a call refused or not made ends the run. A call
+    /// whose tool reports a failure, by the protocol's own `isError`, ends nothing, and the calls
+    /// that depend on it are not made.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the policy, chat, egress, people to ask, slots and the step one apply needs"
+    )]
+    pub(crate) fn apply<S: Sink, C: Confirmer, R: Reporter>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        chat: &mut crate::processor::Chat<'_>,
+        egress: &bravebot_net::Egress,
+        confirmer: &mut C,
+        reporter: &mut R,
+        slots: &mut SlotStore,
+        index: usize,
+        alias: &str,
+        step: &Step,
+    ) -> Result<(String, bravebot_aichat::protocol::Usage), String> {
+        let Some(offer) = &self.offer else {
+            return Err(format!("{alias} is not offered to this run"));
+        };
+        let shape = shape_of(step)?;
+        let list = SlotId::new(step.text("list"));
+        let numbered = SlotId::new(format!("{list}_entries_{index}"));
+        let entries = bravebot_choice::number_a_list(
+            policy,
+            &list,
+            &shape.entry_fields(),
+            numbered.clone(),
+            slots,
+        )
+        .map_err(|denial| denial.to_string())?;
+        let instruction =
+            bravebot_core::value::Labelled::trusted(step.text("instruction").to_string());
+        let spec = policy
+            .before_proposer(&format!("step_{index}"), &[numbered], &instruction, slots)
+            .map_err(|denial| denial.to_string())?;
+        let proposed = crate::processor::propose(policy, chat, slots, &spec, &entries, &shape)
+            .map_err(|error| error.to_string())?;
+        let usage = proposed.usage;
+        let resolved = proposed.resolved;
+        let shown = policy.proposal_for_display(&resolved);
+        if shown.calls.is_empty() {
+            return Ok((
+                format!(
+                    "the processor proposed no call that could be made{}",
+                    dropped_note(&shown)
+                ),
+                usage,
+            ));
+        }
+        let request = crate::confirm::ApplyRequest {
+            alias: alias.to_string(),
+            list: list.to_string(),
+            calls: shown
+                .calls
+                .iter()
+                .map(|call| crate::confirm::ApplyCall {
+                    tool: call.name.clone(),
+                    arguments: call
+                        .arguments
+                        .iter()
+                        .map(|(name, value, source)| {
+                            (name.clone(), value.clone(), described(*source, &list))
+                        })
+                        .collect(),
+                    after: call.after,
+                })
+                .collect(),
+            dropped: shown
+                .dropped
+                .iter()
+                .map(|(why, count)| (why.describe().to_string(), *count))
+                .collect(),
+        };
+        let decision = confirmer.confirm_apply(&request);
+        if decision.unasked {
+            return Err(format!(
+                "the calls to {alias} are put to the person as one list, and nobody could be asked"
+            ));
+        }
+        // A call is kept only where every call it depends on is kept too.
+        let mut kept: Vec<usize> = Vec::new();
+        for (at, call) in shown.calls.iter().enumerate() {
+            let chosen = decision.kept.contains(&at);
+            let after_kept = call.after.is_none_or(|before| kept.contains(&before));
+            if chosen && after_kept {
+                kept.push(at);
+            }
+        }
+        if kept.is_empty() {
+            return Err(format!("the person declined every call to {alias}"));
+        }
+        policy.endorse_applied(alias, &resolved, &kept);
+        let mut skipped: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let (mut made, mut failed) = (0, 0);
+        for at in kept.iter().copied() {
+            if skipped.contains(&at) {
+                continue;
+            }
+            match crate::mcp::call_applied(
+                policy, offer, egress, confirmer, reporter, alias, at, &resolved,
+            ) {
+                crate::mcp::Called::Answered(_) => made += 1,
+                crate::mcp::Called::Failed(text) => {
+                    failed += 1;
+                    let name = format!("{alias}:{}", shown.calls[at].name);
+                    let preview = crate::turn::preview_for(policy, manifest::APPLY, &text);
+                    reporter.quarantined(Shown {
+                        origin: crate::mcp::origin_of_reply(&name, true),
+                        reach: Reach::NoModel,
+                        label: text.label().to_string(),
+                        lines: preview.lines,
+                        preview: preview.preview,
+                    });
+                    skipped.extend(shown.dependants(at));
+                }
+                crate::mcp::Called::Unusable(_) => {
+                    failed += 1;
+                    skipped.extend(shown.dependants(at));
+                }
+                crate::mcp::Called::Problem(problem) => return Err(problem),
+            }
+        }
+        Ok((
+            format!(
+                "made {made} of {} calls to {alias}; {failed} failed, {} skipped as depending on \
+                 one that failed{}",
+                kept.len(),
+                skipped.len(),
+                dropped_note(&shown)
+            ),
+            usage,
+        ))
+    }
+}
+
+/// Where a value of a resolved call came from, in this process's own words.
+fn described(source: bravebot_core::apply::Source, list: &SlotId) -> String {
+    match source {
+        bravebot_core::apply::Source::Plan => "the plan".to_string(),
+        bravebot_core::apply::Source::Entry(number) => format!("entry {number} of {list}"),
+        bravebot_core::apply::Source::Processor => "the processor".to_string(),
+        bravebot_core::apply::Source::Call(at) => format!("call {}", at + 1),
+    }
+}
+
+/// How many rows were dropped, for the step's line, or nothing where none was.
+fn dropped_note(resolved: &bravebot_core::apply::Resolved) -> String {
+    let count: usize = resolved.dropped.values().sum();
+    match count {
+        0 => String::new(),
+        _ => format!("; {count} proposed rows dropped"),
+    }
+}
+
+/// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
+/// argument the kind its `arguments` object gives it. Read from the plan's own text.
+pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, String> {
+    use bravebot_core::apply::{Kind, Shape, Tool};
+    let names: Vec<&str> = step
+        .text("tools")
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    let Ok(Value::Object(by_tool)) = serde_json::from_str::<Value>(step.text("arguments")) else {
+        return Err("the arguments of an APPLY step must be a JSON object of tools".to_string());
+    };
+    if names.is_empty() || by_tool.keys().any(|key| !names.contains(&key.as_str())) {
+        return Err(
+            "the arguments of an APPLY step name each of its tools and no other".to_string(),
+        );
+    }
+    let mut tools: Vec<Tool> = Vec::new();
+    for name in &names {
+        let mut arguments = Vec::new();
+        if let Some(given) = by_tool.get(*name) {
+            let Value::Object(given) = given else {
+                return Err(format!("the arguments of {name} must be a JSON object"));
+            };
+            for (argument, kind) in given {
+                let kind = match kind {
+                    Value::String(word) if word == "new" => Kind::New,
+                    Value::Object(object) if object.len() == 1 => match object.iter().next() {
+                        Some((key, Value::String(value))) if key == "literal" => {
+                            Kind::Literal(value.clone())
+                        }
+                        Some((key, Value::String(value))) if key == "entry" => {
+                            Kind::Entry(value.clone())
+                        }
+                        Some((key, Value::String(value))) if key == "row" => {
+                            let (tool, field) = value.split_once('.').ok_or_else(|| {
+                                format!("{name}'s '{argument}': a row is written tool.argument")
+                            })?;
+                            let at = tools
+                                    .iter()
+                                    .position(|earlier| earlier.name == tool)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "{name}'s '{argument}' names a row of {tool}, which is not an earlier tool of the step"
+                                        )
+                                    })?;
+                            let made = tools[at]
+                                .arguments
+                                .iter()
+                                .any(|(earlier, kind)| earlier == field && *kind == Kind::New);
+                            if !made {
+                                return Err(format!(
+                                    "{name}'s '{argument}' names {tool}'s '{field}', which is not new text"
+                                ));
+                            }
+                            Kind::Row {
+                                tool: at,
+                                argument: field.to_string(),
+                            }
+                        }
+                        _ => return Err(format!("{name}'s '{argument}' has no kind it can take")),
+                    },
+                    _ => return Err(format!("{name}'s '{argument}' has no kind it can take")),
+                };
+                arguments.push((argument.clone(), kind));
+            }
+        }
+        tools.push(Tool {
+            name: (*name).to_string(),
+            arguments,
+        });
+    }
+    let cap = |field: &str, default: usize, most: usize| {
+        step.count(field).map_or(default, |count| {
+            usize::try_from(count).unwrap_or(most).min(most)
+        })
+    };
+    Ok(Shape {
+        tools,
+        max_rows: cap("max_rows", 50, 100),
+        max_new: cap("max_new", 12, 50),
+    })
 }
 
 /// The arguments a call step carries: the JSON object its text holds, or an empty one where the

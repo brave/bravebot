@@ -681,6 +681,15 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// A call to a server declared to ask every call is asked in bypass too: the person chose that
     /// for the server when they declared it, and the mode that answers the other questions does not
     /// take that choice back (SERVERS-21).
+    /// Put to the person in every mode, bypass and plan mode included: the list is the trusted
+    /// selector of the calls a processor proposed, and no mode is a person reading it.
+    fn confirm_apply(
+        &mut self,
+        request: &crate::confirm::ApplyRequest,
+    ) -> crate::confirm::ApplyDecision {
+        self.asking().confirm_apply(request)
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,

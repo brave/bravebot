@@ -20,8 +20,8 @@ pub(crate) use bravebot_agent::servers::{
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
-    self, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field, Problem, Projects,
-    Standing, Timeouts, Unreadable,
+    self, ApplyArguments, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field,
+    Problem, Projects, Standing, Timeouts, Unreadable,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -125,7 +125,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--openshell <image>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--apply <tool>:<argument>=<kind>]... [--openshell <image>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
@@ -382,6 +382,7 @@ fn declared(
     let mut ask_every_call = false;
     let mut openshell: Option<String> = None;
     let mut choices = ChoiceArguments::new();
+    let mut applies = ApplyArguments::new();
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -527,6 +528,15 @@ fn declared(
                 choose(pair, &mut choices)?;
                 taken = 1;
             }
+            "--apply" => {
+                let named = value.ok_or_else(|| argument(t!(mcp_apply_needs_a_kind)))?;
+                apply(named, &mut applies)?;
+            }
+            joined if joined.starts_with("--apply=") => {
+                let named = joined.strip_prefix("--apply=").unwrap_or_default();
+                apply(named, &mut applies)?;
+                taken = 1;
+            }
             "--startup-timeout" => {
                 startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
@@ -640,6 +650,7 @@ fn declared(
                 .and_then(|declaration| declaration.filtering(tools, exclude_tools))
                 .map(|declaration| declaration.asking_every_call(ask_every_call))
                 .and_then(|declaration| declaration.choosing(choices))
+                .and_then(|declaration| declaration.applying(applies))
                 .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)?;
             shares_nothing(&declaration).map_err(argument)?;
@@ -659,6 +670,9 @@ fn declared(
         }
         Some(Transport::Http(_)) if openshell.is_some() => {
             Err(Refusal::Problem(Problem::Remote("backend")))
+        }
+        Some(Transport::Http(_)) if !applies.is_empty() => {
+            Err(Refusal::Problem(Problem::Remote("apply_arguments")))
         }
         Some(Transport::Http(url)) => Declaration::http(url)
             .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
@@ -696,6 +710,25 @@ fn choose(pair: &str, choices: &mut ChoiceArguments) -> Result<(), Refusal> {
         .entry(tool.to_string())
         .or_default()
         .insert(name.to_string());
+    Ok(())
+}
+
+/// One `--apply` word, `<tool>:<argument>=<kind>`, kept with the others. Whether the names are
+/// words a tool may be offered under, and the kind one of `entry`, `new` or `row`, is the
+/// declaration's to check.
+fn apply(named: &str, applies: &mut ApplyArguments) -> Result<(), Refusal> {
+    let (tool, rest) = named
+        .split_once(':')
+        .filter(|(tool, _)| !tool.is_empty())
+        .ok_or_else(|| argument(t!(mcp_apply_needs_a_kind)))?;
+    let (name, kind) = rest
+        .split_once('=')
+        .filter(|(name, kind)| !name.is_empty() && !kind.is_empty())
+        .ok_or_else(|| argument(t!(mcp_apply_needs_a_kind)))?;
+    applies
+        .entry(tool.to_string())
+        .or_default()
+        .insert(name.to_string(), kind.to_string());
     Ok(())
 }
 

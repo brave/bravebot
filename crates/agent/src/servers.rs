@@ -518,6 +518,8 @@ enum Plan {
         ask_every_call: bool,
         /// The arguments of its tools that take a choice (SERVERS-22).
         choice_arguments: ChoiceArguments,
+        /// The arguments its declaration says a row of an `apply` step may fill.
+        apply_arguments: bravebot_config::mcp::ApplyArguments,
     },
     /// A local server that runs in an NVIDIA OpenShell sandbox, offered to manifest runs only.
     OpenShell {
@@ -1097,6 +1099,7 @@ fn planned(
         allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
         ask_every_call: declaration.asks_every_call(),
         choice_arguments: declaration.choice_arguments().clone(),
+        apply_arguments: declaration.apply_arguments().clone(),
     })
 }
 
@@ -1787,6 +1790,8 @@ pub fn problem(found: &Problem) -> String {
         Problem::ChoiceWithoutAsking => t!(mcp_problem_choice_without_asking).to_string(),
         Problem::Backend("image") => t!(mcp_problem_backend_image).to_string(),
         Problem::Backend(_) => t!(mcp_problem_backend).to_string(),
+        Problem::Apply => t!(mcp_problem_apply).to_string(),
+        Problem::ApplyWhileAsking => t!(mcp_problem_apply_while_asking).to_string(),
     }
 }
 
@@ -2632,6 +2637,7 @@ fn start_under(
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                apply_arguments,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -2738,6 +2744,7 @@ fn start_under(
                         reached
                             .asking_every_call(ask_every_call)
                             .choosing(choice_arguments)
+                            .applying(apply_arguments)
                     });
                     let _ = sender.send((alias, outcome, None));
                 });
@@ -3625,6 +3632,7 @@ mod tests {
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -5741,6 +5749,7 @@ mod tests {
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let granting = Capabilities {
             network_denial_enforced: true,
@@ -6424,6 +6433,7 @@ done
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -6587,6 +6597,7 @@ while {answering}"#
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7309,6 +7320,7 @@ while {answering}"#
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7403,6 +7415,7 @@ while {answering}"#
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7489,6 +7502,7 @@ done
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let home = Home {
             directory: Some(state),
@@ -7736,6 +7750,7 @@ done
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -8150,6 +8165,7 @@ for line in sys.stdin:
                 allowed_hosts: None,
                 ask_every_call: asking,
                 choice_arguments: ChoiceArguments::new(),
+                apply_arguments: Default::default(),
             };
             let mut notes = Vec::new();
             let started = start(
@@ -8238,6 +8254,7 @@ for line in sys.stdin:
                 allowed_hosts: None,
                 ask_every_call: true,
                 choice_arguments: choices,
+                apply_arguments: Default::default(),
             };
             let mut notes = Vec::new();
             let started = start(
@@ -8621,6 +8638,7 @@ done
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -8881,6 +8899,7 @@ done
                     allowed_hosts: None,
                     ask_every_call: false,
                     choice_arguments: ChoiceArguments::new(),
+                    apply_arguments: Default::default(),
                 },
             )]
         };
@@ -8949,6 +8968,7 @@ done
             allowed_hosts: None,
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let hosts = listing(Some(&["mine.example"]), &[]);
         let mut notes = Vec::new();
@@ -9015,6 +9035,7 @@ done
             allowed_hosts: Some(vec!["mine.example".to_string()]),
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
         };
         let mut notes = Vec::new();
 

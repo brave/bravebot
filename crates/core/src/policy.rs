@@ -5681,6 +5681,219 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         ))
     }
 
+    /// The spec of a processor asked for the rows of an `apply` step, and nothing else.
+    ///
+    /// The same checks as [`Policy::before_processor`] on what it reads and what it is told, and
+    /// the same label by taint over the inputs. It takes no `about`, because its answer is rows
+    /// and no document. Its answer is read only by [`Policy::resolve_proposal`], which refuses a
+    /// spec built by any other gate.
+    pub fn before_proposer(
+        &mut self,
+        id: &str,
+        reads: &[SlotId],
+        instruction: &Labelled<String>,
+        slots: &crate::slot::SlotStore,
+    ) -> Gated<crate::processor::ProcessorSpec> {
+        let (out_label, instruction) =
+            self.what_a_processor_is_given(id, reads, instruction, slots)?;
+        let spec = crate::processor::ProcessorSpec::new(
+            id,
+            reads.to_vec(),
+            instruction,
+            out_label,
+            None,
+            None,
+            &SpecAuthority::mint(),
+        )
+        .proposing_rows();
+        self.allow(
+            "processor",
+            format!(
+                "{}, asked for the rows of an apply step, with no tools, no memory and nothing \
+                 to write but those rows",
+                spec.describe()
+            ),
+        );
+        Ok(spec)
+    }
+
+    /// Number the entries of the list in `list` for a processor, into the slot `into`, and give
+    /// back the entries as the rows will be resolved against them.
+    ///
+    /// A release to another crate's reader, as [`Policy::read_a_number`] is: the list's text goes to
+    /// `reader`, which decides which entries count, from the fields the plan's arguments take, and
+    /// numbers them. The numbered text is quarantined at the list's label for the processor to
+    /// read, so text inside an entry cannot shift the count, and the entries keep that label. The
+    /// driver holds neither as text. The trail line names the slots and the label, and no count.
+    pub fn number_a_list(
+        &mut self,
+        list: &SlotId,
+        fields: &BTreeSet<String>,
+        into: SlotId,
+        slots: &mut crate::slot::SlotStore,
+        reader: fn(&str, &BTreeSet<String>) -> crate::apply::Numbered,
+    ) -> Gated<Labelled<crate::apply::Entries>> {
+        let content = slots.take_for_reading(list).map_err(|e| Denial {
+            principle: Principle::Confinement,
+            message: format!("apply: {e}"),
+        })?;
+        let label = content.label();
+        let proof = Declassification::authorise(
+            "a list, read for its entries by a reader outside the driver",
+        );
+        let numbered = reader(&content.declassify(&proof), fields);
+        let shown = Labelled::new(numbered.shown, label);
+        self.store_in_slot(
+            "apply",
+            into.clone(),
+            &format!("the entries of {list}"),
+            &shown,
+            slots,
+        )?;
+        self.allow(
+            "apply",
+            format!("{list} was numbered for a processor into {into}, labelled {label}"),
+        );
+        Ok(Labelled::new(numbered.entries, label))
+    }
+
+    /// Read a processor's answer for the rows of an `apply` step, and resolve them against the
+    /// plan's shape and the list's entries.
+    ///
+    /// The one release of such an answer, to `reader`, which `bravebot-choice` holds. What comes
+    /// back is the resolved list: the calls the rows name, each value labelled with everything it
+    /// derives from, and the count of rows dropped for each reason of a closed set. The driver
+    /// carries it to the person and never reads it. The label is the spec's met with the answer's
+    /// and the list's, so a list resolved after a page is untrusted and private whatever it holds.
+    ///
+    /// Refused for a spec that was not built to propose rows. The trail line holds the
+    /// processor's name and the label, and no count.
+    pub fn resolve_proposal(
+        &mut self,
+        spec: &crate::processor::ProcessorSpec,
+        answer: Labelled<String>,
+        entries: &Labelled<crate::apply::Entries>,
+        shape: &crate::apply::Shape,
+        reader: fn(&str, &crate::apply::Entries, &crate::apply::Shape) -> crate::apply::Resolved,
+    ) -> Gated<Labelled<crate::apply::Resolved>> {
+        if !spec.proposes_rows() {
+            return Err(self.deny(
+                "processor",
+                Principle::Confinement,
+                format!(
+                    "{}: this processor was not asked for rows, so none are read from its answer",
+                    spec.id()
+                ),
+            ));
+        }
+        let label = crate::label::taint_all([spec.out_label(), answer.label(), entries.label()]);
+        self.allow(
+            "processor",
+            format!(
+                "{}: the answer was read for the rows it was asked for, labelled {label}",
+                spec.id()
+            ),
+        );
+        let proof = Declassification::authorise(
+            "a processor's answer and a list's entries, read for rows outside the driver",
+        );
+        let resolved = reader(
+            &answer.declassify(&proof),
+            &entries.clone().declassify(&proof),
+            shape,
+        );
+        Ok(Labelled::new(resolved, label))
+    }
+
+    /// A resolved list as the person who is asked about it reads it.
+    ///
+    /// A display release, as [`Policy::choice_for_display`] is: the values go onto lines a person
+    /// reads, drawn as untrusted content, and no gate takes them back to anything an effect uses.
+    /// The calls are made from the labelled list, through [`Policy::carry_applied_call`].
+    pub fn proposal_for_display(
+        &mut self,
+        resolved: &Labelled<crate::apply::Resolved>,
+    ) -> crate::apply::Resolved {
+        let label = resolved.label();
+        self.allow(
+            "display",
+            format!("a resolved list, labelled {label}, shown to the person it is put to"),
+        );
+        let proof = Declassification::authorise("a resolved list, drawn for the person asked");
+        resolved.clone().declassify(&proof)
+    }
+
+    /// Record that the person approved these calls of a resolved list, and no others.
+    ///
+    /// Each grant is bound to the server, the tool and the call's place in the list, so an
+    /// approval cannot be spent on another call or reused.
+    pub fn endorse_applied(
+        &mut self,
+        alias: &str,
+        resolved: &Labelled<crate::apply::Resolved>,
+        kept: &[usize],
+    ) {
+        let proof = Declassification::authorise("the names of the tools a person approved");
+        let names: Vec<String> = resolved
+            .clone()
+            .declassify(&proof)
+            .calls
+            .into_iter()
+            .map(|call| call.name)
+            .collect();
+        for index in kept {
+            if let Some(name) = names.get(*index) {
+                self.issue_grant("apply", "call", format!("{alias}:{name}#{index}"));
+            }
+        }
+    }
+
+    /// The gate a call of a resolved list passes before it is sent. Returns its tool and its
+    /// arguments.
+    ///
+    /// The grant the person's answer minted for this call is consumed. The arguments are not
+    /// refused for being untrusted or private, as [`Policy::before_mcp_call`] would refuse them:
+    /// each value is one the person was shown resolved, with where it came from, and approved for
+    /// this call and this server. That approval is the trusted selector. The trail line holds the
+    /// alias, the tool, the call's place and the label, and no value.
+    pub fn carry_applied_call(
+        &mut self,
+        alias: &str,
+        index: usize,
+        resolved: &Labelled<crate::apply::Resolved>,
+    ) -> Gated<(String, Vec<(String, String)>)> {
+        let label = resolved.label();
+        let proof =
+            Declassification::authorise("a call a person approved in a list, sent to its server");
+        let Some(call) = resolved
+            .clone()
+            .declassify(&proof)
+            .calls
+            .into_iter()
+            .nth(index)
+        else {
+            return Err(self.deny(
+                "apply",
+                Principle::Confinement,
+                format!("apply: no call {index} in the list approved for {alias}"),
+            ));
+        };
+        self.consume_grant("apply", "call", &format!("{alias}:{}#{index}", call.name))?;
+        self.allow(
+            "mcp_call",
+            format!(
+                "call {index} of an approved list, labelled {label}, sent to {alias}:{}",
+                call.name
+            ),
+        );
+        let arguments = call
+            .arguments
+            .into_iter()
+            .map(|(name, value, _)| (name, value))
+            .collect();
+        Ok((call.name, arguments))
+    }
+
     /// Give back the last newline where the document had one and the answer does not.
     ///
     /// A model handing back a file it was asked to return unchanged returns it without the final

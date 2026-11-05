@@ -248,11 +248,25 @@ pub enum Problem {
     /// `backend` is not `openshell`, or `image` is missing, empty or not one image reference, or
     /// given without the backend that reads it. The value is the key that is wrong.
     Backend(&'static str),
+    /// `apply_arguments` is not an object of tool words, each with an object of argument words
+    /// and their kinds.
+    Apply,
+    /// `apply_arguments` names an argument to a server that asks about every call.
+    ApplyWhileAsking,
 }
 
 /// The arguments of a server's tools a declaration says take a choice, by tool (SERVERS-22). Each
 /// is a tool word with the argument words it names, in an order that carries no meaning.
 pub type ChoiceArguments = BTreeMap<String, BTreeSet<String>>;
+
+/// The arguments of a server's tools a declaration says a row of an `apply` step may fill, by
+/// tool, each with the kind it may take: `entry`, a value copied from a list; `new`, short text for
+/// a thing the call creates; or `row`, a value an earlier row of the step gave
+/// (`docs/design/manifest-apply.md`).
+pub type ApplyArguments = BTreeMap<String, BTreeMap<String, String>>;
+
+/// The kinds an argument of [`ApplyArguments`] may take.
+pub const APPLY_KINDS: [&str; 3] = ["entry", "new", "row"];
 
 /// How long a server has for its handshake and for each call, where a declaration says.
 ///
@@ -377,6 +391,9 @@ pub enum Declaration {
         choice_arguments: ChoiceArguments,
         /// Where it runs.
         backend: Backend,
+        /// The arguments of its tools a row of an `apply` step may fill, with their kinds. Empty
+        /// where `ask_every_call` is set, since such a server keeps a question for each call.
+        apply_arguments: ApplyArguments,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -415,6 +432,7 @@ impl std::fmt::Debug for Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -429,6 +447,7 @@ impl std::fmt::Debug for Declaration {
                 .field("ask_every_call", ask_every_call)
                 .field("choice_arguments", choice_arguments)
                 .field("backend", backend)
+                .field("apply_arguments", apply_arguments)
                 .finish(),
             Self::Http {
                 url,
@@ -474,6 +493,7 @@ pub enum Field {
     ChoiceArguments,
     /// The backend, or the image an OpenShell backend is made from.
     Backend,
+    ApplyArguments,
 }
 
 impl Field {
@@ -494,6 +514,7 @@ impl Field {
             Self::AskEveryCall => "ask_every_call",
             Self::ChoiceArguments => "choice_arguments",
             Self::Backend => "backend",
+            Self::ApplyArguments => "apply_arguments",
         }
     }
 }
@@ -525,6 +546,7 @@ impl Declaration {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             backend: Backend::Native,
+            apply_arguments: ApplyArguments::new(),
         })
     }
 
@@ -545,6 +567,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
             ..
         } = self
         else {
@@ -577,6 +600,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
         })
     }
 
@@ -594,6 +618,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
             ..
         } = self
         else {
@@ -624,6 +649,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
         })
     }
 
@@ -642,6 +668,7 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
                 ..
             } => Self::Stdio {
                 argv,
@@ -656,6 +683,7 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
             },
             Self::Http {
                 url,
@@ -713,6 +741,7 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
                 ..
             } => Self::Stdio {
                 argv,
@@ -727,6 +756,7 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
             },
             Self::Http {
                 url,
@@ -779,6 +809,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
             ..
         } = self
         else {
@@ -815,6 +846,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
         })
     }
 
@@ -874,6 +906,7 @@ impl Declaration {
                 allowed_hosts,
                 choice_arguments,
                 backend,
+                apply_arguments,
                 ..
             } => Self::Stdio {
                 argv,
@@ -892,6 +925,10 @@ impl Declaration {
                     false => ChoiceArguments::new(),
                 },
                 backend,
+                apply_arguments: match ask {
+                    true => ApplyArguments::new(),
+                    false => apply_arguments,
+                },
             },
             Self::Http {
                 url,
@@ -945,6 +982,7 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             backend,
+            apply_arguments,
             ..
         } = self
         else {
@@ -977,6 +1015,79 @@ impl Declaration {
             ask_every_call,
             choice_arguments: choices,
             backend,
+            apply_arguments,
+        })
+    }
+
+    /// The arguments of its tools a row of an `apply` step may fill, with their kinds. Empty for
+    /// a remote server.
+    pub fn apply_arguments(&self) -> &ApplyArguments {
+        static NONE: ApplyArguments = BTreeMap::new();
+        match self {
+            Self::Stdio {
+                apply_arguments, ..
+            } => apply_arguments,
+            Self::Http { .. } => &NONE,
+        }
+    }
+
+    /// This declaration with `applies` as the arguments of its tools a row of an `apply` step may
+    /// fill, checked as a file's entry is.
+    ///
+    /// Each tool and argument is a word a tool may be offered under, each kind one of
+    /// [`APPLY_KINDS`], and a tool names at least one argument. A remote server takes none, and a
+    /// local one takes them only where it does not ask about every call: such a server keeps a
+    /// question for each of its calls, so it is not called by an `apply` step. The declaration is
+    /// built with [`Declaration::asking_every_call`] before this.
+    pub fn applying(self, applies: ApplyArguments) -> Result<Self, Problem> {
+        if applies.is_empty() {
+            return Ok(self);
+        }
+        let Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            choice_arguments,
+            backend,
+            ..
+        } = self
+        else {
+            return Err(Problem::Remote("apply_arguments"));
+        };
+        for (tool, arguments) in &applies {
+            let fine = arguments.iter().all(|(argument, kind)| {
+                is_tool_word(argument)
+                    && argument.len() <= MAX_CHOICE_ARGUMENT
+                    && APPLY_KINDS.contains(&kind.as_str())
+            });
+            if !is_tool_word(tool) || arguments.is_empty() || !fine {
+                return Err(Problem::Apply);
+            }
+        }
+        if ask_every_call {
+            return Err(Problem::ApplyWhileAsking);
+        }
+        Ok(Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            choice_arguments,
+            backend,
+            apply_arguments: applies,
         })
     }
 
@@ -1159,6 +1270,7 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -1198,6 +1310,9 @@ impl Declaration {
                 // before there was a choice, and the approval given it still stands.
                 if let Backend::OpenShell { image } = backend {
                     form.push(serde_json::json!({ "backend": Backend::OPENSHELL, "image": image }));
+                }
+                if !apply_arguments.is_empty() {
+                    form.push(serde_json::json!({ "apply_arguments": apply_arguments }));
                 }
                 serde_json::Value::Array(form)
             }
@@ -1263,6 +1378,7 @@ impl Declaration {
                     ask_every_call,
                     choice_arguments,
                     backend,
+                    apply_arguments,
                     ..
                 },
                 Self::Stdio {
@@ -1277,6 +1393,7 @@ impl Declaration {
                     ask_every_call: other_ask_every_call,
                     choice_arguments: other_choice_arguments,
                     backend: other_backend,
+                    apply_arguments: other_apply_arguments,
                     ..
                 },
             ) => {
@@ -1304,6 +1421,10 @@ impl Declaration {
                         Field::ChoiceArguments,
                     ),
                     (backend != other_backend, Field::Backend),
+                    (
+                        apply_arguments != other_apply_arguments,
+                        Field::ApplyArguments,
+                    ),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
@@ -1380,6 +1501,7 @@ impl Declaration {
                 allowed_hosts,
                 choice_arguments,
                 backend,
+                apply_arguments,
                 ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
@@ -1411,6 +1533,9 @@ impl Declaration {
                 if let Backend::OpenShell { image } = backend {
                     entry.insert("backend".into(), Backend::OPENSHELL.into());
                     entry.insert("image".into(), image.clone().into());
+                }
+                if !apply_arguments.is_empty() {
+                    entry.insert("apply_arguments".into(), serde_json::json!(apply_arguments));
                 }
             }
             Self::Http {
@@ -1451,7 +1576,7 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
-        const LOCAL: [&str; 8] = [
+        const LOCAL: [&str; 9] = [
             "variables",
             "env",
             "reads",
@@ -1460,6 +1585,7 @@ impl Declaration {
             "choice_arguments",
             "backend",
             "image",
+            "apply_arguments",
         ];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
             Some("stdio") => &[
@@ -1476,6 +1602,7 @@ impl Declaration {
                 "choice_arguments",
                 "backend",
                 "image",
+                "apply_arguments",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -1611,6 +1738,24 @@ impl Declaration {
                 .collect::<Result<_, Problem>>()?,
             Some(_) => return Err(Problem::Choice),
         };
+        let applies = match entry.get("apply_arguments") {
+            None => ApplyArguments::new(),
+            Some(serde_json::Value::Object(by_tool)) => by_tool
+                .iter()
+                .map(|(tool, arguments)| {
+                    let kinds = arguments.as_object().ok_or(Problem::Apply)?;
+                    let kinds = kinds
+                        .iter()
+                        .map(|(name, kind)| {
+                            kind.as_str().map(|kind| (name.clone(), kind.to_string()))
+                        })
+                        .collect::<Option<BTreeMap<_, _>>>()
+                        .ok_or(Problem::Apply)?;
+                    Ok((tool.clone(), kinds))
+                })
+                .collect::<Result<_, Problem>>()?,
+            Some(_) => return Err(Problem::Apply),
+        };
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
@@ -1619,6 +1764,7 @@ impl Declaration {
             .asking_every_call(ask_every_call)
             .choosing(choices)?
             .running_in(backend)?
+            .applying(applies)?
             .timing(timeouts))
     }
 }

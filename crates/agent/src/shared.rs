@@ -484,6 +484,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_apply(
+        &mut self,
+        request: &crate::confirm::ApplyRequest,
+    ) -> crate::confirm::ApplyDecision {
+        self.asked(
+            |held| held.confirm_apply(request),
+            |refuse| refuse.confirm_apply(request),
+        )
+    }
+
     fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
         self.asked(
             |held| held.confirm_path(request),

@@ -231,6 +231,16 @@ const CHOICES: &[(&str, &str, &str)] = &[
     ("input", "select_option", "element_number"),
 ];
 
+/// The arguments of a group's tools a row of a plan's `apply` step may fill, with their kind, which
+/// `install` declares with `--apply`: a bookmark's `url` copied from a list a read returned, a
+/// folder's `title` the processor writes for the folder the call creates, and the `folder` a
+/// bookmark moves to taken from the row that made it (`docs/design/manifest-apply.md`).
+const APPLIES: &[(&str, &str, &str, &str)] = &[
+    ("bookmarks-write", "create_bookmark_folder", "title", "new"),
+    ("bookmarks-write", "move_bookmark", "url", "entry"),
+    ("bookmarks-write", "move_bookmark", "folder", "row"),
+];
+
 impl Installed {
     /// The command that declares a server for `group` of the tools, or for every tool where there
     /// is none, to be pasted into a POSIX shell. A group's server has the alias `brave-<group>` and
@@ -239,13 +249,20 @@ impl Installed {
     /// that of a group that [`tools::Group::asks_in_browser`] is set for also has `--tool-timeout`
     /// with the bound of [`relay::IN_BROWSER_TOOL_TIMEOUT`], which is above the wait of its server.
     /// The declaration of a group with tools in [`CHOICES`] also has a `--choice <tool>:<argument>`
-    /// for each, after those. The directory and the program are quoted as [`quoted`] says, and the
+    /// for each, after those, and one with tools in [`APPLIES`] an `--apply
+    /// <tool>:<argument>=<kind>` for each. The directory and the program are quoted as [`quoted`] says, and the
     /// line is bytes, since either may be a name that is not UTF-8.
     pub fn declaration(&self, group: Option<&str>) -> OsString {
         let choices: String = CHOICES
             .iter()
             .filter(|(id, ..)| Some(*id) == group)
             .map(|(_, tool, argument)| format!(" --choice {tool}:{argument}"))
+            .chain(
+                APPLIES
+                    .iter()
+                    .filter(|(id, ..)| Some(*id) == group)
+                    .map(|(_, tool, argument, kind)| format!(" --apply {tool}:{argument}={kind}")),
+            )
             .collect();
         let (alias, asked, bound, group) = match group {
             Some(group) => (
@@ -640,6 +657,47 @@ mod tests {
                 .to_string_lossy()
                 .contains("--choice")
         );
+    }
+
+    /// The `bookmarks-write` declaration lets a row of an apply step fill a folder's title as new
+    /// text, a bookmark's URL from a list and the folder it moves to from the row that made it, and
+    /// no other declaration names any. Each named argument is one its tool's schema takes, and the
+    /// group does not ask every call, which a server whose rows are approved as one list must not.
+    #[test]
+    fn the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill() {
+        let installed = Installed {
+            manifest: PathBuf::from("/m/com.brave.bravebot.json"),
+            directory: PathBuf::from("/d"),
+            program: PathBuf::from("/p/bravebot-browser"),
+        };
+        assert_eq!(
+            installed.declaration(Some("bookmarks-write")),
+            "bravebot mcp add brave-bookmarks-write -s user \
+             --apply create_bookmark_folder:title=new --apply move_bookmark:url=entry \
+             --apply move_bookmark:folder=row --dir /d -- /p/bravebot-browser mcp --group \
+             bookmarks-write"
+        );
+        for other in tools::ids().filter(|id| *id != "bookmarks-write") {
+            assert!(
+                !installed
+                    .declaration(Some(other))
+                    .to_string_lossy()
+                    .contains("--apply"),
+                "{other}"
+            );
+        }
+        for (group, tool, argument, _) in APPLIES {
+            assert!(!tools::asks_every_call(group), "{group}");
+            let listed = tools::TOOLS
+                .iter()
+                .find(|listed| listed.name == *tool && listed.group == *group)
+                .expect("a tool of the group")
+                .listed();
+            assert!(
+                listed["inputSchema"]["properties"].get(*argument).is_some(),
+                "{tool}:{argument}"
+            );
+        }
     }
 
     /// The pairs `install` declares are the arguments the relay's schemas call `element_number`,

@@ -1319,6 +1319,7 @@ mcp-tools-needs-a-list = --tools a besoin d'un nom d'outil ou d'une liste de nom
 mcp-exclude-tools-needs-a-list = --exclude-tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
 mcp-allowed-hosts-needs-a-list = --allowed-hosts a besoin d'un nom d'hôte ou d'une liste de noms d'hôtes séparés par des virgules
 mcp-choice-needs-a-pair = --choice a besoin d'un outil et d'un argument, écrits <OUTIL>:<ARGUMENT>
+mcp-apply-needs-a-kind = --apply a besoin d'un outil, d'un argument et d'un type, écrits <OUTIL>:<ARGUMENT>=<entry|new|row>
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
@@ -1358,6 +1359,9 @@ mcp-problem-ask-every-call = ask_every_call n'est ni true ni false
 mcp-problem-choice =
     choice_arguments n'est pas un objet de noms d'outils, chacun avec une liste de noms d'arguments
 mcp-problem-choice-without-asking = choice_arguments a besoin que ask_every_call soit true
+mcp-problem-apply =
+    apply_arguments doit être un objet de noms d'outils, chacun avec un objet de noms d'arguments et l'un de entry, new ou row
+mcp-problem-apply-while-asking = apply_arguments a besoin que ask_every_call soit false
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
@@ -2259,6 +2263,28 @@ plan-not-its-writes =
 plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
+apply-title = faire ces appels à { $server } ?
+apply-verb = Faire
+apply-calls = { $count ->
+    [one] { $count } appel à { $server }
+   *[other] { $count } appels à { $server }
+    }
+apply-after = après l'appel { $call }
+apply-hidden = { $count ->
+    [one] (et un caractère qui ne s'affiche pas)
+   *[other] (et { $count } caractères qui ne s'affichent pas)
+    }
+apply-dropped = { $count ->
+    [one] une ligne proposée a été écartée : elle { $why }
+   *[other] { $count } lignes proposées ont été écartées : elles { $why }
+    }
+apply-explained =
+    un processeur isolé a proposé ces appels à partir de ce qui a été lu. chaque valeur derrière la barre
+    vient de cette liste ou de ce processeur, et est envoyée telle qu'elle est affichée. rien d'autre n'est appelé.
+apply-nothing-yet =
+    aucun n'a encore été fait, donc refuser laisse tout tel quel.
+apply-yes = les faire tous
+apply-no = non
 plan-no = ne pas l'exécuter
 # Là où une question est une ligne sur un terminal plutôt qu'un panneau : à quoi ressemble un oui,
 # et la seule réponse qui approuve. Toute autre ligne, et la fin de l'entrée, refuse. Partagé par
