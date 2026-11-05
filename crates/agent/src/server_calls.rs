@@ -582,13 +582,23 @@ impl Servers {
         // A reply with no content at all is asked for once more, as a process step's is: an empty
         // turn from the model is not an answer, and the rows it would have proposed decide nothing
         // until the person sees them.
+        // A second empty reply is the processor proposing nothing, which ends the step with no
+        // call made rather than the run: a list that holds nothing the rows can take is answered
+        // with nothing.
         let mut retried = false;
         let proposed = loop {
             match crate::processor::propose(policy, chat, slots, &spec, &entries, &shape) {
                 Ok(proposed) => break proposed,
-                Err(crate::processor::ProcessorError::Chat(error))
-                    if error.is_empty_reply() && !retried =>
-                {
+                Err(crate::processor::ProcessorError::Chat(error)) if error.is_empty_reply() => {
+                    if retried {
+                        return Ok((
+                            format!(
+                                "the processor proposed no call to {alias}; the list it was given \
+                                 may hold nothing the plan's arguments can take"
+                            ),
+                            error.completed_usage().unwrap_or_default(),
+                        ));
+                    }
                     retried = true;
                 }
                 Err(error) => return Err(error.to_string()),

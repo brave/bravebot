@@ -2412,3 +2412,24 @@ fn an_apply_step_asks_its_processor_again_after_an_empty_reply() {
     );
     assert_eq!(ran.asked.applies.len(), 1);
 }
+
+/// A processor that answers nothing twice has proposed nothing: the step ends with no list put and
+/// no call made, and the run is not failed for it.
+#[test]
+fn an_apply_step_whose_processor_proposes_nothing_makes_no_call_and_fails_nothing() {
+    let scratch = Scratch::new("apply-nothing");
+    let (url, mcp) = serve_marks();
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(""), says("")],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty(), "no list was put");
+    let made: Vec<&str> = ran.called.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(made, ["list_marks"], "only the read");
+}

@@ -116,7 +116,9 @@ const SERVER_APPLY_SHAPE: &str = "\n\
 A tool listed with apply can be called once for each item of a list that was read: an isolated \
 processor reads the list and proposes the calls, such as which folder each bookmark goes in and \
 what the new folders are called, and the person approves the whole list before any call is made. \
-So a task that reorganises many items is one read, then one apply.";
+So a task that reorganises many items is one read, then one apply. The read must return the items \
+themselves, each with what the calls need, such as every bookmark with its url, and not only the \
+names of the places that hold them; where unsure which read does, prefer one that needs no name.";
 
 /// Added to [`SERVER_SHAPE`] where a listed tool is marked read-only.
 const SERVER_READ_SHAPE: &str = "\n\
