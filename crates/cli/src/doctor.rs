@@ -1126,6 +1126,7 @@ pub(crate) fn doctor() -> ExitCode {
     if failed {
         ending = ends_on(ending, Ending::Failed);
     }
+    report_openshell(&mcp::in_openshell(&home), &mut ending);
 
     // Outside the configuration block as well: which skills a session here loads is read off two
     // directories, a trust map and the rules, and a key nothing reads is wrong whatever the
@@ -1341,6 +1342,83 @@ fn report_bedrock(bedrock: &bravebot_config::bedrock::Bedrock) {
                 .join(", "),
         ),
         true => fact(t!(doctor_tiers), t!(doctor_tiers_absent)),
+    }
+}
+
+/// What `doctor` says of OpenShell, where a server is declared to run in it (SERVERS-24): whether the
+/// program is found and new enough, and whether its gateway answers. Nothing where no declaration
+/// names it, since a machine without OpenShell is not missing anything then.
+#[cfg(unix)]
+fn report_openshell(servers: &[String], ending: &mut Ending) {
+    use bravebot_sandbox::openshell;
+    if servers.is_empty() {
+        return;
+    }
+    let row = |name: &str, value: &str| println!("{}", aligned(name, value, DETAIL));
+    println!();
+    println!("{}", t!(doctor_openshell));
+    row(t!(doctor_openshell_servers), &servers.join(", "));
+    let probe = match openshell::probe() {
+        Ok(probe) => probe,
+        Err(error) => {
+            fact(
+                t!(doctor_openshell),
+                t!(doctor_openshell_missing, reason = error.to_string()),
+            );
+            *ending = ends_on(*ending, Ending::Failed);
+            return;
+        }
+    };
+    match probe.version.as_deref() {
+        Some(version) if openshell::is_supported(version) => {
+            row(t!(doctor_openshell_version), version);
+        }
+        found => {
+            row(
+                t!(doctor_openshell_version),
+                &t!(
+                    doctor_openshell_too_old,
+                    version = found.unwrap_or("?"),
+                    minimum = openshell::MINIMUM_VERSION
+                ),
+            );
+            *ending = ends_on(*ending, Ending::Failed);
+        }
+    }
+    match probe.gateway {
+        Ok(()) => row(
+            t!(doctor_openshell_gateway),
+            t!(doctor_openshell_gateway_up),
+        ),
+        Err(reason) => {
+            row(
+                t!(doctor_openshell_gateway),
+                &t!(doctor_openshell_gateway_down, reason = reason),
+            );
+            *ending = ends_on(*ending, Ending::Failed);
+        }
+    }
+}
+
+/// OpenShell runs on macOS and Linux alone, so a server declared for it is never started here.
+#[cfg(not(unix))]
+fn report_openshell(servers: &[String], ending: &mut Ending) {
+    if !servers.is_empty() {
+        println!();
+        println!("{}", t!(doctor_openshell));
+        println!(
+            "{}",
+            aligned(t!(doctor_openshell_servers), servers.join(", "), DETAIL)
+        );
+        println!(
+            "{}",
+            aligned(
+                t!(doctor_openshell_version),
+                t!(doctor_openshell_unsupported),
+                DETAIL
+            )
+        );
+        *ending = ends_on(*ending, Ending::Failed);
     }
 }
 

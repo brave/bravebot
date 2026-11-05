@@ -601,6 +601,57 @@ fn a_call_made_with_empty_arguments_goes_back_to_the_model_as_an_empty_object() 
     assert_eq!(call["function"]["arguments"], "{}");
 }
 
+/// A server only a manifest run calls, such as one in an OpenShell sandbox, is not a turn's: its list
+/// is not put to the person, so a turn's answer is never mistaken for the run's, and nothing of it,
+/// tools or prompts, is offered or called.
+#[test]
+fn a_turn_puts_no_list_and_offers_no_tool_of_a_server_only_a_manifest_run_calls() {
+    let scratch = Scratch::new("manifest-only");
+    let (url, server) = serve_weather();
+    let session = Session::new(
+        vec![reach(&url).in_a_sandbox_for_manifest_runs(
+            Box::new(()),
+            bravebot_agent::mcp::Sandboxed {
+                name: "bb-1-0".into(),
+                image: "python:3.13-slim".into(),
+                hosts: Vec::new(),
+            },
+        )],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast for Paris").with_mcp(Some(session.clone())),
+        &mut confirmer,
+    );
+    assert!(
+        confirmer.lists.is_empty(),
+        "a turn asked about a list it does not offer: {:?}",
+        confirmer.lists
+    );
+    assert_eq!(methods(&server), ["initialize", "tools/list"]);
+    let held = CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))]);
+    assert!(session.in_a_turn(held).is_empty());
+    assert!(
+        session.prompt_request("/mcp__weather__forecast").is_none(),
+        "a turn could ask for a prompt of a server only a manifest run calls"
+    );
+    let [(alias, sandboxed)] = session
+        .sandboxed()
+        .try_into()
+        .expect("one sandboxed server");
+    assert_eq!(
+        (alias.as_str(), sandboxed.name.as_str()),
+        ("weather", "bb-1-0")
+    );
+}
+
 /// The whole road: the list is put to the person as it is drawn, a yes offers its tool with its
 /// description behind the margin, the call is put to the person with the planner's arguments, the
 /// arguments reach the server, and what the server answers never reaches the planner.

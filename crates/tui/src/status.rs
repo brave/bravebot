@@ -634,6 +634,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     if let Some(session) = &facts.servers.session {
         lines.extend(server_policy_lines(&session.policies()));
+        lines.extend(sandboxed_lines(&session.sandboxed()));
     }
 
     Report { lines }
@@ -811,7 +812,9 @@ fn standing_lines(facts: &Facts<'_>) -> Vec<Line> {
         started => {
             let line = Line::new(t!(status_mcp_servers), started.join(", "));
             match &facts.servers.session {
-                Some(session) => line.with_note(offering(&session.offering())),
+                Some(session) => {
+                    line.with_note(offering(&session.offering(), &manifest_only(session)))
+                }
                 None => line,
             }
         }
@@ -1186,6 +1189,25 @@ fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
     lines
 }
 
+/// What each server that runs in an OpenShell sandbox runs in, under the heading a confined
+/// server's policy is drawn under, since it answers the same question for that server.
+fn sandboxed_lines(servers: &[(String, bravebot_agent::mcp::Sandboxed)]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for (alias, sandboxed) in servers {
+        lines.push(Line::new(
+            t!(status_server_policy),
+            bravebot_agent::mcp::shown(alias),
+        ));
+        lines.extend(
+            sandboxed
+                .described()
+                .into_iter()
+                .map(|(label, value)| Line::new(&label, value)),
+        );
+    }
+    lines
+}
+
 /// A heading line, then one line under it for each row.
 fn rows(heading: Line, rows: &[String]) -> Vec<Line> {
     let mut lines = vec![heading];
@@ -1319,11 +1341,28 @@ pub(crate) fn tokens(count: u64) -> String {
     t!(count_tokens_thousands, thousands = thousands)
 }
 
+/// The aliases of the servers `session` holds that only a manifest run calls.
+pub(crate) fn manifest_only(session: &bravebot_agent::mcp::Session) -> Vec<String> {
+    session
+        .sandboxed()
+        .into_iter()
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
 /// How each server's tools stand, one clause for each.
-pub(crate) fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> String {
+pub(crate) fn offering(
+    servers: &[(String, bravebot_agent::mcp::Offering)],
+    manifest_only: &[String],
+) -> String {
     servers
         .iter()
         .map(|(alias, offering)| match offering {
+            // A server only a manifest run calls is put to the person before a run plans, and
+            // never before a turn.
+            bravebot_agent::mcp::Offering::Unasked if manifest_only.contains(alias) => {
+                t!(status_mcp_servers_unread_manifest, alias = alias)
+            }
             bravebot_agent::mcp::Offering::Unasked => t!(status_mcp_servers_unread, alias = alias),
             bravebot_agent::mcp::Offering::Tools(count) => {
                 t!(status_mcp_servers_tools, alias = alias, count = *count)
@@ -3514,12 +3553,15 @@ mod tests {
     #[test]
     fn each_servers_note_says_how_its_tools_stand() {
         use bravebot_agent::mcp::Offering;
-        let note = offering(&[
-            ("docs".to_string(), Offering::Unasked),
-            ("weather".to_string(), Offering::Tools(3)),
-            ("coins".to_string(), Offering::Tools(1)),
-            ("maps".to_string(), Offering::Declined),
-        ]);
+        let note = offering(
+            &[
+                ("docs".to_string(), Offering::Unasked),
+                ("weather".to_string(), Offering::Tools(3)),
+                ("coins".to_string(), Offering::Tools(1)),
+                ("maps".to_string(), Offering::Declined),
+            ],
+            &[],
+        );
         assert_eq!(
             note,
             [
@@ -3532,6 +3574,28 @@ mod tests {
         );
         assert!(note.contains("weather: 3 tools"), "{note}");
         assert!(note.contains("coins: one tool"), "{note}");
+    }
+
+    /// A server only a manifest run calls is said to be put to the person before a manifest run
+    /// plans, since a turn never puts its list.
+    #[test]
+    fn a_manifest_only_servers_note_says_a_manifest_run_puts_its_list() {
+        use bravebot_agent::mcp::Offering;
+        let note = offering(
+            &[
+                ("boxed".to_string(), Offering::Unasked),
+                ("docs".to_string(), Offering::Unasked),
+            ],
+            &["boxed".to_string()],
+        );
+        assert_eq!(
+            note,
+            [
+                t!(status_mcp_servers_unread_manifest, alias = "boxed"),
+                t!(status_mcp_servers_unread, alias = "docs"),
+            ]
+            .join("; ")
+        );
     }
 
     /// The policy a started server's backend was handed, drawn for the tests of `/status`.
@@ -3636,6 +3700,54 @@ mod tests {
                 "a policy was shown for a server that has none"
             );
         }
+    }
+
+    /// A server in an OpenShell sandbox is drawn under the heading a confined server's policy is:
+    /// the sandbox and its image, the hosts it may reach or none, that it reads only its image, and
+    /// that only a manifest run offers its tools.
+    #[test]
+    fn a_server_in_an_openshell_sandbox_says_what_it_runs_in_and_may_reach() {
+        let sandboxed = |hosts: &[&str]| bravebot_agent::mcp::Sandboxed {
+            name: "bb-42-0".into(),
+            image: "python:3.13-slim".into(),
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        };
+        let lines = sandboxed_lines(&[
+            (
+                "boxed".to_string(),
+                sandboxed(&["example.com", "api.example.org"]),
+            ),
+            ("closed".to_string(), sandboxed(&[])),
+        ]);
+        let pairs: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|line| (line.label.as_str(), line.value.as_str()))
+            .collect();
+        let heading = t!(status_server_policy);
+        let egress = t!(status_server_policy_egress);
+        assert_eq!(pairs[0], (heading, "boxed"));
+        assert!(
+            pairs.contains(&(
+                t!(status_server_openshell),
+                "OpenShell bb-42-0, made from python:3.13-slim"
+            )),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&(egress, "only example.com, api.example.org")),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&(egress, t!(status_server_policy_egress_closed))),
+            "{pairs:?}"
+        );
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(_, value)| *value == t!(status_server_openshell_manifest_runs))
+                .count(),
+            2
+        );
     }
 
     /// SERVERS-20: a path is drawn in full as the prompts that name one draw it, so a control

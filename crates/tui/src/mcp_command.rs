@@ -178,11 +178,17 @@ fn list(session: &mut Session, settings: &Settings) {
         return;
     }
     if !running.is_empty() {
+        let manifest_only = session
+            .servers
+            .session
+            .as_ref()
+            .map(crate::status::manifest_only)
+            .unwrap_or_default();
         session.note(t!(mcp_command_running));
         for server in running {
             session.note(format!(
                 "  {}",
-                crate::status::offering(std::slice::from_ref(&server))
+                crate::status::offering(std::slice::from_ref(&server), &manifest_only)
             ));
         }
     }

@@ -13,6 +13,7 @@ governs:
   - crates/config/src/import.rs
   - crates/cli/src/mcp.rs
   - crates/agent/src/servers.rs
+  - crates/agent/src/images.rs
   - crates/core/src/capability.rs
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
@@ -2363,3 +2364,108 @@ an earlier answer or a rule, so the pairs need it.
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_that_names_choice_arguments_keeps_them_and_approves_them`
 `verified-by: bravebot_browser::install::the_declaration_of_the_input_group_declares_the_element_number_of_its_three_tools_as_taking_a_choice`
 `verified-by: bravebot_browser::install::the_declared_choices_are_the_tools_whose_schema_takes_an_element_number`
+
+<a id="SERVERS-23"></a>
+### SERVERS-23: a local declaration may say it runs in an OpenShell sandbox made from one pinned image
+
+A stdio declaration may hold `"backend": "openshell"` and `"image": "<reference>"`, both or neither.
+`image` without `backend`, a `backend` other than `openshell`, or an image that is empty, longer than
+512 characters, starts with `-` or holds whitespace or a control character is a problem of that entry.
+A remote server cannot declare one. Both are part of the digest where `backend` is set, so a
+declaration that names neither digests as it did before, and changing either asks
+[SERVERS-4](#SERVERS-4)'s question again naming `backend`.
+
+`bravebot mcp add <alias> --openshell <image> -- <program> [args...]` writes the pair. The program is
+looked for in the image, so no `PATH` is asked for. A variable, a stored value, `--dir` or `--http`
+beside it, or an argument naming a file on this machine that the declaration would be granted, is
+refused by the check a session refuses it with, in its sentence, and nothing is written. An
+image named by a tag is pinned before anything is written: its registry is asked, through the egress
+gate and with no credential but the anonymous pull token Docker Hub and GHCR issue, for the manifest
+the tag names, as an index first, and the reference is written as `<image>@sha256:<digest>`, the
+digest being the sha256 of the manifest's bytes. Only that digest is released from what the registry
+sent. A reference that already carries a digest is written as typed. Where the registry cannot be
+reached, refuses, or the image is private, the add stops and says to give the image with its digest.
+
+The question, `get` and `list` say that the server runs in an OpenShell sandbox, from what image, and
+that its tools are offered to manifest runs only, under its row and no other's.
+
+**Why.** The image is the server's filesystem and its program, so it is part of what the person
+approves. A tag names whatever its registry points it at, so an approval of a tag would cover an image
+the person never saw once the tag moved.
+
+`verified-by: bravebot_config::mcp::a_backend_and_its_image_are_part_of_the_digest_and_native_digests_as_before`
+`verified-by: bravebot_config::mcp::a_backend_names_the_field_that_changed_and_survives_the_file`
+`verified-by: bravebot_config::mcp::a_backend_is_openshell_with_one_image_and_belongs_to_a_local_server`
+`verified-by: bravebot_cli::mcp::the_openshell_flag_names_the_image_of_a_local_server_and_asks_for_no_path`
+`verified-by: bravebot_cli::mcp::an_openshell_server_whose_arguments_name_a_file_here_is_refused_before_anything_is_written`
+`verified-by: bravebot_cli::mcp::list_and_get_say_which_server_runs_in_openshell_and_from_what_image`
+`verified-by: bravebot_agent::images::a_reference_is_read_as_a_registry_reads_it`
+`verified-by: bravebot_agent::images::what_is_not_a_reference_is_refused`
+`verified-by: bravebot_agent::images::a_pinned_reference_is_kept_and_nothing_is_fetched`
+`verified-by: bravebot_agent::images::the_digest_is_the_sha256_of_the_manifest_and_a_token_is_read_under_either_name`
+
+<a id="SERVERS-24"></a>
+### SERVERS-24: a session starts an OpenShell server in its own sandbox and offers its tools to manifest runs only
+
+A session that starts a server declared with `"backend": "openshell"` ([SERVERS-23](#SERVERS-23))
+creates one sandbox for it from the declared image ([SANDBOX-33](sandboxing.md#SANDBOX-33)), named
+`bb-` and twelve random letters and digits, and starts the program in it. The sandbox may reach the hosts the declaration's
+`allowed_hosts` names, less any the session's own host list leaves out and any it denies a name of,
+since an OpenShell policy can only allow, and none where the session's network is closed, the
+declaration names no host, or a denied entry cannot be read. Each host is passed in lower case
+with no trailing dot, and a name OpenShell does not take, such as one with `_` in it, is left out
+alone. A declaration that names a variable, a stored
+value, a file to read or a directory is not started, and the person is told what to remove. Nor is one whose image
+carries no digest, as a declaration written by hand may give a tag or a path: an approval of a
+reference that names no digest would cover whatever it names later, and the person is told to add
+the server again with `mcp add`, which pins it. Where
+OpenShell is not installed or the sandbox cannot be created with its policy confirmed, the server is
+not started and the person is told why. It is never started outside the sandbox in its place.
+
+The session holds the sandbox for as long as it holds the server, and deletes it when it lets the
+server go, a failed handshake included. A process ended by a signal deletes nothing, so each sandbox is recorded, with the process and
+the machine that made it, in `openshell-sandboxes` in the state directory before it is created, and
+the first OpenShell start of every process deletes each sandbox this machine recorded whose process is
+no longer running, and says which. A sandbox of a running process, one another machine recorded, as
+where two machines share a state directory, and one in no record, as another machine's on a shared
+gateway, is not touched. Where nothing may be written to the state directory, as in an
+incognito session, nothing is recorded or deleted.
+
+The managed layer ([SERVERS-12](#SERVERS-12)) matches such a server by the program and arguments as
+the image names them. A `mcp.deny` entry naming them refuses it, and no `mcp.allow` entry names it,
+since an allow entry names a command on this machine and the image, which the person chose, decides
+what is at that path inside it. Where `mcp.allow` is in force, a server in OpenShell is not started.
+
+Only a manifest run calls such a server. A turn's grants leave it out, so a turn neither puts its list
+to the person nor offers its tools, its prompts are neither listed nor fetched, and a manifest run puts the list before it plans
+([MANIFEST-15](manifest.md#MANIFEST-15)). `/status` draws it under the server-policy heading: the
+sandbox and its image, the hosts it may reach or none, that it reads only its image, and that its
+tools are offered to manifest runs only.
+
+Where any server is declared for OpenShell, `doctor` names those servers under `openshell`, with
+the version `openshell --version` gives and whether `openshell status` says its gateway is connected,
+and fails where the program is not found, is older than 0.1.7, or its gateway is not connected. Where
+no server is declared for it, `doctor` says nothing of OpenShell.
+
+**Why.** A manifest run fixes every call before it reads anything, so the hosts a server may reach and
+the tools it may be asked for are known when the sandbox is made, and nothing a server returns can
+widen them. A turn reads replies and decides again, and how this backend should serve a turn is not
+settled yet. Starting the program outside the sandbox would run it with the person's own access under
+an approval given for a sandbox.
+
+`verified-by: bravebot_agent::servers::an_openshell_declaration_is_planned_with_its_program_as_named_in_the_image`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_naming_variables_or_files_is_refused`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_whose_image_is_not_pinned_is_refused`
+`verified-by: bravebot_agent::servers::an_openshell_server_reaches_only_its_declared_hosts_within_the_session`
+`verified-by: bravebot_config::managed::an_allow_list_names_no_server_in_an_image_and_a_deny_entry_still_does`
+`verified-by: bravebot_agent::servers::a_server_declared_for_openshell_starts_in_a_recorded_sandbox_and_goes_with_the_session`
+`verified-by: bravebot_sandbox::hosts::a_denied_entry_overlapping_a_rule_at_all_denies_some_name_of_it`
+`verified-by: bravebot_agent::mcp::a_turn_puts_no_list_and_offers_no_tool_of_a_server_only_a_manifest_run_calls`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls`
+`verified-by: bravebot_tui::status::a_server_in_an_openshell_sandbox_says_what_it_runs_in_and_may_reach`
+`verified-by: bravebot_sandbox::openshell::only_a_recorded_sandbox_of_an_ended_process_is_left_behind`
+`verified-by: bravebot_sandbox::openshell::a_record_holds_this_process_and_a_sweep_keeps_a_running_one`
+`verified-by: bravebot_sandbox::openshell::a_name_is_random_and_fits_openshell`
+`verified-by: bravebot_mcp::openshell::a_recorded_sandbox_of_an_ended_process_is_removed_and_no_other`
+`verified-by: bravebot_sandbox::openshell::the_version_and_the_gateway_are_read_from_what_openshell_prints`
+`verified-by: bravebot_cli::mcp::doctor_is_told_the_servers_declared_for_openshell_and_no_others`

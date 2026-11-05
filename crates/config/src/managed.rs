@@ -126,6 +126,10 @@ pub enum Server<'a> {
     Local(&'a [String]),
     /// A remote server, by the url it was declared with.
     Remote(&'a str),
+    /// A server run inside a container image, by the program as the image names it, then its
+    /// arguments. No allow entry names one, since an allow entry names a command on this machine and
+    /// the image, which the person chose, decides what is at that path inside it.
+    InImage(&'a [String]),
 }
 
 /// One entry of `mcp.allow` or `mcp.deny`.
@@ -141,7 +145,9 @@ impl Rule {
     /// Whether this entry names `server`, whose url's host, where it has one, is `host`.
     fn names(&self, server: Server<'_>, host: Option<&str>) -> bool {
         match (self, server) {
-            (Rule::Command(argv), Server::Local(started)) => argv.as_slice() == started,
+            (Rule::Command(argv), Server::Local(started) | Server::InImage(started)) => {
+                argv.as_slice() == started
+            }
             (Rule::Host(entry), Server::Remote(_)) => host.is_some_and(|host| {
                 match entry.strip_prefix("*.") {
                     // A label and a dot before the rest, so `*.corp.example` is neither
@@ -468,11 +474,12 @@ impl Managed {
     /// (SERVERS-12).
     ///
     /// The alias is not compared, because the person declaring a server chooses it. A deny entry
-    /// is read before the allow list, so a server both name is denied.
+    /// is read before the allow list, so a server both name is denied. A server in an image is
+    /// matched by a deny entry as a local one is, and by no allow entry.
     pub fn refuses(&self, server: Server<'_>) -> Option<(&Path, Refusal<'_>)> {
         let host = match server {
             Server::Remote(url) => plain_host(url),
-            Server::Local(_) => None,
+            Server::Local(_) | Server::InImage(_) => None,
         };
         let refusal = match self
             .denied
@@ -490,9 +497,10 @@ impl Managed {
                 .allowed
                 .as_ref()
                 .filter(|allowed| {
-                    !allowed
-                        .iter()
-                        .any(|rule| rule.names(server, host.as_deref()))
+                    matches!(server, Server::InImage(_))
+                        || !allowed
+                            .iter()
+                            .any(|rule| rule.names(server, host.as_deref()))
                 })
                 .map(|_| Refusal::NotAllowed),
         };
@@ -1209,6 +1217,32 @@ mod tests {
         {"host": "[::1]"},
         {"command": ["/usr/local/bin/approved-server", "--stdio"]}
     ]}}"#;
+
+    /// A server in an image is named by no allow entry, since the image decides what is at a path
+    /// inside it, and a deny entry still names it by its argv.
+    #[test]
+    fn an_allow_list_names_no_server_in_an_image_and_a_deny_entry_still_does() {
+        let argv = vec![
+            "/usr/local/bin/approved-server".to_string(),
+            "--stdio".to_string(),
+        ];
+        let allowing = scratch("managed-allow-image", CORP);
+        assert!(allowing.refuses(Server::Local(&argv)).is_none());
+        assert!(matches!(
+            allowing.refuses(Server::InImage(&argv)),
+            Some((_, Refusal::NotAllowed))
+        ));
+        let denying = scratch(
+            "managed-deny-image",
+            r#"{"mcp": {"deny": [{"command": ["/usr/local/bin/approved-server", "--stdio"]}]}}"#,
+        );
+        assert!(matches!(
+            denying.refuses(Server::InImage(&argv)),
+            Some((_, Refusal::Denied(_)))
+        ));
+        let open = scratch("managed-open-image", r#"{"mcp": {}}"#);
+        assert!(open.refuses(Server::InImage(&argv)).is_none());
+    }
 
     /// An allow list is the form that holds: the person chooses an alias and cannot choose what
     /// the list names, so a server it does not name is not started whatever it is called.
