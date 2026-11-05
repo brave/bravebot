@@ -5718,7 +5718,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Number the entries of the list in `list` for a processor, into the slot `into`, and give
-    /// back the entries as the rows will be resolved against them.
+    /// back the entries as the rows will be resolved against them. `at` is where in the reply the
+    /// list is, as the plan wrote it: a JSON pointer such as `/items`, or nothing for the reply
+    /// itself.
     ///
     /// A release to another crate's reader, as [`Policy::read_a_number`] is: the list's text goes to
     /// `reader`, which decides which entries count, from the fields the plan's arguments take, and
@@ -5728,10 +5730,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn number_a_list(
         &mut self,
         list: &SlotId,
+        at: &str,
         fields: &BTreeSet<String>,
         into: SlotId,
         slots: &mut crate::slot::SlotStore,
-        reader: fn(&str, &BTreeSet<String>) -> crate::apply::Numbered,
+        reader: fn(&str, &str, &BTreeSet<String>) -> crate::apply::Numbered,
     ) -> Gated<Labelled<crate::apply::Entries>> {
         let content = slots.take_for_reading(list).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -5741,7 +5744,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise(
             "a list, read for its entries by a reader outside the driver",
         );
-        let numbered = reader(&content.declassify(&proof), fields);
+        let numbered = reader(&content.declassify(&proof), at, fields);
         let shown = Labelled::new(numbered.shown, label);
         self.store_in_slot(
             "apply",

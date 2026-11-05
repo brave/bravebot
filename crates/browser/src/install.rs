@@ -234,12 +234,24 @@ const CHOICES: &[(&str, &str, &str)] = &[
 /// The arguments of a group's tools a row of a plan's `apply` step may fill, with their kind, which
 /// `install` declares with `--apply`: a bookmark's `url` copied from a list a read returned, a
 /// folder's `title` the processor writes for the folder the call creates, and the `folder` a
-/// bookmark moves to, taken from the row that made it or from a folder the list holds
+/// bookmark moves to, taken from the row that made it or from a folder the list holds. A
+/// bookmark's new title and a reading list entry's title are values the call sets, not names it
+/// looks up, so they may be new text; every URL a call acts on is copied from a list
 /// (`docs/design/manifest-apply.md`).
 const APPLIES: &[(&str, &str, &str, &str)] = &[
     ("bookmarks-write", "create_bookmark_folder", "title", "new"),
     ("bookmarks-write", "move_bookmark", "url", "entry"),
     ("bookmarks-write", "move_bookmark", "folder", "row,entry"),
+    ("bookmarks-write", "rename_bookmark", "url", "entry"),
+    ("bookmarks-write", "rename_bookmark", "title", "new"),
+    ("bookmarks-write", "add_reading_list_entry", "url", "entry"),
+    (
+        "bookmarks-write",
+        "add_reading_list_entry",
+        "title",
+        "entry,new",
+    ),
+    ("tabs-manage", "pin_tab", "url", "entry"),
 ];
 
 impl Installed {
@@ -675,10 +687,12 @@ mod tests {
             installed.declaration(Some("bookmarks-write")),
             "bravebot mcp add brave-bookmarks-write -s user \
              --apply create_bookmark_folder:title=new --apply move_bookmark:url=entry \
-             --apply move_bookmark:folder=row,entry --dir /d -- /p/bravebot-browser mcp --group \
+             --apply move_bookmark:folder=row,entry --apply rename_bookmark:url=entry \
+             --apply rename_bookmark:title=new --apply add_reading_list_entry:url=entry \
+             --apply add_reading_list_entry:title=entry,new --dir /d -- /p/bravebot-browser mcp --group \
              bookmarks-write"
         );
-        for other in tools::ids().filter(|id| *id != "bookmarks-write") {
+        for other in tools::ids().filter(|id| !["bookmarks-write", "tabs-manage"].contains(id)) {
             assert!(
                 !installed
                     .declaration(Some(other))

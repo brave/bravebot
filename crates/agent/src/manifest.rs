@@ -342,7 +342,8 @@ const REGISTRY: &[Advertised] = &[
                   with apply: an isolated processor proposes the calls, and the person approves the \
                   whole list before any is made",
         args: "server*, tools* (comma-separated tool names of that server), list* (the slot a \
-               SERVER_READ filled), instruction* (what to do with the items, for the processor), \
+               SERVER_READ filled), entries (where the list is in that reply, as a JSON pointer \
+               such as /items, where the reply is not the list itself), instruction* (what to do with the items, for the processor), \
                arguments* (a JSON object: for each tool, each argument with its kind), max_rows, \
                max_new",
     },

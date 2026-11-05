@@ -41,11 +41,12 @@ pub fn read<S: Sink>(
 pub fn number_a_list<S: Sink>(
     policy: &mut Policy<'_, S>,
     list: &SlotId,
+    at: &str,
     fields: &BTreeSet<String>,
     into: SlotId,
     slots: &mut SlotStore,
 ) -> Result<Labelled<Entries>, Denial> {
-    policy.number_a_list(list, fields, into, slots, rows::number)
+    policy.number_a_list(list, at, fields, into, slots, rows::number)
 }
 
 /// Read a processor's answer for the rows it proposed, resolved against `entries` and `shape`.
