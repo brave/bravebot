@@ -15,7 +15,7 @@ use crate::progress::{printable, printable_path};
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
-    Home, Person, choices_line, drawn, indent, no_state_directory, problem, say,
+    Home, Person, applies_line, choices_line, drawn, indent, no_state_directory, problem, say,
 };
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
@@ -1126,6 +1126,7 @@ pub(crate) fn report(
                     rows.push(format!("{under}{}", t!(mcp_openshell, image = image)));
                 }
                 rows.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
+                rows.extend(applies_line(declaration).map(|line| format!("{under}{line}")));
                 let request = file.map(|file| {
                     match grant(
                         alias,

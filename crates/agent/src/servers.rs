@@ -1734,6 +1734,7 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
         lines.push(format!("{indent}{}", t!(mcp_declaration_asks_every_call)));
     }
     lines.extend(choices_line(declaration).map(|line| format!("{indent}{line}")));
+    lines.extend(applies_line(declaration).map(|line| format!("{indent}{line}")));
     lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
     lines
 }
@@ -1751,6 +1752,21 @@ pub fn choices_line(declaration: &Declaration) -> Option<String> {
         })
         .collect();
     (!pairs.is_empty()).then(|| t!(mcp_declaration_choice_arguments, pairs = pairs.join(", ")))
+}
+
+/// The arguments a row of a plan's apply step may fill, as `tool:argument=kind`, or nothing where
+/// the declaration names none.
+pub fn applies_line(declaration: &Declaration) -> Option<String> {
+    let named: Vec<String> = declaration
+        .apply_arguments()
+        .iter()
+        .flat_map(|(tool, arguments)| {
+            arguments.iter().map(move |(argument, kind)| {
+                format!("{}:{}={}", shown(tool), shown(argument), shown(kind))
+            })
+        })
+        .collect();
+    (!named.is_empty()).then(|| t!(mcp_declaration_apply_arguments, named = named.join(", ")))
 }
 
 /// The margin the lines under a declaration's first one start at.

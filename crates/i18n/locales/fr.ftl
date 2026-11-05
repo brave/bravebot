@@ -1389,6 +1389,7 @@ mcp-declaration-tools = outils : { $names }
 mcp-declaration-exclude-tools = outils exclus : { $names }
 mcp-declaration-asks-every-call = chaque appel est demandé, et aucune réponse n'est conservée
 mcp-declaration-choice-arguments = arguments qui acceptent un choix : { $pairs }
+mcp-declaration-apply-arguments = arguments qu'une étape apply d'un plan peut remplir : { $named }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?

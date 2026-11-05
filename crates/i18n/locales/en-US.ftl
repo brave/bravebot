@@ -1673,6 +1673,7 @@ mcp-declaration-exclude-tools = exclude tools: { $names }
 mcp-declaration-asks-every-call = every call is asked about, and no answer to one is remembered
 # The arguments a declaration says a choice may fill, each as tool:argument.
 mcp-declaration-choice-arguments = arguments that take a choice: { $pairs }
+mcp-declaration-apply-arguments = arguments a plan's apply step may fill: { $named }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
