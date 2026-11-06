@@ -985,10 +985,24 @@ documents show:
   no other, so where it is used, assume the wheel and a click arrive, and that a drag, the target
   under the pointer and a column past 223 may not.
 
-This is what the multiplexers' documents say, and the session has not been run inside either. If the
-wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier above to
-select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the session
-asking for the mouse at all.
+Run with tmux 3.8 and GNU screen 4.00.03 (FAU) on macOS, a single pane filling the whole window, no
+splits: the wheel scrolled the transcript, and a right click opened the session's own menu, through
+both, byte-identical to running outside either. A drag that selected text and a release that followed
+copied the selection to the system clipboard through tmux, by the platform's own clipboard command
+rather than by OSC 52 (the session is local, not reached over `ssh`, so OSC 52 is not the path either
+takes here). tmux forwarded the wheel and the click whether its own `mouse` option was on or off, for
+this one pane filling the window: the option is what tmux needs to tell a click on its own status
+line or a pane's border from a click meant for the pane, and there is neither here. Screen forwarded
+both with no multiplexer setting of its own, asked or not: an SGR report matches none of the escape
+sequences screen reads for itself, so it passes through a window the way a byte sequence screen does
+not recognize at all does.
+
+Not run: a drag and the scrollbar past the bottom edge, the footer naming what the pointer is over,
+copying through GNU screen specifically (only tmux's copy was checked against the clipboard), a
+column past 223 behind either multiplexer, and more than one pane or window open at once in either.
+Where the wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier
+above to select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the
+session asking for the mouse at all.
 
 ### `tui.contextMenu`
 
