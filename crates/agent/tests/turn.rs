@@ -66663,27 +66663,44 @@ fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
     let cancel = bravebot_core::cancel::Cancel::new();
 
-    let outcome = thread::scope(|scope| {
-        scope.spawn(|| {
-            thread::sleep(std::time::Duration::from_millis(1_200));
-            cancel.cancel();
+    // The stop comes once the second round's first attempt has reached the server, which answers
+    // it with a 503. The client waits a second before it sends another, so the stop always falls
+    // after one attempt of that call and before the next.
+    let stop = &cancel;
+    let (outcome, (asked, received)) = thread::scope(|scope| {
+        let watcher = scope.spawn(move || {
+            let mut asked = Vec::new();
+            while asked.len() < 2 {
+                match received.recv_timeout(std::time::Duration::from_secs(30)) {
+                    Ok(body) if body.contains(A_CHECK_ASKING) => {}
+                    Ok(body) => asked.push(body),
+                    Err(_) => break,
+                }
+            }
+            stop.cancel();
+            (asked, received)
         });
-        take_a_turn_reporting(
+        let outcome = take_a_turn_reporting(
             &config,
             &workspace,
             &mut conversation,
             Task::new("what does target.txt say?"),
             &mut reporter,
             &cancel,
-        )
+        );
+        (outcome, watcher.join().expect("watcher"))
     });
 
     let error = outcome.expect_err("the turn was stopped");
+    assert_eq!(asked.len(), 2, "the second round never reached the server");
+    let later: Vec<String> = received
+        .try_iter()
+        .filter(|body| !body.contains(A_CHECK_ASKING))
+        .collect();
+    assert!(later.is_empty(), "an attempt was sent after the stop");
     assert_eq!(
         error.ending(),
-        bravebot_agent::Ending::Stopped {
-            attempts: Some(received.try_iter().count() as u32 - 1)
-        },
+        bravebot_agent::Ending::Stopped { attempts: Some(1) },
         "a stop was reported as a failure"
     );
     assert_eq!(
