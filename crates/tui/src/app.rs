@@ -19894,11 +19894,30 @@ mod tests {
 
     fn drafted(message: &str) -> bravebot_agent::commit_message::Drafted {
         bravebot_agent::commit_message::Drafted {
-            message: message.to_string(),
+            message: Some(message.to_string()),
             partial: false,
             substituted: None,
             usage: bravebot_aichat::protocol::Usage::default(),
         }
+    }
+
+    /// CMD-23, LABEL-8: a draft about a path nobody vouched for is not put in the box. Enter would
+    /// send it to the planner as the person's own typed line, and only a draft the planner could
+    /// have held may go there.
+    #[test]
+    fn a_draft_that_met_something_untrusted_is_held_back_with_a_note() {
+        let mut session = Session::new("none");
+        for c in "typing".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        let mut done = drafted("Rename old to renamed");
+        done.message = None;
+        commit_message_answered(&mut session, Ok(done));
+        assert_eq!(session.input(), "typing", "the box was changed");
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(commit_message_untrusted)
+        );
     }
 
     /// CMD-23, CMD-1: a draft that is itself a command is put in the box after the driver's words,

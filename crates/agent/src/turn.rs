@@ -7106,7 +7106,10 @@ mod tests {
             let carried = scripted::sessions();
             scripted::clear();
 
-            assert_eq!(drafted.expect("a draft").message, "Rename old to renamed");
+            assert_eq!(
+                drafted.expect("a draft").message,
+                Some("Rename old to renamed".to_string())
+            );
             assert_eq!(carried, vec![carried_by(&session)]);
         }
 
