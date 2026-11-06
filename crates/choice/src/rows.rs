@@ -23,6 +23,7 @@ use bravebot_core::apply::{
     Call, Dropped, Entries, Kind, LARGEST_ENTRIES, LARGEST_LIST, LONGEST_NEW, Numbered, Resolved,
     Shape, Source,
 };
+use bravebot_core::invisible::draws_as_nothing;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -136,12 +137,13 @@ fn whole(text: &str) -> Option<usize> {
     ok.then(|| text.parse().ok()).flatten()
 }
 
-/// New text as it may be sent: one line, with every character that hides, reorders or controls
-/// text made a space, trimmed. `None` where nothing is left or it is too long.
+/// New text as it may be sent: one line, with every control character and every character that
+/// draws as nothing ([`draws_as_nothing`], which holds the line and paragraph separators) made a
+/// space, trimmed. `None` where nothing is left or it is too long.
 fn cleaned(text: &str) -> Option<String> {
     let blanked: String = text
         .chars()
-        .map(|c| match c.is_control() || hides(c) {
+        .map(|c| match c.is_control() || draws_as_nothing(c) {
             true => ' ',
             false => c,
         })
@@ -149,14 +151,6 @@ fn cleaned(text: &str) -> Option<String> {
     let trimmed = blanked.trim();
     let fits = !trimmed.is_empty() && trimmed.chars().count() <= LONGEST_NEW;
     fits.then(|| trimmed.to_string())
-}
-
-/// Whether a character changes how the text around it draws or draws as nothing.
-fn hides(c: char) -> bool {
-    matches!(
-        c,
-        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
-    )
 }
 
 /// Resolve the rows of `answer` against the entries of each list and the plan's `shape`.
@@ -490,11 +484,11 @@ mod tests {
         number(LIST, "", "marks", &BTreeSet::from(["url".to_string()])).entries
     }
 
-    /// Only the entries with every field an argument takes are numbered, from 1 and in order, and
+    /// Only the entries with a field an argument takes are numbered, from 1 and in order, and
     /// the processor is shown that numbering with each whole entry, so a title that claims another
     /// number changes nothing.
     #[test]
-    fn a_list_numbers_only_the_entries_that_hold_every_field() {
+    fn a_list_numbers_only_the_entries_that_hold_a_needed_field() {
         let numbered = number(LIST, "", "marks", &BTreeSet::from(["url".to_string()]));
         assert_eq!(numbered.entries.0.len(), 3);
         assert_eq!(numbered.entries.0[0]["url"], "https://brave.com/");
@@ -689,6 +683,10 @@ row 9: tool 1 title=new:7
         assert_eq!(cleaned("  A\u{202E}B\nC  ").as_deref(), Some("A B C"));
         assert_eq!(cleaned("\u{200B}\t"), None);
         assert_eq!(cleaned(&"x".repeat(65)), None);
+        assert_eq!(
+            cleaned("A\u{2028}B\u{061C}C\u{E0041}D").as_deref(),
+            Some("A B C D")
+        );
         let shape = Shape {
             max_rows: 1,
             max_new: 1,

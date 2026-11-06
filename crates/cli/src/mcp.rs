@@ -714,7 +714,7 @@ fn choose(pair: &str, choices: &mut ChoiceArguments) -> Result<(), Refusal> {
 }
 
 /// One `--apply` word, `<tool>:<argument>=<kind>`, kept with the others. Whether the names are
-/// words a tool may be offered under, and the kind one of `entry`, `new` or `row`, is the
+/// words a tool may be offered under, and the kind one of `entry`, `entries`, `new` or `row`, is the
 /// declaration's to check.
 fn apply(named: &str, applies: &mut ApplyArguments) -> Result<(), Refusal> {
     let (tool, rest) = named

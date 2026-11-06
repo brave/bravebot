@@ -260,14 +260,14 @@ pub enum Problem {
 pub type ChoiceArguments = BTreeMap<String, BTreeSet<String>>;
 
 /// The arguments of a server's tools a declaration says a row of an `apply` step may fill, by
-/// tool, each with the kind it may take: `entry`, a value copied from a list; `new`, short text for
-/// a thing the call creates; or `row`, a value an earlier row of the step gave
-/// (`docs/design/manifest-apply.md`).
+/// tool, each with the kind it may take: `entry`, a value copied from a list; `entries`, that value
+/// of several entries of one list as an array; `new`, short text for a value the call sets; or
+/// `row`, the new text an earlier row of the step gave (`docs/design/manifest-apply.md`).
 pub type ApplyArguments = BTreeMap<String, BTreeMap<String, String>>;
 
 /// The kinds an argument of [`ApplyArguments`] may take. A declaration may name several for one
 /// argument, joined by commas, and a row then gives whichever of them it chooses.
-pub const APPLY_KINDS: [&str; 3] = ["entry", "new", "row"];
+pub const APPLY_KINDS: [&str; 4] = ["entry", "entries", "new", "row"];
 
 /// How long a server has for its handshake and for each call, where a declaration says.
 ///
@@ -4014,6 +4014,37 @@ mod tests {
         );
         assert_eq!(remote.clone().choosing(ChoiceArguments::new()), Ok(remote));
         assert!(weather().choosing(ChoiceArguments::new()).is_ok());
+    }
+
+    /// The arguments a row of an `apply` step may fill are taken on a local server that does not
+    /// ask every call, with each kind the install output of a server prints, `entries` and a
+    /// choice of kinds included, and refused on a remote server, on one that asks every call, and
+    /// for a kind that is not one. The regression it rejects is a kind the install output prints
+    /// that the declaration then refuses, which left a declared tool unusable.
+    #[test]
+    fn apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call() {
+        let applies = |kind: &str| -> ApplyArguments {
+            BTreeMap::from([(
+                "group_tabs".to_string(),
+                BTreeMap::from([("urls".to_string(), kind.to_string())]),
+            )])
+        };
+        for kind in ["entry", "entries", "new", "row", "row,entry", "entry,new"] {
+            let built = weather().applying(applies(kind)).expect(kind);
+            assert_eq!(built.apply_arguments(), &applies(kind), "{kind}");
+        }
+        assert_eq!(weather().applying(applies("url")), Err(Problem::Apply));
+        assert_eq!(
+            weather()
+                .asking_every_call(true)
+                .applying(applies("entries")),
+            Err(Problem::ApplyWhileAsking)
+        );
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        assert_eq!(
+            remote.applying(applies("entries")),
+            Err(Problem::Remote("apply_arguments"))
+        );
     }
 
     /// SERVERS-22. The arguments are part of what an approval binds to only where there are any, so
