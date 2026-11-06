@@ -1,6 +1,6 @@
 # Bravebot mobile
 
-The React Native app described in [docs/design/mobile/app-shell.md](../docs/design/mobile/app-shell.md). It is a shell that builds and runs on both platforms and shows a blank slate, because no target is connected yet. It is a bare React Native 0.87.1 app (React 19.2.3, Hermes) that consumes [`packages/agent-client`](../packages/agent-client/README.md) by link. Its one native dependency beyond React Native is `react-native-safe-area-context`. The dependency review is [docs/design/mobile/app-dependencies.md](../docs/design/mobile/app-dependencies.md).
+The React Native app described in [docs/design/mobile/app-shell.md](../docs/design/mobile/app-shell.md). It builds and runs on both platforms. A release build has no target and shows a blank slate. A development build offers a form there that connects to `bravebot-host` through the development relay ([Connect to a host](#connect-to-a-host)). It is a bare React Native 0.87.1 app (React 19.2.3, Hermes) that consumes [`packages/agent-client`](../packages/agent-client/README.md) by link. Its one native dependency beyond React Native is `react-native-safe-area-context`. The dependency review is [docs/design/mobile/app-dependencies.md](../docs/design/mobile/app-dependencies.md).
 
 ## Requirements
 
@@ -23,7 +23,7 @@ pnpm run check                                  # tsc --noEmit, then jest
 
 ## Release builds
 
-A debug build asks for the network because it fetches its JavaScript from Metro, and a release build asks for none, because the app has no network target. Add `INTERNET` to the main Android manifest with the first target that needs it. The release variant is signed only with a key supplied in the Gradle properties `BRAVEBOT_RELEASE_STORE_FILE`, `BRAVEBOT_RELEASE_STORE_PASSWORD`, `BRAVEBOT_RELEASE_KEY_ALIAS` and `BRAVEBOT_RELEASE_KEY_PASSWORD`, for example in `~/.gradle/gradle.properties`. Without them it is left unsigned, so the template's public debug key never signs a release. Neither platform has a release or distribution build tested yet.
+A debug build asks for the network because it fetches its JavaScript from Metro and can reach the development relay, and a release build asks for none, because the release app has no network target. Add `INTERNET` to the main Android manifest with the first target that needs it. The release variant is signed only with a key supplied in the Gradle properties `BRAVEBOT_RELEASE_STORE_FILE`, `BRAVEBOT_RELEASE_STORE_PASSWORD`, `BRAVEBOT_RELEASE_KEY_ALIAS` and `BRAVEBOT_RELEASE_KEY_PASSWORD`, for example in `~/.gradle/gradle.properties`. Without them it is left unsigned, so the template's public debug key never signs a release. Neither platform has a release or distribution build tested yet.
 
 ## App icon
 
@@ -65,6 +65,16 @@ xcrun simctl launch <simulator id> com.brave.bravebot
 Building runs the project's "Sync SPM Autolinking" phase, which regenerates `ios/build/` (ignored by git) and downloads the prebuilt React Native and Hermes XCFrameworks into `~/Library/Caches/ReactNative` on first use. A device build needs a development team set in Xcode. The app is portrait only on iPhone and iPad (`UIRequiresFullScreen` is set so iPad can be portrait only).
 
 Do not run `pod install`. `ios/Podfile` is a placeholder with no dependencies, kept because the React Native CLI finds the iOS project through a file of that name. After `npx react-native spm update` check that `HERMES_CLI_PATH` in `ios/Bravebot.xcodeproj/project.pbxproj` is still `$(SRCROOT)/../node_modules/hermes-compiler/hermesc/osx-bin/hermesc`, because the tool writes an absolute path.
+
+## Connect to a host
+
+A development build (`__DEV__`) shows a Port and a Code field on the "Nothing is connected" screen. They reach `bravebot-host` through the development relay in [packages/agent-client](../packages/agent-client/README.md#the-development-relay), which listens only on the computer's 127.0.0.1. Use it with synthetic data only. It does not resolve U1 or authorize control of a real session.
+
+1. Build the host and the client with `make check-agent-client` from the repository root, then start the demo there: `node packages/agent-client/dist/scripts/dev-relay-demo.js --host "$PWD/target/debug/bravebot-host"`. It prints `dev-relay: listening on 127.0.0.1 port <port>; the code for this launch is <code>`.
+2. Carry the port to the device. On Android, `adb reverse tcp:<port> tcp:<port>` for the device or emulator. The iOS simulator shares the computer's 127.0.0.1 and needs nothing. A physical iPhone has no such tunnel and is not supported.
+3. In the app, enter the port and the code and press Connect. The demo's workspace opens with a new session.
+
+The relay takes one connection per launch. A wrong code ends it, and so does closing the app's connection. Type `launch` in the demo's terminal for a new port and code (run `adb reverse` again for the new port), or `quit` to stop. When the connection ends the app returns to the form and says why.
 
 ## How the iOS project was made
 
