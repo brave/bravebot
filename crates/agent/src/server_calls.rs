@@ -594,8 +594,8 @@ impl Servers {
                     if retried {
                         return Ok((
                             format!(
-                                "the processor proposed no call to {alias}; the list it was given \
-                                 may hold nothing the plan's arguments can take"
+                                "the processor proposed no call to {alias} ({error}); the list it \
+                                 was given may hold nothing the plan's arguments can take"
                             ),
                             error.completed_usage().unwrap_or_default(),
                         ));

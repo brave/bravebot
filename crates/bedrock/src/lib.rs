@@ -61,6 +61,10 @@ pub enum BedrockError {
     Frame(eventstream::FrameError),
     /// A well-formed response carrying no usable content.
     NoContent,
+    /// A well-formed response in which the model only thought: it ended its turn with reasoning
+    /// and no answer or call. Told apart from [`BedrockError::NoContent`] so a person reading why a
+    /// call failed can see which happened; both are an empty reply to ask for again.
+    ThoughtOnly,
     /// The stream stopped without the service saying the reply was over.
     Incomplete,
     /// The reply began and then stopped arriving, on a request that let the service hold a tool's
@@ -112,6 +116,9 @@ impl fmt::Display for BedrockError {
             Self::Egress(e) => write!(f, "{e}"),
             Self::Frame(e) => write!(f, "{e}"),
             Self::NoContent => f.write_str("the response contained no message content"),
+            Self::ThoughtOnly => {
+                f.write_str("the model thought and then ended its turn without writing an answer")
+            }
             Self::Incomplete => {
                 f.write_str("the reply stopped before the service said it was finished")
             }
@@ -629,7 +636,12 @@ impl<'a> BedrockClient<'a> {
             return self.what_was_written(content, label, model, usage, cut_off);
         }
         if content.is_empty() && calls.is_empty() {
-            return Err(BedrockError::NoContent);
+            return Err(
+                match blocks.iter().any(protocol::ReplyBlock::is_reasoning) {
+                    true => BedrockError::ThoughtOnly,
+                    false => BedrockError::NoContent,
+                },
+            );
         }
 
         Ok(Completion {
@@ -851,7 +863,10 @@ impl<'a> BedrockClient<'a> {
 
         let calls = reply.calls();
         if reply.text.is_empty() && calls.is_empty() {
-            return Err(BedrockError::NoContent);
+            return Err(match reply.thought {
+                true => BedrockError::ThoughtOnly,
+                false => BedrockError::NoContent,
+            });
         }
 
         Ok(Completion {
@@ -4271,6 +4286,81 @@ mod tests {
             );
         }
     }
+    /// A reply that ends its turn with reasoning and no answer is told apart from an empty one, in
+    /// a whole reply and in a streamed one, so a person reading why a call failed can see that the
+    /// model only thought. Rejects an implementation that reports both the same way.
+    #[test]
+    fn a_reply_that_only_thought_is_told_apart_from_an_empty_one() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for streaming in [false, true] {
+            let body = if streaming {
+                let mut body = Vec::new();
+                for payload in [
+                    br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"Let me look"}}}"#
+                        .as_slice(),
+                    br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"c2ln"}}}"#,
+                ] {
+                    body.extend(eventstream::tests::frame("contentBlockDelta", payload));
+                }
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"end_turn"}"#,
+                ));
+                body.extend(eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":5,"outputTokens":7,"totalTokens":12}}"#,
+                ));
+                body
+            } else {
+                serde_json::json!({
+                    "output": {"message": {"content": [
+                        {"reasoningContent": {"reasoningText": {"text": "Let me look", "signature": "c2ln"}}}
+                    ]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 5, "outputTokens": 7, "totalTokens": 12},
+                })
+                .to_string()
+                .into_bytes()
+            };
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend(body);
+            let (http, _received) = scripted_responses(vec![response]);
+            let config = config();
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let error = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .unwrap_err();
+            assert!(
+                matches!(error, BedrockError::ThoughtOnly),
+                "streaming {streaming}: {error:?}"
+            );
+        }
+    }
+
     /// Usage is decoded even when assistant content cannot be decoded, and never guessed.
     #[test]
     fn malformed_replies_keep_only_valid_reported_usage() {
