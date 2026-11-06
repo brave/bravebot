@@ -1,4 +1,4 @@
-// Making, editing and setting the model of a desktop bot, through the real `bravebot-rpc` (BOT-5, BOT-6, BOT-7).
+// Making, editing, setting the model, archiving, restoring and deleting a desktop bot, through the real `bravebot-rpc` (BOT-5, BOT-6, BOT-7, BOT-8).
 // Run after `pnpm run bridge`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -190,3 +190,82 @@ for (const [name, change] of Object.entries(CHANGES)) {
     })
   }
 }
+
+const waitUntil = async (laterThan) => {
+  const start = Date.now()
+  while (Date.now() <= laterThan) {
+    if (Date.now() - start > 3000) throw new Error(`the clock did not move past ${laterThan}`)
+    await new Promise((resolve) => setTimeout(resolve, 2))
+  }
+}
+
+test('archiving an archived bot stamps retired again without rewriting the definition, and restoring sets it to zero', async () => {
+  const f = await fixture()
+  try {
+    const made = await f.main.saveForm({ name: 'Custodian', purpose: 'Keep the harbour lights lit', model: 'provider/model-a' })
+    const definition = join(f.agents, `${made.definition}.md`)
+    const bytes = Buffer.concat([readFileSync(definition), Buffer.from('Hand edited.\n')])
+    writeFileSync(definition, bytes)
+
+    await waitUntil(made.updated)
+    const first = await f.main.retireBot(made.slug, true)
+    assert.ok(first.retired > 0)
+    assert.notEqual(first.updated, made.updated)
+    assert.equal(first.retired, first.updated)
+    assert.equal(first.purpose, made.purpose)
+    assert.equal(first.created, made.created)
+    assert.deepEqual(readFileSync(definition), bytes)
+
+    await waitUntil(first.retired)
+    const second = await f.main.retireBot(made.slug, true)
+    assert.ok(second.retired > first.retired)
+    assert.notEqual(second.updated, first.updated)
+    assert.equal(second.name, made.name)
+    assert.equal(second.model, made.model)
+    assert.deepEqual(readFileSync(definition), bytes)
+
+    await waitUntil(second.updated)
+    const restored = await f.main.retireBot(made.slug, false)
+    assert.equal(restored.retired, 0)
+    assert.notEqual(restored.updated, second.updated)
+    assert.equal(restored.slug, made.slug)
+    assert.deepEqual(readFileSync(definition), bytes)
+    assert.equal(f.rows().find((each) => each.slug === made.slug).retired, 0)
+  } finally { f.clean() }
+})
+
+test('a delete removes the row and the bot folder and leaves the definition, the session, the memory, the home and a sibling', async () => {
+  const f = await fixture()
+  try {
+    const made = await f.main.saveForm({ name: 'Custodian', purpose: 'Keep the harbour lights lit' })
+    const other = await f.main.saveForm({ name: 'Bystander', purpose: 'Stay as written' })
+    const definition = join(f.agents, `${made.definition}.md`)
+    const definitionBytes = readFileSync(definition)
+    const session = join(f.state, 'sessions', 'worked', '33333333-3333-4333-8333-333333333333.json')
+    mkdirSync(join(f.state, 'sessions', 'worked'), { recursive: true })
+    writeFileSync(session, '{"id":"kept"}\n')
+    const memory = join(f.profile, 'checkout', '.bravebot', 'memory', `${made.definition}.md`)
+    mkdirSync(join(f.profile, 'checkout', '.bravebot', 'memory'), { recursive: true })
+    writeFileSync(memory, 'notes from the folder\n')
+    const history = join(f.profile, 'bots', made.slug)
+    mkdirSync(join(history, 'nested'), { recursive: true })
+    writeFileSync(join(history, 'nested', 'history.json'), '{"at":1}')
+    const sibling = join(f.profile, 'bots', other.slug)
+    mkdirSync(sibling, { recursive: true })
+    writeFileSync(join(sibling, 'keep.txt'), 'stay')
+    assert.equal(isDirectory(f.home(made.slug)), true)
+
+    assert.equal(await f.main.removeBot(made.slug, false), made.slug)
+
+    assert.equal(f.rows().some((each) => each.slug === made.slug), false)
+    assert.equal(f.rows().find((each) => each.slug === other.slug).purpose, 'Stay as written')
+    assert.equal(existsSync(history), false)
+    assert.equal(readFileSync(join(sibling, 'keep.txt'), 'utf8'), 'stay')
+    assert.deepEqual(readFileSync(definition), definitionBytes)
+    assert.equal(readFileSync(session, 'utf8'), '{"id":"kept"}\n')
+    assert.equal(readFileSync(memory, 'utf8'), 'notes from the folder\n')
+    assert.equal(isDirectory(f.home(made.slug)), true)
+    assert.equal(isDirectory(f.home(other.slug)), true)
+    f.noBotsKey()
+  } finally { f.clean() }
+})

@@ -66,7 +66,8 @@ const avatar = (value) => {
 }
 
 /**
- * The agent's `bot.list`, `bot.replace`, `bot.make`, `bot.edit`, `bot.set_model` and `bot.ensure_home`, kept in memory.
+ * The agent's `bot.list`, `bot.replace`, `bot.make`, `bot.edit`, `bot.set_model`, `bot.ensure_home`,
+ * `bot.archive`, `bot.restore` and `bot.delete`, kept in memory.
  *
  * `rows` is what the bots file holds, `calls` every request made, `refuse` makes the next
  * replaces fail with that message (and the bridge code `refuseCode`, none when it is null, as when the agent is gone) and `repair` changes each row a replace writes, as the agent does
@@ -93,6 +94,7 @@ export function fakeBots(initial = []) {
     leaveOut: [],
     homes: [],
     homeRefused: false,
+    stamp: 10_000,
     async request(method, params) {
       state.calls.push([method, params])
       if (method === 'bot.list') {
@@ -151,6 +153,22 @@ export function fakeBots(initial = []) {
         if (state.homeRefused) return { homeMade: false }
         state.homes.push(params.slug)
         return { homeMade: true }
+      }
+      if (method === 'bot.archive' || method === 'bot.restore') {
+        refuseWrite()
+        const held = state.rows.find((each) => each.slug === params.slug)
+        if (!held) throw coded('bad_request', `no bot has the slug ${params.slug}`)
+        state.stamp += 1
+        const row = { ...held, retired: method === 'bot.archive' ? state.stamp : 0, updated: state.stamp }
+        state.rows = [...state.rows.filter((each) => each.slug !== row.slug), state.repair ? state.repair(row) : row].sort(inByteOrder)
+        return { bot: structuredClone(state.rows.find((each) => each.slug === row.slug)) }
+      }
+      if (method === 'bot.delete') {
+        refuseWrite()
+        const index = state.rows.findIndex((each) => each.slug === params.slug)
+        if (index < 0) throw coded('bad_request', `no bot has the slug ${params.slug}`)
+        state.rows.splice(index, 1)
+        return { slug: params.slug }
       }
       throw new Error(`a method the bots store does not call: ${method}`)
     },

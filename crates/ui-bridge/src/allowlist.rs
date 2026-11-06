@@ -180,6 +180,9 @@ pub const DENIED: &[&str] = &[
     "bot.edit",
     "bot.set_model",
     "bot.ensure_home",
+    "bot.archive",
+    "bot.restore",
+    "bot.delete",
     "doctor",
     // Say where the machine keeps its state and what the host's settings name, for the person at
     // the host to read and post.

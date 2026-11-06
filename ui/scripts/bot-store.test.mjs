@@ -5,7 +5,7 @@
 // own rules have tests in `bravebot-agent`, and `bot-rows-bridge.test.mjs` runs both together.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { botRow, fakeBots, loadMain } from './fake-bots.mjs'
@@ -289,13 +289,21 @@ test('with no agent running a make, an edit and a model change are refused as no
   } finally { clean() }
 })
 
+test('the remove handler passes the turn table and does not read the list to decide the flag', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const handler = /ipcMain\.handle\('bravebot:bots:remove',[\s\S]*?\n  \}\)/.exec(index)
+  assert.ok(handler, 'the remove handler is still one function')
+  assert.match(handler[0], /return removeBot\(slug, botRunning\(slug\)\)/)
+  assert.equal(handler[0].includes('bot('), false)
+})
+
 test('the methods that make, edit and set the model of a bot, and ensure its home, are not among those a window may send', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   const allowed = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
   assert.ok(allowed, 'the list of methods the window may send is still one literal')
   const methods = [...allowed[1].matchAll(/'([^']+)'/g)].map((each) => each[1])
   assert.ok(methods.includes('session.list'), 'the pattern read the list')
-  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home']) {
+  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home', 'bot.archive', 'bot.restore', 'bot.delete']) {
     assert.equal(methods.includes(method), false, `${method} is a method only the main process calls`)
   }
 })
@@ -312,18 +320,65 @@ test('the methods that list and replace the bots are not among those a window ma
   assert.equal(existsSync('src/main/bot-store.ts'), true)
 })
 
-test('the data folder Electron names is sent with each method that makes, edits or sets the model of a bot, and with the home', async () => {
+test('the data folder Electron names is sent with each method that makes, edits, archives, restores, deletes or sets the model of a bot, and with the home', async () => {
   const { profile, file, main, clean } = fixture([])
   try {
     await main.saveForm({ name: 'Form bot', purpose: 'Fill in forms' })
     await main.saveForm({ slug: 'form-bot', purpose: 'Changed' })
     await main.saveBotModel('form-bot', 'provider/model-a')
     await main.ensureBotHome('form-bot')
-    for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home']) {
+    const calls = file.calls.length
+    assert.equal(await main.retireBot('form-bot', 'yes'), null)
+    assert.equal(file.calls.length, calls, 'a retired value that is not a boolean calls nothing')
+    const archived = await main.retireBot('form-bot', true)
+    const restored = await main.retireBot('form-bot', false)
+    assert.notEqual(archived.retired, 0)
+    assert.notEqual(archived.retired, restored.retired)
+    assert.equal(restored.retired, 0)
+    assert.notEqual(archived.updated, restored.updated)
+    assert.equal(await main.removeBot('form-bot', false), 'form-bot')
+    for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home', 'bot.archive', 'bot.restore', 'bot.delete']) {
       const sent = file.calls.filter(([each]) => each === method)
       assert.equal(sent.length, 1, `${method} was sent once`)
       assert.equal(sent[0][1].dataFolder, profile, `${method} carries the folder Electron names, never one composed here`)
     }
+  } finally { clean() }
+})
+
+test('a delete while a turn of that bot is in progress is refused and removes nothing', async () => {
+  const { profile, file, main, clean } = fixture([botRow({ slug: 'custodian' })])
+  try {
+    const folder = join(profile, 'bots', 'custodian')
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'history.json'), '{"at":1}')
+    const before = structuredClone(file.rows)
+    const calls = file.calls.length
+    await assert.rejects(
+      main.removeBot('custodian', true),
+      (error) => error.message === 'Stop this bot’s running conversations before deleting it.',
+    )
+    assert.equal(file.calls.slice(calls).some(([method]) => method === 'bot.delete'), false)
+    assert.deepEqual(file.rows, before)
+    assert.equal(readFileSync(join(folder, 'history.json'), 'utf8'), '{"at":1}')
+    assert.equal(existsSync(folder), true)
+  } finally { clean() }
+})
+
+test('a delete while a turn is in progress is refused when the list cannot be read, and removes nothing', async () => {
+  const { profile, file, main, clean } = fixture([botRow({ slug: 'custodian' })])
+  try {
+    const folder = join(profile, 'bots', 'custodian')
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'history.json'), '{"at":1}')
+    const before = structuredClone(file.rows)
+    main.useBotsBridge(async () => { throw new Error('the agent exited') })
+    await assert.rejects(
+      main.removeBot('custodian', true),
+      (error) => error.message === 'Stop this bot’s running conversations before deleting it.',
+    )
+    assert.deepEqual(file.rows, before)
+    assert.equal(readFileSync(join(folder, 'history.json'), 'utf8'), '{"at":1}')
+    assert.equal(existsSync(folder), true)
   } finally { clean() }
 })
 
@@ -370,6 +425,25 @@ test('a make, an edit and a model change wait their turn behind the writes of th
     assert.equal(review.purpose, 'Changed')
     assert.equal(review.model, 'provider/model-a')
     assert.deepEqual(file.rows.map((each) => each.slug), ['review', 'second', 'third'])
+  } finally { clean() }
+})
+
+test('archiving one bot and deleting another while a conversation is recorded keeps the conversation, the archive and the deletion', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'review' }), botRow({ slug: 'spare' })])
+  try {
+    main.useBotsBridge(async (method, params) => {
+      await new Promise((resolve) => setImmediate(resolve))
+      return file.request(method, params)
+    })
+    await Promise.all([
+      main.retireBot('review', true),
+      main.removeBot('spare', false),
+      main.noteBotSession('review', ids[0], '/project'),
+    ])
+    const review = file.rows.find((each) => each.slug === 'review')
+    assert.ok(review.conversations.some((each) => each.id === ids[0]))
+    assert.notEqual(review.retired, 0)
+    assert.equal(file.rows.some((each) => each.slug === 'spare'), false)
   } finally { clean() }
 })
 

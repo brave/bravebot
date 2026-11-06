@@ -10,8 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod operations;
 
 pub use operations::{
-    Changes, NewBot, Saved, edit, edit_in, ensure_home, ensure_home_in, make, make_in, set_model,
-    set_model_in,
+    Changes, NewBot, Saved, archive, archive_in, delete, delete_in, edit, edit_in, ensure_home,
+    ensure_home_in, make, make_in, restore, restore_in, set_model, set_model_in,
 };
 
 pub const CEILING: usize = 100;
@@ -214,6 +214,7 @@ pub enum Refused {
     OldFile(Problem),
     Locked(PathBuf),
     Io(Problem),
+    History(Problem),
     Name,
     Purpose,
     Model,
@@ -230,6 +231,7 @@ impl Refused {
             Self::Unreadable(problem)
             | Self::OldFile(problem)
             | Self::Io(problem)
+            | Self::History(problem)
             | Self::DefinitionIo(problem) => Some(problem.clone()),
             Self::Locked(path) => Some(Problem::new(path, self)),
             _ => None,
@@ -272,6 +274,12 @@ impl fmt::Display for Refused {
                 path.display()
             ),
             Self::Io(problem) => write!(out, "the bots could not be saved ({problem})"),
+            Self::History(problem) => {
+                write!(
+                    out,
+                    "the bot's history folder could not be removed ({problem})"
+                )
+            }
             Self::Name => out.write_str("the name is blank or holds a null character"),
             Self::Purpose => out.write_str("the purpose is blank or holds a null character"),
             Self::Model => write!(
