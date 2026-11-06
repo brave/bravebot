@@ -235,6 +235,37 @@ fn judge_pidfd(pidfd: &Value) -> Pidfd {
     }
 }
 
+/// Whether this kernel lets a process of the same user copy descriptors out of one that is not its
+/// descendant and has not marked itself non-dumpable, so the attack must work against `control`.
+#[cfg(target_os = "linux")]
+fn the_attack_must_work() -> bool {
+    scope_lets_the_attack_work(
+        std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn the_attack_must_work() -> bool {
+    false
+}
+
+/// Yama's `ptrace_scope` 0, or a kernel without Yama, lets a process reach any other of the same
+/// user that has not marked itself non-dumpable. 1 limits it to descendants and 2 and 3 to
+/// `CAP_SYS_PTRACE` or nobody, so the attack fails against `control` too.
+fn scope_lets_the_attack_work(scope: Option<&str>) -> bool {
+    scope.is_none_or(|scope| scope.trim() == "0")
+}
+
+#[test]
+fn the_attack_must_work_where_the_kernel_lets_a_process_reach_its_peers() {
+    assert!(scope_lets_the_attack_work(None));
+    assert!(scope_lets_the_attack_work(Some("0\n")));
+    assert!(!scope_lets_the_attack_work(Some("1\n")));
+    assert!(!scope_lets_the_attack_work(Some("3\n")));
+}
+
 #[test]
 fn copying_nothing_out_of_the_bridge_proves_nothing_where_the_attack_never_worked() {
     // The kernel refused `pidfd_open`, or this one has no `pidfd_getfd`, so nothing was tried.
@@ -947,10 +978,18 @@ fn the_client_alone_decides<F: Front>(scratch: &Scratch, mut waiting: Waiting<F>
             panic!("a tool copied {copied} descriptors out of the server: {report}")
         }
         Pidfd::Refused => {}
-        Pidfd::NotExercised => eprintln!(
-            "pidfd_getfd was not exercised (unavailable here, or it fails against any process); \
-             the server's refusal of it is not shown by this run: {report}"
-        ),
+        Pidfd::NotExercised => {
+            assert!(
+                !the_attack_must_work(),
+                "pidfd_getfd copied nothing out of the control process though this kernel lets a \
+                 process reach its peers, so the attack did not run: {report}"
+            );
+            eprintln!(
+                "pidfd_getfd was not exercised (unavailable here, or the kernel's ptrace policy \
+                 refuses it against any process); the server's refusal of it is not shown by \
+                 this run: {report}"
+            );
+        }
     }
     assert_eq!(
         scratch.written("approved.txt"),
