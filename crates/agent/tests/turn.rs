@@ -92153,3 +92153,258 @@ fn a_respelled_file_nobody_vouched_for_is_a_reference_and_is_offered_for_a_vouch
         "the vouch was not offered for the file opened"
     );
 }
+
+/// Guards every test below that points the diagnostic log at a real directory, so two of them
+/// configuring it at once do not race (DIAG-7).
+static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A server that writes `sent` under a stated `Content-Length` of `announced`, which is larger,
+/// then calls `when_quiet` once that much is on the wire, and holds the connection open without
+/// writing the rest, so a client reading the announced length sees the body cut rather than
+/// finished.
+///
+/// As `serve_stalled_body_then` in `crates/net/tests/egress.rs`: the hook is how a test acts at a
+/// moment the client is known to be reading, which nothing on the client's side says.
+fn serve_stalled_raw_body_then(
+    content_type: &'static str,
+    announced: usize,
+    sent: &'static [u8],
+    when_quiet: impl FnOnce() + Send + 'static,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if line == "\r\n" || line == "\n" {
+                break;
+            }
+            line.clear();
+        }
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {announced}\r\n\r\n"
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(sent);
+        let _ = stream.flush();
+        when_quiet();
+        thread::sleep(std::time::Duration::from_secs(60));
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Points the diagnostic log at a scratch directory for the duration of `body`, and returns what
+/// was written to it. Serialised against every other test that does the same (`DIAG_LOG`).
+fn with_diagnostic_log(body: impl FnOnce()) -> String {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let _unconfigure = Unconfigure;
+
+    body();
+
+    std::fs::read_dir(dir.path().join("logs"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// DIAG-7: `fetch_url` reads its body through `fetch_watching`, the same reader every other
+/// egress caller does, and nothing had pinned that a body it cuts reaches the log, or that a body
+/// cut after the turn was stopped does not.
+///
+/// The stop arrives from the server's own thread, a second and a half after the reply began and
+/// well before the long idle bound given the stopped case would end the read on its own, so what
+/// ends the read is the stop and not the clock. The unstopped case is given a short idle bound
+/// instead, so the same cut server produces a genuine body failure for it to log.
+#[test]
+fn a_fetch_urls_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped() {
+    for stopped in [false, true] {
+        let scratch = Scratch::new("diag-fetch-url");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let pressed = cancel.clone();
+        let site = serve_stalled_raw_body_then(
+            "text/plain",
+            100,
+            b"the beginning of an answer",
+            move || {
+                if stopped {
+                    thread::sleep(std::time::Duration::from_millis(1_500));
+                    pressed.cancel();
+                }
+            },
+        );
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page"}}"#)),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: if stopped {
+                std::time::Duration::from_secs(4)
+            } else {
+                std::time::Duration::from_millis(400)
+            },
+            reply: std::time::Duration::from_secs(30),
+            ..bravebot_net::Timeouts::default()
+        });
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        let log = with_diagnostic_log(|| {
+            let ended = turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("read the page"),
+                &mut bravebot_agent::Conversation::new(),
+                &mut bravebot_agent::confirm::ApproveFetches,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &cancel,
+            )
+            .outcome;
+            if stopped {
+                assert!(
+                    matches!(ended, Err(turn::TurnError::Cancelled { .. })),
+                    "stopped: {stopped}: {ended:?}"
+                );
+            } else {
+                ended.expect("the turn runs");
+            }
+        });
+
+        // Scoped to this test's own host: the diagnostic log's state is process-wide, so a
+        // transport failure an unrelated test makes while this one holds it configured would
+        // otherwise be counted as this test's own.
+        let host = format!("host={}", site.trim_start_matches("http://"));
+        let cut = log
+            .lines()
+            .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+            .count();
+        if stopped {
+            assert_eq!(
+                cut, 0,
+                "stopped: {stopped}: a request the person stopped was logged as a failure: {log}"
+            );
+        } else {
+            assert_eq!(
+                cut, 1,
+                "stopped: {stopped}: a cut body was not logged: {log}"
+            );
+        }
+    }
+}
+
+/// DIAG-7: `download_url` reads its body through `fetch_streaming`, the other reader besides
+/// `fetch_watching` that shares the same diagnostic-log decision, and nothing had pinned it either.
+///
+/// As the previous test, with a destination path the person is also asked to approve.
+#[test]
+fn a_downloads_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped() {
+    for stopped in [false, true] {
+        let scratch = Scratch::new("diag-download-url");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let pressed = cancel.clone();
+        let site = serve_stalled_raw_body_then(
+            "application/octet-stream",
+            10_000,
+            b"the beginning of a download",
+            move || {
+                if stopped {
+                    thread::sleep(std::time::Duration::from_millis(1_500));
+                    pressed.cancel();
+                }
+            },
+        );
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "download_url",
+                &format!(r#"{{"url":"{site}/blob.bin","path":"blob.bin"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: if stopped {
+                std::time::Duration::from_secs(4)
+            } else {
+                std::time::Duration::from_millis(400)
+            },
+            reply: std::time::Duration::from_secs(30),
+            ..bravebot_net::Timeouts::default()
+        });
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut confirmer = ApprovesFetchesAndWrites::default();
+
+        let log = with_diagnostic_log(|| {
+            let ended = turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("save the blob"),
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &cancel,
+            )
+            .outcome;
+            if stopped {
+                assert!(
+                    matches!(ended, Err(turn::TurnError::Cancelled { .. })),
+                    "stopped: {stopped}: {ended:?}"
+                );
+            } else {
+                ended.expect("the turn runs");
+            }
+        });
+
+        // Scoped to this test's own host: the diagnostic log's state is process-wide, so a
+        // transport failure an unrelated test makes while this one holds it configured would
+        // otherwise be counted as this test's own.
+        let host = format!("host={}", site.trim_start_matches("http://"));
+        let cut = log
+            .lines()
+            .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+            .count();
+        if stopped {
+            assert_eq!(
+                cut, 0,
+                "stopped: {stopped}: a request the person stopped was logged as a failure: {log}"
+            );
+        } else {
+            assert_eq!(
+                cut, 1,
+                "stopped: {stopped}: a cut body was not logged: {log}"
+            );
+        }
+        assert!(
+            !scratch.path.join("blob.bin").exists(),
+            "stopped: {stopped}: a cut download left a partial file"
+        );
+    }
+}
