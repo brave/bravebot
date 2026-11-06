@@ -252,6 +252,8 @@ const APPLIES: &[(&str, &str, &str, &str)] = &[
         "entry,new",
     ),
     ("tabs-manage", "pin_tab", "url", "entry"),
+    ("tabs-manage", "group_tabs", "urls", "entries"),
+    ("tabs-manage", "group_tabs", "title", "new"),
 ];
 
 impl Installed {

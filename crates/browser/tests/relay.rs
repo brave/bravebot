@@ -2473,7 +2473,10 @@ fn declared(directory: &Path, group: Option<&str>) -> String {
                                     --apply add_reading_list_entry:title=entry,new"
             .split_whitespace()
             .fold(String::new(), |line, word| line + " " + word),
-        Some("tabs-manage") => " --apply pin_tab:url=entry".to_string(),
+        Some("tabs-manage") => {
+            " --apply pin_tab:url=entry --apply group_tabs:urls=entries --apply group_tabs:title=new"
+                .to_string()
+        }
         _ => String::new(),
     };
     let (alias, asked, bound, group) = match group {

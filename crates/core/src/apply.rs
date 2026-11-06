@@ -1,10 +1,11 @@
 //! The shape of an `apply` step, and what a processor's proposal for it resolves to.
 //!
-//! A plan fixes the tools a step may call and, for each argument, where its value may come from:
-//! the plan's own text, a field of an entry of a list a fetch returned, short text the processor
-//! wrote for a thing the call creates, or the value an earlier row of the same step gave such an
-//! argument. A processor proposes rows of those tools by number. What the rows resolve to is put to
-//! the person as one list, and only the rows they keep are called (`docs/design/manifest-apply.md`).
+//! A plan fixes the tools a step may call, the lists a proposal may point into, and for each
+//! argument where its value may come from: the plan's own text, a field of an entry of one of those
+//! lists, the same field of several entries as one list, short text the processor wrote, or the
+//! value an earlier row of the same step gave such an argument. A processor proposes rows of those
+//! tools by number. What the rows resolve to is put to the person as one list, and only the rows
+//! they keep are called (`docs/design/manifest-apply.md`).
 //!
 //! Nothing here reads a proposal. The types are filled by `bravebot-choice`, through the policy
 //! layer's gate for that one read, and carried by the driver without being looked at.
@@ -16,14 +17,17 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum Kind {
     /// The plan's own text.
     Literal(String),
-    /// A field of one entry of the list, copied byte for byte.
-    Entry(String),
-    /// Short text the processor wrote, for a thing the call creates.
+    /// A field of one entry of the list at this index, copied byte for byte.
+    Entry { list: usize, field: String },
+    /// The same field of several entries of the list at this index, as one list of values, for an
+    /// argument the tool takes as an array.
+    Entries { list: usize, field: String },
+    /// Short text the processor wrote, for a value the call sets and does not look up.
     New,
     /// The value an earlier row of the tool at this index gave the named argument.
     Row { tool: usize, argument: String },
     /// Any one of these, chosen by each row, as a folder a bookmark moves to may be one an
-    /// earlier row made or one the list holds. None of them is a literal or another choice.
+    /// earlier row made or one a list holds. None of them is a literal or another choice.
     Either(Vec<Kind>),
 }
 
@@ -32,18 +36,21 @@ impl Kind {
     pub fn word(&self) -> String {
         match self {
             Self::Literal(_) => "literal".to_string(),
-            Self::Entry(_) => "entry".to_string(),
+            Self::Entry { .. } => "entry".to_string(),
+            Self::Entries { .. } => "entries".to_string(),
             Self::New => "new".to_string(),
             Self::Row { .. } => "row".to_string(),
             Self::Either(kinds) => kinds.iter().map(Kind::word).collect::<Vec<_>>().join(","),
         }
     }
 
-    /// The fields of a list's entries this kind may take a value from.
-    fn fields(&self) -> Vec<String> {
+    /// The fields of the list at `list` this kind may take a value from.
+    fn fields(&self, list: usize) -> Vec<String> {
         match self {
-            Self::Entry(field) => vec![field.clone()],
-            Self::Either(kinds) => kinds.iter().flat_map(Kind::fields).collect(),
+            Self::Entry { list: at, field } | Self::Entries { list: at, field } if *at == list => {
+                vec![field.clone()]
+            }
+            Self::Either(kinds) => kinds.iter().flat_map(|kind| kind.fields(list)).collect(),
             _ => Vec::new(),
         }
     }
@@ -59,25 +66,32 @@ pub struct Tool {
 /// Everything about an `apply` step the plan fixed before anything was read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shape {
+    /// The lists a row may point into, by the names of the slots that hold them, in the plan's
+    /// order. A row names an entry as `name:N`.
+    pub lists: Vec<String>,
     pub tools: Vec<Tool>,
     pub max_rows: usize,
     pub max_new: usize,
 }
 
 impl Shape {
-    /// The fields an argument of any tool may take from an entry. An entry counts where it holds
-    /// at least one of them as text, and a row naming it for a field it lacks is dropped.
-    pub fn entry_fields(&self) -> BTreeSet<String> {
+    /// The fields an argument of any tool may take from an entry of the list at `list`. An entry
+    /// counts where it holds at least one of them, and a row naming it for a field it lacks is
+    /// dropped.
+    pub fn entry_fields(&self, list: usize) -> BTreeSet<String> {
         self.tools
             .iter()
             .flat_map(|tool| &tool.arguments)
-            .flat_map(|(_, kind)| kind.fields())
+            .flat_map(|(_, kind)| kind.fields(list))
             .collect()
     }
 }
 
 /// The most entries a list may hold, so an entry's number is at most three digits.
 pub const LARGEST_LIST: usize = 999;
+
+/// The most entries one argument may take as a list.
+pub const LARGEST_ENTRIES: usize = 50;
 
 /// The longest new text a row may give, in characters.
 pub const LONGEST_NEW: usize = 64;
@@ -94,12 +108,14 @@ pub struct Numbered {
 }
 
 /// Where a resolved value came from, as the person is told.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// The plan wrote it.
     Plan,
-    /// The entry of the list with this number, from 1.
-    Entry(usize),
+    /// The entry with this number, from 1, of the list at this index.
+    Entry { list: usize, number: usize },
+    /// The entries with these numbers of the list at this index, in the order the row gave them.
+    Entries { list: usize, numbers: Vec<usize> },
     /// The processor wrote it.
     Processor,
     /// The call with this index in the resolved list gave it.
@@ -113,7 +129,8 @@ pub struct Call {
     pub tool: usize,
     /// The tool's name.
     pub name: String,
-    /// Each argument with its value and where the value came from, in the shape's order.
+    /// Each argument with its value and where the value came from, in the shape's order. A value
+    /// taken from several entries is the JSON array of their values.
     pub arguments: Vec<(String, String, Source)>,
     /// The earlier call this one depends on, by its index in the resolved list.
     pub after: Option<usize>,
@@ -126,7 +143,7 @@ pub enum Dropped {
     Unreadable,
     /// It named no tool of the step.
     Tool,
-    /// An entry number was outside the list.
+    /// An entry number was outside its list, or the entry lacked the field.
     Entry,
     /// It named new text or a row that is not there, or one that was dropped.
     Reference,
@@ -134,7 +151,7 @@ pub enum Dropped {
     Argument,
     /// It repeated an earlier call, or new text an earlier line gave.
     Repeated,
-    /// It went past a cap on rows or new values.
+    /// It went past a cap on rows, new values or entries.
     Cap,
 }
 
@@ -144,7 +161,7 @@ impl Dropped {
         match self {
             Self::Unreadable => "could not be read",
             Self::Tool => "named no tool of the step",
-            Self::Entry => "named an entry that is not in the list",
+            Self::Entry => "named an entry that is not in its list",
             Self::Reference => "named new text or a row that is not there",
             Self::Argument => "gave an argument the plan does not let it give",
             Self::Repeated => "repeated an earlier call or name",
@@ -207,35 +224,53 @@ mod tests {
         assert!(resolved.dependants(4).is_empty());
     }
 
-    /// The fields an entry needs are the ones an argument takes, each once.
+    /// The fields an entry of each list needs are the ones an argument takes from that list, each
+    /// once, including through a choice of kinds and a list of entries.
     #[test]
-    fn an_entry_needs_the_fields_the_arguments_take() {
+    fn each_list_needs_the_fields_the_arguments_take_from_it() {
         let shape = Shape {
+            lists: vec!["issues".into(), "labels".into()],
             tools: vec![
                 Tool {
-                    name: "make".into(),
+                    name: "label".into(),
                     arguments: vec![
-                        ("title".into(), Kind::New),
-                        ("parent".into(), Kind::Literal("Organised".into())),
+                        (
+                            "issue".into(),
+                            Kind::Entry {
+                                list: 0,
+                                field: "number".into(),
+                            },
+                        ),
+                        (
+                            "label".into(),
+                            Kind::Either(vec![
+                                Kind::Entry {
+                                    list: 1,
+                                    field: "name".into(),
+                                },
+                                Kind::New,
+                            ]),
+                        ),
                     ],
                 },
                 Tool {
-                    name: "move".into(),
-                    arguments: vec![
-                        ("url".into(), Kind::Entry("url".into())),
-                        (
-                            "folder".into(),
-                            Kind::Row {
-                                tool: 0,
-                                argument: "title".into(),
-                            },
-                        ),
-                    ],
+                    name: "close".into(),
+                    arguments: vec![(
+                        "issues".into(),
+                        Kind::Entries {
+                            list: 0,
+                            field: "number".into(),
+                        },
+                    )],
                 },
             ],
             max_rows: 50,
             max_new: 12,
         };
-        assert_eq!(shape.entry_fields(), BTreeSet::from(["url".to_string()]));
+        assert_eq!(
+            shape.entry_fields(0),
+            BTreeSet::from(["number".to_string()])
+        );
+        assert_eq!(shape.entry_fields(1), BTreeSet::from(["name".to_string()]));
     }
 }

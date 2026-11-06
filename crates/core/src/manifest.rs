@@ -855,24 +855,24 @@ const CONTRACTS: &[Contract] = &[
     // The server is an alias a person typed, and the tools words on a list a person vouched for,
     // written as one comma-separated field so the routing lock holds them as text. The arguments
     // are the plan's own text, a JSON object that gives each argument of each tool its kind. The
-    // list is a slot an earlier fetch filled, read for its entries; the step fills no slot.
+    // lists are slots earlier fetches filled, read for their entries; the step fills no slot.
     Contract {
         tool: APPLY,
         tier: Tier::Act,
-        required: &["server", "tools", "arguments", "list", "instruction"],
+        required: &["server", "tools", "arguments", "lists", "instruction"],
         accepted: &[
             "server",
             "tools",
             "arguments",
-            "list",
+            "lists",
             "entries",
             "instruction",
             "max_rows",
             "max_new",
         ],
         slot_output: None,
-        slot_inputs: &[],
-        slot_refs: &["list"],
+        slot_inputs: &["lists"],
+        slot_refs: &[],
         paths: &[],
         counts: &["max_rows", "max_new"],
         texts: &["arguments", "instruction", "entries"],
@@ -2263,7 +2263,7 @@ mod tests {
             .with_text("server", "brave-bookmarks-write")
             .with_text("tools", "create_bookmark_folder,move_bookmark")
             .with_text("arguments", r#"{"move_bookmark":{"url":{"entry":"url"}}}"#)
-            .with_text("list", "marks")
+            .with("lists", Arg::List(vec!["marks".to_string()]))
             .with_text("instruction", "group these bookmarks");
         let plan = validate(&Draft::new(vec![
             server_read("brave-bookmarks-read", "list_bookmark_folder", "marks"),

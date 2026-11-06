@@ -341,11 +341,12 @@ const REGISTRY: &[Advertised] = &[
         summary: "For each item of a list a SERVER_READ step read, call tools of one server listed \
                   with apply: an isolated processor proposes the calls, and the person approves the \
                   whole list before any is made",
-        args: "server*, tools* (comma-separated tool names of that server), list* (the slot a \
-               SERVER_READ filled), entries (where the list is in that reply, as a JSON pointer \
-               such as /items, where the reply is not the list itself), instruction* (what to do with the items, for the processor), \
-               arguments* (a JSON object: for each tool, each argument with its kind), max_rows, \
-               max_new",
+        args: "server*, tools* (comma-separated tool names of that server), lists* (the slots \
+               SERVER_READ steps filled, the first being the main one), entries (where each list \
+               is in its reply, as a JSON pointer such as /items, or an object of pointers by \
+               list, where a reply is not the list itself), instruction* (what to do with the \
+               items, for the processor), arguments* (a JSON object: for each tool, each \
+               argument with its kind), max_rows, max_new",
     },
     Advertised {
         capability: "ANSWER",
@@ -473,10 +474,12 @@ fn parse(source: &str) -> Result<Draft, PlanError> {
                 if value.is_null() {
                     continue;
                 }
-                // A call's arguments are a JSON object, which a planner writes as one. The step
-                // carries them as the object's text, so the grammar below stays three shapes.
-                let object_as_text =
-                    (key == "arguments" && value.is_object()).then(|| Arg::Text(value.to_string()));
+                // A call's arguments, and an apply step's entries, are a JSON object a planner
+                // writes as one. The step carries each as the object's text, so the grammar below
+                // stays three shapes.
+                let object_as_text = (matches!(key.as_str(), "arguments" | "entries")
+                    && value.is_object())
+                .then(|| Arg::Text(value.to_string()));
                 let arg = object_as_text.or_else(|| read_arg(value)).ok_or_else(|| {
                     PlanError::Malformed(format!(
                         "step {index}: '{key}' is not text, a whole number, or a list of names"

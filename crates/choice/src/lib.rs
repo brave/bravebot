@@ -57,10 +57,10 @@ pub fn resolve_proposal<S: Sink>(
     policy: &mut Policy<'_, S>,
     spec: &ProcessorSpec,
     answer: Labelled<String>,
-    entries: &Labelled<Entries>,
+    lists: &[Labelled<Entries>],
     shape: &Shape,
 ) -> Result<Labelled<Resolved>, Denial> {
-    policy.resolve_proposal(spec, answer, entries, shape, rows::resolve)
+    policy.resolve_proposal(spec, answer, lists, shape, rows::resolve)
 }
 
 #[cfg(test)]

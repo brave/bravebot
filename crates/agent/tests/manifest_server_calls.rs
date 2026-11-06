@@ -2154,7 +2154,7 @@ fn organise() -> Vec<Value> {
         json!({"capability": "APPLY", "args": {
             "server": "brave",
             "tools": "make_folder,move_mark",
-            "list": "marks",
+            "lists": ["marks"],
             "instruction": "group these bookmarks into folders",
             "arguments": {
                 "make_folder": {"title": "new", "parent": {"literal": "Organised"}},
@@ -2275,7 +2275,7 @@ fn an_apply_step_makes_the_calls_the_person_approved_as_one_list() {
     // The planner saw neither the list nor the rows; the processor saw the numbered list.
     assert_eq!(ran.chat.len(), 3, "shape, plan and one processor call");
     assert!(ran.chat[..2].iter().all(|body| !body.contains(STEERING)));
-    assert!(ran.chat[2].contains("entry 2:"), "{}", ran.chat[2]);
+    assert!(ran.chat[2].contains("marks 2:"), "{}", ran.chat[2]);
     assert!(ran.chat[2].contains(STEERING));
 }
 
@@ -2464,6 +2464,15 @@ fn serve_tracker() -> (String, mpsc::Receiver<String>) {
                     {"name": "set_flag", "description": "Flags.", "inputSchema": {"type": "object",
                      "properties": {"issue": {"type": "integer"}, "flagged": {"type": "boolean"}},
                      "required": ["issue", "flagged"]}},
+                    {"name": "list_labels", "description": "Labels.",
+                     "annotations": {"readOnlyHint": true},
+                     "inputSchema": {"type": "object", "properties": {}}},
+                    {"name": "add_label", "description": "Labels one.", "inputSchema": {"type": "object",
+                     "properties": {"issue": {"type": "integer"}, "label": {"type": "string"}},
+                     "required": ["issue", "label"]}},
+                    {"name": "close_issues", "description": "Closes.", "inputSchema": {"type": "object",
+                     "properties": {"issues": {"type": "array", "items": {"type": "integer"}}},
+                     "required": ["issues"]}},
                 ]}),
                 Some("tools/call") => match request.pointer("/params/name").and_then(Value::as_str)
                 {
@@ -2472,6 +2481,9 @@ fn serve_tracker() -> (String, mpsc::Receiver<String>) {
                         {"number": 9, "title": "Typo in README", "state": "open"},
                         {"number": 12, "title": "Login fails on Safari", "state": "open"},
                     ]).to_string()}]}),
+                    Some("list_labels") => json!({"content": [{"type": "text", "text": json!({
+                        "total": 2, "labels": [{"name": "bug"}, {"name": "docs"}],
+                    }).to_string()}]}),
                     _ => json!({"content": [{"type": "text", "text": "done"}]}),
                 },
                 _ => json!({}),
@@ -2521,7 +2533,7 @@ fn an_apply_step_triages_an_issue_tracker_with_a_tool_chosen_per_row() {
         json!({"capability": "APPLY", "args": {
             "server": "brave",
             "tools": "mark_urgent,mark_later,retitle,set_flag",
-            "list": "issues",
+            "lists": ["issues"],
             "instruction": "triage the open issues",
             "arguments": {
                 "mark_urgent": {"issue": {"entry": "number"}},
@@ -2571,6 +2583,10 @@ row 5: tool 4 issue=entry:3
         line.contains("retitle (issue: the number of an entry of issues, title: a new name"),
         "{line}"
     );
+    assert!(
+        line.contains("set_flag (flagged: true, issue: the number of an entry of issues)"),
+        "a switch reads as one: {line}"
+    );
     let processor = &ran.chat[2];
     assert!(processor.contains("tool 3: retitle"), "{processor}");
     for word in ["bookmark", "folder"] {
@@ -2607,4 +2623,145 @@ fn an_apply_step_whose_processor_finds_nothing_to_do_says_so() {
     );
     let made: Vec<&str> = ran.called.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(made, ["list_marks"]);
+}
+
+/// The tracker's server, declared to let a row take an issue, a label and a list of issues.
+fn tracker_session(url: &str, scratch: &Scratch) -> Session {
+    let mut declared = bravebot_config::mcp::ApplyArguments::new();
+    for (tool, argument, kind) in [
+        ("add_label", "issue", "entry"),
+        ("add_label", "label", "entry"),
+        ("close_issues", "issues", "entries"),
+    ] {
+        declared
+            .entry(tool.to_string())
+            .or_default()
+            .insert(argument.to_string(), kind.to_string());
+    }
+    session_of(reach(url, false).applying(declared), scratch, true)
+}
+
+/// An apply step may point into two lists: each issue is labelled with a label taken from the
+/// repository's own list of labels, which the server wraps in an object the plan points into, and
+/// both values are copied from their lists. The processor is shown each list under its name.
+///
+/// Rejects an implementation that holds one list per step, that numbers two lists as one, or that
+/// lets a label be anything but an entry of the labels list.
+#[test]
+fn an_apply_step_labels_issues_with_labels_from_a_second_list() {
+    let scratch = Scratch::new("apply-two-lists");
+    let (url, mcp) = serve_tracker();
+    let steps = vec![
+        json!({"capability": "SERVER_READ", "args": {"server": "brave", "tool": "list_issues",
+            "out_slot": "issues"}}),
+        json!({"capability": "SERVER_READ", "args": {"server": "brave", "tool": "list_labels",
+            "out_slot": "labels"}}),
+        json!({"capability": "APPLY", "args": {
+            "server": "brave",
+            "tools": "add_label",
+            "lists": ["issues", "labels"],
+            "entries": {"labels": "/labels"},
+            "instruction": "label each open issue with the label that fits it",
+            "arguments": {"add_label": {
+                "issue": {"entry": "issues.number"},
+                "label": {"entry": "labels.name"},
+            }},
+        }}),
+    ];
+    let rows = "row 1: tool 1 issue=issues:1 label=labels:1\n\
+                row 2: tool 1 issue=issues:2 label=labels:2\n\
+                row 3: tool 1 issue=labels:1 label=labels:1\n";
+    let ran = walk(Walk {
+        session: tracker_session(&url, &scratch),
+        mode: PermissionMode::Ask,
+        task: Task::new("label my open issues"),
+        replies: vec![shape(), plan(steps), says(rows)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(
+        ran.called[2..],
+        [
+            ("add_label".to_string(), json!({"issue": 7, "label": "bug"})),
+            (
+                "add_label".to_string(),
+                json!({"issue": 9, "label": "docs"})
+            ),
+        ]
+    );
+    let request = &ran.asked.applies[0];
+    assert_eq!(request.list, "issues, labels");
+    assert_eq!(
+        request.calls[1].arguments[1],
+        (
+            "label".to_string(),
+            "docs".to_string(),
+            "entry 2 of labels".to_string()
+        )
+    );
+    assert_eq!(
+        request.dropped,
+        vec![(
+            "gave an argument the plan does not let it give".to_string(),
+            1
+        )]
+    );
+    let processor = &ran.chat[2];
+    assert!(processor.contains("issues 1: "), "{processor}");
+    assert!(processor.contains("labels 2: "), "{processor}");
+    assert!(
+        processor.contains("label=labels:N, the name of labels N"),
+        "{processor}"
+    );
+}
+
+/// An argument the tool takes as an array is filled from several entries of one list, and is sent
+/// as an array of the type the tool gives its items.
+///
+/// Rejects an implementation that sends a list of entries as text, or as an array of strings to a
+/// tool that takes numbers.
+#[test]
+fn an_apply_step_fills_an_array_argument_from_several_entries() {
+    let scratch = Scratch::new("apply-array");
+    let (url, mcp) = serve_tracker();
+    let steps = vec![
+        json!({"capability": "SERVER_READ", "args": {"server": "brave", "tool": "list_issues",
+            "out_slot": "issues"}}),
+        json!({"capability": "APPLY", "args": {
+            "server": "brave",
+            "tools": "close_issues",
+            "lists": ["issues"],
+            "instruction": "close the issues that are fixed",
+            "arguments": {"close_issues": {"issues": {"entries": "number"}}},
+        }}),
+    ];
+    let ran = walk(Walk {
+        session: tracker_session(&url, &scratch),
+        mode: PermissionMode::Ask,
+        task: Task::new("close the fixed issues"),
+        replies: vec![
+            shape(),
+            plan(steps),
+            says("row 1: tool 1 issues=issues:1+issues:3\n"),
+        ],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(
+        ran.called[1],
+        ("close_issues".to_string(), json!({"issues": [7, 12]}))
+    );
+    assert_eq!(
+        ran.asked.applies[0].calls[0].arguments[0].2,
+        "entries 1, 3 of issues"
+    );
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(
+        line.contains("issues: the number of each of several entries of issues"),
+        "{line}"
+    );
 }

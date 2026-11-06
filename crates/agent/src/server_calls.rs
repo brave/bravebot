@@ -322,7 +322,6 @@ impl Servers {
             .enumerate()
             .filter_map(|(index, step)| match step.tool() {
                 manifest::APPLY => shape_of(step).ok().map(|shape| {
-                    let list = step.text("list");
                     let tools: Vec<String> = shape
                         .tools
                         .iter()
@@ -331,7 +330,7 @@ impl Servers {
                                 .arguments
                                 .iter()
                                 .map(|(name, kind)| {
-                                    format!("{name}: {}", kind_in_words(kind, &shape, list))
+                                    format!("{name}: {}", kind_in_words(kind, &shape))
                                 })
                                 .collect();
                             format!("{} ({})", tool.name, arguments.join(", "))
@@ -469,8 +468,10 @@ impl Servers {
 const APPLY_CATALOGUE: &str = " A tool listed with apply may be called by an APPLY step for each \
 item of a list a SERVER_READ step read: an isolated processor proposes the calls, row by row, and \
 the person approves the whole list before any is made. Its arguments give each argument of each \
-tool a kind: a fixed value {\"literal\": \"text\"}, a field of a list entry {\"entry\": \"field\"}, \
-new text for a thing the call creates \"new\", or the value an earlier row of another tool gave \
+tool a kind: a fixed value {\"literal\": \"text\"}, a field of an entry {\"entry\": \"field\"} \
+(of the first list, or {\"entry\": \"list.field\"} of another), that field of several entries as \
+one array {\"entries\": \"field\"} for an argument the tool takes as a list, new text for a value \
+the call sets \"new\", or the value an earlier row of another tool gave \
 {\"row\": \"tool.argument\"}, or a list of those kinds where the tool is listed with several, \
 any one of which a row may give. Only the kinds the tool is listed with may be used, besides \
 literal.";
@@ -564,21 +565,32 @@ impl Servers {
             return Err(format!("{alias} is not offered to this run"));
         };
         let shape = shape_of(step)?;
-        let list = SlotId::new(step.text("list"));
-        let numbered = SlotId::new(format!("{list}_entries_{index}"));
-        let entries = bravebot_choice::number_a_list(
-            policy,
-            &list,
-            step.text("entries"),
-            &shape.entry_fields(),
-            numbered.clone(),
-            slots,
-        )
-        .map_err(|denial| denial.to_string())?;
+        // Each list is numbered for the processor under its own name, from the array at the
+        // pointer the plan gave it, and the processor reads those numbered lists and nothing else.
+        let names = shape.lists.clone();
+        let pointers = pointers_of(step.text("entries"), &names)?;
+        let mut lists = Vec::new();
+        let mut numbered = Vec::new();
+        for (at, name) in names.iter().enumerate() {
+            let into = SlotId::new(format!("{name}_entries_{index}"));
+            lists.push(
+                bravebot_choice::number_a_list(
+                    policy,
+                    &SlotId::new(name),
+                    &pointers[at],
+                    &shape.entry_fields(at),
+                    into.clone(),
+                    slots,
+                )
+                .map_err(|denial| denial.to_string())?,
+            );
+            numbered.push(into);
+        }
+        let named = names.join(", ");
         let instruction =
             bravebot_core::value::Labelled::trusted(step.text("instruction").to_string());
         let spec = policy
-            .before_proposer(&format!("step_{index}"), &[numbered], &instruction, slots)
+            .before_proposer(&format!("step_{index}"), &numbered, &instruction, slots)
             .map_err(|denial| denial.to_string())?;
         // A reply with no content at all is asked for once more, as a process step's is: an empty
         // turn from the model is not an answer, and the rows it would have proposed decide nothing
@@ -588,7 +600,7 @@ impl Servers {
         // with nothing.
         let mut retried = false;
         let proposed = loop {
-            match crate::processor::propose(policy, chat, slots, &spec, &entries, &shape) {
+            match crate::processor::propose(policy, chat, slots, &spec, &lists, &shape) {
                 Ok(proposed) => break proposed,
                 Err(crate::processor::ProcessorError::Chat(error)) if error.is_empty_reply() => {
                     if retried {
@@ -612,7 +624,7 @@ impl Servers {
             // No row at all is the processor saying nothing in the list needed a call, as it is
             // told to say it; rows that were all dropped are a proposal nothing could be made of.
             let note = match shown.dropped.is_empty() {
-                true => format!("the processor found nothing in {list} that needed a call"),
+                true => format!("the processor found nothing in {named} that needed a call"),
                 false => format!(
                     "the processor proposed no call that could be made{}",
                     dropped_note(&shown)
@@ -622,7 +634,7 @@ impl Servers {
         }
         let request = crate::confirm::ApplyRequest {
             alias: alias.to_string(),
-            list: list.to_string(),
+            list: named.clone(),
             calls: shown
                 .calls
                 .iter()
@@ -632,7 +644,7 @@ impl Servers {
                         .arguments
                         .iter()
                         .map(|(name, value, source)| {
-                            (name.clone(), value.clone(), described(*source, &list))
+                            (name.clone(), value.clone(), described(source, &names))
                         })
                         .collect(),
                     after: call.after,
@@ -780,13 +792,46 @@ fn show_what_came<S: Sink, R: Reporter>(
 }
 
 /// Where a value of a resolved call came from, in this process's own words.
-fn described(source: bravebot_core::apply::Source, list: &SlotId) -> String {
+fn described(source: &bravebot_core::apply::Source, lists: &[String]) -> String {
+    use bravebot_core::apply::Source;
+    let name = |list: &usize| lists.get(*list).map_or("the list", String::as_str);
     match source {
-        bravebot_core::apply::Source::Plan => "the plan".to_string(),
-        bravebot_core::apply::Source::Entry(number) => format!("entry {number} of {list}"),
-        bravebot_core::apply::Source::Processor => "the processor".to_string(),
-        bravebot_core::apply::Source::Call(at) => format!("call {}", at + 1),
+        Source::Plan => "the plan".to_string(),
+        Source::Entry { list, number } => format!("entry {number} of {}", name(list)),
+        Source::Entries { list, numbers } => {
+            let numbers: Vec<String> = numbers.iter().map(usize::to_string).collect();
+            format!("entries {} of {}", numbers.join(", "), name(list))
+        }
+        Source::Processor => "the processor".to_string(),
+        Source::Call(at) => format!("call {}", at + 1),
     }
+}
+
+/// Where the list is in each list's reply, as the plan's `entries` gives it: nothing for the reply
+/// itself, one JSON pointer for every list, or an object naming a pointer for each list by name.
+fn pointers_of(entries: &str, names: &[String]) -> Result<Vec<String>, String> {
+    let entries = entries.trim();
+    if !entries.starts_with('{') {
+        return Ok(vec![entries.to_string(); names.len()]);
+    }
+    let Ok(Value::Object(by_list)) = serde_json::from_str::<Value>(entries) else {
+        return Err("the entries of an APPLY step must be a pointer or an object of them".into());
+    };
+    if let Some(unknown) = by_list.keys().find(|key| !names.contains(key)) {
+        return Err(format!(
+            "the entries of an APPLY step name no list {unknown}"
+        ));
+    }
+    Ok(names
+        .iter()
+        .map(|name| {
+            by_list
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect())
 }
 
 /// How many rows were dropped, for the step's line, or nothing where none was.
@@ -802,6 +847,10 @@ fn dropped_note(resolved: &bravebot_core::apply::Resolved) -> String {
 /// argument the kind its `arguments` object gives it. Read from the plan's own text.
 pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, String> {
     use bravebot_core::apply::{Shape, Tool};
+    let lists: Vec<String> = step.reads().iter().map(ToString::to_string).collect();
+    if lists.is_empty() {
+        return Err("an APPLY step names at least one list".to_string());
+    }
     let names: Vec<&str> = step
         .text("tools")
         .split(',')
@@ -824,7 +873,7 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
                 return Err(format!("the arguments of {name} must be a JSON object"));
             };
             for (argument, kind) in given {
-                let kind = kind_of(name, argument, kind, &tools, true)?;
+                let kind = kind_of(name, argument, kind, &tools, &lists, true)?;
                 arguments.push((argument.clone(), kind));
             }
         }
@@ -839,6 +888,7 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
         })
     };
     Ok(Shape {
+        lists,
         tools,
         max_rows: cap("max_rows", 50, 100),
         max_new: cap("max_new", 12, 50),
@@ -853,16 +903,27 @@ fn kind_of(
     argument: &str,
     value: &Value,
     tools: &[bravebot_core::apply::Tool],
+    lists: &[String],
     choice: bool,
 ) -> Result<bravebot_core::apply::Kind, String> {
     use bravebot_core::apply::Kind;
     let none = || format!("{name}'s '{argument}' has no kind it can take");
+    // `field` names a field of the first list, and `list.field` one of the list of that name.
+    let of_list = |value: &str| -> Result<(usize, String), String> {
+        match value.split_once('.') {
+            Some((list, field)) if lists.iter().any(|known| known == list) => Ok((
+                lists.iter().position(|known| known == list).unwrap_or(0),
+                field.to_string(),
+            )),
+            _ => Ok((0, value.to_string())),
+        }
+    };
     match value {
         Value::String(word) if word == "new" => Ok(Kind::New),
         Value::Array(kinds) if choice && kinds.len() > 1 => {
             let kinds = kinds
                 .iter()
-                .map(|kind| kind_of(name, argument, kind, tools, false))
+                .map(|kind| kind_of(name, argument, kind, tools, lists, false))
                 .collect::<Result<Vec<_>, _>>()?;
             match kinds.iter().any(|kind| matches!(kind, Kind::Literal(_))) {
                 true => Err(none()),
@@ -876,7 +937,14 @@ fn kind_of(
             Some((key, value @ (Value::Number(_) | Value::Bool(_)))) if key == "literal" => {
                 Ok(Kind::Literal(value.to_string()))
             }
-            Some((key, Value::String(value))) if key == "entry" => Ok(Kind::Entry(value.clone())),
+            Some((key, Value::String(value))) if key == "entry" => {
+                let (list, field) = of_list(value)?;
+                Ok(Kind::Entry { list, field })
+            }
+            Some((key, Value::String(value))) if key == "entries" => {
+                let (list, field) = of_list(value)?;
+                Ok(Kind::Entries { list, field })
+            }
             Some((key, Value::String(value))) if key == "row" => {
                 let (tool, field) = value.split_once('.').ok_or_else(|| {
                     format!("{name}'s '{argument}': a row is written tool.argument")
@@ -919,15 +987,22 @@ fn declared_words(declared: Option<&String>) -> Vec<&str> {
 }
 
 /// How a kind reads on the line a person approves, in this process's own words.
-fn kind_in_words(
-    kind: &bravebot_core::apply::Kind,
-    shape: &bravebot_core::apply::Shape,
-    list: &str,
-) -> String {
+fn kind_in_words(kind: &bravebot_core::apply::Kind, shape: &bravebot_core::apply::Shape) -> String {
     use bravebot_core::apply::Kind;
     match kind {
-        Kind::Literal(value) => format!("\"{value}\""),
-        Kind::Entry(field) => format!("the {field} of an entry of {list}"),
+        // A number or a switch is sent as one, so it reads as one; text reads quoted.
+        Kind::Literal(value) => match serde_json::from_str::<Value>(value) {
+            Ok(Value::Number(_) | Value::Bool(_)) => value.clone(),
+            _ => format!("\"{value}\""),
+        },
+        Kind::Entry { list, field } => format!(
+            "the {field} of an entry of {}",
+            shape.lists.get(*list).map_or("the list", String::as_str)
+        ),
+        Kind::Entries { list, field } => format!(
+            "the {field} of each of several entries of {}",
+            shape.lists.get(*list).map_or("the list", String::as_str)
+        ),
         Kind::New => "a new name the processor writes".to_string(),
         Kind::Row { tool, argument } => format!(
             "the {argument} given by an earlier {}",
@@ -938,7 +1013,7 @@ fn kind_in_words(
         ),
         Kind::Either(kinds) => kinds
             .iter()
-            .map(|kind| kind_in_words(kind, shape, list))
+            .map(|kind| kind_in_words(kind, shape))
             .collect::<Vec<_>>()
             .join(" or "),
     }

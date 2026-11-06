@@ -5734,7 +5734,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         fields: &BTreeSet<String>,
         into: SlotId,
         slots: &mut crate::slot::SlotStore,
-        reader: fn(&str, &str, &BTreeSet<String>) -> crate::apply::Numbered,
+        reader: fn(&str, &str, &str, &BTreeSet<String>) -> crate::apply::Numbered,
     ) -> Gated<Labelled<crate::apply::Entries>> {
         let content = slots.take_for_reading(list).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -5744,7 +5744,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise(
             "a list, read for its entries by a reader outside the driver",
         );
-        let numbered = reader(&content.declassify(&proof), at, fields);
+        let numbered = reader(&content.declassify(&proof), at, &list.to_string(), fields);
         let shown = Labelled::new(numbered.shown, label);
         self.store_in_slot(
             "apply",
@@ -5767,7 +5767,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// back is the resolved list: the calls the rows name, each value labelled with everything it
     /// derives from, and the count of rows dropped for each reason of a closed set. The driver
     /// carries it to the person and never reads it. The label is the spec's met with the answer's
-    /// and the list's, so a list resolved after a page is untrusted and private whatever it holds.
+    /// and every list's, so a list resolved after a page is untrusted and private whatever it holds.
     ///
     /// Refused for a spec that was not built to propose rows. The trail line holds the
     /// processor's name and the label, and no count.
@@ -5775,9 +5775,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &mut self,
         spec: &crate::processor::ProcessorSpec,
         answer: Labelled<String>,
-        entries: &Labelled<crate::apply::Entries>,
+        lists: &[Labelled<crate::apply::Entries>],
         shape: &crate::apply::Shape,
-        reader: fn(&str, &crate::apply::Entries, &crate::apply::Shape) -> crate::apply::Resolved,
+        reader: fn(&str, &[crate::apply::Entries], &crate::apply::Shape) -> crate::apply::Resolved,
     ) -> Gated<Labelled<crate::apply::Resolved>> {
         if !spec.proposes_rows() {
             return Err(self.deny(
@@ -5789,7 +5789,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        let label = crate::label::taint_all([spec.out_label(), answer.label(), entries.label()]);
+        let label = crate::label::taint_all(
+            [spec.out_label(), answer.label()]
+                .into_iter()
+                .chain(lists.iter().map(Labelled::label)),
+        );
         self.allow(
             "processor",
             format!(
@@ -5800,11 +5804,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise(
             "a processor's answer and a list's entries, read for rows outside the driver",
         );
-        let resolved = reader(
-            &answer.declassify(&proof),
-            &entries.clone().declassify(&proof),
-            shape,
-        );
+        let entries: Vec<crate::apply::Entries> = lists
+            .iter()
+            .map(|list| list.clone().declassify(&proof))
+            .collect();
+        let resolved = reader(&answer.declassify(&proof), &entries, shape);
         Ok(Labelled::new(resolved, label))
     }
 
