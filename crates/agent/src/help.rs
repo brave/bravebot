@@ -301,7 +301,12 @@ pub fn body() -> &'static str {
                 size_note(crate::skills::body_after_frontmatter(page.text))
             ));
         }
-        out.push_str(&format!("- {}: {SPEC_LIST_SUMMARY}\n", name_of(SPEC_LIST)));
+        // The page of specs always loads whole, so its size is the plain character count.
+        out.push_str(&format!(
+            "- {}: {SPEC_LIST_SUMMARY} ({} characters)\n",
+            name_of(SPEC_LIST),
+            specs::LIST.chars().count()
+        ));
         out
     })
 }
@@ -686,6 +691,15 @@ intro
                 );
             }
         }
+        let prefix = format!("- {}: ", name_of(SPEC_LIST));
+        let line = index
+            .lines()
+            .find(|line| line.starts_with(&prefix))
+            .expect("the specs page is in the index");
+        assert!(
+            line.ends_with(&format!("({} characters)", specs::LIST.chars().count())),
+            "{line}"
+        );
     }
 
     /// The spec files on disk that carry a clause prefix, with the ids of their clause anchors in
