@@ -13,9 +13,10 @@ built on the branch `bots/slice-2a-layouts`, stacked on `bots/slice-1-rows-modul
 pull request together with slice 1. Slice 2b is built on the branch `bots/slice-2b-layout`, stacked on
 `bots/slice-2a-layouts`, and waits for a pull request together with them. Slice 3a is built on the
 branch `bots/slice-3-operations`, stacked on `bots/slice-2b-layout`, and waits for a pull request
-together with them. The branches of the design, slice 1 and slice 2a are pushed and equal the local
-ones. The branches of slice 2b and slice 3a are not pushed. Slices 3b and 3c and the later slices are
-not built. The design is
+together with them. Slice 3b is built on the branch `bots/slice-3b-archive`, stacked on
+`bots/slice-3-operations`, and waits for a pull request together with them. The branches of the
+design, slice 1, slice 2a, slice 2b and slice 3a are pushed and equal the local ones. Slice 3b is
+not pushed. Slice 3c and the later slices are not built. The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
 
@@ -216,15 +217,47 @@ Slice 3a differs from its text in these places:
   before the read, and a resolved null is shown the same way `chooseModel` shows a missing save. A
   refusal reaches it now because the module's rule decides the model.
 
-What 3b and 3c inherit. Slice 3b adds archive, restore and delete. Its delete removes the row and
-`<data folder>/bots/<slug>`, composed from the slug the person gave, and each archive stamps
-`retired`. The GUI keeps its refusal of a delete while a turn runs. Slice 3c adds the operations that
-record a conversation, record the archive length, release a session and forget a deleted
-conversation, and removes `bot.replace`, `updateBots`, `saveBot` and `withBot` from the GUI. In
-`ui/src/main/bots.ts` the row write of `migrateBot` and the counter writes of `noteBotMemory`,
-`keepingMemoryMark` and `noteBotNudged` still go through `bot.replace`, and the entry for 3c lists no
-operation for them, so 3c needs a decision for them. `bot.define` and `bot.redefine` have no caller in
-the GUI after 3a.
+Slice 3b adds `archive`, `restore` and `delete` to the module in `crates/agent/src/bots/operations.rs`.
+Archive sets `retired` to the time of that archive, including when the bot is already archived.
+Restore sets `retired` to zero, including when it is already zero. Each of those writes sets
+`updated` to the time of the write and leaves every other field as it was. The definition file is
+not opened for write. Delete checks the slug with `is_slug` before any path is composed from it. A
+value that is not a slug removes nothing, and a slug that has no row removes nothing, including no
+folder. When the row exists, delete removes the folder `<data folder>/bots/<slug>` and then the row,
+and the lock is held across both. The row is written only after the folder removal succeeds, so a
+list cannot observe a deletion that is then reverted. A list during the removal still sees the row.
+A replace of that list after the delete puts the row back, and the folder is already gone. That is
+the replace race left until slice 3c: a read made outside the lock, then a write of the whole list.
+A list taken before the delete starts ends the same way. One desktop process does not read during
+its own delete, because that read shares the queue with the delete and runs after the delete returns.
+A missing folder is success. If the folder
+cannot be removed, the bots file is left as it was and the error names that folder. The removal is recursive and does not read the folder to decide what to
+remove. The module's delete does
+not check `retired` and does not know about turns. The bridge methods are `bot.archive`,
+`bot.restore` and `bot.delete`. They are in `DENIED`, so the window cannot send them. Each request
+carries `dataFolder` from the folder Electron names, as `bot.make` does. In the GUI,
+`bravebot:bots:retire` is still `(slug, retired)`. `retired === true` calls archive and
+`retired === false` calls restore. A `retired` that is not a boolean returns null and calls nothing.
+`bravebot:bots:remove` is still `(slug)`. A delete while a turn of that bot is in progress in this
+program is refused from the desktop's turn table, before the list is read, with the error text the
+handler already uses, and on that refusal nothing is removed. That check stays in the desktop,
+before any bridge delete. Archive, restore and delete run
+on the same queue as `updateBots`. `retireBot` and `removeBot` no longer write the row through
+`saveBot` or `updateBots`. `removeMemoryHistory` stays, because other callers use it, and the delete
+path does not call it. `saveBot`, `updateBots`, `bot.replace`, `bot.define` and `bot.redefine` stay.
+Slice 3b adds no dialog, and the renderer is unchanged. The terminal's confirmation of an archive or
+a delete, and its offer of delete only for an archived bot, are not built.
+
+Slice 3b is built on `bots/slice-3b-archive`. There is no pull request yet, so the evidence is the
+tests on that branch. The plan does not repeat them.
+
+What slice 3c inherits. Slice 3c adds the operations that record a conversation, record the archive
+length, release a session and forget a deleted conversation, and removes `bot.replace`, `updateBots`,
+`saveBot` and `withBot` from the GUI. It still has to decide what replaces the row write of
+`migrateBot` and the counter writes of `noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` in
+`ui/src/main/bots.ts`: an operation of the module, or removing them. Slice 6 removes the counters.
+It still has to decide whether to remove `bot.define` and `bot.redefine` and their bridge tests,
+since the GUI has no caller of either after slice 3a.
 
 Before a pull request. The stack is 141 commits behind `origin/main` and conflicts with it in most
 files slice 2b touches, so the whole stack is rebased and the gates run again. The rebase changes
@@ -463,7 +496,7 @@ for bots, so each terminal function is in the bots layout.
      the window's list. Verified with `cargo test -p bravebot-agent bots`,
      `cargo test -p bravebot-ui-bridge`, `cd ui && node --test scripts/*.test.mjs` and
      `make check-spec`.
-3b. **The module archives, restores and deletes a bot, and the GUI calls them through the bridge.**
+3b. **The module archives, restores and deletes a bot, and the GUI calls them through the bridge.** Built. The Status above describes it.
    - Add the operations of [BOT-7](specs/bots.md#BOT-7) and [BOT-8](specs/bots.md#BOT-8) that archive
      a bot, restore it and delete it, with `retired` stamped on each archive and `updated` on each
      write. A delete removes the row and the folder `<data folder>/bots/<slug>`, composed from the slug

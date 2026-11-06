@@ -69,7 +69,7 @@ import { printToPdf } from './export'
 import { applyNativeAppearance } from './theme'
 import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
-import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
+import { editMemory, memoryHistory, snapshotMemory, tidyMemory } from './memory'
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -784,15 +784,13 @@ app.whenReady().then(() => {
   // definition stays exactly as it was, which is what lets the same session, the same memory and
   // the same face come back together when somebody brings it out again.
   ipcMain.handle('bravebot:bots:retire', async (_event, slug: unknown, retired: unknown) => {
-    if (typeof retired !== 'boolean') return null
     return retireBot(slug, retired)
   })
 
+  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
+
   ipcMain.handle('bravebot:bots:remove', async (_event, slug: unknown) => {
-    const held = await bot(slug)
-    if (!held) return null
-    if ([...botHandles].some(([handle, owner]) => owner === held.slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before deleting it.')
-    // The definition and app-owned memory copies go. Its session is a session like any other and stays
+    // The definition, the sessions, and the memory files stay, and `bot.delete` removes the history folder. Its session is a session like any other and stays
     // in the agent's own store, and its memory is a file in somebody's checkout that this app did
     // not put there on its own account. Deleting either would make a bot's removal a destructive
     // act, which is not what removing a row from a list looks like.
@@ -803,13 +801,10 @@ app.whenReady().then(() => {
     // there, a second deliberate step. The guarantee is the interface's rather than this
     // channel's, and it stays that way on purpose — the demo tears its own bots down through
     // here, and a bot made by a script is a bot a script should be able to take away.
-    await removeBot(held.slug)
-    await removeMemoryHistory(held.slug)
-    return held.slug
+    return removeBot(slug, botRunning(slug))
   })
 
   // Each names a folder, which is checked against the folders this process recorded for the bot.
-  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
   ipcMain.handle('bravebot:bots:memory', async (_event, slug: unknown, directory: unknown) => {
     if (!botRunning(slug)) await tidyMemory(slug, directory)
     return memory(slug, directory)

@@ -275,7 +275,15 @@ fn a_refused_replacement_writes_nothing_and_says_why() {
 
 #[test]
 fn the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client() {
-    for method in ["bot.make", "bot.edit", "bot.set_model", "bot.ensure_home"] {
+    for method in [
+        "bot.make",
+        "bot.edit",
+        "bot.set_model",
+        "bot.ensure_home",
+        "bot.archive",
+        "bot.restore",
+        "bot.delete",
+    ] {
         assert!(
             DENIED.contains(&method),
             "{method} is not denied to the host"
@@ -525,4 +533,99 @@ fn a_set_model_request_without_a_model_is_refused_and_leaves_the_bots_model_alon
     )
     .unwrap();
     assert_eq!(cleared["bot"]["model"], Value::Null);
+}
+
+#[test]
+fn a_bot_archived_restored_and_deleted_through_the_bridge() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let state = bravebot_agent::home::directory().unwrap();
+    let mut bridge = bridge();
+    call(
+        &mut bridge,
+        "bot.make",
+        json!({"dataFolder": data, "name": "Keeper", "purpose": "Keeps the record."}),
+    )
+    .unwrap();
+    let definition = state.join("agents/keeper.md");
+    let mut bytes = std::fs::read(&definition).unwrap();
+    bytes.extend_from_slice(b"Hand edited.\n");
+    std::fs::write(&definition, &bytes).unwrap();
+    let home = data.join("bot-homes/keeper");
+    assert!(home.is_dir());
+
+    let archived = call(
+        &mut bridge,
+        "bot.archive",
+        json!({"dataFolder": data, "slug": "keeper"}),
+    )
+    .unwrap();
+    assert!(archived["bot"]["retired"].as_f64().unwrap() > 0.0);
+    assert_eq!(archived["bot"]["slug"], json!("keeper"));
+    assert_eq!(archived["bot"]["purpose"], json!("Keeps the record."));
+    assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+
+    let restored = call(
+        &mut bridge,
+        "bot.restore",
+        json!({"dataFolder": data, "slug": "keeper"}),
+    )
+    .unwrap();
+    assert_eq!(restored["bot"]["retired"], json!(0));
+    assert_eq!(restored["bot"]["name"], json!("Keeper"));
+    assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+
+    let history = data.join("bots/keeper");
+    std::fs::create_dir_all(history.join("nested")).unwrap();
+    std::fs::write(history.join("nested/history.json"), "h").unwrap();
+    let sibling = data.join("bots/other");
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("keep.txt"), "stay").unwrap();
+
+    let deleted = call(
+        &mut bridge,
+        "bot.delete",
+        json!({"dataFolder": data, "slug": "keeper"}),
+    )
+    .unwrap();
+    assert_eq!(deleted["slug"], json!("keeper"));
+    assert_eq!(listed_slugs(&mut bridge, &data), Vec::<String>::new());
+    assert!(!history.exists());
+    assert_eq!(std::fs::read(sibling.join("keep.txt")).unwrap(), b"stay");
+    assert!(home.is_dir());
+    assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+}
+
+#[test]
+fn a_bad_slug_or_a_missing_row_refuses_before_a_folder_is_removed() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let mut bridge = bridge();
+    let escape = data.join("escape");
+    std::fs::create_dir_all(&escape).unwrap();
+    std::fs::write(escape.join("marker"), "stay").unwrap();
+    std::fs::write(data.join("canary"), "stay").unwrap();
+    let ghost = data.join("bots/ghost");
+    std::fs::create_dir_all(&ghost).unwrap();
+    std::fs::write(ghost.join("history.json"), "g").unwrap();
+
+    for method in ["bot.archive", "bot.restore", "bot.delete"] {
+        for slug in ["../escape", "..", "ghost"] {
+            let refused = call(
+                &mut bridge,
+                method,
+                json!({"dataFolder": data, "slug": slug}),
+            )
+            .expect_err("refused");
+            assert_eq!(refused.code, ErrorCode::BadRequest, "{method} {slug}");
+        }
+    }
+    assert!(!bots_file().exists());
+    assert_eq!(std::fs::read(escape.join("marker")).unwrap(), b"stay");
+    assert_eq!(std::fs::read(data.join("canary")).unwrap(), b"stay");
+    assert_eq!(std::fs::read(ghost.join("history.json")).unwrap(), b"g");
 }

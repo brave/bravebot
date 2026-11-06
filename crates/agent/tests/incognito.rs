@@ -697,3 +697,21 @@ fn a_private_session_refuses_to_make_edit_or_ensure_a_bot_and_writes_nothing() {
     }
     assert!(!data_folder.exists());
 }
+
+#[test]
+fn a_private_session_refuses_to_archive_restore_or_delete_a_bot_and_writes_nothing() {
+    use bravebot_agent::bots::Refused;
+    let scratch = Scratch::new("bots-archive");
+    let data_folder = scratch.home.join("gui");
+
+    let refusals = [
+        bravebot_agent::bots::archive(&data_folder, "dev").map(|_| ()),
+        bravebot_agent::bots::restore(&data_folder, "dev").map(|_| ()),
+        bravebot_agent::bots::delete(&data_folder, "dev").map(|_| ()),
+    ];
+
+    for refused in refusals {
+        assert!(matches!(refused, Err(Refused::Incognito)), "{refused:?}");
+    }
+    assert!(!data_folder.exists());
+}

@@ -88,6 +88,33 @@ pub fn ensure_home(request: &Request) -> Result<Value, Failure> {
     }
 }
 
+pub fn archive(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    match bots::archive(&data_folder, &slug) {
+        Ok(row) => Ok(json!({ "bot": row.to_value() })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn restore(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    match bots::restore(&data_folder, &slug) {
+        Ok(row) => Ok(json!({ "bot": row.to_value() })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn delete(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    match bots::delete(&data_folder, &slug) {
+        Ok(()) => Ok(json!({ "slug": slug })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
 fn saved_answer(saved: &bots::Saved) -> Value {
     json!({ "bot": saved.row.to_value(), "homeMade": saved.home_made })
 }
@@ -132,9 +159,11 @@ fn failure(refused: &Refused) -> Failure {
         Refused::Unreadable(_) | Refused::OldFile(_) | Refused::Locked(_) => {
             ErrorCode::StateUnusable
         }
-        Refused::NoFolder | Refused::Incognito | Refused::Io(_) | Refused::DefinitionIo(_) => {
-            ErrorCode::NoHome
-        }
+        Refused::NoFolder
+        | Refused::Incognito
+        | Refused::Io(_)
+        | Refused::History(_)
+        | Refused::DefinitionIo(_) => ErrorCode::NoHome,
     };
     Failure::new(code, refused.to_string())
 }
@@ -229,6 +258,12 @@ mod tests {
             ("bot.set_model", json!({"dataFolder": folder, "model": "m"})),
             ("bot.ensure_home", json!({"dataFolder": folder})),
             ("bot.ensure_home", json!({"slug": "a"})),
+            ("bot.archive", json!({"dataFolder": folder})),
+            ("bot.archive", json!({"slug": "a"})),
+            ("bot.restore", json!({"dataFolder": folder})),
+            ("bot.restore", json!({"slug": "a"})),
+            ("bot.delete", json!({"dataFolder": folder})),
+            ("bot.delete", json!({"slug": "a"})),
         ];
         for (method, params) in cases {
             let call = request(method, params.clone());
@@ -236,7 +271,11 @@ mod tests {
                 "bot.make" => make(&call),
                 "bot.edit" => edit(&call),
                 "bot.set_model" => set_model(&call),
-                _ => ensure_home(&call),
+                "bot.ensure_home" => ensure_home(&call),
+                "bot.archive" => archive(&call),
+                "bot.restore" => restore(&call),
+                "bot.delete" => delete(&call),
+                _ => panic!("untested method {method}"),
             }
             .expect_err("refused");
             assert_eq!(refused.code.as_str(), "bad_request", "{method} {params}");
@@ -308,6 +347,7 @@ mod tests {
             (Refused::NoFolder, "no_home"),
             (Refused::Incognito, "no_home"),
             (Refused::Io(problem()), "no_home"),
+            (Refused::History(problem()), "no_home"),
             (Refused::Unreadable(problem()), "state_unusable"),
             (Refused::OldFile(problem()), "state_unusable"),
             (

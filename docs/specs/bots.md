@@ -46,9 +46,10 @@ Built so far are the module that reads and writes the rows and the bridge method
 it through (slice 1), the layout seam and the phase with no session (slice 2a), the bots layout
 that lists the bots, opened by `--layout bots` and `/layout bots` (slice 2b), and the module's make,
 edit, set the model and home folder operations with the bridge methods the GUI calls them through
-(slice 3a). Not built are archive, restore and delete, the operations that record what happened to a
-row (a conversation, the archive length, a released session), everything that needs a session as a
-bot, the forms and the memory. The reasoning and the trust analysis are in
+(slice 3a), and archive, restore and delete with the bridge methods the GUI calls them through
+(slice 3b). Not built are the operations that record what happened to a row (a conversation, the
+archive length, a released session), everything that needs a session as a bot, the forms and the
+memory. The reasoning and the trust analysis are in
 [../design/bots-layer.md](../design/bots-layer.md). Where each clause is built, and in what order,
 is in [../PLAN.md](../PLAN.md).
 
@@ -343,15 +344,17 @@ face from. A bot the terminal makes takes its slug as the seed, so both programs
 `verified-by: bravebot_agent::bots::operations::a_data_folder_that_cannot_be_text_refuses_an_edit_a_model_change_and_an_ensure_before_any_row_is_dropped`
 `verified-by: bravebot_agent::bots::operations::an_edit_makes_a_home_that_was_removed_by_hand`
 `verified-by: bravebot_agent::bots::operations::setting_the_model_does_not_make_a_home_that_is_missing`
+`verified-by: bravebot_agent::bots::operations::an_archive_and_a_restore_do_not_make_a_home_that_is_missing`
 `verified-by: bravebot_agent::bots::operations::ensuring_a_home_makes_a_missing_one_privately`
 `verified-by: bravebot_agent::bots::operations::ensuring_a_home_changes_no_row_and_says_when_it_could_not_be_made`
 `verified-by: bravebot_agent::bots::operations::ensuring_the_home_of_a_bot_nobody_made_or_from_a_file_that_does_not_parse_is_refused`
 `verified-by: bravebot_agent::bots::operations::a_home_the_row_names_is_the_one_made_whatever_the_data_folder`
 `verified-by: bravebot_agent::incognito::a_private_session_refuses_to_make_edit_or_ensure_a_bot_and_writes_nothing`
+`verified-by: bravebot_agent::incognito::a_private_session_refuses_to_archive_restore_or_delete_a_bot_and_writes_nothing`
 `verified-by: bravebot_agent::home::a_machine_that_names_no_state_directory_refuses_to_make_edit_or_ensure_a_bot`
 `verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-rows-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes is in bots.json and not in bravebot-ui.json, that a bot is listed again by a bridge started afterwards, that the rows of an old bravebot-ui.json written in the old forms move unchanged and in order and the old file is left as it was, that a second start does not read the old key again, that an absent or empty key leaves no bots file, and that an old file that does not parse, or whose bots key is not an array, gives no rows, names its path and refuses a make; ui/scripts/bot-store.test.mjs asserts that the desktop sends the data folder Electron names and never reads or writes the bots key of bravebot-ui.json, that a write the agent refuses is shown with its reason and the bot is not shown as saved, and that a file that could not be read is never written over; make check-ui runs both)`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes has its home folder, that an edit makes a home that was removed by hand and a change of model does not, that ensuring the home makes it again and answers false for a bot that does not exist, and that bravebot-ui.json never holds a bots key; ui/scripts/bot-store.test.mjs asserts that bot.make, bot.edit, bot.set_model and bot.ensure_home each carry the data folder Electron names; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs all three)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes has its home folder, that an edit makes a home that was removed by hand and a change of model does not, that ensuring the home makes it again and answers false for a bot that does not exist, and that bravebot-ui.json never holds a bots key; ui/scripts/bot-store.test.mjs asserts that bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore and bot.delete each carry the data folder Electron names; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs all three)`
 
 <a id="BOT-5"></a>
 ### BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
@@ -409,7 +412,7 @@ come from"), whichever crate holds the code.
 `verified-by: bravebot_ui_bridge::bots::each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code`
 `verified-by: bravebot_ui_bridge::bots::a_wrongly_typed_or_missing_field_is_a_bad_request_before_anything_is_written`
 `verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads the rows through bot.list and replaces them through bot.replace, that it makes, edits and changes the model of a bot through bot.make, bot.edit and bot.set_model and makes a home folder through bot.ensure_home, each with the data folder Electron names, that changes made at the same moment, a make, an edit and a change of model among them, each reach the file, that the agent not running gives no rows and writes nothing, that ui/src/main/bots.ts and ui/src/main/index.ts no longer hold botFromForm, saveFormBot, ensureHome, bot.define or bot.redefine, and that none of bot.list, bot.replace, bot.make, bot.edit, bot.set_model and bot.ensure_home is among those a window may send; ui/scripts/bot-operations-bridge.test.mjs runs a make, an edit, a change of model and the making of a home folder through the real bravebot-rpc and asserts the rows, the definition and the folder they leave; make check-ui runs both)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads the rows through bot.list and replaces them through bot.replace, that it makes, edits and changes the model of a bot through bot.make, bot.edit and bot.set_model and makes a home folder through bot.ensure_home, each with the data folder Electron names, that changes made at the same moment, a make, an edit and a change of model among them, each reach the file, that the agent not running gives no rows and writes nothing, that ui/src/main/bots.ts and ui/src/main/index.ts no longer hold botFromForm, saveFormBot, ensureHome, bot.define or bot.redefine, and that none of bot.list, bot.replace, bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore and bot.delete is among those a window may send; ui/scripts/bot-operations-bridge.test.mjs runs a make, an edit, a change of model and the making of a home folder through the real bravebot-rpc and asserts the rows, the definition and the folder they leave; make check-ui runs both)`
 
 ## Making and changing a bot
 
@@ -449,7 +452,7 @@ person first. Nothing here shows that the renderer displays fetched pages, which
 window be taken over.
 
 `verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the four methods added here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test. The terminal's form is not built)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore, bot.delete, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the methods named here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test. The terminal's form is not built)`
 
 <a id="BOT-7"></a>
 ### BOT-7: the definition is written first, and the row only after it
@@ -514,7 +517,10 @@ definition.
 `verified-by: bravebot_ui_bridge::bots::each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code`
 `verified-by: bravebot_ui_bridge::bots::a_set_model_request_without_a_model_is_refused_and_leaves_the_bots_model_alone`
 `verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_leaves_a_definition_as_it_was_for_an_edit_and_a_model_change`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. Archive, restore and the stamping of retired, the recording operations and the migration of a bot made before definitions are not built)`
+`verified-by: bravebot_agent::bots::operations::archiving_a_bot_that_is_archived_stamps_retired_again_and_leaves_the_definition`
+`verified-by: bravebot_agent::bots::operations::restoring_sets_retired_to_zero_and_each_write_stamps_updated`
+`verified-by: bravebot_agent::bots::operations::an_archive_or_a_restore_of_a_missing_bot_writes_nothing`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each, and that archiving a bot that is already archived stamps retired again, leaves the definition bytes unchanged, sets retired to zero on a restore, and changes updated on each of those writes; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. The recording operations and the migration of a bot made before definitions are not built. The terminal's confirmation of an archive is not built)`
 
 <a id="BOT-8"></a>
 ### BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
@@ -542,7 +548,14 @@ earlier bot had.
 edited by hand. Sessions and memories are records of what happened. What a delete removes is what
 the GUI's delete removes today, and the module does the removal for both programs.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::deleting_a_bot_removes_its_row_and_its_history_folder_and_nothing_else`
+`verified-by: bravebot_agent::bots::operations::a_delete_whose_history_folder_is_already_gone_removes_the_row`
+`verified-by: bravebot_agent::bots::operations::a_history_folder_that_cannot_be_removed_leaves_the_row`
+`verified-by: bravebot_agent::bots::operations::a_removal_that_fails_does_not_publish_the_row_deletion`
+`verified-by: bravebot_agent::bots::operations::a_slug_that_is_not_one_removes_nothing_and_a_missing_bot_removes_no_folder`
+`verified-by: bravebot_ui_bridge::bots::a_bot_archived_restored_and_deleted_through_the_bridge`
+`verified-by: bravebot_ui_bridge::bots::a_bad_slug_or_a_missing_row_refuses_before_a_folder_is_removed`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a delete removes the row and the folder under the data folder at bots/<slug> and no other folder, and that the definition, a session file in the state directory's sessions folder, a memory file in a folder the bot worked in, the home folder and a sibling folder under bots all remain; ui/scripts/bot-store.test.mjs invokes the function the remove handler calls, with the running flag set, through the fake bridge and a real folder, and asserts the refusal is thrown without a list read, including when the bridge cannot list the rows, that bot.delete was not sent, and that the row and the folder remain; make check-ui runs both. The terminal's confirmation and its offer of delete only for an archived bot are not built)`
 
 ## Talking to a bot
 

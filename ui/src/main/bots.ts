@@ -111,7 +111,7 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botFolders, botOf, isSlug, withBot, withoutBot } from '../shared/bots'
+import { type Bot, botFolders, botOf, isSlug, withBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
 import { isOpenedDirectory } from './opened'
 import { type BotRow, type BridgeWrite, bridgeRequest, readBots, updateBots, withoutFigures, writeThroughBridge } from './bot-store'
@@ -319,16 +319,26 @@ export async function forgetBotConversation(directory: string, id: string): Prom
  * The window may ask for this and cannot say what the field becomes, which is the arrangement
  * `releaseBotSession` above has and for the same reason.
  */
-export async function retireBot(slug: unknown, retired: boolean): Promise<Bot | null> {
-  const held = await bot(slug)
-  if (!held) return null
-  const next = { ...held, retired: retired ? Date.now() : 0 }
-  await saveBot(next)
-  return next
+export async function retireBot(slug: unknown, retired: unknown): Promise<Bot | null> {
+  if (typeof retired !== 'boolean' || !isSlug(slug)) return null
+  const method = retired ? 'bot.archive' : 'bot.restore'
+  const answer = (await writeThroughBridge(async () => {
+    const held = await bot(slug)
+    if (!held) return null
+    return { method, params: { slug: held.slug } }
+  })) as { bot: BotRow } | null
+  return answer === null ? null : withoutFigures(answer.bot)
 }
 
-export async function removeBot(slug: string): Promise<void> {
-  await updateBots((all) => withoutBot(all, slug))
+export async function removeBot(slug: unknown, turnInProgress: boolean): Promise<string | null> {
+  if (!isSlug(slug)) return null
+  if (turnInProgress) throw new Error('Stop this bot’s running conversations before deleting it.')
+  const removed = await writeThroughBridge(async () => {
+    const held = await bot(slug)
+    if (!held) return null
+    return { method: 'bot.delete', params: { slug: held.slug } }
+  })
+  return removed === null ? null : slug
 }
 
 async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<void> {

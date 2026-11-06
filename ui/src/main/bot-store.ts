@@ -116,10 +116,11 @@ export interface BridgeWrite {
   params: Record<string, unknown>
 }
 
-export function writeThroughBridge(prepare: () => Promise<BridgeWrite> | BridgeWrite): Promise<unknown> {
+export function writeThroughBridge(prepare: () => Promise<BridgeWrite | null> | BridgeWrite | null): Promise<unknown> {
   return serially(async () => {
-    const { method, params } = await prepare()
-    return sendWrite(method, params)
+    const prepared = await prepare()
+    if (prepared === null) return null
+    return sendWrite(prepared.method, prepared.params)
   })
 }
 

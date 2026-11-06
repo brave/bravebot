@@ -320,6 +320,9 @@ impl Bridge {
             "bot.edit" => crate::bots::edit(request),
             "bot.set_model" => crate::bots::set_model(request),
             "bot.ensure_home" => crate::bots::ensure_home(request),
+            "bot.archive" => crate::bots::archive(request),
+            "bot.restore" => crate::bots::restore(request),
+            "bot.delete" => crate::bots::delete(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(

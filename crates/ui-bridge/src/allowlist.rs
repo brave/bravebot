@@ -145,6 +145,9 @@ pub const DENIED: &[&str] = &[
     "bot.edit",
     "bot.set_model",
     "bot.ensure_home",
+    "bot.archive",
+    "bot.restore",
+    "bot.delete",
     "doctor",
     // Read files or attach them to a turn.
     "mentions.offer",

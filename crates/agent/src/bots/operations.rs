@@ -208,6 +208,102 @@ pub fn ensure_home_in(
     Ok(make_home(&row.home))
 }
 
+pub fn archive(data_folder: &Path, slug: &str) -> Result<Row, Refused> {
+    let home = writable_home()?;
+    archive_in(&home, data_folder, slug, now(), LOCK_WAIT)
+}
+
+pub fn archive_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<Row, Refused> {
+    require_text_data_folder(data_folder)?;
+    stamp_retired(home, data_folder, slug, now, now, wait)
+}
+
+pub fn restore(data_folder: &Path, slug: &str) -> Result<Row, Refused> {
+    let home = writable_home()?;
+    restore_in(&home, data_folder, slug, now(), LOCK_WAIT)
+}
+
+pub fn restore_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<Row, Refused> {
+    require_text_data_folder(data_folder)?;
+    stamp_retired(home, data_folder, slug, 0.0, now, wait)
+}
+
+pub fn delete(data_folder: &Path, slug: &str) -> Result<(), Refused> {
+    if !is_slug(slug) {
+        return Err(Refused::NoSuchBot(slug.to_string()));
+    }
+    let home = writable_home()?;
+    delete_in(&home, data_folder, slug, now(), LOCK_WAIT)
+}
+
+pub fn delete_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<(), Refused> {
+    if !is_slug(slug) {
+        return Err(Refused::NoSuchBot(slug.to_string()));
+    }
+    require_text_data_folder(data_folder)?;
+    modify_keeping(
+        home,
+        data_folder,
+        now,
+        wait,
+        |rows| {
+            let index = rows
+                .iter()
+                .position(|row| row.slug == slug)
+                .ok_or_else(|| Refused::NoSuchBot(slug.to_string()))?;
+            rows.remove(index);
+            Ok(data_folder.join("bots").join(slug))
+        },
+        |folder| remove_history(folder),
+    )
+    .map(|_| ())
+}
+
+fn stamp_retired(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    retired: f64,
+    now: f64,
+    wait: Duration,
+) -> Result<Row, Refused> {
+    modify(home, data_folder, now, wait, |rows| {
+        let held = rows
+            .iter_mut()
+            .find(|row| row.slug == slug)
+            .ok_or_else(|| Refused::NoSuchBot(slug.to_string()))?;
+        held.retired = retired;
+        held.updated = now;
+        Ok(held.clone())
+    })
+}
+
+fn remove_history(folder: &Path) -> Result<(), Refused> {
+    match std::fs::remove_dir_all(folder) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Refused::History(Problem::new(folder, error))),
+    }
+}
+
 fn require_text_data_folder(data_folder: &Path) -> Result<(), Refused> {
     match composed_home(data_folder, "bot") {
         Some(_) => Ok(()),
@@ -250,6 +346,17 @@ fn modify<T>(
     wait: Duration,
     change: impl FnOnce(&mut Vec<Row>) -> Result<T, Refused>,
 ) -> Result<T, Refused> {
+    modify_keeping(home, data_folder, now, wait, change, |_: &T| Ok(()))
+}
+
+fn modify_keeping<T>(
+    home: &Path,
+    data_folder: &Path,
+    now: f64,
+    wait: Duration,
+    change: impl FnOnce(&mut Vec<Row>) -> Result<T, Refused>,
+    and_then: impl FnOnce(&T) -> Result<(), Refused>,
+) -> Result<T, Refused> {
     move_with(home, data_folder, wait, || {})?;
     make_state_directory(home)?;
     let _held = lock(home, wait)?;
@@ -269,6 +376,7 @@ fn modify<T>(
         return Err(Refused::Ceiling);
     }
     rows.sort_by(|a, b| a.slug.cmp(&b.slug));
+    and_then(&outcome)?;
     write_entries(&path, rows.iter().map(Row::to_value).collect())?;
     Ok(outcome)
 }
@@ -1442,6 +1550,24 @@ mod tests {
     }
 
     #[test]
+    fn an_archive_and_a_restore_do_not_make_a_home_that_is_missing() {
+        let scratch = Scratch::new("archive-home");
+        let made = scratch.make("Homed");
+        std::fs::remove_dir_all(&made.row.home).unwrap();
+
+        let archived = archive_in(&scratch.home(), &scratch.data(), "homed", NOW, WAIT).unwrap();
+        let restored =
+            restore_in(&scratch.home(), &scratch.data(), "homed", NOW + 1.0, WAIT).unwrap();
+
+        assert!(!Path::new(&made.row.home).exists());
+        assert_eq!(archived.updated, NOW);
+        assert_eq!(archived.retired, NOW);
+        assert_eq!(restored.updated, NOW + 1.0);
+        assert_eq!(restored.retired, 0.0);
+        assert_eq!(scratch.row("homed").updated, NOW + 1.0);
+    }
+
+    #[test]
     fn a_model_that_breaks_the_bound_or_a_missing_bot_is_refused_when_setting_it() {
         let scratch = Scratch::new("set-model-refused");
         made_with_memory(&scratch);
@@ -1581,5 +1707,294 @@ mod tests {
             assert!(!edited.home_made, "{spelling}");
             assert!(!Path::new(spelling).exists(), "{spelling}");
         }
+    }
+
+    fn without_stamps(entry: &Value) -> Value {
+        let mut copy = entry.clone();
+        let fields = copy.as_object_mut().expect("an object");
+        fields.remove("retired");
+        fields.remove("updated");
+        copy
+    }
+
+    #[test]
+    fn archiving_a_bot_that_is_archived_stamps_retired_again_and_leaves_the_definition() {
+        let scratch = Scratch::new("archive");
+        let before = made_with_memory(&scratch);
+        let definition = scratch.home().join("agents/editor.md");
+        let mut bytes = std::fs::read(&definition).unwrap();
+        bytes.extend_from_slice(b"Hand edited.\n");
+        std::fs::write(&definition, &bytes).unwrap();
+        let other = scratch.entry("other");
+        let kept = scratch.stored();
+        scratch.write_bots(&[kept[0].clone(), other]);
+
+        let first = archive_in(&scratch.home(), &scratch.data(), "editor", NOW, WAIT).unwrap();
+        let later = NOW + 25.0;
+        let second = archive_in(&scratch.home(), &scratch.data(), "editor", later, WAIT).unwrap();
+
+        assert_eq!(first.retired, NOW);
+        assert_eq!(first.updated, NOW);
+        assert_eq!(second.retired, later);
+        assert_ne!(second.retired, first.retired);
+        assert_eq!(second.updated, later);
+        assert_eq!(first.session, before.session);
+        assert_eq!(second.session, before.session);
+        assert_eq!(first.conversations, before.conversations);
+        assert_eq!(second.conversations, before.conversations);
+        assert_eq!(first.archived, before.archived);
+        assert_eq!(second.archived, before.archived);
+        assert_eq!(
+            (
+                second.slug.as_str(),
+                second.created,
+                second.definition.as_deref()
+            ),
+            ("editor", before.created, Some("editor"))
+        );
+        assert_eq!(second.name, before.name);
+        assert_eq!(second.purpose, before.purpose);
+        assert_eq!(second.home, before.home);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+        let stored = scratch.stored();
+        let editor = stored
+            .iter()
+            .find(|entry| entry["slug"] == "editor")
+            .unwrap();
+        assert_eq!(editor["retired"].as_f64(), Some(later));
+        assert_eq!(without_stamps(editor), without_stamps(&before.to_value()));
+        let untouched = stored
+            .iter()
+            .find(|entry| entry["slug"] == "other")
+            .unwrap();
+        assert_eq!(untouched, &scratch.entry("other"));
+
+        let restored = restore_in(
+            &scratch.home(),
+            &scratch.data(),
+            "editor",
+            later + 5.0,
+            WAIT,
+        )
+        .unwrap();
+        assert_eq!(restored.retired, 0.0);
+        assert_eq!(restored.session, before.session);
+        assert_eq!(restored.conversations, before.conversations);
+        assert_eq!(restored.archived, before.archived);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+    }
+
+    #[test]
+    fn restoring_sets_retired_to_zero_and_each_write_stamps_updated() {
+        let scratch = Scratch::new("restore");
+        scratch.make("Keeper");
+        archive_in(&scratch.home(), &scratch.data(), "keeper", NOW, WAIT).unwrap();
+
+        let restored =
+            restore_in(&scratch.home(), &scratch.data(), "keeper", NOW + 5.0, WAIT).unwrap();
+        let again =
+            restore_in(&scratch.home(), &scratch.data(), "keeper", NOW + 9.0, WAIT).unwrap();
+
+        assert_eq!(restored.retired, 0.0);
+        assert_eq!(restored.updated, NOW + 5.0);
+        assert_eq!(again.retired, 0.0);
+        assert_eq!(again.updated, NOW + 9.0);
+        assert_ne!(again.updated, restored.updated);
+        let row = scratch.stored().into_iter().next().unwrap();
+        assert_eq!(row["retired"].as_f64(), Some(0.0));
+        assert_eq!(row["updated"].as_f64(), Some(NOW + 9.0));
+    }
+
+    #[test]
+    fn an_archive_or_a_restore_of_a_missing_bot_writes_nothing() {
+        let scratch = Scratch::new("archive-missing");
+        let made = scratch.make("Keeper");
+        let definition = scratch.definition("keeper").unwrap();
+        let rows = scratch.bots_text();
+
+        let archived =
+            archive_in(&scratch.home(), &scratch.data(), "ghost", NOW + 3.0, WAIT).unwrap_err();
+        let restored =
+            restore_in(&scratch.home(), &scratch.data(), "ghost", NOW + 4.0, WAIT).unwrap_err();
+
+        assert!(matches!(archived, Refused::NoSuchBot(slug) if slug == "ghost"));
+        assert!(matches!(restored, Refused::NoSuchBot(slug) if slug == "ghost"));
+        assert_eq!(scratch.bots_text(), rows);
+        assert_eq!(
+            scratch.definition("keeper").as_deref(),
+            Some(definition.as_str())
+        );
+        assert_eq!(scratch.row("keeper").retired, made.row.retired);
+    }
+
+    #[test]
+    fn deleting_a_bot_removes_its_row_and_its_history_folder_and_nothing_else() {
+        let scratch = Scratch::new("delete");
+        let made = scratch.make("Keeper");
+        scratch.make("Other");
+        let definition = scratch.home().join("agents/keeper.md");
+        let mut bytes = std::fs::read(&definition).unwrap();
+        bytes.extend_from_slice(b"Hand edited.\n");
+        std::fs::write(&definition, &bytes).unwrap();
+        let session = scratch
+            .home()
+            .join("sessions/worked/33333333-3333-4333-8333-333333333333.json");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, "{\"id\":\"kept\"}").unwrap();
+        let memory = scratch.0.join("work/.bravebot/memory/keeper.md");
+        std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
+        std::fs::write(&memory, "notes").unwrap();
+        let history = scratch.data().join("bots/keeper");
+        std::fs::create_dir_all(history.join("nested")).unwrap();
+        std::fs::write(history.join("nested/history.json"), "h").unwrap();
+        let sibling = scratch.data().join("bots/other");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("keep.txt"), "stay").unwrap();
+        let home = PathBuf::from(&made.row.home);
+        assert!(home.is_dir());
+        let other_before = scratch
+            .stored()
+            .into_iter()
+            .find(|entry| entry["slug"] == "other")
+            .unwrap();
+
+        delete_in(&scratch.home(), &scratch.data(), "keeper", NOW, WAIT).unwrap();
+
+        let left: Vec<_> = scratch.stored();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0], other_before);
+        assert!(!history.exists());
+        assert_eq!(std::fs::read(sibling.join("keep.txt")).unwrap(), b"stay");
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read_to_string(&session).unwrap(),
+            "{\"id\":\"kept\"}"
+        );
+        assert_eq!(std::fs::read_to_string(&memory).unwrap(), "notes");
+        assert!(home.is_dir());
+        assert!(scratch.definition("other").is_some());
+    }
+
+    #[test]
+    fn a_delete_whose_history_folder_is_already_gone_removes_the_row() {
+        let scratch = Scratch::new("delete-missing-folder");
+        scratch.make("Keeper");
+        assert!(!scratch.data().join("bots/keeper").exists());
+
+        delete_in(&scratch.home(), &scratch.data(), "keeper", NOW, WAIT).unwrap();
+
+        assert!(scratch.stored().is_empty());
+    }
+
+    #[test]
+    fn a_history_folder_that_cannot_be_removed_leaves_the_row() {
+        let scratch = Scratch::new("delete-history-file");
+        scratch.make("Keeper");
+        let rows = scratch.bots_text().unwrap();
+        let history = scratch.data().join("bots/keeper");
+        std::fs::create_dir_all(history.parent().unwrap()).unwrap();
+        std::fs::write(&history, "not a directory").unwrap();
+
+        let refused = delete_in(&scratch.home(), &scratch.data(), "keeper", NOW, WAIT).unwrap_err();
+
+        assert!(matches!(refused, Refused::History(_)), "{refused:?}");
+        let message = refused.to_string();
+        assert!(message.contains("history folder"), "{message}");
+        assert!(!message.contains("could not be saved"), "{message}");
+        assert_eq!(scratch.bots_text().unwrap(), rows);
+        assert_eq!(std::fs::read(&history).unwrap(), b"not a directory");
+    }
+
+    #[test]
+    fn a_removal_that_fails_does_not_publish_the_row_deletion() {
+        let scratch = Scratch::new("delete-unpublished");
+        scratch.make("Keeper");
+        let before = scratch.bots_text().unwrap();
+        let home = scratch.home();
+        let data = scratch.data();
+        let during = before.clone();
+        let folder = data.join("bots/keeper");
+
+        let refused = modify_keeping(
+            &home,
+            &data,
+            NOW,
+            WAIT,
+            |rows| {
+                rows.retain(|row| row.slug != "keeper");
+                Ok(())
+            },
+            |_| {
+                assert_eq!(
+                    scratch.bots_text().as_deref(),
+                    Some(during.as_str()),
+                    "the deletion is published before the folder removal fails"
+                );
+                Err(Refused::History(Problem::new(&folder, "not removed")))
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(refused, Refused::History(_)), "{refused:?}");
+        assert_eq!(scratch.bots_text().as_deref(), Some(before.as_str()));
+    }
+
+    #[test]
+    fn a_slug_that_is_not_one_removes_nothing_and_a_missing_bot_removes_no_folder() {
+        let scratch = Scratch::new("delete-slug");
+        scratch.make("Keeper");
+        let rows = scratch.bots_text().unwrap();
+        let history = scratch.data().join("bots/keeper");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("history.json"), "h").unwrap();
+        let ghost = scratch.data().join("bots/ghost");
+        std::fs::create_dir_all(&ghost).unwrap();
+        std::fs::write(ghost.join("history.json"), "g").unwrap();
+        let escape = scratch.data().join("escape");
+        std::fs::create_dir_all(&escape).unwrap();
+        std::fs::write(escape.join("marker"), "stay").unwrap();
+        let outside = scratch.0.join("escape");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("marker"), "stay").unwrap();
+        std::fs::write(scratch.data().join("canary"), "stay").unwrap();
+        let names = |folder: PathBuf| {
+            let mut found = std::fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            found.sort();
+            found
+        };
+        let bots_before = names(scratch.data().join("bots"));
+
+        for slug in [
+            "../escape",
+            "..",
+            "../..",
+            "/tmp/x",
+            "keeper/../../escape",
+            "",
+            "Keeper",
+            "a/b",
+        ] {
+            let refused = delete_in(&scratch.home(), &scratch.data(), slug, NOW, WAIT).unwrap_err();
+            assert!(
+                matches!(refused, Refused::NoSuchBot(ref got) if got == slug),
+                "{slug:?} {refused:?}"
+            );
+        }
+        let missing = delete_in(&scratch.home(), &scratch.data(), "ghost", NOW, WAIT).unwrap_err();
+        assert!(matches!(missing, Refused::NoSuchBot(slug) if slug == "ghost"));
+
+        assert_eq!(scratch.bots_text().unwrap(), rows);
+        assert_eq!(std::fs::read(history.join("history.json")).unwrap(), b"h");
+        assert_eq!(std::fs::read(ghost.join("history.json")).unwrap(), b"g");
+        assert_eq!(std::fs::read(escape.join("marker")).unwrap(), b"stay");
+        assert_eq!(std::fs::read(outside.join("marker")).unwrap(), b"stay");
+        assert_eq!(
+            std::fs::read(scratch.data().join("canary")).unwrap(),
+            b"stay"
+        );
+        assert_eq!(names(scratch.data().join("bots")), bots_before);
     }
 }
