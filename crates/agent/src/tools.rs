@@ -29440,6 +29440,47 @@ mod tests {
         assert!(produced.failed, "a name one character out loaded a page");
     }
 
+    /// The regression it rejects: a long page loading whole through `load_skill`, or a section name
+    /// the outline gives being known to `help` and refused by the tool.
+    #[cfg(unix)]
+    #[test]
+    fn a_long_documentation_page_loads_by_section_through_the_tool() {
+        let fixture = SkillFixture::new("help-section-loads");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+
+        let outline = load_named(&mut policy, &catalogue, "bravebot-help/reference/commands");
+        assert!(
+            outline.len() < 20_000,
+            "the page loaded whole: {} bytes",
+            outline.len()
+        );
+        let first = outline
+            .lines()
+            .find_map(|line| line.strip_prefix("- "))
+            .and_then(|line| line.split(": ").next())
+            .expect("a section line")
+            .to_string();
+        assert!(
+            first.starts_with("bravebot-help/reference/commands#"),
+            "{outline}"
+        );
+        let section = load_named(&mut policy, &catalogue, &first);
+        assert!(section.starts_with("#"), "{section}");
+        assert!(section.len() < 20_000, "{} bytes", section.len());
+        assert_ne!(section, outline);
+
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            Beside::every(),
+            &json!({ "name": "bravebot-help/reference/commands#no-section-has-this-heading" }),
+        );
+        assert!(produced.failed, "a section the page lacks loaded");
+    }
+
     /// The regression it rejects: the list of specs or a spec's page being known to `help` and not
     /// reachable through `load_skill`, or a spec's page answering as the list does.
     #[cfg(unix)]

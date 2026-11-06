@@ -12,8 +12,10 @@
 //! `/changelog` and the desktop's Release Notes (CMD-25).
 //!
 //! The planner selects a page from a fixed table by an exact match of its name. The name is never a
-//! path and nothing here reads a file at run time (SKILL-8).
+//! path and nothing here reads a file at run time (SKILL-8). A long page is loaded one `##` section
+//! at a time, the section named the same way after a `#` (SKILL-17).
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// The skill whose body is the index and whose pages are loaded one at a time.
@@ -115,22 +117,171 @@ fn name_of(id: &str) -> String {
     format!("{SKILL}/{id}")
 }
 
+/// A page of at most this many characters loads whole. A longer one loads as its opening text and
+/// the list of its sections, so a question costs the section that answers it and not the page.
+const WHOLE_PAGE_LIMIT: usize = 12_000;
+
+/// One section of a page: its heading, the name it loads by, and its text from the heading to the
+/// next section.
+struct Section<'a> {
+    heading: &'a str,
+    slug: String,
+    text: &'a str,
+}
+
+/// The heading lowercased, with each run of characters other than letters and digits written as one
+/// hyphen and none at either end.
+fn slug_of(heading: &str) -> String {
+    let mut out = String::new();
+    for c in heading.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+/// The character and count of the fence marks a line starts with, ignoring indentation.
+fn fence_marks(line: &str) -> Option<(char, usize)> {
+    let line = line.trim_start();
+    let kind = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let count = line.chars().take_while(|c| *c == kind).count();
+    (count >= 3).then_some((kind, count))
+}
+
+/// The text before the first section of a page, and its sections in order.
+///
+/// A section starts at a `## ` line outside a code fence, or at a `### ` line where the page has
+/// no `## ` line. A repeated heading gets `-2`, `-3` added to its name so that every section has a
+/// name of its own.
+fn sections(text: &str) -> (&str, Vec<Section<'_>>) {
+    let mut marked: Vec<(usize, usize, &str)> = Vec::new();
+    let mut fence = None;
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        match (fence, fence_marks(line)) {
+            (None, Some(open)) => fence = Some(open),
+            (Some((kind, length)), Some((found, count)))
+                if found == kind && count >= length && line.trim().len() == count =>
+            {
+                fence = None;
+            }
+            (None, None) => {
+                if let Some(heading) = line.strip_prefix("## ") {
+                    marked.push((at, 2, heading.trim()));
+                } else if let Some(heading) = line.strip_prefix("### ") {
+                    marked.push((at, 3, heading.trim()));
+                }
+            }
+            _ => {}
+        }
+        at += line.len();
+    }
+    let level = marked.iter().map(|head| head.1).min().unwrap_or(2);
+    let heads: Vec<(usize, &str)> = marked
+        .iter()
+        .filter(|head| head.1 == level)
+        .map(|head| (head.0, head.2))
+        .collect();
+    let intro = text
+        .get(..heads.first().map_or(text.len(), |head| head.0))
+        .unwrap_or_default();
+    let mut taken: Vec<String> = Vec::new();
+    let found = heads
+        .iter()
+        .enumerate()
+        .map(|(n, &(from, heading))| {
+            let to = heads.get(n + 1).map_or(text.len(), |next| next.0);
+            let base = match slug_of(heading) {
+                empty if empty.is_empty() => "section".to_string(),
+                slug => slug,
+            };
+            let mut slug = base.clone();
+            let mut count = 1;
+            while taken.contains(&slug) {
+                count += 1;
+                slug = format!("{base}-{count}");
+            }
+            taken.push(slug.clone());
+            Section {
+                heading,
+                slug,
+                text: text.get(from..to).unwrap_or_default().trim_end(),
+            }
+        })
+        .collect();
+    (intro, found)
+}
+
+/// What a long page loads as: its opening text, then one line per section with the name to load it
+/// by and its size.
+fn outline(id: &str, text: &str, sections: &[Section<'_>], intro: &str) -> String {
+    let mut out = String::from(intro.trim_end());
+    out.push_str(&format!(
+        "\n\nThis page is {} characters, so it loads by section. Load the section whose heading fits \
+         the question with load_skill, using the name at the start of its line:\n\n",
+        text.chars().count()
+    ));
+    for section in sections {
+        out.push_str(&format!(
+            "- {}#{}: {} ({} characters)\n",
+            name_of(id),
+            section.slug,
+            section.heading,
+            section.text.chars().count()
+        ));
+    }
+    out
+}
+
+/// How the index states a page's size: its characters, and for a page that loads by section, how
+/// many sections it has.
+fn size_note(text: &str) -> String {
+    let characters = text.chars().count();
+    let count = sections(text).1.len();
+    if characters > WHOLE_PAGE_LIMIT && count > 0 {
+        format!("({characters} characters in {count} sections)")
+    } else {
+        format!("({characters} characters)")
+    }
+}
+
 /// The text of the page of this name, without its frontmatter, or `None` for any other name.
 ///
+/// A page of more than `WHOLE_PAGE_LIMIT` characters is answered with its opening text and the
+/// names of its sections. `<page name>#<section>` is the text of one section.
+///
 /// An exact match against the table. A name that is a traversal, a path, or one character out
-/// matches nothing.
-pub fn page(name: &str) -> Option<&'static str> {
+/// matches nothing, and neither does a section the page does not have.
+pub fn page(name: &str) -> Option<Cow<'static, str>> {
     let id = name.strip_prefix(SKILL)?.strip_prefix('/')?;
-    if id == SPEC_LIST {
-        return Some(specs::LIST);
+    let (id, wanted) = match id.split_once('#') {
+        Some((id, section)) => (id, Some(section)),
+        None => (id, None),
+    };
+    if wanted.is_none() {
+        if id == SPEC_LIST {
+            return Some(Cow::Borrowed(specs::LIST));
+        }
+        if let Some(spec) = specs::SPECS.iter().find(|(spec_id, _)| *spec_id == id) {
+            return Some(Cow::Borrowed(spec.1));
+        }
     }
-    if let Some(spec) = specs::SPECS.iter().find(|(spec_id, _)| *spec_id == id) {
-        return Some(spec.1);
+    let page = PAGES.iter().find(|page| page.id == id)?;
+    let text = crate::skills::body_after_frontmatter(page.text);
+    let (intro, found) = sections(text);
+    match wanted {
+        Some(slug) => found
+            .into_iter()
+            .find(|section| section.slug == slug)
+            .map(|section| Cow::Borrowed(section.text)),
+        None if text.chars().count() > WHOLE_PAGE_LIMIT && !found.is_empty() => {
+            Some(Cow::Owned(outline(id, text, &found, intro)))
+        }
+        None => Some(Cow::Borrowed(text)),
     }
-    PAGES
-        .iter()
-        .find(|page| page.id == id)
-        .map(|page| crate::skills::body_after_frontmatter(page.text))
 }
 
 /// What the skill tells the planner, then one line per page (its name, title and description), then
@@ -143,10 +294,11 @@ pub fn body() -> &'static str {
             let declared = crate::skills::declarations(page.text).unwrap_or_default();
             let said = |key: &str| declared.get(key).map(String::as_str).unwrap_or("");
             out.push_str(&format!(
-                "- {}: {}. {}\n",
+                "- {}: {}. {} {}\n",
                 name_of(page.id),
                 said("title"),
-                said("description")
+                said("description"),
+                size_note(crate::skills::body_after_frontmatter(page.text))
             ));
         }
         out.push_str(&format!("- {}: {SPEC_LIST_SUMMARY}\n", name_of(SPEC_LIST)));
@@ -166,8 +318,11 @@ them and not from memory: a command, key or setting that no page names may not e
 version.
 
 Pick the one or two pages whose title and description fit the question and load each with \
-load_skill, using the name at the start of its line. Do not load every page: a question costs the \
-pages it needs. If the pages you loaded do not answer it, say so rather than guessing.
+load_skill, using the name at the start of its line. Each line ends with the size of the page. A \
+page of more than 12000 characters loads as a list of its sections with their sizes: load the one \
+section whose heading fits the question, using the name on its line. Do not load every page or \
+every section: a question costs what it loads. If what you loaded does not answer it, say so \
+rather than guessing.
 
 Pages:
 ";
@@ -358,6 +513,178 @@ mod tests {
             "bravebot-help/using/watches.md",
         ] {
             assert!(page(wrong).is_none(), "{wrong} named a page");
+        }
+    }
+
+    /// The text of the published page of this id, as the planner is given it.
+    fn page_text(id: &str) -> &'static str {
+        let page = PAGES
+            .iter()
+            .find(|page| page.id == id)
+            .expect("a published page");
+        crate::skills::body_after_frontmatter(page.text)
+    }
+
+    /// The regression it rejects: a section running past the next heading, a heading inside a code
+    /// fence starting a section, or two sections sharing a name so that one cannot be loaded.
+    #[test]
+    fn a_section_runs_to_the_next_heading_and_a_fenced_heading_starts_none() {
+        let text = "# Title\n\nintro\n\n## First one\n\nbody\n\n```sh\n## not a heading\n```\n\n### Sub\n\nmore\n\n## Second, with `code`!\n\nend\n\n## First one\n\nagain\n";
+        let (intro, found) = sections(text);
+        assert_eq!(intro, "# Title\n\nintro\n\n");
+        let slugs: Vec<&str> = found.iter().map(|section| section.slug.as_str()).collect();
+        assert_eq!(slugs, ["first-one", "second-with-code", "first-one-2"]);
+        assert_eq!(
+            found[0].text,
+            "## First one\n\nbody\n\n```sh\n## not a heading\n```\n\n### Sub\n\nmore"
+        );
+        assert_eq!(found[1].text, "## Second, with `code`!\n\nend");
+        assert_eq!(found[2].text, "## First one\n\nagain");
+    }
+
+    /// The regression it rejects: a long page loading whole, which puts tens of thousands of
+    /// characters in every later round for a question one section answers, or an outline naming a
+    /// section that does not load.
+    #[test]
+    fn a_long_page_loads_as_its_sections_and_a_section_loads_alone() {
+        let whole = page_text("reference/commands");
+        assert!(whole.chars().count() > WHOLE_PAGE_LIMIT);
+        let outline = page("bravebot-help/reference/commands").expect("the commands page");
+        assert!(outline.len() < whole.len() / 5, "{} bytes", outline.len());
+
+        let named: Vec<&str> = outline
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .map(|line| line.split(": ").next().unwrap())
+            .collect();
+        let (_, found) = sections(whole);
+        assert!(found.len() > 10, "{} sections", found.len());
+        assert_eq!(named.len(), found.len());
+        for (name, section) in named.iter().zip(&found) {
+            assert!(
+                name.starts_with("bravebot-help/reference/commands#"),
+                "{name}"
+            );
+            let loaded = page(name).unwrap_or_else(|| panic!("{name} loads nothing"));
+            assert!(
+                loaded.ends_with(section.text.lines().last().unwrap())
+                    && loaded.contains(section.heading),
+                "{name}: {loaded}"
+            );
+            assert!(loaded.len() < whole.len() / 2, "{name} is most of the page");
+        }
+    }
+
+    /// The regression it rejects: a page small enough to answer a question being split into
+    /// sections, which costs a second call for no saving.
+    #[test]
+    fn a_short_page_loads_whole() {
+        let whole = page_text("using/watches");
+        assert!(whole.chars().count() <= WHOLE_PAGE_LIMIT);
+        assert_eq!(
+            &*page("bravebot-help/using/watches").expect("the watches page"),
+            whole
+        );
+    }
+
+    /// The regression it rejects: splitting only at `##`, which leaves a page whose sections are all
+    /// `###` as one block that loads whole.
+    #[test]
+    fn a_page_with_only_third_level_headings_splits_at_them() {
+        let (intro, found) = sections(
+            "# T
+
+intro
+
+### A
+
+a
+
+### B
+
+b
+",
+        );
+        assert_eq!(
+            intro,
+            "# T
+
+intro
+
+"
+        );
+        let slugs: Vec<&str> = found.iter().map(|section| section.slug.as_str()).collect();
+        assert_eq!(slugs, ["a", "b"]);
+        assert_eq!(found[1].text, "### B\n\nb");
+    }
+
+    /// The regression it rejects: a long page with no section to load it by, which the outline would
+    /// list as empty and so leave unreadable.
+    #[test]
+    fn every_long_page_has_sections_to_load_it_by() {
+        for page in &PAGES {
+            let text = crate::skills::body_after_frontmatter(page.text);
+            if text.chars().count() > WHOLE_PAGE_LIMIT {
+                assert!(!sections(text).1.is_empty(), "{} has no sections", page.id);
+            }
+        }
+    }
+
+    /// The same table-only rule as for a page: a near-miss, another page's section, a spec page's
+    /// or a traversal must not reach text the table does not name.
+    #[test]
+    fn a_section_is_found_by_its_exact_name_and_nothing_else() {
+        let (_, found) = sections(page_text("reference/commands"));
+        let slug = &found[0].slug;
+        assert!(page(&format!("bravebot-help/reference/commands#{slug}")).is_some());
+        for wrong in [
+            "bravebot-help/reference/commands#".to_string(),
+            "bravebot-help/reference/commands#no-section-has-this-heading".to_string(),
+            format!("bravebot-help/reference/commands#{slug}x"),
+            format!("bravebot-help/reference/commands#{slug}-"),
+            format!("bravebot-help/reference/commands#{slug}#{slug}"),
+            format!("bravebot-help/reference/commands#{slug}/"),
+            format!("bravebot-help/reference/commandz#{slug}"),
+            format!("bravebot-help/using/watches#{slug}"),
+            format!("bravebot-help#{slug}"),
+            format!("bravebot-help/specs#{slug}"),
+            format!("bravebot-help/specs/commands#{slug}"),
+            format!("reference/commands#{slug}"),
+            format!("#{slug}"),
+        ] {
+            assert!(page(&wrong).is_none(), "{wrong} named a page");
+        }
+    }
+
+    /// The regression it rejects: an index that gives no size, so the planner picks a page
+    /// without knowing it costs 50,000 characters, or one that says a short page loads by section.
+    #[test]
+    fn the_index_gives_the_size_of_every_page_and_says_which_load_by_section() {
+        let index = body();
+        assert!(
+            index.contains(&format!("{WHOLE_PAGE_LIMIT} characters")),
+            "{index}"
+        );
+        for page in &PAGES {
+            let text = crate::skills::body_after_frontmatter(page.text);
+            let prefix = format!("- {}: ", name_of(page.id));
+            let line = index
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("{} is not in the index", page.id));
+            let characters = text.chars().count();
+            if characters > WHOLE_PAGE_LIMIT {
+                let count = sections(text).1.len();
+                assert!(
+                    line.ends_with(&format!("({characters} characters in {count} sections)")),
+                    "{line}"
+                );
+            } else {
+                assert!(
+                    line.ends_with(&format!("({characters} characters)")),
+                    "{line}"
+                );
+            }
         }
     }
 
