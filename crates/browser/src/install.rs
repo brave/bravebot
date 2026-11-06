@@ -694,6 +694,12 @@ mod tests {
              --apply add_reading_list_entry:title=entry,new --dir /d -- /p/bravebot-browser mcp --group \
              bookmarks-write"
         );
+        assert_eq!(
+            installed.declaration(Some("tabs-manage")),
+            "bravebot mcp add brave-tabs-manage -s user --apply pin_tab:url=entry \
+             --apply group_tabs:urls=entries --apply group_tabs:title=new --dir /d -- \
+             /p/bravebot-browser mcp --group tabs-manage"
+        );
         for other in tools::ids().filter(|id| !["bookmarks-write", "tabs-manage"].contains(id)) {
             assert!(
                 !installed

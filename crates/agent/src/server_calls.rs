@@ -260,7 +260,7 @@ impl Servers {
     pub(crate) fn check(&self, plan: &Manifest) -> Result<(), String> {
         for (index, step) in plan.steps().iter().enumerate() {
             if step.tool() == manifest::APPLY {
-                self.check_apply(index, step)?;
+                self.check_apply(plan, index, step)?;
                 continue;
             }
             if !manifest::is_server_call(step.tool()) {
@@ -481,7 +481,7 @@ impl Servers {
     /// server is offered and does not ask every call, each tool is on its list, every argument the
     /// tool requires is given a kind and no other argument is, and each kind but a literal is one
     /// the declaration names for that argument. Read from the plan alone.
-    fn check_apply(&self, index: usize, step: &Step) -> Result<(), String> {
+    fn check_apply(&self, plan: &Manifest, index: usize, step: &Step) -> Result<(), String> {
         let number = index + 1;
         let alias = step.text("server");
         let Some(offer) = &self.offer else {
@@ -496,6 +496,20 @@ impl Servers {
             ));
         }
         let shape = shape_of(step)?;
+        // A list is what a fetch returned, never what a model wrote, so every entry a row names is
+        // something the run read.
+        for list in &shape.lists {
+            let fetched = plan.steps()[..index].iter().any(|earlier| {
+                earlier.tier() == manifest::Tier::Fetch
+                    && earlier.out_slot().is_some_and(|slot| slot.as_str() == list)
+            });
+            if !fetched {
+                return Err(format!(
+                    "step {number}: the list {list} was not filled by a read, so an APPLY step \
+                     cannot point into it"
+                ));
+            }
+        }
         let offered = offer.callable();
         for tool in &shape.tools {
             let name = format!("{alias}:{}", tool.name);
@@ -877,6 +891,18 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
                 arguments.push((argument.clone(), kind));
             }
         }
+        // A call depends on at most one earlier call, so unticking or failing that one is all that
+        // can leave it without a value.
+        let rows = arguments
+            .iter()
+            .filter(|(_, kind)| takes_a_row(kind))
+            .count();
+        if rows > 1 {
+            return Err(format!(
+                "{name} takes a row in more than one argument, and a call may depend on one \
+                 earlier call only"
+            ));
+        }
         tools.push(Tool {
             name: (*name).to_string(),
             arguments,
@@ -893,6 +919,16 @@ pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, Strin
         max_rows: cap("max_rows", 50, 100),
         max_new: cap("max_new", 12, 50),
     })
+}
+
+/// Whether a row may give this argument the new text of an earlier row.
+fn takes_a_row(kind: &bravebot_core::apply::Kind) -> bool {
+    use bravebot_core::apply::Kind;
+    match kind {
+        Kind::Row { .. } => true,
+        Kind::Either(kinds) => kinds.iter().any(takes_a_row),
+        _ => false,
+    }
 }
 
 /// The kind the plan gives `argument` of `name`: `"new"`, `{"literal": text}`, `{"entry": field}`,

@@ -2339,6 +2339,66 @@ fn an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked() 
     assert!(ran.called.is_empty());
 }
 
+/// A list an apply step points into is what a read returned. A plan that points it at what a
+/// model wrote, so that a model could write the URLs a row then "copies", is refused before it is
+/// put to anybody.
+#[test]
+fn an_apply_into_a_list_a_model_wrote_is_refused_before_anybody_is_asked() {
+    let scratch = Scratch::new("apply-written");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[0]["args"]["out_slot"] = json!("raw");
+    steps.insert(
+        1,
+        json!({"capability": "TRANSFORM", "args": {
+            "reads": ["raw"], "instruction": "list them again", "out_slot": "marks"}}),
+    );
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps.clone()), plan(steps)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(failure.contains("was not filled by a read"), "{failure}");
+    assert!(ran.asked.plans.is_empty());
+    assert!(ran.called.is_empty());
+}
+
+/// A call depends on one earlier call at most, so a plan that lets one tool take new text of
+/// earlier rows in two arguments is refused: unticking or failing either could not otherwise be
+/// followed to the call that needs it.
+#[test]
+fn an_apply_whose_call_could_depend_on_two_rows_is_refused() {
+    let scratch = Scratch::new("apply-two-rows");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["arguments"]["move_mark"]["url"] = json!({"row": "make_folder.title"});
+    let ran = walk(Walk {
+        session: marks_session(
+            &url,
+            &scratch,
+            &[
+                ("make_folder", "title", "new"),
+                ("move_mark", "url", "row"),
+                ("move_mark", "folder", "row"),
+            ],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps.clone()), plan(steps)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(failure.contains("one earlier call only"), "{failure}");
+    assert!(ran.called.is_empty());
+}
+
 /// An argument the declaration names with two kinds takes whichever a row gives: a bookmark may
 /// move into a folder the step makes or into one the list already holds, and the plan line says
 /// both in words rather than as the plan's JSON.
