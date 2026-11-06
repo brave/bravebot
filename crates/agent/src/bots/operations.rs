@@ -1,7 +1,8 @@
 use super::{
-    AVATAR_MAX, CEILING, LOCK_WAIT, Parsed, Problem, Reading, Refused, Row, bots_file,
-    composed_home, entries_of, is_model, is_slug, is_text, list_waiting, lock,
-    make_state_directory, move_with, now, parse_entries, write_entries,
+    AVATAR_MAX, CEILING, Conversation, LOCK_WAIT, MAX_SAFE_INTEGER, Parsed, Problem, Reading,
+    Refused, Row, bots_file, composed_home, entries_of, is_absolute_path, is_identifier, is_model,
+    is_slug, is_text, list_waiting, lock, make_state_directory, move_with, now, parse_entries,
+    write_entries,
 };
 use crate::agents::{self, Made, MakeRefused, RedefineRefused};
 use std::collections::HashSet;
@@ -30,6 +31,12 @@ pub struct Changes {
 pub struct Saved {
     pub row: Row,
     pub home_made: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Noted {
+    pub row: Option<Row>,
+    pub wrote: bool,
 }
 
 pub fn slug_for(name: &str, taken: &HashSet<&str>) -> String {
@@ -277,6 +284,176 @@ pub fn delete_in(
     .map(|_| ())
 }
 
+pub fn record_conversation(
+    data_folder: &Path,
+    slug: &str,
+    id: &str,
+    directory: &str,
+) -> Result<Noted, Refused> {
+    let home = writable_home()?;
+    record_conversation_in(&home, data_folder, slug, id, directory, now(), LOCK_WAIT)
+}
+
+pub fn record_conversation_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    id: &str,
+    directory: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<Noted, Refused> {
+    require_text_data_folder(data_folder)?;
+    amend(home, data_folder, now, wait, |rows| {
+        let Some(held) = rows.iter_mut().find(|row| row.slug == slug) else {
+            return Ok((quiet(None), false));
+        };
+        if !is_identifier(id) || !is_absolute_path(directory) {
+            return Err(Refused::Conversation);
+        }
+        held.session = Some(id.to_string());
+        if !held
+            .conversations
+            .iter()
+            .any(|each| each.id == id && each.directory == directory)
+        {
+            held.conversations.push(Conversation {
+                id: id.to_string(),
+                directory: directory.to_string(),
+            });
+        }
+        held.updated = now;
+        Ok((
+            Noted {
+                row: Some(held.clone()),
+                wrote: true,
+            },
+            true,
+        ))
+    })
+}
+
+pub fn record_archived(data_folder: &Path, slug: &str, archived: f64) -> Result<Noted, Refused> {
+    let home = writable_home()?;
+    record_archived_in(&home, data_folder, slug, archived, now(), LOCK_WAIT)
+}
+
+pub fn record_archived_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    archived: f64,
+    now: f64,
+    wait: Duration,
+) -> Result<Noted, Refused> {
+    require_text_data_folder(data_folder)?;
+    amend(home, data_folder, now, wait, |rows| {
+        let Some(held) = rows.iter_mut().find(|row| row.slug == slug) else {
+            return Ok((quiet(None), false));
+        };
+        let Some(next) = whole_archived(archived) else {
+            return Ok((quiet(Some(held.clone())), false));
+        };
+        if next <= held.archived {
+            return Ok((quiet(Some(held.clone())), false));
+        }
+        held.archived = next;
+        held.updated = now;
+        Ok((
+            Noted {
+                row: Some(held.clone()),
+                wrote: true,
+            },
+            true,
+        ))
+    })
+}
+
+pub fn release_session(data_folder: &Path, slug: &str) -> Result<Noted, Refused> {
+    let home = writable_home()?;
+    release_session_in(&home, data_folder, slug, now(), LOCK_WAIT)
+}
+
+pub fn release_session_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<Noted, Refused> {
+    require_text_data_folder(data_folder)?;
+    amend(home, data_folder, now, wait, |rows| {
+        let Some(held) = rows.iter_mut().find(|row| row.slug == slug) else {
+            return Ok((quiet(None), false));
+        };
+        if held.session.is_none() {
+            return Ok((quiet(Some(held.clone())), false));
+        }
+        held.session = None;
+        held.archived = 0;
+        held.updated = now;
+        Ok((
+            Noted {
+                row: Some(held.clone()),
+                wrote: true,
+            },
+            true,
+        ))
+    })
+}
+
+fn quiet(row: Option<Row>) -> Noted {
+    Noted { row, wrote: false }
+}
+
+pub fn forget_conversation(
+    data_folder: &Path,
+    id: &str,
+    directory: &str,
+) -> Result<usize, Refused> {
+    let home = writable_home()?;
+    forget_conversation_in(&home, data_folder, id, directory, now(), LOCK_WAIT)
+}
+
+pub fn forget_conversation_in(
+    home: &Path,
+    data_folder: &Path,
+    id: &str,
+    directory: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<usize, Refused> {
+    require_text_data_folder(data_folder)?;
+    amend(home, data_folder, now, wait, |rows| {
+        let mut changed = 0;
+        for held in rows.iter_mut() {
+            let listed = held.conversations.len();
+            held.conversations
+                .retain(|each| !(each.id == id && each.directory == directory));
+            let removed = held.conversations.len() != listed;
+            let pointed = held.session.as_deref() == Some(id);
+            if !removed && !pointed {
+                continue;
+            }
+            if pointed {
+                held.session = None;
+                held.archived = 0;
+            }
+            held.updated = now;
+            changed += 1;
+        }
+        Ok((changed, changed > 0))
+    })
+}
+
+fn whole_archived(value: f64) -> Option<u64> {
+    if value.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&value) {
+        Some(value as u64)
+    } else {
+        None
+    }
+}
+
 fn stamp_retired(
     home: &Path,
     data_folder: &Path,
@@ -357,6 +534,34 @@ fn modify_keeping<T>(
     change: impl FnOnce(&mut Vec<Row>) -> Result<T, Refused>,
     and_then: impl FnOnce(&T) -> Result<(), Refused>,
 ) -> Result<T, Refused> {
+    revise(
+        home,
+        data_folder,
+        now,
+        wait,
+        |rows| change(rows).map(|value| (value, true)),
+        and_then,
+    )
+}
+
+fn amend<T>(
+    home: &Path,
+    data_folder: &Path,
+    now: f64,
+    wait: Duration,
+    change: impl FnOnce(&mut Vec<Row>) -> Result<(T, bool), Refused>,
+) -> Result<T, Refused> {
+    revise(home, data_folder, now, wait, change, |_| Ok(()))
+}
+
+fn revise<T>(
+    home: &Path,
+    data_folder: &Path,
+    now: f64,
+    wait: Duration,
+    change: impl FnOnce(&mut Vec<Row>) -> Result<(T, bool), Refused>,
+    and_then: impl FnOnce(&T) -> Result<(), Refused>,
+) -> Result<T, Refused> {
     move_with(home, data_folder, wait, || {})?;
     make_state_directory(home)?;
     let _held = lock(home, wait)?;
@@ -371,7 +576,10 @@ fn modify_keeping<T>(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(Refused::Unreadable(Problem::new(&path, error))),
     };
-    let outcome = change(&mut rows)?;
+    let (outcome, changed) = change(&mut rows)?;
+    if !changed {
+        return Ok(outcome);
+    }
     if rows.len() > CEILING {
         return Err(Refused::Ceiling);
     }
@@ -1996,5 +2204,478 @@ mod tests {
             b"stay"
         );
         assert_eq!(names(scratch.data().join("bots")), bots_before);
+    }
+
+    fn plant(scratch: &Scratch, definition: &str) -> Vec<u8> {
+        let path = scratch
+            .home()
+            .join("agents")
+            .join(format!("{definition}.md"));
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.extend_from_slice(b"Hand edited.\n");
+        std::fs::write(&path, &bytes).unwrap();
+        bytes
+    }
+
+    fn same_identity(row: &Row, before: &Row) {
+        assert_eq!(row.name, before.name);
+        assert_eq!(row.purpose, before.purpose);
+        assert_eq!(row.model, before.model);
+        assert_eq!(row.avatar, before.avatar);
+        assert_eq!(row.home, before.home);
+        assert_eq!(row.definition, before.definition);
+        assert_eq!(row.retired, before.retired);
+        assert_eq!(row.created, before.created);
+    }
+
+    fn absolute(scratch: &Scratch, name: &str) -> String {
+        scratch.data().join(name).to_str().unwrap().to_string()
+    }
+
+    fn wrote(result: Result<Noted, Refused>) -> Row {
+        let noted = result.expect("the note was accepted");
+        assert!(noted.wrote);
+        noted.row.expect("the note wrote a row")
+    }
+
+    fn held(result: Result<Noted, Refused>) -> Row {
+        let noted = result.expect("the note was accepted");
+        assert!(!noted.wrote);
+        noted.row.expect("the row was still there")
+    }
+
+    fn absent(result: Result<Noted, Refused>) {
+        let noted = result.expect("a missing bot is not a refusal");
+        assert!(!noted.wrote);
+        assert!(noted.row.is_none());
+    }
+
+    #[test]
+    fn a_recorded_conversation_sets_the_session_and_is_added_once() {
+        let scratch = Scratch::new("record-conversation");
+        let made = scratch.make("Keeper");
+        let before = scratch.row("keeper");
+        let bytes = plant(&scratch, "keeper");
+        let definition = scratch.home().join("agents/keeper.md");
+        let dir_a = absolute(&scratch, "proj-a");
+        let dir_b = absolute(&scratch, "proj-b");
+
+        let first = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &dir_a,
+            NOW + 1.0,
+            WAIT,
+        ));
+
+        assert_eq!(first.session.as_deref(), Some("s-1"));
+        assert_eq!(
+            first.conversations,
+            vec![Conversation {
+                id: "s-1".into(),
+                directory: dir_a.clone(),
+            }]
+        );
+        assert_eq!(first.updated, NOW + 1.0);
+        same_identity(&first, &before);
+        assert_eq!(first.archived, before.archived);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+
+        let second = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &dir_a,
+            NOW + 2.0,
+            WAIT,
+        ));
+
+        assert_eq!(
+            second.conversations.len(),
+            1,
+            "the conversation was added twice: {:?}",
+            second.conversations
+        );
+        assert_eq!(second.conversations, first.conversations);
+        assert_eq!(second.session.as_deref(), Some("s-1"));
+        assert_eq!(second.updated, NOW + 2.0);
+        assert_ne!(second.updated, first.updated);
+        same_identity(&second, &before);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+
+        let moved = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &dir_b,
+            NOW + 3.0,
+            WAIT,
+        ));
+
+        assert_eq!(moved.session.as_deref(), Some("s-1"));
+        assert_eq!(
+            moved.conversations,
+            vec![
+                Conversation {
+                    id: "s-1".into(),
+                    directory: dir_a,
+                },
+                Conversation {
+                    id: "s-1".into(),
+                    directory: dir_b,
+                },
+            ]
+        );
+        assert_eq!(moved.updated, NOW + 3.0);
+        same_identity(&moved, &before);
+        assert_eq!(moved.retired, made.row.retired);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+
+        let text = scratch.bots_text();
+        absent(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "ghost",
+            "s-1",
+            &absolute(&scratch, "proj-a"),
+            NOW + 4.0,
+            WAIT,
+        ));
+        assert_eq!(scratch.bots_text(), text);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_conversation_the_parser_would_not_keep_is_refused_and_writes_nothing() {
+        let scratch = Scratch::new("record-refused");
+        let before = scratch.make("Keeper").row;
+        let bytes = plant(&scratch, "keeper");
+        let definition = scratch.home().join("agents/keeper.md");
+        let text = scratch.bots_text();
+        let directory = absolute(&scratch, "proj-a");
+        for (id, directory) in [
+            ("a/b", directory.as_str()),
+            ("", directory.as_str()),
+            ("s\0", directory.as_str()),
+            ("s-1", "relative"),
+            ("s-1", ""),
+            ("s-1", "rel\0ative"),
+        ] {
+            let refused = record_conversation_in(
+                &scratch.home(),
+                &scratch.data(),
+                "keeper",
+                id,
+                directory,
+                NOW + 1.0,
+                WAIT,
+            )
+            .expect_err(id);
+            assert!(matches!(refused, Refused::Conversation), "{id} {directory}");
+            assert_eq!(scratch.bots_text(), text, "{id}");
+            assert_eq!(scratch.row("keeper").session, before.session, "{id}");
+            assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+        }
+        absent(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "ghost",
+            "a/b",
+            "relative",
+            NOW + 1.0,
+            WAIT,
+        ));
+        assert_eq!(scratch.bots_text(), text);
+        let kept = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &directory,
+            NOW + 2.0,
+            WAIT,
+        ));
+        assert_eq!(kept.session.as_deref(), Some("s-1"));
+        assert_eq!(kept.slug, before.slug);
+    }
+
+    #[test]
+    fn an_archive_length_only_rises() {
+        let scratch = Scratch::new("record-archived");
+        let before = made_with_memory(&scratch);
+        let bytes = plant(&scratch, "editor");
+        let definition = scratch.home().join("agents/editor.md");
+        let text = scratch.bots_text();
+        assert_eq!(before.archived, 4);
+
+        for value in [4.0, 3.0, 0.0, -1.0, 4.5, f64::NAN, MAX_SAFE_INTEGER + 2.0] {
+            let answered = held(record_archived_in(
+                &scratch.home(),
+                &scratch.data(),
+                "editor",
+                value,
+                NOW + 20.0,
+                WAIT,
+            ));
+            assert_eq!(answered.archived, 4, "{value}");
+            assert_eq!(answered.updated, before.updated, "{value}");
+            assert_eq!(scratch.bots_text(), text, "{value}");
+        }
+
+        absent(record_archived_in(
+            &scratch.home(),
+            &scratch.data(),
+            "ghost",
+            9.0,
+            NOW + 21.0,
+            WAIT,
+        ));
+        assert_eq!(scratch.bots_text(), text);
+
+        let risen = wrote(record_archived_in(
+            &scratch.home(),
+            &scratch.data(),
+            "editor",
+            5.0,
+            NOW + 22.0,
+            WAIT,
+        ));
+
+        assert_eq!(risen.archived, 5);
+        assert_eq!(risen.updated, NOW + 22.0);
+        assert_eq!(risen.session, before.session);
+        assert_eq!(risen.conversations, before.conversations);
+        same_identity(&risen, &before);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+        assert_eq!(scratch.row("editor").archived, 5);
+
+        let top = wrote(record_archived_in(
+            &scratch.home(),
+            &scratch.data(),
+            "editor",
+            MAX_SAFE_INTEGER,
+            NOW + 23.0,
+            WAIT,
+        ));
+        assert_eq!(top.archived, MAX_SAFE_INTEGER as u64);
+        assert_eq!(top.updated, NOW + 23.0);
+        same_identity(&top, &before);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+    }
+
+    #[test]
+    fn releasing_a_session_clears_it_and_keeps_the_conversation() {
+        let scratch = Scratch::new("release-session");
+        let before = made_with_memory(&scratch);
+        let bytes = plant(&scratch, "editor");
+        let definition = scratch.home().join("agents/editor.md");
+
+        let released = wrote(release_session_in(
+            &scratch.home(),
+            &scratch.data(),
+            "editor",
+            NOW + 1.0,
+            WAIT,
+        ));
+
+        assert_eq!(released.session, None);
+        assert_eq!(released.archived, 0);
+        assert_eq!(released.conversations, before.conversations);
+        assert_eq!(released.updated, NOW + 1.0);
+        same_identity(&released, &before);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+        assert_eq!(scratch.row("editor").conversations, before.conversations);
+
+        let text = scratch.bots_text();
+        let again = held(release_session_in(
+            &scratch.home(),
+            &scratch.data(),
+            "editor",
+            NOW + 9.0,
+            WAIT,
+        ));
+        assert_eq!(again.session, None);
+        assert_eq!(again.archived, 0);
+        assert_eq!(again.updated, NOW + 1.0);
+        assert_eq!(again.conversations, before.conversations);
+        assert_eq!(scratch.bots_text(), text);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+
+        let mut entries = scratch.stored();
+        entries[0]["archived"] = json!(9);
+        scratch.write_bots(&entries);
+        let parked = scratch.bots_text();
+        let left = held(release_session_in(
+            &scratch.home(),
+            &scratch.data(),
+            "editor",
+            NOW + 11.0,
+            WAIT,
+        ));
+        assert_eq!(left.session, None);
+        assert_eq!(left.archived, 9);
+        assert_eq!(left.updated, released.updated);
+        assert_eq!(scratch.bots_text(), parked);
+
+        absent(release_session_in(
+            &scratch.home(),
+            &scratch.data(),
+            "ghost",
+            NOW + 12.0,
+            WAIT,
+        ));
+        assert_eq!(scratch.bots_text(), parked);
+        assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+    }
+
+    #[test]
+    fn forgetting_a_deleted_conversation_removes_it_from_every_row_that_lists_it() {
+        let scratch = Scratch::new("forget-conversation");
+        for name in ["Keeper", "Listed", "Pointed", "Untouched"] {
+            scratch.make(name);
+        }
+        let dir = absolute(&scratch, "proj-a");
+        let other = absolute(&scratch, "proj-b");
+        let mut entries = scratch.stored();
+        let set = |entries: &mut [Value],
+                   slug: &str,
+                   session: &str,
+                   archived: u64,
+                   pairs: &[(&str, &str)]| {
+            let entry = entries
+                .iter_mut()
+                .find(|entry| entry["slug"] == slug)
+                .unwrap();
+            entry["session"] = json!(session);
+            entry["archived"] = json!(archived);
+            entry["updated"] = json!(6);
+            entry["conversations"] = json!(
+                pairs
+                    .iter()
+                    .map(|(id, directory)| json!({"id": id, "directory": directory}))
+                    .collect::<Vec<_>>()
+            );
+        };
+        set(
+            &mut entries,
+            "keeper",
+            "s-1",
+            4,
+            &[("s-1", &dir), ("s-2", &other)],
+        );
+        set(&mut entries, "listed", "s-9", 2, &[("s-1", &dir)]);
+        set(&mut entries, "pointed", "s-1", 7, &[("s-1", &other)]);
+        set(&mut entries, "untouched", "s-3", 1, &[("s-3", &other)]);
+        scratch.write_bots(&entries);
+        let before = |slug: &str| scratch.row(slug);
+        let keeper = before("keeper");
+        let listed = before("listed");
+        let pointed = before("pointed");
+        let untouched = before("untouched");
+        let bytes: Vec<_> = ["keeper", "listed", "pointed", "untouched"]
+            .into_iter()
+            .map(|name| (name, plant(&scratch, name)))
+            .collect();
+
+        let changed = forget_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "s-1",
+            &dir,
+            NOW + 50.0,
+            WAIT,
+        )
+        .unwrap();
+
+        assert_eq!(changed, 3);
+        let keeper_after = scratch.row("keeper");
+        let listed_after = scratch.row("listed");
+        let pointed_after = scratch.row("pointed");
+        let untouched_after = scratch.row("untouched");
+        assert_eq!(keeper_after.session, None);
+        assert_eq!(keeper_after.archived, 0);
+        assert_eq!(
+            keeper_after.conversations,
+            vec![Conversation {
+                id: "s-2".into(),
+                directory: other.clone(),
+            }]
+        );
+        assert_eq!(keeper_after.updated, NOW + 50.0);
+        assert_eq!(listed_after.session.as_deref(), Some("s-9"));
+        assert_eq!(listed_after.archived, 2);
+        assert!(
+            listed_after
+                .conversations
+                .iter()
+                .all(|each| each.id != "s-1"),
+            "the deleted pair stayed: {:?}",
+            listed_after.conversations
+        );
+        let listed_stored = scratch
+            .stored()
+            .into_iter()
+            .find(|entry| entry["slug"] == "listed")
+            .unwrap();
+        assert!(
+            listed_stored["conversations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|each| each["id"] != "s-1"),
+            "the deleted pair stayed on disk: {}",
+            listed_stored["conversations"]
+        );
+        assert_eq!(listed_stored["session"], json!("s-9"));
+        assert_eq!(listed_stored["archived"], json!(2));
+        assert_eq!(listed_after.updated, NOW + 50.0);
+        assert_eq!(pointed_after.session, None);
+        assert_eq!(pointed_after.archived, 0);
+        assert_eq!(
+            pointed_after.conversations,
+            vec![Conversation {
+                id: "s-1".into(),
+                directory: other,
+            }]
+        );
+        assert_eq!(pointed_after.updated, NOW + 50.0);
+        assert_eq!(untouched_after.updated, untouched.updated);
+        assert_eq!(untouched_after.session, untouched.session);
+        assert_eq!(untouched_after.archived, untouched.archived);
+        assert_eq!(untouched_after.conversations, untouched.conversations);
+        for (row, prior) in [
+            (&keeper_after, &keeper),
+            (&listed_after, &listed),
+            (&pointed_after, &pointed),
+            (&untouched_after, &untouched),
+        ] {
+            same_identity(row, prior);
+        }
+        for (name, bytes) in bytes {
+            assert_eq!(
+                std::fs::read(scratch.home().join("agents").join(format!("{name}.md"))).unwrap(),
+                bytes,
+                "{name}"
+            );
+        }
+
+        let text = scratch.bots_text();
+        let none = forget_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "s-missing",
+            &dir,
+            NOW + 80.0,
+            WAIT,
+        )
+        .unwrap();
+        assert_eq!(none, 0);
+        assert_eq!(scratch.bots_text(), text);
+        assert_eq!(scratch.row("untouched").updated, untouched.updated);
+        assert_eq!(scratch.row("keeper").updated, NOW + 50.0);
     }
 }

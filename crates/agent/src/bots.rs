@@ -9,8 +9,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod operations;
 
 pub use operations::{
-    Changes, NewBot, Saved, archive, archive_in, delete, delete_in, edit, edit_in, ensure_home,
-    ensure_home_in, make, make_in, restore, restore_in, set_model, set_model_in,
+    Changes, NewBot, Noted, Saved, archive, archive_in, delete, delete_in, edit, edit_in,
+    ensure_home, ensure_home_in, forget_conversation, forget_conversation_in, make, make_in,
+    record_archived, record_archived_in, record_conversation, record_conversation_in,
+    release_session, release_session_in, restore, restore_in, set_model, set_model_in,
 };
 
 pub const CEILING: usize = 100;
@@ -185,6 +187,7 @@ pub enum Refused {
     DataFolder(PathBuf),
     Definition(String),
     DefinitionIo(Problem),
+    Conversation,
 }
 
 impl Refused {
@@ -267,6 +270,9 @@ impl fmt::Display for Refused {
             Self::DefinitionIo(problem) => write!(
                 out,
                 "the bot's definition could not be written, so nothing was saved ({problem})"
+            ),
+            Self::Conversation => out.write_str(
+                "the conversation was not recorded: the session is not an identifier, or the directory is not an absolute path",
             ),
         }
     }

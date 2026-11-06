@@ -127,8 +127,10 @@ export function writeThroughBridge(prepare: () => Promise<BridgeWrite | null> | 
 async function sendWrite(method: string, params: Record<string, unknown>): Promise<unknown> {
   try {
     const answer = await bridgeRequest(method, params)
-    unread = null
-    unwritten = null
+    if (!leftTheFileAlone(answer)) {
+      unread = null
+      unwritten = null
+    }
     return answer
   } catch (error) {
     if (!isValidationRefusal(error)) unwritten = message(error)
@@ -138,4 +140,8 @@ async function sendWrite(method: string, params: Record<string, unknown>): Promi
 
 function isValidationRefusal(error: unknown): boolean {
   return error instanceof Error && (error as { code?: unknown }).code === 'bad_request'
+}
+
+function leftTheFileAlone(answer: unknown): boolean {
+  return answer !== null && typeof answer === 'object' && (answer as { wrote?: unknown }).wrote === false
 }

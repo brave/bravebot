@@ -115,6 +115,58 @@ pub fn delete(request: &Request) -> Result<Value, Failure> {
     }
 }
 
+pub fn record_conversation(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    let id = request.string("id")?;
+    let directory = request.string("directory")?;
+    match bots::record_conversation(&data_folder, &slug, &id, &directory) {
+        Ok(noted) => Ok(noted_answer(&noted)),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn record_archived(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    let Some(value) = request.params.get("archived") else {
+        return Err(Failure::bad_request("`archived` is required"));
+    };
+    let Some(archived) = value.as_f64() else {
+        return Ok(json!({ "bot": Value::Null, "wrote": false }));
+    };
+    match bots::record_archived(&data_folder, &slug, archived) {
+        Ok(noted) => Ok(noted_answer(&noted)),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn release_session(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    match bots::release_session(&data_folder, &slug) {
+        Ok(noted) => Ok(noted_answer(&noted)),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn forget_conversation(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let id = request.string("id")?;
+    let directory = request.string("directory")?;
+    match bots::forget_conversation(&data_folder, &id, &directory) {
+        Ok(changed) => Ok(json!({ "changed": changed, "wrote": changed > 0 })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+fn noted_answer(noted: &bots::Noted) -> Value {
+    json!({
+        "bot": noted.row.as_ref().map(bots::Row::to_value),
+        "wrote": noted.wrote,
+    })
+}
+
 fn saved_answer(saved: &bots::Saved) -> Value {
     json!({ "bot": saved.row.to_value(), "homeMade": saved.home_made })
 }
@@ -155,7 +207,8 @@ fn failure(refused: &Refused) -> Failure {
         | Refused::Avatar
         | Refused::NoSuchBot(_)
         | Refused::DataFolder(_)
-        | Refused::Definition(_) => ErrorCode::BadRequest,
+        | Refused::Definition(_)
+        | Refused::Conversation => ErrorCode::BadRequest,
         Refused::Unreadable(_) | Refused::OldFile(_) | Refused::Locked(_) => {
             ErrorCode::StateUnusable
         }
@@ -264,6 +317,70 @@ mod tests {
             ("bot.restore", json!({"slug": "a"})),
             ("bot.delete", json!({"dataFolder": folder})),
             ("bot.delete", json!({"slug": "a"})),
+            ("bot.record_conversation", json!({"dataFolder": folder})),
+            (
+                "bot.record_conversation",
+                json!({"slug": "a", "id": "s", "directory": "/d"}),
+            ),
+            (
+                "bot.record_conversation",
+                json!({"dataFolder": folder, "slug": "a", "id": "s"}),
+            ),
+            (
+                "bot.record_conversation",
+                json!({"dataFolder": folder, "slug": "a", "directory": "/d"}),
+            ),
+            (
+                "bot.record_conversation",
+                json!({"dataFolder": folder, "slug": 1, "id": "s", "directory": "/d"}),
+            ),
+            (
+                "bot.record_conversation",
+                json!({"dataFolder": folder, "slug": "a", "id": 1, "directory": "/d"}),
+            ),
+            (
+                "bot.record_conversation",
+                json!({"dataFolder": folder, "slug": "a", "id": "s", "directory": 1}),
+            ),
+            (
+                "bot.record_archived",
+                json!({"dataFolder": folder, "archived": 1}),
+            ),
+            ("bot.record_archived", json!({"slug": "a", "archived": 1})),
+            (
+                "bot.record_archived",
+                json!({"dataFolder": folder, "slug": "a"}),
+            ),
+            (
+                "bot.record_archived",
+                json!({"dataFolder": folder, "slug": 1, "archived": 1}),
+            ),
+            ("bot.release_session", json!({"dataFolder": folder})),
+            ("bot.release_session", json!({"slug": "a"})),
+            (
+                "bot.release_session",
+                json!({"dataFolder": folder, "slug": 1}),
+            ),
+            (
+                "bot.forget_conversation",
+                json!({"dataFolder": folder, "id": "s"}),
+            ),
+            (
+                "bot.forget_conversation",
+                json!({"dataFolder": folder, "directory": "/d"}),
+            ),
+            (
+                "bot.forget_conversation",
+                json!({"id": "s", "directory": "/d"}),
+            ),
+            (
+                "bot.forget_conversation",
+                json!({"dataFolder": folder, "id": 1, "directory": "/d"}),
+            ),
+            (
+                "bot.forget_conversation",
+                json!({"dataFolder": folder, "id": "s", "directory": true}),
+            ),
         ];
         for (method, params) in cases {
             let call = request(method, params.clone());
@@ -275,10 +392,26 @@ mod tests {
                 "bot.archive" => archive(&call),
                 "bot.restore" => restore(&call),
                 "bot.delete" => delete(&call),
+                "bot.record_conversation" => record_conversation(&call),
+                "bot.record_archived" => record_archived(&call),
+                "bot.release_session" => release_session(&call),
+                "bot.forget_conversation" => forget_conversation(&call),
                 _ => panic!("untested method {method}"),
             }
             .expect_err("refused");
             assert_eq!(refused.code.as_str(), "bad_request", "{method} {params}");
+        }
+    }
+
+    #[test]
+    fn a_non_number_archive_length_is_a_success() {
+        for archived in [json!("no"), json!(null), json!(true)] {
+            let call = request(
+                "bot.record_archived",
+                json!({"dataFolder": "/gui", "slug": "a", "archived": archived}),
+            );
+            let answered = record_archived(&call).expect("success");
+            assert_eq!(answered, json!({"bot": null, "wrote": false}), "{archived}");
         }
     }
 

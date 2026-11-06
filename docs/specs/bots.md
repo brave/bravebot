@@ -47,9 +47,10 @@ it through (slice 1), the layout seam and the phase with no session (slice 2a), 
 that lists the bots, opened by `--layout bots` and `/layout bots` (slice 2b), and the module's make,
 edit, set the model and home folder operations with the bridge methods the GUI calls them through
 (slice 3a), and archive, restore and delete with the bridge methods the GUI calls them through
-(slice 3b). Not built are the operations that record what happened to a row (a conversation, the
-archive length, a released session), everything that needs a session as a bot, the forms and the
-memory. The reasoning and the trust analysis are in
+(slice 3b), and the operations that record a conversation, an archive length, a released session
+and a forgotten conversation, with the bridge methods the GUI calls them through (slice 3c). The
+terminal does not record a turn, does not continue a conversation from the layout, and has no
+delete of a conversation. Still not built are a session as a bot, the forms and the memory. The reasoning and the trust analysis are in
 [../design/bots-layer.md](../design/bots-layer.md). Where each clause is built, and in what order,
 is in [../PLAN.md](../PLAN.md).
 
@@ -452,7 +453,7 @@ person first. Nothing here shows that the renderer displays fetched pages, which
 window be taken over.
 
 `verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore, bot.delete, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the methods named here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test. The terminal's form is not built)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore, bot.delete, bot.record_conversation, bot.record_archived, bot.release_session, bot.forget_conversation, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the methods named here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test. The terminal's form is not built)`
 
 <a id="BOT-7"></a>
 ### BOT-7: the definition is written first, and the row only after it
@@ -520,7 +521,7 @@ definition.
 `verified-by: bravebot_agent::bots::operations::archiving_a_bot_that_is_archived_stamps_retired_again_and_leaves_the_definition`
 `verified-by: bravebot_agent::bots::operations::restoring_sets_retired_to_zero_and_each_write_stamps_updated`
 `verified-by: bravebot_agent::bots::operations::an_archive_or_a_restore_of_a_missing_bot_writes_nothing`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each, and that archiving a bot that is already archived stamps retired again, leaves the definition bytes unchanged, sets retired to zero on a restore, and changes updated on each of those writes; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. The recording operations and the migration of a bot made before definitions are not built. The terminal's confirmation of an archive is not built)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each, and that archiving a bot that is already archived stamps retired again, leaves the definition bytes unchanged, sets retired to zero on a restore, and changes updated on each of those writes; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. The recording operations are built, and ui/scripts/bot-operations-bridge.test.mjs asserts them through the real bravebot-rpc. The migration of a bot made before definitions is not built. The terminal's confirmation of an archive is not built)`
 
 <a id="BOT-8"></a>
 ### BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
@@ -654,7 +655,10 @@ the bot.
 
 When a turn of a bot's session ends, the terminal records the session's identifier and folder in the
 row, as the GUI does: the row's `session` becomes that identifier and the conversation is added
-to `conversations` once. A turn that fails records the identifier too, when the agent's answer to the
+to `conversations` once. When the row exists, a session that is not an identifier, or a directory
+that is not absolute, is refused and the file is left as it was. A missing row is left as it was
+and is not an error, including when that session or directory would have been refused. A note that
+does not write the file leaves a failure already shown. A turn that fails records the identifier too, when the agent's answer to the
 failure carries one, as the GUI records it on `turn.error` as well as `turn.done`. The identifier
 is read off what the agent answered, never off anything the person typed. A session continued in the bots layout is the row's `session` or one chosen from the
 row's `conversations`, each shown with its folder.
@@ -682,7 +686,12 @@ the same conversations in both surfaces. Reading session records for a slug woul
 record does not have, and a conversation can run in any folder, so a slug in the record would leave two
 lists to keep equal. A slug in the record is a product alternative this design leaves open.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::a_recorded_conversation_sets_the_session_and_is_added_once`
+`verified-by: bravebot_agent::bots::operations::a_conversation_the_parser_would_not_keep_is_refused_and_writes_nothing`
+`verified-by: bravebot_agent::bots::operations::an_archive_length_only_rises`
+`verified-by: bravebot_agent::bots::operations::releasing_a_session_clears_it_and_keeps_the_conversation`
+`verified-by: bravebot_agent::bots::operations::forgetting_a_deleted_conversation_removes_it_from_every_row_that_lists_it`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a recorded conversation sets the session and is added once, that a second note of the same pair does not add it again, that an archive length only rises, that a release sets session to none and archived to zero and keeps the conversation, and that a forgotten conversation is removed from every row that lists it and releases a row whose session equals that id, with updated stamped on each write and the definition bytes unchanged; ui/scripts/bot-store.test.mjs asserts that a note which does not write the file leaves a failure already shown; make check-ui runs both. The terminal does not record a turn, does not continue a conversation from the layout, and has no delete of a conversation)`
 
 <a id="BOT-12"></a>
 ### BOT-12: a bot's session is refused with incognito

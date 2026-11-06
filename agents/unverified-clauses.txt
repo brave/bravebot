@@ -13,7 +13,6 @@ docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers 
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
 docs/specs/bots.md:BOT-9: a bot's turn runs in its home folder, a folder a person moved to in this run, or a folder recorded for the bot
 docs/specs/bots.md:BOT-10: every turn of a bot's session in the terminal addresses the bot's definition
-docs/specs/bots.md:BOT-11: a conversation is recorded in the row, and either surface can continue it
 docs/specs/bots.md:BOT-12: a bot's session is refused with incognito
 docs/specs/bots.md:BOT-13: a bot's memory is the definition's, and the terminal shows it without trusting it
 docs/specs/bots.md:BOT-14: `/undo` in a bot's session is the terminal's `/undo`

@@ -323,6 +323,10 @@ impl Bridge {
             "bot.archive" => crate::bots::archive(request),
             "bot.restore" => crate::bots::restore(request),
             "bot.delete" => crate::bots::delete(request),
+            "bot.record_conversation" => crate::bots::record_conversation(request),
+            "bot.record_archived" => crate::bots::record_archived(request),
+            "bot.release_session" => crate::bots::release_session(request),
+            "bot.forget_conversation" => crate::bots::forget_conversation(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(

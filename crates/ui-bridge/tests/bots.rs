@@ -283,6 +283,10 @@ fn the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_
         "bot.archive",
         "bot.restore",
         "bot.delete",
+        "bot.record_conversation",
+        "bot.record_archived",
+        "bot.release_session",
+        "bot.forget_conversation",
     ] {
         assert!(
             DENIED.contains(&method),

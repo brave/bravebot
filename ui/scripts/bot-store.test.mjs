@@ -249,6 +249,25 @@ test('a bots file that cannot be read is never written over, and a bot is not ma
   } finally { clean() }
 })
 
+test('a note that writes nothing leaves a failure already shown', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'review', archived: 4 })])
+  try {
+    file.refuse = 'the disk is full'
+    await assert.rejects(main.noteBotSession('review', ids[0], '/project'), /the disk is full/)
+    assert.match(main.botsProblem(), /the disk is full/)
+    file.refuse = null
+    await main.noteBotArchived('review', 4)
+    await main.noteBotArchived('review', 1.5)
+    await main.noteBotSession('no-such', ids[1], '/project')
+    await main.releaseBotSession('review')
+    await main.forgetBotConversation('/project', ids[1])
+    assert.match(main.botsProblem(), /the disk is full/)
+    await main.noteBotArchived('review', 5)
+    assert.equal(main.botsProblem(), null, 'a note that writes clears the failure')
+    assert.equal(file.rows.find((each) => each.slug === 'review').archived, 5)
+  } finally { clean() }
+})
+
 test('changes made at the same moment each reach the file', async () => {
   const { file, main, clean } = fixture([botRow({ slug: 'review' })])
   try {
@@ -303,7 +322,7 @@ test('the methods that make, edit and set the model of a bot, and ensure its hom
   assert.ok(allowed, 'the list of methods the window may send is still one literal')
   const methods = [...allowed[1].matchAll(/'([^']+)'/g)].map((each) => each[1])
   assert.ok(methods.includes('session.list'), 'the pattern read the list')
-  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home', 'bot.archive', 'bot.restore', 'bot.delete']) {
+  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home', 'bot.archive', 'bot.restore', 'bot.delete', 'bot.record_conversation', 'bot.record_archived', 'bot.release_session', 'bot.forget_conversation']) {
     assert.equal(methods.includes(method), false, `${method} is a method only the main process calls`)
   }
 })
@@ -313,7 +332,7 @@ test('the methods that list and replace the bots are not among those a window ma
   const allowed = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
   assert.ok(allowed, 'the list of methods the window may send is still one literal')
   const methods = [...allowed[1].matchAll(/'([^']+)'/g)].map((each) => each[1])
-  for (const method of ['bot.list', 'bot.replace', 'bot.define', 'bot.redefine', 'bot.migrate']) {
+  for (const method of ['bot.list', 'bot.replace', 'bot.define', 'bot.redefine', 'bot.migrate', 'bot.record_conversation', 'bot.record_archived', 'bot.release_session', 'bot.forget_conversation']) {
     assert.equal(methods.includes(method), false, `${method} is a method only the main process calls`)
   }
   assert.ok(methods.includes('session.list'), 'the pattern read the list')

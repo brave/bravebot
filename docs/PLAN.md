@@ -14,9 +14,10 @@ pull request together with slice 1. Slice 2b is built on the branch `bots/slice-
 `bots/slice-2a-layouts`, and waits for a pull request together with them. Slice 3a is built on the
 branch `bots/slice-3-operations`, stacked on `bots/slice-2b-layout`, and waits for a pull request
 together with them. Slice 3b is built on the branch `bots/slice-3b-archive`, stacked on
-`bots/slice-3-operations`, and waits for a pull request together with them. The branches of the
-design, slice 1, slice 2a, slice 2b and slice 3a are pushed and equal the local ones. Slice 3b is
-not pushed. Slice 3c and the later slices are not built. The design is
+`bots/slice-3-operations`, and waits for a pull request together with them. Slice 3c is built on the branch `bots/slice-3c-record`, stacked on
+`bots/slice-3b-archive`. There is no pull request. The branches of the design, slice 1, slice 2a,
+slice 2b, slice 3a and slice 3b are pushed and equal the local ones. Slice 4 and the later slices
+are not built. The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
 
@@ -189,9 +190,11 @@ Slice 3a differs from its text in these places:
   rows the fallback cannot be reached.
 - The GUI's make, edit and change of model share one queue with `updateBots`, so a make or an edit
   cannot interleave with a read followed by `bot.replace`.
-- Until slice 3c, the other operations still replace the whole list from a read made outside the
-  lock. A program that writes between that read and the replace can lose its row. This is slice 1's
-  behaviour and is unchanged.
+- A read made outside the lock, then a write of the whole list, remains for the row write of
+  `migrateBot` and the counter writes. Slice 3c records a conversation, an archive length, a
+  released session and a forgotten conversation under the lock. The owner left the other writes on
+  `bot.replace` on 2026-11-06. A program that writes between that read and the replace can lose its
+  row.
 - [BOT-6](specs/bots.md#BOT-6) and [BOT-7](specs/bots.md#BOT-7) name tests for the part 3a builds,
   as [BOT-2](specs/bots.md#BOT-2) to [BOT-5](specs/bots.md#BOT-5) do under the owner's answer of
   2026-10-29, so they are not in `agents/unverified-clauses.txt`. The owner confirmed on 2026-11-05
@@ -227,7 +230,8 @@ folder. When the row exists, delete removes the folder `<data folder>/bots/<slug
 and the lock is held across both. The row is written only after the folder removal succeeds, so a
 list cannot observe a deletion that is then reverted. A list during the removal still sees the row.
 A replace of that list after the delete puts the row back, and the folder is already gone. That is
-the replace race left until slice 3c: a read made outside the lock, then a write of the whole list.
+the replace race for a read made outside the lock, then a write of the whole list. Slice 3c leaves
+the writes that still go through `bot.replace` on that path.
 A list taken before the delete starts ends the same way. One desktop process does not read during
 its own delete, because that read shares the queue with the delete and runs after the delete returns.
 A missing folder is success. If the folder
@@ -251,13 +255,45 @@ a delete, and its offer of delete only for an archived bot, are not built.
 Slice 3b is built on `bots/slice-3b-archive`. There is no pull request yet, so the evidence is the
 tests on that branch. The plan does not repeat them.
 
-What slice 3c inherits. Slice 3c adds the operations that record a conversation, record the archive
-length, release a session and forget a deleted conversation, and removes `bot.replace`, `updateBots`,
-`saveBot` and `withBot` from the GUI. It still has to decide what replaces the row write of
-`migrateBot` and the counter writes of `noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` in
-`ui/src/main/bots.ts`: an operation of the module, or removing them. Slice 6 removes the counters.
-It still has to decide whether to remove `bot.define` and `bot.redefine` and their bridge tests,
-since the GUI has no caller of either after slice 3a.
+What slice 3c inherits. The owner left the row write of `migrateBot` and the counter writes of
+`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` on `bot.replace`, and left `bot.define`
+and `bot.redefine` in place. Slice 5 still owns the migration's row write. Slice 6 still removes
+the counters.
+
+Slice 3c adds `record_conversation`, `record_archived`, `release_session` and `forget_conversation`
+to the module in `crates/agent/src/bots/operations.rs`. Each is one read-modify-write under the lock
+on `bots.json.lock`, on the same path as `archive`, and none of them rewrites the definition.
+Recording a conversation sets `session` to the given identifier and adds the id and directory to
+`conversations` when that pair is absent. A second note of the same pair still writes and stamps
+`updated`. Recording an archive length raises `archived` only when the value is a finite integer in
+the range the row parser accepts and is strictly greater than the stored length. The comparison is
+under the lock. Releasing a session sets `session` to none and `archived` to zero and keeps the
+conversations entry. A second release writes nothing. Forgetting a conversation removes that id and
+directory from every row that lists the pair, and sets `session` to none and `archived` to zero on
+a row whose `session` equals that id. Directory is not part of that comparison. A row that does not
+change keeps its `updated`. When an operation changes nothing, the file is not written, and that answer does not clear a
+failure already shown. When the row exists, a session that is not an identifier, or a directory
+that is not absolute, is refused and the file is left as it was. A missing row is not an error.
+The bridge
+methods are `bot.record_conversation`, `bot.record_archived`, `bot.release_session` and
+`bot.forget_conversation`. They are in `DENIED`, so the window cannot send them. Each request
+carries `dataFolder` from the folder Electron names. In the GUI, `noteBotSession`,
+`noteBotArchived`, `releaseBotSession` and `forgetBotConversation` call those methods through
+`writeThroughBridge`. `releaseBotSession` still returns before any bridge call when the slug is not
+a slug. The GUI does not read the list to compute the new row. `migrateBot`, `noteBotMemory`,
+`keepingMemoryMark`, `noteBotNudged`, `saveBot`, `updateBots` and `withBot` stay, and so do
+`bot.replace`, `bot.define` and `bot.redefine`. A search of `ui/src/main` still finds row writes
+outside the bridge, in `saveBot`, `migrateBot` and the counter writes. The terminal does not record
+a turn, does not continue a conversation from the layout, and has no delete of a conversation.
+
+The owner decided on 2026-11-06 that the row write of `migrateBot` and the counter writes of
+`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` stay on `bot.replace` until slice 5 and
+slice 6, and that `bot.define` and `bot.redefine` stay. `bot.replace`, `updateBots`, `saveBot` and
+`withBot` stay with them. The done-when that required `bot.replace` to be removed, and a search of
+`ui/src/main` to find no write of the rows outside the bridge, is not the done-when of this slice.
+
+Slice 3c is built on `bots/slice-3c-record`. There is no pull request, so the evidence is the tests
+on that branch. The plan does not repeat them.
 
 Before a pull request. The stack is 141 commits behind `origin/main` and conflicts with it in most
 files slice 2b touches, so the whole stack is rebased and the gates run again. The rebase changes
@@ -509,23 +545,23 @@ for bots, so each terminal function is in the bots layout.
      removes the row and the folder `<data folder>/bots/<slug>` and no other folder, archiving an
      archived bot stamps `retired` again, and a delete of a bot with a turn in progress in the GUI is
      refused.
-3c. **The module records what happened to a row, and the GUI no longer replaces the list.**
+3c. **The module records what happened to a row, and the GUI calls those operations through the bridge.** Built. The Status above describes it.
    - Add the operations of [BOT-7](specs/bots.md#BOT-7) and [BOT-11](specs/bots.md#BOT-11) that record
      a conversation, record the archive length, release a session and forget a deleted conversation,
      with the bridge methods for them, kept out of the window's list
-     ([BOT-6](specs/bots.md#BOT-6)). Switch the GUI's `noteBotSession`, `noteBotArchived` and
-     `releaseBotSession` to the bridge through its existing handlers. The GUI writes no `bots` key of
-     `bravebot-ui.json` after this.
-   - Decide what replaces the writes that still go through `bot.replace` and that no operation above
-     covers: the row write of `migrateBot` and the counter writes of `noteBotMemory`,
-     `keepingMemoryMark` and `noteBotNudged` in `ui/src/main/bots.ts`. Either an operation of the
-     module takes them, or they are removed. Slice 6 removes the counters.
-   - Remove the replace method from the bridge and from the module, and `updateBots`, `saveBot` and
-     `withBot` from the GUI. Decide whether to remove `bot.define` and `bot.redefine` with their
-     bridge tests, since the GUI has no caller of them after 3a.
-   - Done when a turn that ends in the GUI records its conversation and the archive's length through the
-     bridge, the replace method is removed, and a search of `ui/src/main` finds no write of the rows
-     outside the bridge.
+     ([BOT-6](specs/bots.md#BOT-6)). Switch the GUI's `noteBotSession`, `noteBotArchived`,
+     `releaseBotSession` and `forgetBotConversation` to the bridge through its existing handlers.
+   - The owner decided on 2026-11-06 that the row write of `migrateBot` and the counter writes of
+     `noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` stay on `bot.replace` until slice 5 and
+     slice 6, and that `bot.define` and `bot.redefine` stay. `bot.replace`, `updateBots`, `saveBot`
+     and `withBot` stay. The done-when that required `bot.replace` to be removed, and a search of
+     `ui/src/main` to find no write of the rows outside the bridge, is not the done-when of this
+     slice. A search of `ui/src/main` still finds the row writes of `saveBot`, `migrateBot` and the
+     counters.
+   - Done when a turn that ends in the GUI records its conversation and the archive length through the
+     bridge, a release sets `session` to none and `archived` to zero and keeps the conversation, a
+     forgotten conversation is removed from every row that lists it, and each of those writes stamps
+     `updated` and leaves the definition file unchanged.
 4. **The terminal makes, edits, archives, restores and deletes a bot.**
    - Slice 2b's pane reads the rows once, when the phase with no session opens
      (`bots_pane::State::read`). Reread them after each write of this slice. Slice 2b leaves out the
@@ -702,14 +738,16 @@ Questions slice 3a raised for the owner:
 
 - What replaces the row write of `migrateBot` and the counter writes of `noteBotMemory`,
   `keepingMemoryMark` and `noteBotNudged` in `ui/src/main/bots.ts`. They go through `bot.replace`, the
-  entry for slice 3c lists no operation for them, and slice 6 removes the counters. Either an
-  operation of the module takes them in 3c or they are removed before `bot.replace` can go.
+  entry for slice 3c lists no operation for them, and slice 6 removes the counters. Answered by the
+  owner on 2026-11-06: they stay on `bot.replace`. Slice 5 owns the migration's row write and slice 6
+  removes the counters. `bot.replace`, `updateBots`, `saveBot` and `withBot` stay until those slices.
 - Whether slice 3c removes `bot.define` and `bot.redefine`. The GUI has no caller of either after
   slice 3a. Four unit tests in `crates/ui-bridge/src/definitions.rs` cover them
   (`a_bot_is_answered_with_the_name_its_definition_was_given`,
   `an_edit_the_agent_refuses_or_cannot_find_is_a_bad_request`,
   `an_edit_rewrites_the_file_made_for_the_bot` and `a_refused_bot_writes_nothing`), and removing the
-  methods removes those tests.
+  methods removes those tests. Answered by the owner on 2026-11-06: `bot.define` and `bot.redefine`
+  stay, with those tests.
 - Whether the operations of the module should log a refused write or a home folder that could not be
   made. `bravebot-agent` has no logging dependency, so they log nothing and report through their
   return values, and logging needs a dependency added to the crate.

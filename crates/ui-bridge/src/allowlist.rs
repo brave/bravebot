@@ -148,6 +148,10 @@ pub const DENIED: &[&str] = &[
     "bot.archive",
     "bot.restore",
     "bot.delete",
+    "bot.record_conversation",
+    "bot.record_archived",
+    "bot.release_session",
+    "bot.forget_conversation",
     "doctor",
     // Read files or attach them to a turn.
     "mentions.offer",

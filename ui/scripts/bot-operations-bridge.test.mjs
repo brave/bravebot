@@ -1,4 +1,4 @@
-// Making, editing, setting the model, archiving, restoring and deleting a desktop bot, through the real `bravebot-rpc` (BOT-5, BOT-6, BOT-7, BOT-8).
+// Making, editing, setting the model, archiving, restoring, deleting and recording what happened to a desktop bot, through the real `bravebot-rpc` (BOT-5, BOT-6, BOT-7, BOT-8, BOT-11).
 // Run after `pnpm run bridge`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -266,6 +266,140 @@ test('a delete removes the row and the bot folder and leaves the definition, the
     assert.equal(readFileSync(memory, 'utf8'), 'notes from the folder\n')
     assert.equal(isDirectory(f.home(made.slug)), true)
     assert.equal(isDirectory(f.home(other.slug)), true)
+    f.noBotsKey()
+  } finally { f.clean() }
+})
+
+test('a recorded conversation, an archive length, a release and a forgotten conversation go through the bridge and leave the definition', async () => {
+  const f = await fixture()
+  try {
+    const made = await f.main.saveForm({ name: 'Custodian', purpose: 'Keep the harbour lights lit', model: 'provider/model-a', avatar: 'seed-a' })
+    const listed = await f.main.saveForm({ name: 'Listed', purpose: 'List the pair', model: 'provider/model-b', avatar: 'seed-b' })
+    const pointed = await f.main.saveForm({ name: 'Pointed', purpose: 'Point at the id', model: 'provider/model-c', avatar: 'seed-c' })
+    const untouched = await f.main.saveForm({ name: 'Untouched', purpose: 'Stay as written', model: 'provider/model-d', avatar: 'seed-d' })
+    const definitions = Object.fromEntries([made, listed, pointed, untouched].map((bot) => {
+      const path = join(f.agents, `${bot.definition}.md`)
+      const bytes = Buffer.concat([readFileSync(path), Buffer.from('Hand edited.\n')])
+      writeFileSync(path, bytes)
+      return [bot.slug, bytes]
+    }))
+    const sameBot = (row, bot) => {
+      for (const field of ['name', 'purpose', 'model', 'avatar', 'home', 'definition', 'retired', 'created']) {
+        assert.deepEqual(row[field], bot[field], `${bot.slug} ${field}`)
+      }
+      assert.deepEqual(readFileSync(join(f.agents, `${bot.definition}.md`)), definitions[bot.slug], bot.slug)
+    }
+    const rowOf = (slug) => f.rows().find((each) => each.slug === slug)
+    const dir = join(f.profile, 'proj-a')
+    const otherDir = join(f.profile, 'proj-b')
+    const other = '44444444-4444-4444-8444-444444444444'
+    mkdirSync(dir)
+    mkdirSync(otherDir)
+
+    const beforeMissing = readFileSync(f.file)
+    await f.main.noteBotSession('no-such', SESSION, dir)
+    await f.main.noteBotArchived('no-such', 3)
+    await f.main.releaseBotSession('no-such')
+    await f.main.releaseBotSession('Not a slug')
+    assert.deepEqual(readFileSync(f.file), beforeMissing, 'a missing bot and a slug that is not one write nothing')
+
+    await waitUntil(made.updated)
+    await f.main.noteBotSession(made.slug, SESSION, dir)
+    let row = rowOf(made.slug)
+    assert.equal(row.session, SESSION)
+    assert.deepEqual(row.conversations, [{ id: SESSION, directory: dir }])
+    assert.notEqual(row.updated, made.updated)
+    sameBot(row, made)
+
+    await waitUntil(row.updated)
+    await f.main.noteBotSession(made.slug, SESSION, dir)
+    const noted = rowOf(made.slug)
+    assert.deepEqual(noted.conversations, [{ id: SESSION, directory: dir }], 'a second note of the same id and directory added the conversation again')
+    assert.equal(noted.session, SESSION)
+    assert.notEqual(noted.updated, row.updated)
+    sameBot(noted, made)
+
+    await waitUntil(noted.updated)
+    await f.main.noteBotArchived(made.slug, 4)
+    row = rowOf(made.slug)
+    assert.equal(row.archived, 4)
+    assert.notEqual(row.updated, noted.updated)
+    sameBot(row, made)
+    const parked = readFileSync(f.file)
+    await f.main.noteBotArchived(made.slug, 4)
+    await f.main.noteBotArchived(made.slug, 1)
+    await f.main.noteBotArchived(made.slug, 1.5)
+    assert.deepEqual(readFileSync(f.file), parked, 'a lower or equal archive length writes nothing')
+    assert.equal(rowOf(made.slug).updated, row.updated)
+    assert.equal(rowOf(made.slug).archived, 4)
+
+    const beforeRise = row.updated
+    await waitUntil(beforeRise)
+    await f.main.noteBotArchived(made.slug, 9)
+    row = rowOf(made.slug)
+    assert.equal(row.archived, 9)
+    assert.notEqual(row.updated, beforeRise)
+    sameBot(row, made)
+
+    await waitUntil(row.updated)
+    await f.main.releaseBotSession(made.slug)
+    const released = rowOf(made.slug)
+    assert.equal(released.session, null)
+    assert.equal(released.archived, 0)
+    assert.deepEqual(released.conversations, [{ id: SESSION, directory: dir }])
+    assert.notEqual(released.updated, row.updated)
+    sameBot(released, made)
+    const afterRelease = readFileSync(f.file)
+    await f.main.releaseBotSession(made.slug)
+    assert.deepEqual(readFileSync(f.file), afterRelease, 'a second release writes nothing')
+    assert.equal(rowOf(made.slug).session, null)
+    assert.equal(rowOf(made.slug).archived, 0)
+
+    await f.main.noteBotSession(made.slug, other, otherDir)
+    await f.main.noteBotSession(made.slug, SESSION, dir)
+    await f.main.noteBotArchived(made.slug, 4)
+    await f.main.noteBotSession(listed.slug, SESSION, dir)
+    await f.main.noteBotSession(listed.slug, other, otherDir)
+    await f.main.noteBotArchived(listed.slug, 2)
+    await f.main.noteBotSession(pointed.slug, SESSION, otherDir)
+    await f.main.noteBotArchived(pointed.slug, 7)
+    await f.main.noteBotSession(untouched.slug, other, otherDir)
+    const keeperBefore = rowOf(made.slug)
+    const listedBefore = rowOf(listed.slug)
+    const pointedBefore = rowOf(pointed.slug)
+    const untouchedBefore = rowOf(untouched.slug)
+    await waitUntil(Math.max(keeperBefore.updated, listedBefore.updated, pointedBefore.updated, untouchedBefore.updated))
+    await f.main.forgetBotConversation(dir, SESSION)
+
+    const keeperAfter = rowOf(made.slug)
+    const listedAfter = rowOf(listed.slug)
+    const pointedAfter = rowOf(pointed.slug)
+    const untouchedAfter = rowOf(untouched.slug)
+    assert.equal(keeperAfter.session, null)
+    assert.equal(keeperAfter.archived, 0)
+    assert.deepEqual(keeperAfter.conversations, [{ id: other, directory: otherDir }])
+    assert.notEqual(keeperAfter.updated, keeperBefore.updated)
+    assert.notEqual(listedAfter.updated, listedBefore.updated)
+    assert.notEqual(pointedAfter.updated, pointedBefore.updated)
+    assert.equal(listedAfter.session, other)
+    assert.equal(listedAfter.archived, 2)
+    assert.deepEqual(listedAfter.conversations, [{ id: other, directory: otherDir }])
+    assert.equal(pointedAfter.session, null)
+    assert.equal(pointedAfter.archived, 0)
+    assert.deepEqual(pointedAfter.conversations, [{ id: SESSION, directory: otherDir }])
+    assert.equal(untouchedAfter.session, other)
+    assert.deepEqual(untouchedAfter.conversations, [{ id: other, directory: otherDir }])
+    assert.equal(untouchedAfter.archived, 0)
+    assert.equal(untouchedAfter.updated, untouchedBefore.updated)
+    sameBot(keeperAfter, made)
+    sameBot(listedAfter, listed)
+    sameBot(pointedAfter, pointed)
+    sameBot(untouchedAfter, untouched)
+
+    const afterForget = readFileSync(f.file)
+    await f.main.forgetBotConversation(dir, '55555555-5555-4555-8555-555555555555')
+    assert.deepEqual(readFileSync(f.file), afterForget, 'a forget that matches nothing writes nothing')
+    assert.equal(rowOf(untouched.slug).updated, untouchedBefore.updated)
     f.noBotsKey()
   } finally { f.clean() }
 })

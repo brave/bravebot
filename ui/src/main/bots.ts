@@ -253,14 +253,7 @@ export function worksIn(held: Bot, directory: string | undefined): directory is 
 
 /** Record a durable conversation and the folder it ran in, without discarding any earlier ones. */
 export async function noteBotSession(slug: string, id: string, directory: string): Promise<void> {
-  await changeBot(slug, (held) => {
-    const known = held.conversations.some((each) => each.id === id && each.directory === directory)
-    return {
-      ...held,
-      session: id,
-      conversations: known ? held.conversations : [...held.conversations, { id, directory }],
-    }
-  })
+  await writeThroughBridge(() => ({ method: 'bot.record_conversation', params: { slug, id, directory } }))
 }
 
 /**
@@ -271,7 +264,7 @@ export async function noteBotSession(slug: string, id: string, directory: string
  * happened to justify.
  */
 export async function noteBotArchived(slug: string, archived: number): Promise<void> {
-  await changeBot(slug, (held) => (Number.isInteger(archived) && archived > held.archived ? { ...held, archived } : null))
+  await writeThroughBridge(() => ({ method: 'bot.record_archived', params: { slug, archived } }))
 }
 
 /**
@@ -286,7 +279,7 @@ export async function noteBotArchived(slug: string, archived: number): Promise<v
  */
 export async function releaseBotSession(slug: unknown): Promise<void> {
   if (!isSlug(slug)) return
-  await changeBot(slug, (held) => (held.session === null ? null : { ...held, session: null, archived: 0 }))
+  await writeThroughBridge(() => ({ method: 'bot.release_session', params: { slug } }))
 }
 
 /**
@@ -294,17 +287,7 @@ export async function releaseBotSession(slug: unknown): Promise<void> {
  * pointer was that conversation starts a new one on its next turn.
  */
 export async function forgetBotConversation(directory: string, id: string): Promise<void> {
-  await updateBots((all) => {
-    let changed = false
-    const next = all.map((held) => {
-      const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
-      const pointed = held.session === id
-      if (conversations.length === held.conversations.length && !pointed) return held
-      changed = true
-      return { ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived, updated: Date.now() }
-    })
-    return changed ? next : null
-  })
+  await writeThroughBridge(() => ({ method: 'bot.forget_conversation', params: { id, directory } }))
 }
 
 /**
@@ -339,14 +322,6 @@ export async function removeBot(slug: unknown, turnInProgress: boolean): Promise
     return { method: 'bot.delete', params: { slug: held.slug } }
   })
   return removed === null ? null : slug
-}
-
-async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<void> {
-  await updateBots((all) => {
-    const held = botOf(all, slug)
-    const next = held && change(held)
-    return next ? withBot(all, { ...next, updated: Date.now() }) : null
-  })
 }
 
 /** Where this app keeps its own files for a bot. Composed from a slug that has been judged. */
