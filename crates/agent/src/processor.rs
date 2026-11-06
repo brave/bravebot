@@ -166,7 +166,8 @@ row N: tool T name=kind:N name=kind:N
 A new line gives short text, one line of at most {longest} characters, for a thing a call creates. \
 A row is one call: the tool by its number and each argument the tool lists below, and no other. \
 Number new lines and rows from 1. A row that names another row comes after it. Give at most {rows} \
-rows and {news} new lines. Leave out anything that needs no call.{used}
+rows and {news} new lines. Leave out anything that needs no call.{used} If nothing in the list \
+needs a call, your whole answer is the one word: none
 
 The tools:
 {tools}",

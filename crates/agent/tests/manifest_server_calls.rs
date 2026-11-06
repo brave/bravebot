@@ -2580,3 +2580,31 @@ row 5: tool 4 issue=entry:3
         );
     }
 }
+
+/// A processor that finds nothing to do says so with "none", as it is told to, and the step ends
+/// saying nothing in the list needed a call: no list is put, nothing is called, and nothing is
+/// counted as dropped.
+#[test]
+fn an_apply_step_whose_processor_finds_nothing_to_do_says_so() {
+    let scratch = Scratch::new("apply-none");
+    let (url, mcp) = serve_marks();
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says("none")],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty());
+    assert_eq!(ran.chat.len(), 3, "asked once: none is an answer");
+    assert!(
+        ran.chat[2].contains("your whole answer is the one word: none"),
+        "{}",
+        ran.chat[2]
+    );
+    let made: Vec<&str> = ran.called.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(made, ["list_marks"]);
+}

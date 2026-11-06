@@ -594,8 +594,8 @@ impl Servers {
                     if retried {
                         return Ok((
                             format!(
-                                "the processor proposed no call to {alias} ({error}); the list it \
-                                 was given may hold nothing the plan's arguments can take"
+                                "the processor gave no answer, twice ({error}), so no call to \
+                                 {alias} was proposed"
                             ),
                             error.completed_usage().unwrap_or_default(),
                         ));
@@ -609,13 +609,16 @@ impl Servers {
         let resolved = proposed.resolved;
         let shown = policy.proposal_for_display(&resolved);
         if shown.calls.is_empty() {
-            return Ok((
-                format!(
+            // No row at all is the processor saying nothing in the list needed a call, as it is
+            // told to say it; rows that were all dropped are a proposal nothing could be made of.
+            let note = match shown.dropped.is_empty() {
+                true => format!("the processor found nothing in {list} that needed a call"),
+                false => format!(
                     "the processor proposed no call that could be made{}",
                     dropped_note(&shown)
                 ),
-                usage,
-            ));
+            };
+            return Ok((note, usage));
         }
         let request = crate::confirm::ApplyRequest {
             alias: alias.to_string(),
