@@ -1641,6 +1641,8 @@ pub struct Callable {
 pub struct CallableArgument {
     pub name: String,
     pub kind: Option<String>,
+    /// The type of each item, where the argument is an array and the list says.
+    pub items: Option<String>,
     pub required: bool,
 }
 
@@ -2040,6 +2042,7 @@ impl Offer {
                     .map(|argument| CallableArgument {
                         name: argument.name.clone(),
                         kind: argument.kind.clone(),
+                        items: argument.items.clone(),
                         required: argument.required,
                     })
                     .collect(),
@@ -2453,9 +2456,20 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
 }
 
 /// `value` as the JSON type `kind` names, where the list gave one: a whole number, a number or a
-/// switch read from its text, and text otherwise. `None` where the text is not that type.
-fn as_declared(value: &str, kind: Option<&str>) -> Option<Value> {
+/// switch read from its text, an array of `items` from the JSON array a list of entries resolved
+/// to, and text otherwise. `None` where the text is not that type.
+fn as_declared(value: &str, kind: Option<&str>, items: Option<&str>) -> Option<Value> {
     match kind {
+        // A value taken from several entries is the JSON array of their values as text, each sent
+        // as the type the list gives the array's items.
+        Some("array") => match serde_json::from_str::<Value>(value).ok()? {
+            Value::Array(values) => values
+                .iter()
+                .map(|item| as_declared(item.as_str()?, items, None))
+                .collect::<Option<Vec<_>>>()
+                .map(Value::Array),
+            _ => None,
+        },
         Some("integer") => value.trim().parse::<i64>().ok().map(Value::from),
         Some("number") => value
             .trim()
@@ -2503,7 +2517,7 @@ pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
     }
     // Each value is sent as the type the vouched list gives its argument, so a number or a switch
     // is not sent as text. A value that is not that type is not sent at all.
-    let kinds: BTreeMap<String, Option<String>> = offer
+    let kinds: BTreeMap<String, (Option<String>, Option<String>)> = offer
         .callable()
         .into_iter()
         .find(|callable| callable.alias == alias && callable.tool == tool)
@@ -2511,14 +2525,14 @@ pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
             callable
                 .arguments
                 .into_iter()
-                .map(|argument| (argument.name, argument.kind))
+                .map(|argument| (argument.name, (argument.kind, argument.items)))
                 .collect()
         })
         .unwrap_or_default();
     let mut typed = Map::new();
     for (key, value) in arguments {
-        let kind = kinds.get(&key).cloned().flatten();
-        match as_declared(&value, kind.as_deref()) {
+        let (kind, items) = kinds.get(&key).cloned().unwrap_or_default();
+        match as_declared(&value, kind.as_deref(), items.as_deref()) {
             Some(value) => {
                 typed.insert(key, value);
             }
