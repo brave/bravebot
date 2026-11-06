@@ -6,7 +6,11 @@
 use crate::protocol::Event;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+/// How many of the most recent rows a view keeps for a snapshot. Older rows are left out of it,
+/// and the snapshot says how many.
+pub const RETAINED_ROWS: usize = 256;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -66,8 +70,18 @@ pub struct Update {
     pub rows: Vec<Row>,
 }
 
-/// Retains only current control/display metadata. Clients retain their own transcript rows.
-/// No history snapshot or reconnect is offered by version 1.
+/// Where a view stands and its most recent rows, for a client that was not there for all of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    #[serde(flatten)]
+    pub state: Update,
+    /// How many rows before the first in `rows` the snapshot leaves out.
+    pub omitted: u64,
+}
+
+/// The current control and display state, and the last [`RETAINED_ROWS`] rows in the order each
+/// first appeared. The pending question is kept apart from the rows, so it is never left out of a
+/// snapshot.
 pub(crate) struct View {
     sequence: u64,
     turn: u64,
@@ -77,6 +91,11 @@ pub(crate) struct View {
     pending: Option<Pending>,
     /// Calls that have started and not finished, by the call's id, with the row each is drawn on.
     running_calls: HashMap<u64, u64>,
+    /// The latest state of each row kept, by id. Ids are given in the order rows first appear.
+    retained: BTreeMap<u64, Row>,
+    /// The id of the last row no longer kept. Rows are numbered from 1 and dropped oldest first,
+    /// so this is also how many have been dropped.
+    dropped_through: u64,
 }
 
 impl View {
@@ -93,6 +112,16 @@ impl View {
             next_row: 0,
             pending: None,
             running_calls: HashMap::new(),
+            retained: BTreeMap::new(),
+            dropped_through: 0,
+        }
+    }
+
+    /// The current state with every row kept.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            state: self.update(self.retained.values().cloned().collect()),
+            omitted: self.dropped_through,
         }
     }
 
@@ -113,6 +142,16 @@ impl View {
 
     fn changed(&mut self, rows: Vec<Row>) -> Update {
         self.sequence += 1;
+        for row in &rows {
+            self.retained.insert(row.id, row.clone());
+        }
+        // Ids rise with first appearance, so the first rows are the oldest. A later state of a row
+        // already dropped has the lowest id and is dropped again: it is sent and not kept.
+        while self.retained.len() > RETAINED_ROWS {
+            if let Some((id, _)) = self.retained.pop_first() {
+                self.dropped_through = id;
+            }
+        }
         self.update(rows)
     }
 
@@ -260,9 +299,13 @@ pub fn action_targets() -> Value {
     json!({"version": 1, "questionIds": "session", "cancel": "expected_target", "trust": "once"})
 }
 
+/// The method a client calls for a new snapshot when it has missed an update (RPCVIEW-9).
+pub const RESYNC: &str = "session.view.resync";
+
 pub fn capability() -> Value {
     json!({"version": 1, "start": "session.view.start", "scope": "fresh_session",
-        "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false})
+        "approvals": ["confirm", "run", "fetch", "ask"], "resync": RESYNC,
+        "retainedRows": RETAINED_ROWS})
 }
 
 #[cfg(test)]
@@ -327,7 +370,8 @@ mod tests {
     }
 
     /// What the TypeScript client is written against: the capability, every status and row kind
-    /// as serde writes them, and one update using every field.
+    /// as serde writes them, one update using every field, and a snapshot of the same state that
+    /// leaves rows out.
     fn wire_contract() -> Value {
         use RowKind::*;
         let statuses = [
@@ -387,6 +431,7 @@ mod tests {
             "actionTargets": action_targets(),
             "statuses": statuses.map(status_name),
             "rowKinds": kinds.map(row_kind_name),
+            "snapshot": Snapshot { state: update.clone(), omitted: 4 },
             "update": update,
         })
     }
@@ -472,6 +517,70 @@ mod tests {
         let left = started(&mut view, json!(8));
         view.started(3, 3, json!({"text": "once more"}));
         assert!(finish(&mut view, json!(8), "late").rows[0].id > left);
+    }
+
+    /// A snapshot holds the most recent rows in the order each first appeared, each in its latest
+    /// state, and says how many earlier rows it leaves out. A later state of a row it left out is
+    /// sent to clients that hold it and does not come back into the snapshot out of order. The
+    /// question waiting is in the snapshot whole even when its row is not.
+    #[test]
+    fn a_snapshot_keeps_the_most_recent_rows_and_the_question_waiting() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let asked = json!({"request": 3, "path": "a.rs", "remark": {"label": "(U,priv)"}});
+        let question = view
+            .event(&Event::new("confirm.request", "s1", asked.clone()))
+            .unwrap()
+            .rows[0]
+            .id;
+        let call = |call: u64| json!({"call": call, "verb": "read", "target": "a.rs"});
+        let first_call = view
+            .event(&Event::new("tool.started", "s1", call(1)))
+            .unwrap()
+            .rows[0]
+            .id;
+        for at in 0..RETAINED_ROWS as u64 {
+            view.event(&Event::new("narration", "s1", json!({"text": at})));
+        }
+        let last_call = view
+            .event(&Event::new("tool.started", "s1", call(2)))
+            .unwrap()
+            .rows[0]
+            .id;
+
+        let snapshot = view.snapshot();
+        assert_eq!(snapshot.state.rows.len(), RETAINED_ROWS);
+        assert_eq!(snapshot.omitted, last_call - RETAINED_ROWS as u64);
+        assert_eq!(snapshot.state.rows[0].id, snapshot.omitted + 1);
+        assert_eq!(snapshot.state.rows.last().unwrap().id, last_call);
+        assert!(snapshot.state.rows.iter().all(|row| row.id != question));
+        let pending = snapshot.state.pending.expect("the question is kept");
+        assert_eq!((pending.row, pending.data), (question, asked.clone()));
+
+        // Both calls finish: the one left out is sent and stays out, the one kept is replaced.
+        let finished = |view: &mut View, at: u64| {
+            view.event(&Event::new("tool.finished", "s1", call(at)))
+                .unwrap()
+                .rows[0]
+                .id
+        };
+        assert_eq!(finished(&mut view, 1), first_call);
+        assert_eq!(finished(&mut view, 2), last_call);
+        let resolved = view.answered(3).unwrap();
+        assert_eq!(resolved.rows[0].id, question);
+        assert_eq!(resolved.rows[0].data, asked);
+
+        let snapshot = view.snapshot();
+        let ids: Vec<u64> = snapshot.state.rows.iter().map(|row| row.id).collect();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
+        assert!(!ids.contains(&first_call) && !ids.contains(&question));
+        let last = snapshot.state.rows.last().unwrap();
+        assert_eq!(
+            (last.id, last.event.as_deref()),
+            (last_call, Some("tool.finished"))
+        );
+        assert!(snapshot.state.pending.is_none());
+        assert_eq!(snapshot.state.sequence, view.initial().sequence);
     }
 
     /// A failed model request must not leave a client showing a running turn.

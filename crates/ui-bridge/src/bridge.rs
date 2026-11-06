@@ -239,6 +239,7 @@ impl Bridge {
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
             "session.view.start" => self.start_view(request),
+            "session.view.resync" => self.resync_view(request),
             "session.fork" => self.fork_session(request),
             "session.addressed" => addressed_sessions(request),
             "session.delete" => self.delete_session(request),
@@ -1223,9 +1224,9 @@ impl Bridge {
     ///
     /// `hand_over` switches where the session's events go, and runs between the end of what the
     /// previous client was sent and the start of what the new one is. The client is sent the
-    /// session's current state as `session.view.snapshot`, with the startup question again if it
-    /// is still unanswered, and is then able to answer the `kinds` named. The session must have
-    /// started a view.
+    /// session's current state and most recent rows as `session.view.snapshot`, with the startup
+    /// question again if it is still unanswered, and is then able to answer the `kinds` named. The
+    /// session must have started a view.
     pub fn attach_view(
         &mut self,
         handle: &str,
@@ -1236,7 +1237,7 @@ impl Bridge {
             return Err(Failure::no_such_session());
         }
         let answerers = self.answerers_of(handle);
-        let sequence = self.emitter.resume_view(handle, || {
+        let snapshot = self.emitter.snapshot_view(handle, || {
             // Who can answer is set first, so a failure to set it leaves the previous controller
             // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
             // set here, since no client has the session.
@@ -1248,7 +1249,19 @@ impl Bridge {
             Ok(())
         })?;
         self.ask_about_trust(handle);
-        Ok(json!({"version": 1, "sequence": sequence, "history": "omitted"}))
+        Ok(snapshot_answer(snapshot))
+    }
+
+    /// Send the session's view again as a snapshot, for a client that missed an update
+    /// (RPCVIEW-9). Who can answer is unchanged.
+    fn resync_view(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        if !self.open.contains_key(&handle) {
+            return Err(Failure::no_such_session());
+        }
+        let snapshot = self.emitter.snapshot_view(&handle, || Ok(()))?;
+        self.ask_about_trust(&handle);
+        Ok(snapshot_answer(snapshot))
     }
 
     /// Whether a thread is still working for the session: a turn or a run that has not yet
@@ -2639,6 +2652,12 @@ impl Bridge {
 /// An entry that is not a string, and a `dropped` that is not a list at all, are left out rather
 /// than refused. Those are a front end built against a different version of this protocol, which
 /// is the case the leniency exists for.
+/// What `session.attach` and `session.view.resync` answer: the sequence of the snapshot sent
+/// before the answer, and how many earlier rows it leaves out.
+fn snapshot_answer((sequence, omitted): (u64, u64)) -> Value {
+    json!({"version": 1, "sequence": sequence, "omitted": omitted})
+}
+
 fn dropped_paths(request: &Request) -> Result<Vec<String>, Failure> {
     let Some(entries) = request.params.get("dropped").and_then(Value::as_array) else {
         return Ok(Vec::new());

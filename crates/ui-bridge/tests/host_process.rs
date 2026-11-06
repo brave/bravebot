@@ -613,12 +613,13 @@ fn a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on() 
         "the turn did not go on to read the refusal"
     );
     let taken = second.call("session.attach", json!({"session": session}));
-    assert_eq!(taken["history"], "omitted");
+    assert_eq!(taken["omitted"], 0);
     let snapshot = second.event("session.view.snapshot");
     assert_eq!(snapshot["data"]["status"], "completed", "{snapshot}");
     assert_eq!(snapshot["data"]["turn"], sent["turn"]);
     assert_eq!(snapshot["data"]["target"], sent["target"]);
-    assert_eq!(snapshot["data"]["rows"], json!([]));
+    assert_eq!(kinds(&snapshot["data"]).first(), Some(&"prompt"));
+    assert_eq!(kinds(&snapshot["data"]).last(), Some(&"reply"));
     assert_eq!(snapshot["data"]["pending"], Value::Null);
     second.leave();
 }
@@ -651,7 +652,7 @@ fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answe
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
 
     let taken = second.call("session.attach", json!({"session": session}));
-    assert_eq!(taken["history"], "omitted");
+    assert_eq!(taken["omitted"], 0);
     let snapshot = second.event("session.view.snapshot");
     assert_eq!(snapshot["data"]["status"], "completed", "{snapshot}");
     assert_eq!(snapshot["data"]["target"], sent["target"]);
@@ -683,6 +684,110 @@ fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answe
     assert_eq!(
         std::fs::read_to_string(&written).expect("the approved write landed"),
         "written by the model"
+    );
+    second.leave();
+}
+
+/// The kind of each row of a view's snapshot or update, in order.
+fn kinds(view: &Value) -> Vec<&str> {
+    view["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row["kind"].as_str().expect("a kind"))
+        .collect()
+}
+
+/// Rows as a client holds them after applying `update`: each listed row replaces the row with its
+/// id where it is, and a row with a new id goes last.
+fn apply(rows: &mut Vec<Value>, update: &Value) {
+    for row in update["rows"].as_array().expect("rows") {
+        match rows.iter_mut().find(|held| held["id"] == row["id"]) {
+            Some(held) => *held = row.clone(),
+            None => rows.push(row.clone()),
+        }
+    }
+}
+
+/// HOST-11: a client that returns while the host lives is sent the rows the session produced,
+/// including those from while nobody was connected, and then each update after them in sequence.
+/// Applying those updates leaves it holding what a snapshot asked for at the end holds, so nothing
+/// is missing or repeated across the reconnection, and a payload arrives as its event carried it.
+#[test]
+fn a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them() {
+    let scratch = Scratch::new();
+    let (before, reached, release) = a_gate();
+    let endpoint = a_model_service(ends_the_turn, before);
+    let mut host = Host::start(&scratch, &endpoint);
+
+    let mut first = host.client();
+    let session = first.viewed_session_in(&scratch.project());
+    first.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+    let prompt = first.until(|message| {
+        message["event"] == "session.view.update" && kinds(&message["data"]) == ["prompt"]
+    });
+    first.leave();
+
+    // The turn ends while nobody is connected.
+    let mut second = Client::next_client_of(&mut host);
+    release.send(()).unwrap();
+    second.until_idle(&session);
+    let taken = second.call("session.attach", json!({"session": session}));
+    let snapshot = second.event("session.view.snapshot")["data"].clone();
+    assert_eq!(taken["sequence"], snapshot["sequence"]);
+    assert_eq!(
+        (&taken["omitted"], &snapshot["omitted"]),
+        (&json!(0), &json!(0))
+    );
+    assert_eq!(snapshot["status"], "completed", "{snapshot}");
+    assert_eq!(
+        snapshot["rows"][0], prompt["data"]["rows"][0],
+        "the prompt row changed across the reconnection"
+    );
+    assert_eq!(kinds(&snapshot).last(), Some(&"reply"), "{snapshot}");
+
+    // The next turn's updates follow the snapshot, one sequence at a time.
+    let mut rows = snapshot["rows"].as_array().unwrap().clone();
+    let mut sequence = snapshot["sequence"].as_u64().unwrap();
+    second.call("turn.send", json!({"session": session, "prompt": "again"}));
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+    release.send(()).unwrap();
+    let done = second.event("turn.done");
+    loop {
+        let update = second.event("session.view.update");
+        sequence += 1;
+        assert_eq!(
+            update["data"]["sequence"], sequence,
+            "an update was missed or repeated"
+        );
+        apply(&mut rows, &update["data"]);
+        if update["data"]["status"] == "completed" {
+            break;
+        }
+    }
+
+    let resynced = second.call("session.view.resync", json!({"session": session}));
+    let end = second.event("session.view.snapshot")["data"].clone();
+    assert_eq!(resynced["sequence"], sequence);
+    assert_eq!(end["sequence"], sequence);
+    assert_eq!(
+        end["rows"],
+        Value::Array(rows),
+        "the client's rows differ from the host's"
+    );
+    let reply = end["rows"]
+        .as_array()
+        .unwrap()
+        .last()
+        .expect("the second reply");
+    assert_eq!(
+        reply["data"], done["data"],
+        "the reply's payload was reshaped"
     );
     second.leave();
 }

@@ -35,7 +35,7 @@ turn in a cancel stops whatever is running.
 
 `agent.info` and `agent.ready` advertise `capabilities.sessionView`: version 1, the
 `session.view.start` operation, `fresh_session` scope, the four supported approval kinds
-(`confirm`, `run`, `fetch`, `ask`), and `reconnect: false`. A client requiring the view checks this
+(`confirm`, `run`, `fetch`, `ask`), `resync: "session.view.resync"` and `retainedRows` (RPCVIEW-9). A runtime from before RPCVIEW-9 advertises `reconnect: false` in place of the last two. A client requiring the view checks this
 field and refuses an absent or unsupported version; it must not infer the view from legacy events.
 
 `session.view.start` requires a session handle and version 1. It works once, before a fresh
@@ -81,7 +81,7 @@ eligibility share the emitter lock, so the next turn cannot publish ahead of the
 Closing a session detaches and removes its view; `detached` says nothing about worker termination,
 save success, or rollback. EOF retains the existing process-ending behavior.
 
-The bridge retains only current view metadata and the pending payload. Clients retain transcript rows. There is no history snapshot, late subscription, reconnect, or resynchronization operation on the stdio transports. Connection loss or a sequence gap ends the view; a client must not claim recovered history. The local host's `session.attach` ([HOST-11](local-host.md#HOST-11)) gives a client that takes a session over its current status with no rows and says the history is omitted.
+The bridge retains current view metadata, the pending payload and the most recent rows (RPCVIEW-9). A snapshot of them is sent on request and to a client that takes a session over with the local host's `session.attach` ([HOST-11](local-host.md#HOST-11)). There is no incremental replay or late subscription. Connection loss ends the view, and a client must not claim recovered history.
 
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
@@ -181,8 +181,7 @@ capability and refuses a runtime that lacks version 1, before it creates a sessi
 view itself and never builds one from legacy events.
 
 It applies each update by replacing the listed rows at their positions and replacing every status
-field. A sequence that is not the next one, a malformed update, or the end of the connection ends
-that view at its last received state; it claims no recovery. It reports a close as a detached view
+field. A sequence that is not the next one asks for a snapshot (RPCVIEW-9) when the runtime offers one. Until the snapshot arrives, the view keeps its last received state, ignores updates, and refuses replies and sends without sending them. A gap the runtime cannot resynchronize, a refused resync, a resync answered before its snapshot, a malformed update, or the end of the connection ends that view at its last received state; it claims no recovery. It keeps at most `retainedRows` rows, the most recent, and counts the rest as omitted, as a snapshot does. It reports a close as a detached view
 with worker termination and save success unknown. A failed close keeps the session registered for
 view updates and connection-loss reporting, unless the bridge reports that the session is gone. Sessions open only in configured workspace ids, and a
 request unanswered past its deadline ends the connection with its outcome unknown. A failed request
@@ -250,3 +249,16 @@ Three limits belong to the launcher and the bridge. First, creating a socket pai
 `verified-by: bravebot_ui_bridge::control_boundary::copying_nothing_out_of_the_bridge_proves_nothing_where_the_attack_never_worked`
 `verified-by: bravebot_ui_bridge::control_boundary::the_attack_must_work_where_the_kernel_lets_a_process_reach_its_peers`
 `verified-by: bravebot_sandbox::inspection::a_failed_remedy_is_said_with_its_error`
+
+<a id="RPCVIEW-9"></a>
+### RPCVIEW-9: a snapshot holds the most recent rows and says how many it leaves out
+
+The view keeps its current state and its most recent rows, at most `retainedRows` (256). The bound is a count of rows. No payload is read to decide what is kept. A row that falls out of the bound is not kept again when it changes. The update that changes it is still sent, with its id. The pending question is kept whole outside the rows, so a question whose row has fallen out can still be shown and answered. Approval resolutions are kept as rows with `resolved` set, under the same bound.
+
+`session.view.resync` takes a session handle and answers `{ "version": 1, "sequence": n, "omitted": k }` for an open session that has a view, after sending `session.view.snapshot`. A snapshot has the shape of an update, with the retained rows in id order, and `omitted`, how many rows before the first it leaves out. Because row ids count from 1, those are ids 1 to `omitted`. The snapshot is written under the lock every update takes, so each later update has the next sequence after the snapshot's, and applying them leaves a client holding what a later snapshot holds. A session whose startup question is unanswered sends `trust.request` again after the snapshot. A resync grants nothing and answers nothing: a question is answered only by its reply.
+
+`verified-by: bravebot_ui_bridge::view::a_snapshot_keeps_the_most_recent_rows_and_the_question_waiting`
+`verified-by: bravebot_ui_bridge::control_tests::a_client_that_applies_the_updates_after_a_snapshot_holds_what_a_later_snapshot_holds`
+`verified-by: bravebot_ui_bridge::host_process::a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them`
+`verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
+`verified-by: by-construction (packages/agent-client/tests/client.test.ts recovers a missed update from a snapshot, refuses actions while one is awaited, and ends the view when a resync is refused or the runtime offers none; tests/view.test.ts bounds the rows and leaves out changes to omitted rows)`
