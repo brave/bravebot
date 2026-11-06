@@ -945,10 +945,25 @@ fn let_the_attacker_try<F: Front>(scratch: &Scratch, waiting: &Waiting<F>) -> Va
     report
 }
 
+/// What started the attacker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartedBy {
+    /// A hook, which runs unconfined, so the attacker has the person's own access.
+    Hook,
+    /// An approved command, which is confined where the server confines commands. The
+    /// confinement can refuse `pidfd_getfd` against every process, the control one included.
+    Command,
+}
+
 /// Everything that must hold once the attacker has tried: it tried, it was detached from the
 /// server, it reached no channel, the write is still waiting, and only the client's answer
 /// finishes it.
-fn the_client_alone_decides<F: Front>(scratch: &Scratch, mut waiting: Waiting<F>, report: &Value) {
+fn the_client_alone_decides<F: Front>(
+    scratch: &Scratch,
+    mut waiting: Waiting<F>,
+    report: &Value,
+    started_by: StartedBy,
+) {
     assert_ne!(
         report["ppid"].as_u64().unwrap(),
         u64::from(waiting.front.server_pid()),
@@ -980,14 +995,14 @@ fn the_client_alone_decides<F: Front>(scratch: &Scratch, mut waiting: Waiting<F>
         Pidfd::Refused => {}
         Pidfd::NotExercised => {
             assert!(
-                !the_attack_must_work(),
-                "pidfd_getfd copied nothing out of the control process though this kernel lets a \
-                 process reach its peers, so the attack did not run: {report}"
+                started_by == StartedBy::Command || !the_attack_must_work(),
+                "pidfd_getfd copied nothing out of the control process though this kernel lets an \
+                 unconfined process reach its peers, so the attack did not run: {report}"
             );
             eprintln!(
-                "pidfd_getfd was not exercised (unavailable here, or the kernel's ptrace policy \
-                 refuses it against any process); the server's refusal of it is not shown by \
-                 this run: {report}"
+                "pidfd_getfd was not exercised (unavailable here, refused by the kernel's ptrace \
+                 policy against any process, or by the command's confinement); the server's \
+                 refusal of it is not shown by this run: {report}"
             );
         }
     }
@@ -1056,7 +1071,7 @@ fn a_program_a_hook_leaves_running_cannot_reach_the_channel() {
     a_hook_that_starts_the_attacker(&scratch);
     let waiting = until_a_write_is_waiting(&scratch, FrontEnd::start, None, false);
     let report = let_the_attacker_try(&scratch, &waiting);
-    the_client_alone_decides(&scratch, waiting, &report);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Hook);
 }
 
 /// A command the person approved, started by the bridge's own `run` tool, and the process it
@@ -1068,7 +1083,7 @@ fn a_program_an_approved_command_leaves_running_cannot_reach_the_channel() {
     let first = a_command_that_starts_the_attacker(&scratch);
     let waiting = until_a_write_is_waiting(&scratch, FrontEnd::start, first, true);
     let report = let_the_attacker_try(&scratch, &waiting);
-    the_client_alone_decides(&scratch, waiting, &report);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Command);
 }
 
 /// The host holds the near end of its client's channel, and the client's end is held by a
@@ -1080,7 +1095,7 @@ fn a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel() {
     a_hook_that_starts_the_attacker(&scratch);
     let waiting = until_a_write_is_waiting(&scratch, Hosted::start, None, false);
     let report = let_the_attacker_try(&scratch, &waiting);
-    the_client_alone_decides(&scratch, waiting, &report);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Hook);
 }
 
 /// As [`a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel`], for a command a
@@ -1091,7 +1106,7 @@ fn a_program_an_approved_command_the_host_runs_leaves_running_cannot_reach_the_c
     let first = a_command_that_starts_the_attacker(&scratch);
     let waiting = until_a_write_is_waiting(&scratch, Hosted::start, first, true);
     let report = let_the_attacker_try(&scratch, &waiting);
-    the_client_alone_decides(&scratch, waiting, &report);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Command);
 }
 
 fn cat() -> Command {
