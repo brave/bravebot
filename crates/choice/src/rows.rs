@@ -697,6 +697,17 @@ row 9: tool 1 title=new:7
         let resolved = resolve(answer, &[entries()], &shape);
         assert_eq!(resolved.calls.len(), 1);
         assert_eq!(resolved.dropped.get(&Dropped::Cap), Some(&2));
+
+        // Rows that each stand on their own stop at the cap on rows, and the rest are counted.
+        let shape = Shape {
+            max_rows: 2,
+            ..bookmarks()
+        };
+        let answer = "new 1 = \"A\"\nnew 2 = \"B\"\nnew 3 = \"C\"\n\
+                      row 1: tool 1 title=new:1\nrow 2: tool 1 title=new:2\nrow 3: tool 1 title=new:3\n";
+        let resolved = resolve(answer, &[entries()], &shape);
+        assert_eq!(resolved.calls.len(), 2);
+        assert_eq!(resolved.dropped.get(&Dropped::Cap), Some(&1));
     }
 
     /// A step may point into several lists, each numbered under its own name. A row names an entry
