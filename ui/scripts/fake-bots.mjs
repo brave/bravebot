@@ -36,6 +36,12 @@ const slugOf = (name, taken) => {
 
 const coded = (code, message) => Object.assign(new Error(message), { code })
 
+const isAbsoluteDirectory = (value) => {
+  if (typeof value !== 'string' || value.includes('\0')) return false
+  if (value.startsWith('/')) return true
+  return /^[A-Za-z]:[\\/]/.test(value) && !value.slice(2).includes(':')
+}
+
 const text = (field, value) => {
   if (typeof value !== 'string') throw coded('bad_request', `${field} must be a string`)
   if (!value.trim()) throw coded('bad_request', `${field} must not be blank`)
@@ -67,7 +73,8 @@ const avatar = (value) => {
 
 /**
  * The agent's `bot.list`, `bot.replace`, `bot.make`, `bot.edit`, `bot.set_model`, `bot.ensure_home`,
- * `bot.archive`, `bot.restore` and `bot.delete`, kept in memory.
+ * `bot.archive`, `bot.restore`, `bot.delete`, `bot.record_conversation`, `bot.record_archived`,
+ * `bot.release_session` and `bot.forget_conversation`, kept in memory.
  *
  * `rows` is what the bots file holds, `calls` every request made, `refuse` makes the next
  * replaces fail with that message (and the bridge code `refuseCode`, none when it is null, as when the agent is gone) and `repair` changes each row a replace writes, as the agent does
@@ -169,6 +176,61 @@ export function fakeBots(initial = []) {
         if (index < 0) throw coded('bad_request', `no bot has the slug ${params.slug}`)
         state.rows.splice(index, 1)
         return { slug: params.slug }
+      }
+      if (method === 'bot.record_conversation' || method === 'bot.record_archived' || method === 'bot.release_session' || method === 'bot.forget_conversation') {
+        const required = (name) => {
+          if (typeof params[name] !== 'string') throw coded('bad_request', `\`${name}\` must be a string`)
+          return params[name]
+        }
+        if (method === 'bot.record_archived') {
+          if (!('archived' in params)) throw coded('bad_request', '`archived` is required')
+          if (typeof params.archived !== 'number') return { bot: null, wrote: false }
+        }
+        refuseWrite()
+        const stampRow = (row) => {
+          state.stamp += 1
+          const next = { ...row, updated: state.stamp }
+          state.rows = [...state.rows.filter((each) => each.slug !== next.slug), state.repair ? state.repair(next) : next].sort(inByteOrder)
+          return structuredClone(state.rows.find((each) => each.slug === next.slug))
+        }
+        if (method === 'bot.forget_conversation') {
+          const id = required('id')
+          const directory = required('directory')
+          let changed = 0
+          state.stamp += 1
+          const stamp = state.stamp
+          const nextRows = state.rows.map((held) => {
+            const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
+            const pointed = held.session === id
+            if (conversations.length === held.conversations.length && !pointed) return held
+            changed += 1
+            const next = { ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived, updated: stamp }
+            return state.repair ? state.repair(next) : next
+          })
+          if (changed === 0) state.stamp -= 1
+          else state.rows = nextRows.sort(inByteOrder)
+          return { changed, wrote: changed > 0 }
+        }
+        const slug = required('slug')
+        const held = state.rows.find((each) => each.slug === slug)
+        if (!held) return { bot: null, wrote: false }
+        if (method === 'bot.record_conversation') {
+          const id = required('id')
+          const directory = required('directory')
+          if (id.length === 0 || id.includes('/') || id.includes('\0') || !isAbsoluteDirectory(directory)) {
+            throw coded('bad_request', 'the conversation was not recorded: the session is not an identifier, or the directory is not an absolute path')
+          }
+          const known = held.conversations.some((each) => each.id === id && each.directory === directory)
+          return { bot: stampRow({ ...held, session: id, conversations: known ? held.conversations : [...held.conversations, { id, directory }] }), wrote: true }
+        }
+        if (method === 'bot.record_archived') {
+          const archived = params.archived
+          const whole = Number.isFinite(archived) && archived === Math.trunc(archived) && archived >= 0 && archived <= Number.MAX_SAFE_INTEGER
+          if (!whole || archived <= held.archived) return { bot: structuredClone(held), wrote: false }
+          return { bot: stampRow({ ...held, archived }), wrote: true }
+        }
+        if (held.session === null) return { bot: structuredClone(held), wrote: false }
+        return { bot: stampRow({ ...held, session: null, archived: 0 }), wrote: true }
       }
       throw new Error(`a method the bots store does not call: ${method}`)
     },

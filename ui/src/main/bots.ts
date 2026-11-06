@@ -285,19 +285,13 @@ export function worksIn(held: Bot, directory: string | undefined): directory is 
  * Record a durable conversation and the folder it ran in, without discarding any earlier ones.
  *
  * A turn that ended in the home folder at a prompt the agent numbered also moves `lastHome` there,
- * which is where a summon elsewhere places its card (MEMORY-14).
+ * which is where a summon elsewhere places its card (MEMORY-14). The module records the conversation.
+ * `lastHome` is not one of its fields yet, so that one write still replaces the row.
  */
 export async function noteBotSession(slug: string, id: string, directory: string, prompt?: number): Promise<void> {
-  await changeBot(slug, (held) => {
-    const known = held.conversations.some((each) => each.id === id && each.directory === directory)
-    const home = directory === held.home && typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0
-    return {
-      ...held,
-      session: id,
-      conversations: known ? held.conversations : [...held.conversations, { id, directory }],
-      lastHome: home ? { id, prompt } : held.lastHome,
-    }
-  })
+  await writeThroughBridge(() => ({ method: 'bot.record_conversation', params: { slug, id, directory } }))
+  if (typeof prompt !== 'number' || !Number.isInteger(prompt) || prompt < 0) return
+  await changeBot(slug, (held) => (directory === held.home ? { ...held, lastHome: { id, prompt } } : null))
 }
 
 /**
@@ -308,7 +302,7 @@ export async function noteBotSession(slug: string, id: string, directory: string
  * happened to justify.
  */
 export async function noteBotArchived(slug: string, archived: number): Promise<void> {
-  await changeBot(slug, (held) => (Number.isInteger(archived) && archived > held.archived ? { ...held, archived } : null))
+  await writeThroughBridge(() => ({ method: 'bot.record_archived', params: { slug, archived } }))
 }
 
 /**
@@ -323,7 +317,7 @@ export async function noteBotArchived(slug: string, archived: number): Promise<v
  */
 export async function releaseBotSession(slug: unknown): Promise<void> {
   if (!isSlug(slug)) return
-  await changeBot(slug, (held) => (held.session === null ? null : { ...held, session: null, archived: 0 }))
+  await writeThroughBridge(() => ({ method: 'bot.release_session', params: { slug } }))
 }
 
 /**
@@ -331,17 +325,7 @@ export async function releaseBotSession(slug: unknown): Promise<void> {
  * pointer was that conversation starts a new one on its next turn.
  */
 export async function forgetBotConversation(directory: string, id: string): Promise<void> {
-  await updateBots((all) => {
-    let changed = false
-    const next = all.map((held) => {
-      const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
-      const pointed = held.session === id
-      if (conversations.length === held.conversations.length && !pointed) return held
-      changed = true
-      return { ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived, updated: Date.now() }
-    })
-    return changed ? next : null
-  })
+  await writeThroughBridge(() => ({ method: 'bot.forget_conversation', params: { id, directory } }))
 }
 
 /**

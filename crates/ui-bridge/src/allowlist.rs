@@ -183,6 +183,10 @@ pub const DENIED: &[&str] = &[
     "bot.archive",
     "bot.restore",
     "bot.delete",
+    "bot.record_conversation",
+    "bot.record_archived",
+    "bot.release_session",
+    "bot.forget_conversation",
     "doctor",
     // Say where the machine keeps its state and what the host's settings name, for the person at
     // the host to read and post.
