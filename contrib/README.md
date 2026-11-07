@@ -110,11 +110,13 @@ whose answer is known, and reads no catalog; `make check-locales` runs it first,
 
 ## check-code-selectors.py
 
-Fails while a variable in `CODE_SELECTORS` in `crates/agent/src/gcloud.rs` lacks a test.
+Fails while a variable in a `CODE_SELECTORS` list, in `crates/agent/src/gcloud.rs` or
+`crates/bedrock/src/credentials.rs`, lacks a test.
 
-`gcloud` is started with the person's environment, and its launcher reads `CLOUDSDK_PYTHON` and
-`CLOUDSDK_CONFIG` to choose code to run. `command_for` takes such a variable off when its value
-names a path a stage may write. For each name in the list, this requires an
+`gcloud` and `aws` are started with the person's environment, and their launchers read variables
+such as `CLOUDSDK_PYTHON` and `AWS_CONFIG_FILE` to choose code to run. `command_for` takes such a
+variable off when its value names a path a stage may write. For each name in a list, this requires
+an
 `assert!(withheld("NAME", ...))` and an `assert!(!withheld("NAME", ...))` in the test module of the
 same file. A loop that keeps every value fails the first, and one that removes every value fails the
 second.

@@ -1,32 +1,41 @@
 #!/usr/bin/env python3
-"""Holds each variable in gcloud.rs CODE_SELECTORS to a test that keeps it and one that removes it.
+"""Holds each variable in a CODE_SELECTORS list to a test that keeps it and one that removes it.
 
-`gcloud` is started with the person's environment, so a variable its launcher reads to choose code
-to run is taken off when its value names a path a stage may write. CODE_SELECTORS lists those
-variables. A name added to the list with no test is a removal nothing pins, and a test that checks
-only one value of it passes for a loop that never removes anything or one that removes everything.
+`gcloud` and `aws` are started with the person's environment, so a variable their launchers read to
+choose code to run is taken off when its value names a path a stage may write. Each program has a
+CODE_SELECTORS list of those variables. A name added to a list with no test is a removal nothing
+pins, and a test that checks only one value of it passes for a loop that never removes anything or
+one that removes everything.
 
-So this fails while a name in the list lacks either test in the same file:
+So this fails while a name in a list lacks either test in the same file:
 
 - an assertion that the name is withheld (`assert!(withheld("NAME", ...))`), which a loop that
   keeps every value fails, and
 - an assertion that it is kept for a safe value (`assert!(!withheld("NAME", ...))`), which a loop
   that removes every value fails.
 
-It cannot tell that the list is complete. A variable the launcher reads that is not listed is found
+It cannot tell that a list is complete. A variable the launcher reads that is not listed is found
 by reading the launcher, which is what PATH-008 in docs/best-practices/paths.md asks a reviewer to
-do.
+do. A program added to the sources below has the same check.
 """
 
 import re
 import sys
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parent.parent / "crates/agent/src/gcloud.rs"
+ROOT = Path(__file__).resolve().parent.parent
+
+# The files that hold a CODE_SELECTORS list, each with the tests for it in the same file.
+SOURCES = [
+    "crates/agent/src/gcloud.rs",
+    "crates/bedrock/src/credentials.rs",
+]
 
 LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*\[(.*?)\]\s*;", re.DOTALL)
 ENTRY = re.compile(r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)')
-TESTS = re.compile(r"#\[cfg\(\s*all\(\s*test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*\{")
+TESTS = re.compile(
+    r"#\[cfg\(\s*(?:test|all\(\s*test\b[^\]]*)\)\s*\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*\{"
+)
 
 
 def selectors(text):
@@ -54,38 +63,39 @@ def asserts(tests, name, kept):
     return re.search(pattern, tests) is not None
 
 
-def verdict(text):
+def verdict(text, source="the source file"):
     """Every way the list and the tests disagree, as complaints to print."""
     names = selectors(text)
     if names is None:
-        return ["CODE_SELECTORS is not in gcloud.rs. If it moved, teach check-code-selectors.py."]
+        return [f"CODE_SELECTORS is not in {source}. If it moved, teach check-code-selectors.py."]
     if not names:
         return [
-            "CODE_SELECTORS holds no name this script could read. If its shape changed, "
-            "teach check-code-selectors.py."
+            f"CODE_SELECTORS in {source} holds no name this script could read. If its shape "
+            "changed, teach check-code-selectors.py."
         ]
     tests = tests_of(text)
     if tests is None:
-        return ["gcloud.rs has no test module, so no name in CODE_SELECTORS has a test."]
+        return [f"{source} has no test module, so no name in CODE_SELECTORS has a test."]
     complaints = []
     for name in names:
         if not asserts(tests, name, kept=False):
             complaints.append(
-                f"{name} is in CODE_SELECTORS and no test asserts withheld(\"{name}\", ...) "
-                f"for a value a stage may write."
+                f"{name} is in CODE_SELECTORS in {source} and no test asserts "
+                f"withheld(\"{name}\", ...) for a value a stage may write."
             )
         if not asserts(tests, name, kept=True):
             complaints.append(
-                f"{name} is in CODE_SELECTORS and no test asserts !withheld(\"{name}\", ...) "
-                f"for a safe value."
+                f"{name} is in CODE_SELECTORS in {source} and no test asserts "
+                f"!withheld(\"{name}\", ...) for a safe value."
             )
     return complaints
 
 
 COVERED = """\
-const CODE_SELECTORS: [(&str, Names); 2] = [
+const CODE_SELECTORS: [(&str, Names); 3] = [
     ("A_PROGRAM", Names::Program),
     ("A_DIRECTORY", Names::Directory),
+    ("A_FILE", Names::File),
 ];
 #[cfg(all(test, unix))]
 #[allow(clippy::unwrap_used, reason = "test helpers unwrap")]
@@ -103,9 +113,14 @@ mod tests {
             &genuine,
             &session
         ));
+        assert!(withheld("A_FILE", &planted, &session));
+        assert!(!withheld("A_FILE", &genuine, &session));
     }
 }
 """
+
+# The same list under the plain `#[cfg(test)]` a crate without a unix-only test module has.
+COVERED_PLAIN = COVERED.replace("#[cfg(all(test, unix))]", "#[cfg(test)]")
 
 
 def selftest():
@@ -120,10 +135,16 @@ def selftest():
         checks.append((claim, held, got))
 
     got = selectors(COVERED)
-    case("parse: both names are read", got == ["A_PROGRAM", "A_DIRECTORY"], got)
+    case("parse: all names are read", got == ["A_PROGRAM", "A_DIRECTORY", "A_FILE"], got)
     case("parse: a file with no list is not an empty list", selectors("fn main() {}") is None, None)
     case("verdict: a covered list passes", verdict(COVERED) == [], verdict(COVERED))
+    case(
+        "verdict: a covered list under a plain cfg(test) passes",
+        verdict(COVERED_PLAIN) == [],
+        verdict(COVERED_PLAIN),
+    )
 
+    new_one = '("A_DIRECTORY", Names::Directory),\n    ("A_NEW_ONE", Names::Program),'
     cases = [
         (
             "a name asserted only as kept fails once",
@@ -132,15 +153,12 @@ def selftest():
         ),
         (
             "a name asserted only as withheld fails once",
-            COVERED.replace('assert!(!withheld("A_PROGRAM"', 'assert!(withheld("A_PROGRAM"'),
+            COVERED.replace('assert!(!withheld("A_FILE"', 'assert!(withheld("A_FILE"'),
             1,
         ),
         (
             "a name added to the list with no test fails twice",
-            COVERED.replace(
-                '("A_DIRECTORY", Names::Directory),',
-                '("A_DIRECTORY", Names::Directory),\n    ("A_NEW_ONE", Names::Program),',
-            ),
+            COVERED.replace('("A_DIRECTORY", Names::Directory),', new_one),
             2,
         ),
         (
@@ -148,10 +166,7 @@ def selftest():
             COVERED.replace(
                 "    fn t() {",
                 '    fn t() {\n        let _ = "A_NEW_ONE";',
-            ).replace(
-                '("A_DIRECTORY", Names::Directory),',
-                '("A_DIRECTORY", Names::Directory),\n    ("A_NEW_ONE", Names::Program),',
-            ),
+            ).replace('("A_DIRECTORY", Names::Directory),', new_one),
             2,
         ),
         (
@@ -162,7 +177,9 @@ def selftest():
         (
             "an empty list fails",
             COVERED.replace(
-                '    ("A_PROGRAM", Names::Program),\n    ("A_DIRECTORY", Names::Directory),\n', ""
+                '    ("A_PROGRAM", Names::Program),\n    ("A_DIRECTORY", Names::Directory),\n'
+                '    ("A_FILE", Names::File),\n',
+                "",
             ),
             1,
         ),
@@ -184,16 +201,24 @@ def selftest():
 def main():
     if "--selftest" in sys.argv[1:]:
         return selftest()
-    if not SOURCE.exists():
-        print(f"{SOURCE} is not there", file=sys.stderr)
-        return 1
-    text = SOURCE.read_text(encoding="utf-8")
-    complaints = verdict(text)
+    complaints = []
+    total = 0
+    for relative in SOURCES:
+        source = ROOT / relative
+        if not source.exists():
+            complaints.append(f"{source} is not there")
+            continue
+        text = source.read_text(encoding="utf-8")
+        complaints += verdict(text, relative)
+        total += len(selectors(text) or [])
     for complaint in complaints:
         print(complaint, file=sys.stderr)
     if complaints:
         return 1
-    print(f"check-code-selectors: {len(selectors(text))} names, each with a keep and a remove test")
+    print(
+        f"check-code-selectors: {total} names in {len(SOURCES)} files, "
+        "each with a keep and a remove test"
+    )
     return 0
 
 

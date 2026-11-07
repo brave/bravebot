@@ -3611,6 +3611,38 @@ file. A new spawn that looks a name up through
   A row that says unreduced is a known gap, not a decision, and it comes out of the table when the
   start is given `SearchPath::Reduced` and a test plants an interpreter in a directory left out and
   checks it is not run.
+- **The variables a started program reads to choose code are withheld unless they name something
+  outside every directory a stage may write.** `programs::withhold_code_selectors_with` takes each
+  variable of a program's `CODE_SELECTORS` list off the environment `start` built, unless its value
+  passes `programs::may_be_run`: an absolute path that exists outside every such directory, links
+  followed, and for a variable that names a file ([`Names::File`](#SANDBOX-30)) a regular file. A
+  variable that names a program ([`Names::Program`](#SANDBOX-30)) also keeps a bare name, since the
+  program's `PATH` leaves those directories out. A relative path, a path that does not exist and a
+  value inside such a directory are taken off. A variable not listed is left as set. The lists are
+  `CODE_SELECTORS` in `crates/agent/src/gcloud.rs` (`CLOUDSDK_PYTHON`, `CLOUDSDK_CONFIG`,
+  [BACKEND-65](backends.md#BACKEND-65)) and in `crates/bedrock/src/credentials.rs`:
+
+  | AWS CLI variable | Names | Why it selects code |
+  |---|---|---|
+  | `AWS_CONFIG_FILE` | a file | replaces `~/.aws/config`, whose profile can carry a `credential_process` command, and whose `[plugins]` section loads a Python module |
+  | `AWS_SHARED_CREDENTIALS_FILE` | a file | replaces `~/.aws/credentials`, whose profile can carry a `credential_process` command |
+  | `BROWSER` | a program | the command `aws sso login` opens the sign-in page with |
+  | `OPENSSL_CONF` | a file | configuration of the OpenSSL the CLI bundles, which can load an engine or a provider module |
+  | `OPENSSL_CONF_INCLUDE` | a directory | where that configuration's `.include` lines are read from |
+  | `OPENSSL_ENGINES`, `OPENSSL_MODULES` | a directory | where the bundled OpenSSL loads engines and provider modules from |
+
+  `PYTHONPATH`, `PYTHONSTARTUP` and the other `PYTHON*` variables are not listed: the installed CLI is a
+  frozen executable, and a probe of version 2.37.12 with `PYTHONPATH` and `PYTHONSTARTUP` naming a
+  `sitecustomize.py` did not run it. `AWS_PAGER` and `PAGER` name a program the CLI runs to page
+  output, but every `aws` this program starts has both output streams piped, and a probe with
+  `AWS_PAGER` naming a script, run piped and under a pseudo-terminal, did not run it. The
+  rest of the variables the CLI documents (`AWS_PROFILE`, `AWS_CA_BUNDLE`,
+  `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_DATA_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`) name data the CLI
+  parses and does not run. This list was read from the CLI's own topic pages and the strings of the
+  executable and its bundled `libcrypto`, and cannot show that no other variable selects code
+  ([PATH-008](../best-practices/paths.md#PATH-008)). The variables `gcloud`'s launcher and auth code
+  read beyond the two listed are #3795, and the other programs bravebot starts for itself have no
+  list yet.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3688,6 +3720,15 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_bedrock::credentials::an_aws_config_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read`
+`verified-by: bravebot_bedrock::credentials::an_aws_credentials_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read`
+`verified-by: bravebot_bedrock::credentials::an_openssl_configuration_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read`
+`verified-by: bravebot_bedrock::credentials::an_openssl_directory_a_stage_may_write_is_not_the_one_the_cli_is_told_to_load_from`
+`verified-by: bravebot_bedrock::credentials::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
+`verified-by: bravebot_bedrock::credentials::an_aws_value_that_selects_no_code_is_left_as_set`
+`verified-by: bravebot_bedrock::credentials::the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one`
+`verified-by: bravebot_sandbox::programs::a_file_that_names_code_must_exist_as_a_file_outside_every_directory_a_stage_may_write`
+`verified-by: bravebot_sandbox::programs::a_code_selector_is_taken_off_unless_its_value_passes`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`

@@ -24,6 +24,7 @@
 
 use bravebot_config::Secret;
 use bravebot_i18n::t;
+use bravebot_sandbox::programs::Names;
 use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -32,16 +33,6 @@ use std::sync::mpsc;
 
 /// The program asked for a token, looked for on `PATH` as any command a person runs is.
 const GCLOUD: &str = "gcloud";
-
-/// A variable the CLI reads to choose code to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Names {
-    /// A program: a bare name is looked up on the reduced `PATH`, and anything with a separator is
-    /// a file.
-    Program,
-    /// A directory the CLI may source a script from.
-    Directory,
-}
 
 /// The variables the CLI reads that name code it runs, and what each names.
 ///
@@ -107,27 +98,13 @@ fn command_for_with(
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
     );
-    for (name, names) in CODE_SELECTORS {
-        if let Some(value) = held(name)
-            && !may_be_run(names, Path::new(&value), &outside_stage_writable)
-        {
-            command.env_remove(name);
-        }
-    }
+    bravebot_sandbox::programs::withhold_code_selectors_with(
+        &mut command,
+        &CODE_SELECTORS,
+        held,
+        outside_stage_writable,
+    );
     command
-}
-
-/// Whether the CLI may be left to run what `value` names.
-///
-/// A program given by a bare name is looked up on the `PATH` the CLI is started with, which leaves
-/// out the directories a stage may write. Any other value must be an absolute path to something
-/// that exists outside them, with its links followed. A relative path is read from the directory the
-/// session writes in, and one that does not exist is made by whoever writes it first.
-fn may_be_run(names: Names, value: &Path, outside_stage_writable: &impl Fn(&Path) -> bool) -> bool {
-    if names == Names::Program && value.components().count() == 1 && !value.is_absolute() {
-        return true;
-    }
-    value.is_absolute() && outside_stage_writable(value)
 }
 
 fn token_command(program: &Path) -> Command {

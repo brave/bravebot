@@ -27,7 +27,8 @@
 //! a turn, and the only thing it is ever used for is computing a signature.
 
 use bravebot_config::{Held, Secret};
-use std::ffi::OsStr;
+use bravebot_sandbox::programs::Names;
+use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -81,14 +82,68 @@ fn absent(command: &Command) -> bool {
     command.get_program().is_empty()
 }
 
+/// The variables a program the CLI starts or loads reads to choose code to run, and what each
+/// names ([PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
+///
+/// A value is kept only when it passes [`bravebot_sandbox::programs::may_be_run`], which leaves out
+/// every directory a stage may write ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+/// The CLI is started unconfined, so a file a stage wrote and one of these names would run with the
+/// person's access.
+///
+/// - `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` replace `~/.aws/config` and
+///   `~/.aws/credentials`. A profile in either can name a `credential_process` command, and a
+///   `[plugins]` section in the first loads a Python module from `cli_legacy_plugin_path`.
+/// - `BROWSER` is the command `aws sso login` opens the sign-in page with.
+/// - `OPENSSL_CONF` is a configuration file of the OpenSSL the CLI bundles, which can load an
+///   engine or a provider module, and `OPENSSL_CONF_INCLUDE` is where its `.include` lines are read
+///   from. `OPENSSL_ENGINES` and `OPENSSL_MODULES` are where those engines and providers are loaded
+///   from.
+///
+/// The CLI does not read `PYTHONPATH` or the other `PYTHON*` variables (it is a frozen executable),
+/// and runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start here has
+/// piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
+/// `SSL_CERT_DIR` name certificates, and `AWS_WEB_IDENTITY_TOKEN_FILE` names a token; none is run.
+const CODE_SELECTORS: [(&str, Names); 7] = [
+    ("AWS_CONFIG_FILE", Names::File),
+    ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
+    ("BROWSER", Names::Program),
+    ("OPENSSL_CONF", Names::File),
+    ("OPENSSL_CONF_INCLUDE", Names::Directory),
+    ("OPENSSL_ENGINES", Names::Directory),
+    ("OPENSSL_MODULES", Names::Directory),
+];
+
 fn command_for(program: &Path) -> Command {
+    command_for_with(
+        program,
+        |name| std::env::var_os(name),
+        bravebot_sandbox::programs::outside_stage_writable,
+    )
+}
+
+/// [`command_for`] against a given environment and a given judgment of which files are outside the
+/// directories a stage may write.
+fn command_for_with(
+    program: &Path,
+    held: impl Fn(&str) -> Option<OsString>,
+    outside_stage_writable: impl Fn(&Path) -> bool,
+) -> Command {
     // The names the CLI starts itself (an `env` shebang, a `credential_process` command) search
     // only the entries the lookup above searches (SANDBOX-30).
-    bravebot_sandbox::programs::start(
+    let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-    )
+    );
+    // The rest of the environment stays: `AWS_PROFILE`, `AWS_REGION` and the credentials the person
+    // keeps there are what the CLI is run to resolve.
+    bravebot_sandbox::programs::withhold_code_selectors_with(
+        &mut command,
+        &CODE_SELECTORS,
+        held,
+        outside_stage_writable,
+    );
+    command
 }
 
 /// The export, as a command, so what it is handed can be read without running it.
@@ -1069,6 +1124,253 @@ mod tests {
                 "{kept} was withheld, so the CLI cannot resolve the credential it is asked for"
             );
         }
+    }
+
+    /// Whether `name` is taken off the environment an `aws` is started with, when the person's
+    /// environment holds `value` for it and `writable` is the directory a stage may write.
+    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+        let row = writable.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let command = command_for_with(
+            Path::new("/usr/bin/aws"),
+            |asked| (asked == name).then(|| value.as_os_str().to_os_string()),
+            |file| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// A file a stage can plant, in a directory it holds, and a genuine one in a directory outside
+    /// every row, each with a directory that does not exist yet beside it. Returns the held
+    /// directory, the planted file, the genuine file and the genuine directory.
+    fn planted_and_genuine(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let session = fresh_directory(&format!("{name}-session"));
+        let safe = fresh_directory(&format!("{name}-safe"));
+        let planted = session.join("planted");
+        let genuine = safe.join("genuine");
+        for file in [&planted, &genuine] {
+            std::fs::write(file, "[default]\n").unwrap();
+        }
+        (session, planted, genuine, safe)
+    }
+
+    /// A link in a directory outside every row to `target`.
+    #[cfg(unix)]
+    fn link_to(name: &str, target: &Path) -> PathBuf {
+        let directory = fresh_directory(&format!("{name}-linked"));
+        let link = directory.join("link");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        link
+    }
+
+    /// The regression it rejects: starting the CLI with `AWS_CONFIG_FILE` as the person set it, so
+    /// a profile in a file a stage wrote names a `credential_process` that runs unconfined, with
+    /// the person's access, when `aws configure export-credentials` resolves it.
+    #[test]
+    fn an_aws_config_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read() {
+        let (session, planted, genuine, safe) = planted_and_genuine("credentials-config-file");
+
+        assert!(withheld("AWS_CONFIG_FILE", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "AWS_CONFIG_FILE",
+            &link_to("credentials-config-file", &planted),
+            &session
+        ));
+        assert!(withheld("AWS_CONFIG_FILE", Path::new("config"), &session));
+        assert!(withheld("AWS_CONFIG_FILE", &safe.join("not-yet"), &session));
+        assert!(withheld("AWS_CONFIG_FILE", &safe, &session));
+        assert!(!withheld("AWS_CONFIG_FILE", &genuine, &session));
+        #[cfg(unix)]
+        assert!(!withheld(
+            "AWS_CONFIG_FILE",
+            &link_to("credentials-config-file-safe", &genuine),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: starting the CLI with `AWS_SHARED_CREDENTIALS_FILE` as the person
+    /// set it. A `[profile]` there can carry a `credential_process` as well.
+    #[test]
+    fn an_aws_credentials_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read() {
+        let (session, planted, genuine, safe) = planted_and_genuine("credentials-shared-file");
+
+        assert!(withheld("AWS_SHARED_CREDENTIALS_FILE", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            &link_to("credentials-shared-file", &planted),
+            &session
+        ));
+        assert!(withheld(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            Path::new("./credentials"),
+            &session
+        ));
+        assert!(withheld(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            &safe.join("not-yet"),
+            &session
+        ));
+        assert!(!withheld("AWS_SHARED_CREDENTIALS_FILE", &genuine, &session));
+    }
+
+    /// The regression it rejects: starting the CLI with `OPENSSL_CONF` as the person set it, so the
+    /// OpenSSL the CLI bundles loads an engine or provider module a stage wrote.
+    #[test]
+    fn an_openssl_configuration_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read() {
+        let (session, planted, genuine, safe) = planted_and_genuine("credentials-openssl-conf");
+
+        assert!(withheld("OPENSSL_CONF", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "OPENSSL_CONF",
+            &link_to("credentials-openssl-conf", &planted),
+            &session
+        ));
+        assert!(withheld("OPENSSL_CONF", Path::new("openssl.cnf"), &session));
+        assert!(withheld("OPENSSL_CONF", &safe.join("not-yet"), &session));
+        assert!(!withheld("OPENSSL_CONF", &genuine, &session));
+    }
+
+    /// The regression it rejects: starting the CLI with `BROWSER` as the person set it, so
+    /// `aws sso login` opens the sign-in page with a program a stage wrote. A bare name is looked
+    /// up on the reduced `PATH`, which leaves those directories out, so it is kept.
+    #[test]
+    fn a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-browser");
+
+        assert!(withheld("BROWSER", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "BROWSER",
+            &link_to("credentials-browser", &planted),
+            &session
+        ));
+        assert!(withheld("BROWSER", Path::new("./opener"), &session));
+        assert!(withheld("BROWSER", Path::new("bin/opener"), &session));
+        assert!(!withheld("BROWSER", Path::new("xdg-open"), &session));
+        assert!(!withheld("BROWSER", &genuine, &session));
+    }
+
+    /// The directories the CLI's bundled OpenSSL loads engines, providers and included
+    /// configuration from are held to the same check as the file that names them.
+    #[test]
+    fn an_openssl_directory_a_stage_may_write_is_not_the_one_the_cli_is_told_to_load_from() {
+        let (session, _planted, _genuine, safe) = planted_and_genuine("credentials-openssl-dirs");
+        let planted = session.join("modules");
+        std::fs::create_dir_all(&planted).unwrap();
+
+        assert!(withheld("OPENSSL_CONF_INCLUDE", &planted, &session));
+        assert!(!withheld("OPENSSL_CONF_INCLUDE", &safe, &session));
+        assert!(withheld("OPENSSL_ENGINES", &planted, &session));
+        assert!(!withheld("OPENSSL_ENGINES", &safe, &session));
+        assert!(withheld("OPENSSL_MODULES", &planted, &session));
+        assert!(!withheld("OPENSSL_MODULES", &safe, &session));
+        assert!(withheld("OPENSSL_MODULES", Path::new("modules"), &session));
+    }
+
+    /// A variable of the CLI's that selects no code is left as the person set it, whatever it
+    /// names: the CLI is run to resolve these.
+    #[test]
+    fn an_aws_value_that_selects_no_code_is_left_as_set() {
+        let (session, planted, _genuine, _safe) = planted_and_genuine("credentials-other-values");
+
+        for other in [
+            "AWS_PROFILE",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_CA_BUNDLE",
+            "AWS_PAGER",
+            "AWS_DATA_PATH",
+            "SSL_CERT_FILE",
+            "PYTHONPATH",
+        ] {
+            assert!(!withheld(other, &planted, &session), "{other}");
+        }
+    }
+
+    /// The whole path from the process environment to the program started: the real
+    /// `outside_stage_writable`, with the session registered as a directory a stage may write. The
+    /// test binary runs again with the four variables set, `PATH` holding an installed directory
+    /// whose `aws` writes down what it was handed, and the export is started. Each variable that
+    /// names a file in the session is not handed on, and one naming a file outside it is.
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str =
+            "credentials::tests::the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one";
+        const SESSION: &str = "BRAVEBOT_TEST_AWS_SELECTORS_SESSION";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            // The stand-in prints no credentials, so the export is refused; what matters is what
+            // it was handed.
+            let _ = export(None);
+            return;
+        }
+
+        let session = fresh_directory("credentials-selectors-session");
+        let installed = fresh_directory("credentials-selectors-installed");
+        let genuine = fresh_directory("credentials-selectors-genuine").join("file");
+        std::fs::write(&genuine, "").unwrap();
+        let planted = session.join("planted");
+        std::fs::write(&planted, "").unwrap();
+        let aws = installed.join("aws");
+        let report = |name: &str| {
+            format!(
+                "printf '%s' \"${{{name}-unset}}\" > '{}'\n",
+                session.join(name).display()
+            )
+        };
+        let body: String = [
+            "AWS_CONFIG_FILE",
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "OPENSSL_CONF",
+            "BROWSER",
+        ]
+        .into_iter()
+        .map(report)
+        .collect();
+        std::fs::write(&aws, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env("PATH", &path)
+            .env("AWS_CONFIG_FILE", &planted)
+            .env("AWS_SHARED_CREDENTIALS_FILE", &genuine)
+            .env("OPENSSL_CONF", &planted)
+            .env("BROWSER", &planted)
+            .output()
+            .unwrap();
+
+        let said = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(
+            session.join("ran").exists(),
+            "the child did not run the test: {said}"
+        );
+        assert!(child.status.success(), "{said}");
+        let handed = |name: &str| std::fs::read_to_string(session.join(name)).unwrap();
+        assert_eq!(handed("AWS_CONFIG_FILE"), "unset");
+        assert_eq!(handed("OPENSSL_CONF"), "unset");
+        assert_eq!(handed("BROWSER"), "unset");
+        assert_eq!(
+            handed("AWS_SHARED_CREDENTIALS_FILE"),
+            genuine.to_string_lossy()
+        );
     }
 
     /// The scrubbing is added to the command, not substituted for what the command is: an

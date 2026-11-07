@@ -365,7 +365,8 @@ check` runs it and so does CI, because the tagging path's own refusal fires on r
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
 
-`make check-code-selectors` holds each variable in `CODE_SELECTORS` in `crates/agent/src/gcloud.rs`
+`make check-code-selectors` holds each variable in a `CODE_SELECTORS` list, in
+`crates/agent/src/gcloud.rs` and `crates/bedrock/src/credentials.rs`,
 to a test that keeps a safe value and a test that removes one a stage may write. `make check` runs
 it and so does CI. It cannot tell that the list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer.
