@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: An OpenAI-compatible gateway
-description: Name a gateway, the models it offers and where its credential lives, including a local Ollama that wants no key.
+description: Configure OpenAI-compatible gateways, endpoints, headers and credentials, keyless local models, model rosters, context windows, options, variants, thinking and retries.
 ---
 
 # Reaching an OpenAI-compatible gateway

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: MCP servers
-description: Declare a Model Context Protocol server, approve it, have a checkout ask for it, and see what a session started.
+description: Declare and approve MCP servers, filter tools, configure credentials and confinement, run server prompts, handle calls and failures, inspect connections, and reconnect, disable or remove servers.
 ---
 
 # MCP servers

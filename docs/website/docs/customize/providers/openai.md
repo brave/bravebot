@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: OpenAI
-description: Reach OpenAI with an API key, which models it offers, and how to reach it through chat completions instead of the Responses API.
+description: Configure OpenAI API keys and model names, choose reasoning effort, and use the Responses API or chat completions.
 ---
 
 # Reaching OpenAI with an API key

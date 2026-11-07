@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Interactive mode
-description: The input box, every key, and what a running turn refuses.
+description: Input editing and keybindings, prompt enhancement and history search, queues and stashes, cancellation, background commands, hint rows, delegate and output views, asides and long turns.
 ---
 
 # Interactive mode

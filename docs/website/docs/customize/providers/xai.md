@@ -1,7 +1,7 @@
 ---
 sidebar_position: 11
 title: xAI
-description: Sign in with a SuperGrok subscription with a code entered on any device, and use the models the account reaches.
+description: Sign in to xAI with a SuperGrok device code, select models, understand request destinations and token refresh, sign out and review observed support.
 ---
 
 # Reaching a model with an xAI SuperGrok subscription

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2.1
 title: Permission modes
-description: What asking, accepting edits, plan mode, auto and bypassing each answer for you, what they stop at, and the two things no mode answers.
+description: Asking, accepting edits, plan, auto and bypass modes, their limits and unanswered prompts, desktop controls and how long a mode lasts.
 ---
 
 # Permission modes

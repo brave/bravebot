@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Shell mode
-description: Type `!` on an empty prompt to run a line in your own shell, and have its output reach the model in full.
+description: Run your own shell command with !, queue it during a turn, inspect live output, keep output private and understand what reaches the model without approval.
 ---
 
 # Shell mode
