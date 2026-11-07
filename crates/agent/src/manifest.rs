@@ -1153,7 +1153,7 @@ fn plan<S: Sink, R: Reporter>(
         // in from the item it lands on, so the plan a person reads says both.
         let mut notes = connectors.notes(&plan);
         // And the arguments of each server call, in full, since a person approves the call by them.
-        notes.extend(Servers::notes(&plan));
+        notes.extend(servers.notes(&plan, task.permission_mode.get().refuses_writes()));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
@@ -1964,7 +1964,16 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             locked(policy, index, "tools")?;
             let began = std::time::Instant::now();
             let applied = servers.apply(
-                policy, chat, egress, confirmer, reporter, slots, index, &alias, step,
+                policy,
+                chat,
+                egress,
+                confirmer,
+                reporter,
+                slots,
+                index,
+                &alias,
+                step,
+                a_person_answered && !permission_mode.get().refuses_writes(),
             );
             accounting.elapsed.inference += began.elapsed();
             let (note, usage) = applied?;

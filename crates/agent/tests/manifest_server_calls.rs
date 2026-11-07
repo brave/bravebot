@@ -2258,6 +2258,28 @@ fn marks_session(url: &str, scratch: &Scratch, applies: &[(&str, &str, &str)]) -
     session_of(reach(url, false).applying(declared), scratch, true)
 }
 
+/// [`marks_session`], with `unattended` marked as running unattended.
+fn marked_session(
+    url: &str,
+    scratch: &Scratch,
+    applies: &[(&str, &str, &str)],
+    unattended: &[&str],
+) -> Session {
+    let mut declared = bravebot_config::mcp::ApplyArguments::new();
+    for (tool, argument, kind) in applies {
+        declared
+            .entry((*tool).to_string())
+            .or_default()
+            .insert((*argument).to_string(), (*kind).to_string());
+    }
+    let marked = unattended.iter().map(|tool| (*tool).to_string()).collect();
+    session_of(
+        reach(url, false).applying(declared).unattended(marked),
+        scratch,
+        true,
+    )
+}
+
 const MARKS_DECLARED: &[(&str, &str, &str)] = &[
     ("make_folder", "title", "new"),
     ("move_mark", "url", "entry"),
@@ -2743,6 +2765,106 @@ fn an_apply_whose_call_could_depend_on_two_rows_is_refused() {
     let failure = ran.outcome.expect_err("refused").to_string();
     assert!(failure.contains("one earlier call only"), "{failure}");
     assert!(ran.called.is_empty());
+}
+
+/// A step whose tools are all marked unattended makes its calls on the person's approval of the plan,
+/// with no list put. The plan line says the step runs without asking and names the server its list
+/// was read from, and the trail credits the plan's approval for each call.
+///
+/// Rejects an implementation that still puts the list, that runs it without saying so on the line
+/// the person approved, and that leaves the trail silent about what answered the calls.
+#[test]
+fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
+    let scratch = Scratch::new("unattended");
+    let (url, mcp) = serve_marks();
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.asked.applies.is_empty(), "the list was put");
+    assert!(ran.asked.calls.is_empty(), "{:?}", ran.asked.calls);
+    let tools: Vec<&str> = ran.called.iter().map(|(tool, _)| tool.as_str()).collect();
+    assert!(
+        tools.contains(&"make_folder") && tools.contains(&"move_mark"),
+        "{tools:?}"
+    );
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(line.contains("run without asking you"), "{line}");
+    assert!(line.contains("marks (read from brave)"), "{line}");
+    assert!(ran.events.iter().any(|event| matches!(
+        event,
+        bravebot_core::event::Event::GatePassed { gate: "approval", detail }
+            if detail == "approving the plan covered brave:make_folder, no prompt at the step"
+    )));
+}
+
+/// A step whose tools are all marked still puts its list where one tool is not marked, where bypass
+/// mode and not a person approved the plan, where an `ask` rule names one of its tools, and in plan
+/// mode.
+///
+/// Rejects an implementation that runs a step unattended on a mark it does not wholly have, on a
+/// plan nobody read, past a rule somebody wrote, or in a mode that asks at the step.
+#[test]
+fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks() {
+    let scratch = Scratch::new("unattended-asks");
+    let (url, mcp) = serve_marks();
+    let all = ["make_folder", "move_mark"];
+    let (asking, _) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &["Mcp(brave:move_mark)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    let cases: [(&str, &[&str], PermissionMode, Task); 4] = [
+        (
+            "one tool unmarked",
+            &all[..1],
+            PermissionMode::Ask,
+            Task::new("organise"),
+        ),
+        (
+            "bypass approved",
+            &all,
+            PermissionMode::Bypass,
+            Task::new("organise"),
+        ),
+        (
+            "an ask rule",
+            &all,
+            PermissionMode::Ask,
+            Task::new("organise").with_permissions(asking),
+        ),
+        (
+            "plan mode",
+            &all,
+            PermissionMode::Plan,
+            Task::new("organise").with_permission_mode(PermissionMode::Plan),
+        ),
+    ];
+    for (case, marked, mode, task) in cases {
+        let ran = walk(Walk {
+            session: marked_session(&url, &scratch, MARKS_DECLARED, marked),
+            mode,
+            task,
+            replies: vec![shape(), plan(organise()), says(ROWS)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        assert!(ran.outcome.is_ok(), "{case}: {:?}", ran.outcome.err());
+        assert_eq!(ran.asked.applies.len(), 1, "{case}: the list was not put");
+    }
 }
 
 /// An argument the declaration names with two kinds takes whichever a row gives: a bookmark may
