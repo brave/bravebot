@@ -1831,6 +1831,18 @@ file would answer differently on a machine whose owner had configured it. A dele
 figure the turn that spawned it holds, since the budget is a person's answer about what output is
 worth and does not stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 
+**What an unfiltered `read_output` costs is said where the size is stated.** `read_output` on
+output nobody vouched for hands back all of the slot, which the cap above does not bound and which
+stays in every later request. Where the size the slot states is above the cap, the advice beside a
+quarantined reference says that `read_output` returns all N bytes, about N/4 tokens, and, in a turn
+offered `run`, that a filter such as `tail -n 100` or `grep` given the reference as `stdin_ref`, with
+`read: true`, reads part of it. That holds for a `job_output` result and for a `run` result that did
+not ask to read, in every mode, and for the refusal of an `offset` or a `pattern` on that output
+([OUTPUT-4](read-output.md#OUTPUT-4), [OUTPUT-5](read-output.md#OUTPUT-5)). The description of
+`read_output` says the same without a size. A run that asked to read is told in the sentence
+[RUN-22](#RUN-22) gives and is not told twice. The driver decides this from the size the slot
+states and from nothing the output holds: a size at or below the cap, or none stated, adds nothing.
+
 `verified-by: bravebot_config::settings::a_settings_file_names_what_a_commands_output_may_spend`
 `verified-by: bravebot_config::settings::a_cap_of_zero_or_of_nonsense_leaves_the_built_in_one`
 `verified-by: bravebot_config::settings::the_nearest_layer_that_named_an_output_cap_wins`
@@ -1840,6 +1852,12 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_look_at_a_background_job_is_cut_to`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to`
+`verified-by: bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
+`verified-by: bravebot_agent::turn::sentences::output_within_the_cap_or_of_no_stated_size_says_nothing_of_its_cost`
+`verified-by: bravebot_agent::turn::sentences::a_run_that_asked_to_read_is_not_told_the_cost_twice`
+`verified-by: bravebot_agent::turn::sentences::the_filter_is_offered_only_where_the_list_holds_run`
+`verified-by: bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`
+`verified-by: bravebot_agent::turn::the_read_output_description_says_what_reading_all_of_a_long_output_costs`
 
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where the mode or a check answers
@@ -2395,3 +2413,13 @@ show that a model follows them.
   ([SANDBOX-24](../sandboxing.md#SANDBOX-24)). A probe refused for either reason fails as a closed
   port does, so the planner then asks about a browser that is listening, and the person answers
   that question.
+- **`read_output` on quarantined run output returns all of it, and the output cap does not bound
+  that.** [RUN-21](#RUN-21)'s cap bounds a run's result, a `job_output` page and a released page, and
+  `read_output` on output nobody vouched for hands back the whole slot, which stays in every later
+  request. The driver's advice now states the size (about N/4 tokens) where the slot's stated size is
+  above the cap and names the `stdin_ref` filter that reads part of it, so the cost is told and not
+  removed. A planner that ignores the advice still pays it. Stubbing a large result in the requests
+  after its round ([COMPACT-18](../compaction.md#COMPACT-18)) would bound it and is not built. The
+  advice is pinned by
+  `bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
+  and `bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`.

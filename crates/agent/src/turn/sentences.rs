@@ -162,6 +162,13 @@ pub(super) fn run_advice(
     } else {
         ""
     };
+    // A run that asked to read, where the mode or a check answers, already gets the size sentence
+    // in the arm for that case.
+    let costs = if tool == "run" && read_asked && read_output_is != ReadOutputIs::Asked {
+        String::new()
+    } else {
+        crate::tools::read_output_cost(bytes, cap, beside)
+    };
     match (printed_by, covered_by_record, read_output_is) {
         (false, _, _) => String::new(),
         // Whatever the mode says, a list without `read_output` has no release for a `read` to make
@@ -204,7 +211,7 @@ pub(super) fn run_advice(
                 "\n\nThis is about the command rather than about what \
                  it printed, and it is not the end of the road. To see \
                  this one, call read_output with the \
-                 reference.{in_the_result}{read_file}"
+                 reference.{in_the_result}{costs}{read_file}"
             )
         }
         (true, _, ReadOutputIs::ByACheck) => {
@@ -228,20 +235,20 @@ pub(super) fn run_advice(
                 "\n\nThis is about the command rather than about \
                  what it printed, and it is not the end of the road. \
                  To see this one, call read_output with the \
-                 reference.{not_returned}{read_file}"
+                 reference.{not_returned}{costs}{read_file}"
             )
         }
         (true, true, ReadOutputIs::Asked) => format!(
             "\n\nThis is about the command rather \
              than about what it printed, and it is not the end of the \
              road. To see this one, call read_output with the \
-             reference.{read_file}"
+             reference.{costs}{read_file}"
         ),
         (true, false, ReadOutputIs::Asked) => format!(
             "\n\nThis is about the command rather \
              than about what it printed, and it is not the end of the \
              road. To see this one, call read_output with the \
-             reference. {STOP_BEING_ASKED}{read_file}"
+             reference.{costs} {STOP_BEING_ASKED}{read_file}"
         ),
     }
 }
@@ -511,6 +518,85 @@ mod tests {
                 "{ABOUT} To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on. To read a file, use read_file."
             )
         );
+    }
+
+    /// The cost sentence the issue asks for, for a stated size of 400000 bytes against a cap of 10.
+    const COST: &str = " read_output returns all 400000 bytes of it, about 100000 tokens, which stay in every later request. To read part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true.";
+
+    /// The regression it rejects (brave/bravebot#3777): a result of hundreds of kilobytes pointing
+    /// at `read_output` with no word that it returns all of it or that `stdin_ref` reads part. A
+    /// job's result and a run that did not ask to read are the cases the issue names.
+    #[test]
+    fn output_past_the_cap_says_what_read_output_returns_and_how_to_read_part() {
+        for (tool, asked) in [("job_output", false), ("run", false)] {
+            for is in [
+                ReadOutputIs::Unasked,
+                ReadOutputIs::ByACheck,
+                ReadOutputIs::Asked,
+            ] {
+                let text = advice(true, true, is, tool, asked, Some(400_000), 10);
+                assert!(text.contains(COST), "{tool} {is:?}: {text}");
+            }
+        }
+    }
+
+    /// The regression it rejects: the sentence said for every result, which spends the planner's
+    /// context on advice about output that was small, or the cap compared with `>=`.
+    #[test]
+    fn output_within_the_cap_or_of_no_stated_size_says_nothing_of_its_cost() {
+        for size in [Some(0), Some(9), Some(10), None] {
+            for is in [
+                ReadOutputIs::Unasked,
+                ReadOutputIs::ByACheck,
+                ReadOutputIs::Asked,
+            ] {
+                let text = advice(true, true, is, "job_output", false, size, 10);
+                assert!(!text.contains("bytes of it"), "{size:?} {is:?}: {text}");
+            }
+        }
+        assert!(
+            advice(
+                true,
+                true,
+                ReadOutputIs::Asked,
+                "job_output",
+                false,
+                Some(11),
+                10
+            )
+            .contains("returns all 11 bytes of it, about 2 tokens")
+        );
+    }
+
+    /// The regression it rejects: the cost said twice in a result whose arm already says
+    /// read_output hands back all of it, for a run that asked to read.
+    #[test]
+    fn a_run_that_asked_to_read_is_not_told_the_cost_twice() {
+        for is in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            let text = advice(true, false, is, "run", true, Some(400_000), 10);
+            assert!(!text.contains("bytes of it"), "{is:?}: {text}");
+            assert_eq!(text.matches("tail -n 100").count(), 1, "{is:?}: {text}");
+        }
+    }
+
+    /// The regression it rejects: the filter half said to a list that cannot call `run`.
+    #[test]
+    fn the_filter_is_offered_only_where_the_list_holds_run() {
+        let text = run_advice(
+            true,
+            true,
+            ReadOutputIs::Asked,
+            without(&["run"]),
+            "job_output",
+            false,
+            Some(400_000),
+            10,
+        );
+        assert!(
+            text.contains("read_output returns all 400000 bytes of it, about 100000 tokens"),
+            "{text}"
+        );
+        assert!(!text.contains("stdin_ref"), "{text}");
     }
 
     const NOT_RETURNED: &str = "\n\nYour read: true did not return it in this result, so vet_content is the way to see it.";

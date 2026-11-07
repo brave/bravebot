@@ -332,6 +332,12 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     } else {
         ""
     };
+    let filter = if beside("run") {
+        ", and a filter such as tail or grep run on it with the reference as stdin_ref and \
+         read: true reads part of it instead"
+    } else {
+        ""
+    };
     format!(
         "Ask to be shown what a command printed. Give the reference a run handed back. Use it \
          whenever you ran something to find something out, which is most of the time: a run's \
@@ -344,7 +350,10 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          offset you give. A pattern searches that output instead of paging it: you get the \
          matching lines, each numbered with the byte it starts at, so a second call with that \
          byte as the offset reads on from the match you wanted. A pattern on output you may not \
-         read is refused rather than asked about."
+         read is refused rather than asked about. Called on output you may not read, with no \
+         offset or pattern, it returns all of it, and what it returns stays in every later \
+         request at about a token for every four bytes. Where the reference states a size of \
+         hundreds of kilobytes, that is tens of thousands of tokens or more{filter}."
     )
 }
 

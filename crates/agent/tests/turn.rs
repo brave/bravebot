@@ -29974,6 +29974,25 @@ fn a_tool_description(
         .to_string()
 }
 
+/// RUN-21. The `read_output` description says that unfiltered output the planner may not read comes
+/// back whole and stays in the context, and that a filter with `stdin_ref` reads part of it.
+/// brave/bravebot#3777.
+#[test]
+fn the_read_output_description_says_what_reading_all_of_a_long_output_costs() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    for (tag, mode) in [("ro-cost-ask", Ask), ("ro-cost-bypass", Bypass)] {
+        let description = the_read_output_description(tag, mode, false);
+        assert!(
+            description.contains("it returns all of it")
+                && description.contains("about a token for every four bytes")
+                && description.contains("stdin_ref")
+                && description.contains("tail or grep"),
+            "{tag}: the description does not say what reading all of a long output costs or how \
+             to read part of it: {description}"
+        );
+    }
+}
+
 /// RUN-14: who answers `read_output` is said once, in the tool's description, from the session's
 /// mode and auto-vetting, so it is not false where permissions are bypassed or a check answers first
 /// and is not repeated in every result.
@@ -57303,6 +57322,61 @@ fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
         "{refused}"
     );
     assert!(!refused.contains("SENTINEL-XYZZY"));
+}
+
+/// OUTPUT-5, RUN-21. A refusal of an offset or a pattern on output nobody vouched for says what
+/// read_output returns when output is above a run's cap and how a filter reads part of it, from
+/// the size the slot states, and carries no byte of the output. brave/bravebot#3777.
+#[test]
+fn a_refusal_over_output_past_the_cap_says_what_read_output_returns() {
+    for argument in [r#""offset":0"#, r#""pattern":"SENTINEL""#] {
+        let scratch = Scratch::new("read-output-refusal-says-the-cost");
+        let mut log = String::from("SENTINEL-XYZZY\n");
+        for line in 0..400 {
+            log.push_str(&format!("line {line} of a long build log\n"));
+        }
+        std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+            tool_request("read_output", &format!(r#"{{"ref":"ref:1",{argument}}}"#)),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut confirmer = ReadsWhatItRan::new(true);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out").with_output_cap(Some(4096)),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        let refused = newest_tool_result(bodies[2].clone());
+        assert!(
+            refused.contains(&format!(
+                "read_output returns all {} bytes of it, about {} tokens",
+                log.len(),
+                log.len() / 4
+            )),
+            "{argument}: {refused}"
+        );
+        assert!(refused.contains("stdin_ref"), "{argument}: {refused}");
+        assert!(!refused.contains("SENTINEL-XYZZY"), "{refused}");
+    }
 }
 
 /// OUTPUT-5. A pattern on output the planner may already read answers with the matching lines,
