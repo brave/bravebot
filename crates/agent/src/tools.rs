@@ -14262,6 +14262,26 @@ fn git_failure(mut said: String, e: &crate::workspace::WorkspaceError, running: 
     said
 }
 
+/// What a read_git answer that ran out of time tells the planner can narrow it. A status takes
+/// only a path, so it is not told about a range or a count, and it is told the setting that sets
+/// the time and, where the turn holds `run`, that `git status` through it is not held to that time.
+fn read_git_time_note(query: crate::git::Query, run_held: bool) -> String {
+    if !matches!(query, crate::git::Query::Status) {
+        return "\n\n(read_git ran out of time and this answer is partial; narrow it with a \
+                path, a range or a smaller count)"
+            .to_owned();
+    }
+    let instead = if run_held {
+        ", or use run with git status"
+    } else {
+        ""
+    };
+    format!(
+        "\n\n(read_git ran out of time and this status is partial; narrow it with a path, or \
+         raise search.maxSeconds in the settings{instead})"
+    )
+}
+
 fn read_git<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -14484,10 +14504,7 @@ fn read_git<S: Sink, C: Confirmer>(
             );
         }
         if a.timed_out {
-            body.push_str(
-                "\n\n(read_git ran out of time and this answer is partial; narrow it with a \
-                 path, a range or a smaller count)",
-            );
+            body.push_str(&read_git_time_note(query, tools.beside.holds(Named::Run)));
         } else if let Some(next) = a.next {
             let (answer, more) = match query {
                 crate::git::Query::Tags => ("list of tags", "tags"),
@@ -17860,6 +17877,32 @@ mod tests {
             checker.contains("For --follow, blame or anything else use run."),
             "a checker was not sent to the tool it holds: {checker}"
         );
+    }
+
+    /// GIT-9. A status that ran out of time is told what can narrow it, which is a path and the
+    /// `search.maxSeconds` setting, and `git status` through run where the turn holds one. It is
+    /// not told about a range or a count, which a status does not take, and a log still is.
+    #[test]
+    fn a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice() {
+        use crate::git::Query;
+
+        let with_run = read_git_time_note(Query::Status, true);
+        assert!(with_run.contains("this status is partial"), "{with_run}");
+        assert!(with_run.contains("search.maxSeconds"), "{with_run}");
+        assert!(with_run.contains("use run with git status"), "{with_run}");
+        assert!(!with_run.contains("range"), "{with_run}");
+        assert!(!with_run.contains("count"), "{with_run}");
+
+        let without_run = read_git_time_note(Query::Status, false);
+        assert!(without_run.contains("search.maxSeconds"), "{without_run}");
+        assert!(!without_run.contains("run"), "{without_run}");
+
+        let log = read_git_time_note(Query::Log, true);
+        assert!(
+            log.contains("narrow it with a path, a range or a smaller count"),
+            "{log}"
+        );
+        assert!(!log.contains("search.maxSeconds"), "{log}");
     }
 
     /// GIT-8. read_git declines a `.git` that is a file, and the description says so in a turn
