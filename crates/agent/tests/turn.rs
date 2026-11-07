@@ -16884,6 +16884,145 @@ fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
     }
 }
 
+/// A response asking for three tool calls in one round.
+fn three_tool_requests(calls: [(&str, &str); 3]) -> String {
+    let escape = |a: &str| a.replace('\\', "\\\\").replace('"', "\\\"");
+    let calls: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .map(|(at, (name, arguments))| {
+            format!(
+                r#"{{"id":"c{}","type":"function","function":{{"name":"{name}","arguments":"{}"}}}}"#,
+                at + 1,
+                escape(arguments)
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{}]}}}}]}}"#,
+        calls.join(",")
+    )
+}
+
+/// PROC-4: a reference is described without the move to a processor once the context holds private
+/// content, and that includes a reference made earlier in the same round than the call that
+/// released something. Three `run` calls with `read: true` in one round: two print more than a
+/// run's result holds and come back as references, the third prints one line that auto-vetting
+/// releases, which makes the context private. The advice on the first two was composed before that
+/// release and named `spawn_processor`, which the planner followed into a refusal.
+///
+/// The control is the same round with the third call not asking to read. The context stays public
+/// and the first two results still name a processor, so the rewrite is conditional on the context.
+///
+/// The regression it rejects is advice composed per call and never revisited, so a result that
+/// ran before the release still names `spawn_processor`.
+#[test]
+fn a_reference_made_before_a_release_in_the_same_round_names_no_processor_afterwards() {
+    for released in [false, true] {
+        let scratch = Scratch::new(if released {
+            "processor-advice-same-round-released"
+        } else {
+            "processor-advice-same-round-kept"
+        });
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let third = if released {
+            r#"{"command":"sed -n p where.txt","read":true}"#
+        } else {
+            r#"{"command":"sed -n p where.txt"}"#
+        };
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+            )],
+            vec![
+                three_tool_requests([
+                    ("run", r#"{"command":"seq 1 50000","read":true}"#),
+                    ("run", r#"{"command":"seq 50001 100000","read":true}"#),
+                    ("run", third),
+                ]),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut confirmer = ReadsWhatItRan::new(false);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out").with_auto_vetting(true),
+            &mut conversation,
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent = every_request(&received);
+        let told = sent
+            .iter()
+            .rfind(|body| !body.contains(A_CHECK_ASKING))
+            .expect("the planner's last round");
+        let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
+            .expect("a request")["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| message["content"].to_string())
+            .collect();
+        assert_eq!(results.len(), 3, "the round was not answered: {results:?}");
+        for long in &results[..2] {
+            assert!(
+                long.contains("Quarantined") && long.contains("longer than a run's result"),
+                "a long result was not held back as a reference, so nothing here was tested: \
+                 {long}"
+            );
+        }
+        let (holds, shown) = if released {
+            (bravebot_core::label::Confidentiality::Private, true)
+        } else {
+            (bravebot_core::label::Confidentiality::Public, false)
+        };
+        assert_eq!(
+            conversation.holds(),
+            holds,
+            "the third call did not leave the context as this case needs, so nothing here was \
+             tested"
+        );
+        assert_eq!(
+            results[2].contains("SENTINEL-XYZZY"),
+            shown,
+            "the third result was not as this case needs: {}",
+            results[2]
+        );
+        for long in &results[..2] {
+            assert_eq!(
+                long.contains("spawn_processor"),
+                !released,
+                "a result from before the round released private content {} to use a processor: \
+                 {long}",
+                if released { "was told" } else { "was not told" }
+            );
+            if released {
+                assert!(
+                    long.contains("contents_ref") && long.contains("read_output"),
+                    "the moves that remain were not offered: {long}"
+                );
+            }
+        }
+    }
+}
+
 /// The note a planner gets for reading a reference to a file it may not read is built by hand
 /// rather than from the reference, so it has to leave out the processor on its own account once
 /// the context holds private content. The control is the same turn with the first read refused.

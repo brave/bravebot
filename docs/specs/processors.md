@@ -98,7 +98,8 @@ delegate that starts closed is not offered `spawn_processor`, and its prompt doe
 hand files to processors. A reference made in such a
 context is described without the move that names a processor, and the tool's description says that
 `spawn_processor` is refused once the context holds private content and that those tools keep
-working.
+working. That includes a reference made earlier in the same round than the call that raised what the
+context holds: once the round's last call has run, no result of the round names a processor.
 
 **Why.** A planner told to give a reference to a processor, and refused for the rest of the
 conversation when it does, reads the whole of a long output with `read_output` instead, which is
@@ -115,6 +116,7 @@ the content the processor was the way to avoid reading.
 `verified-by: bravebot_agent::tools::the_processor_is_described_as_refused_once_private_content_has_been_shown`
 `verified-by: bravebot_agent::turn::a_planner_that_cannot_start_a_processor_is_not_pointed_at_one`
 `verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_context`
+`verified-by: bravebot_agent::turn::a_reference_made_before_a_release_in_the_same_round_names_no_processor_afterwards`
 
 <a id="PROC-5"></a>
 ### PROC-5: the output is never shown to the planner

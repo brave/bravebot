@@ -1360,6 +1360,29 @@ fn record_answer<S: Sink>(
     Ok(answer)
 }
 
+/// A result pushed earlier in a round whose reference is described with the move to a processor.
+///
+/// A later call in the same round can raise what the context holds, after which every
+/// `spawn_processor` call is refused (PROC-4). The description was fixed when the reference was
+/// made, so the round restates it from the driver's own sentences: what it said and what it says
+/// once processors are closed. No byte of the content is involved.
+struct ProcessorMove {
+    /// Where the result sits in the conversation.
+    at: usize,
+    /// The whole text it was pushed as.
+    body: String,
+    /// The reference's description with the move to a processor.
+    before: String,
+    /// The same description without it.
+    after: String,
+}
+
+impl ProcessorMove {
+    fn restated(&self) -> String {
+        self.body.replacen(&self.before, &self.after, 1)
+    }
+}
+
 /// Put each file `vet_content` let through in front of the planner, a message apiece (VET-4).
 ///
 /// The words are the driver's and name the reference and the kind of file, never the path it was
@@ -3915,6 +3938,9 @@ where
         // Held until every call in the round has its result, since a picture goes in a
         // message of its own after them and never between a call and its answer.
         let mut attached = Vec::new();
+        // Results of this round that describe a reference with the move to a processor, so they can
+        // be restated if a later call in the round closes processors (PROC-4).
+        let mut naming_a_processor: Vec<ProcessorMove> = Vec::new();
         // Reads that already ran beside each other, by the call they answer (TURN-10).
         let mut ahead: Vec<Option<tools::Ahead>> = completion.calls.iter().map(|_| None).collect();
         let mut examined = 0;
@@ -4137,6 +4163,9 @@ where
             // Set where a skill's text was shown, so the result is tagged with it.
             let mut skill_shown: Option<String> = None;
             let mut message_sent: Option<Composed> = None;
+            // Set where a reference is described while processors are open: that description and
+            // the one it becomes when they are not.
+            let mut processor_move: Option<(String, String)> = None;
             // Set in each arm below, where the presentation that decides it is in scope.
             let result_from: Provenance;
             let body = if let Some(entries) = &output.entries {
@@ -4818,6 +4847,14 @@ where
                         );
                         let left_out = sentences::left_out_note(output.left_out);
                         let respelled = sentences::respelled_note(output.respelled);
+                        // A later call in this round may close processors, and this description
+                        // was written before it. Kept with the wording it would have had, so the
+                        // round can restate it (PROC-4).
+                        let described = reference.describe();
+                        let closed = reference.clone().closed_to_processors().describe();
+                        if described != closed {
+                            processor_move = Some((described, closed));
+                        }
                         // Which lines of the job's whole output this reference holds and which
                         // references the earlier looks became: counts and names the driver minted.
                         let looked = match (&output.printed_by, &output.look) {
@@ -4854,6 +4891,11 @@ where
                 None => body,
             };
 
+            // The text this result is pushed as, kept if it names a processor.
+            let restatable = processor_move
+                .take()
+                .map(|(before, after)| (body.clone(), before, after));
+
             // A result answers the call it belongs to by id where the round replayed calls at
             // all. Where it did not, the result is a plain message, as everything here was
             // before: a conversation may hold both shapes, so long as no call goes unanswered.
@@ -4882,6 +4924,21 @@ where
                     Composed::ToolResult,
                     result_from,
                 ),
+            }
+            // Remembered by where it went in, then restated at once if this call or an earlier
+            // one has closed processors. A reference made from here on is described closed already.
+            if let Some((body, before, after)) = restatable {
+                naming_a_processor.push(ProcessorMove {
+                    at: conversation.len().saturating_sub(1),
+                    body,
+                    before,
+                    after,
+                });
+            }
+            if policy.processors_closed() {
+                for stale in naming_a_processor.drain(..) {
+                    conversation.restate_result(stale.at, stale.restated());
+                }
             }
             // How many tasks the list leaves open, whichever way the result went into the
             // conversation. Kept only where the planner was shown the list: a list it was not shown

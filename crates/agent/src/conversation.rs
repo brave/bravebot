@@ -742,6 +742,19 @@ impl Conversation {
         });
     }
 
+    /// Replace the text of the result stored at `at`, which a turn composed earlier in the same
+    /// round.
+    ///
+    /// For the one case where a later call in a round changes what an earlier result may say: the
+    /// round raised what the context holds, so a reference described before it must not name a
+    /// processor (PROC-4). Nothing is replaced when `at` is not a stored message. The text is the
+    /// driver's own sentence about the same reference, never content.
+    pub fn restate_result(&mut self, at: usize, text: String) {
+        if let Some(stored) = self.messages.get_mut(at) {
+            Arc::make_mut(&mut stored.message).content = Content::Text(text);
+        }
+    }
+
     /// Take the next reference name.
     ///
     /// Unique across the session rather than across the turn, which is the difference between a
