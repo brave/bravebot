@@ -48,6 +48,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 42 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 8 | the opt-in shared Rust view for fresh local bridge sessions, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
 | [local-host.md](local-host.md) | `HOST` | 12 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, when a session is closed, and the development relay that hands it to an app on loopback |
+| [sdk.md](sdk.md) | `SDK` | 10 | the TypeScript library that runs the command line and reads its event stream: the options it offers, the labels on what it sends, and what it reads of what comes back |
 | [watching.md](watching.md) | `WATCH` | 24 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, the mode Ctrl-L opens over the delegates and the questions, and `/outputs` and Alt-L, which open it over what commands printed |
 | [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |

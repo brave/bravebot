@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Added `packages/sdk`, a TypeScript library that runs `bravebot --json-stream` for one run or `--input-format lines` for a conversation and returns typed events and result objects. It passes only the flags it lists, has no option that approves an effect, and sends the words of a prompt as a program's unless it is started with `trustInputLines`. It is in the repository and is not published. ([#1554](https://github.com/brave/bravebot/issues/1554))
+
 ## [0.21.0](https://github.com/brave/bravebot/releases/tag/v0.21.0)
 
  - Added `bravebot schedule`, which runs a prompt on a cron expression with `add`, `list`, `remove`, `run-now`, `history`, `pause`, `resume`, `pending` and `clear`. It installs a crontab line, a launchd job (the default on macOS) or a systemd timer, and a scheduled run stops at its first question and keeps it for `pending`. ([#1541](https://github.com/brave/bravebot/issues/1541), [#1546](https://github.com/brave/bravebot/issues/1546))

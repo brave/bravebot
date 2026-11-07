@@ -17,6 +17,8 @@ governs:
   - install.ps1
   - package.json
   - ui/package.json
+  - packages/sdk/package.json
+  - packages/sdk/tests/package.test.ts
   - contrib/check-versions.py
   - contrib/release-preflight.py
   - contrib/package-manifests.py
@@ -64,7 +66,7 @@ pinned by another, which runs it under `pwsh`.
 ### RELEASE-1: one version names a release, and every file that states it agrees
 
 The workspace manifest holds the version. Every other file that repeats it, the npm package
-manifest and the desktop application's manifest in particular, states the same value, and a
+manifest, the desktop application's manifest and the SDK's manifest in particular, states the same value, and a
 disagreement stops a release rather than being resolved in favour of either. The npm package
 manifest repeats it for each of its six platform packages, which it pins by exact version. Those
 packages are written from that manifest when they are published, so each states the version in no
@@ -210,7 +212,10 @@ A branch push, a pull request, and a tag push do not publish to the registry. So
 `publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
 What is published is the tree that tag names, and a branch of the same name does not supply it.
 Seven packages are published: the six platform packages, and the wrapper only after all six are on
-the registry. A dispatch is refused before anything is published when its tag is not `v` plus the
+the registry. The SDK under `packages/sdk` is not one of them: it is private and this workflow does
+not publish it. Its manifest carries the metadata a publish needs (`files`, `repository`,
+`publishConfig`) and the workspace version, so the first publish is a change to this workflow, its
+trusted publisher on npmjs.com and the `private` field, made by a person. A dispatch is refused before anything is published when its tag is not `v` plus the
 version in the tree, when the wrapper runs an install script or depends on anything but the six
 platform packages at its own version, when its GitHub release is missing any platform asset, any
 checksum, or the signature beside a Linux checksum, or when a Linux signature does not verify
@@ -266,8 +271,8 @@ job declares one.
 
 The wrapper that is published declares no dependency except exactly its six platform packages,
 as `optionalDependencies`, so installing it fetches nothing but the wrapper and the package for
-the machine. The three JavaScript projects that are not published (`ui`, `docs/website` and
-`packages/agent-client`) each commit a `pnpm-lock.yaml`, CI installs from it with
+the machine. The four JavaScript projects that are not published (`ui`, `docs/website`,
+`packages/agent-client` and `packages/sdk`) each commit a `pnpm-lock.yaml`, CI installs from it with
 `--frozen-lockfile`, and a lockfile that pulls from anywhere but the npm registry, or from a
 GitHub repository other than the one its `package.json` names, fails that job.
 
@@ -279,7 +284,7 @@ a binary from another release. The lockfile is the whole of what
 an install fetches, so an entry edited to point at another host changes what runs in CI without
 touching `package.json`.
 
-`verified-by: by-construction (package.json declares no dependency but the six platform packages at its own version, which npm/tests/package.test.mjs holds and publish-npm.yml refuses a tag whose package.json breaks; each project's pnpm-lock.yaml is in the tree, CI installs with pnpm install --frozen-lockfile, and contrib/check-pnpm-lockfiles.py refuses a registry entry that is not an sha512 integrity alone, a git source the project's package.json does not name, and a link, file or URL version)`
+`verified-by: by-construction (package.json declares no dependency but the six platform packages at its own version, which npm/tests/package.test.mjs holds and publish-npm.yml refuses a tag whose package.json breaks; packages/sdk/tests/package.test.ts holds the SDK manifest private, with no install script and no dependency at run time; each project's pnpm-lock.yaml is in the tree, CI installs with pnpm install --frozen-lockfile, and contrib/check-pnpm-lockfiles.py refuses a registry entry that is not an sha512 integrity alone, a git source the project's package.json does not name, and a link, file or URL version)`
 
 <a id="RELEASE-13"></a>
 ### RELEASE-13: each tool's release origin is composed from nothing
@@ -622,7 +627,7 @@ package's key does not decide what is trusted for this one.
   push would have to publish something to prove anything. Three checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
   refusals: that no job beside the credential installs a dependency, and that the checkout names a
-  kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the six files that
+  kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the manifests that
   state a version, and carries its own selftest because a version check that is quietly partial
   reports success forever. Both of those are read off files, so a refusal deleted from a `run:`
   block passes them. `make check-npm` is the one that runs something: it calls the package script's
