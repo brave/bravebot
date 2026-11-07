@@ -644,7 +644,10 @@ A run that would put the user's private data into a program asks whatever the ru
 whose destination is known only through a reference asks whatever the rules say. A run carrying an
 environment assignment written in front of one of its programs asks whatever the rules say. A call
 that would put the user's private data into a server's tool asks whatever the rules say, and
-whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)). A write whose destination
+whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)); for the calls of an
+`apply` step whose tools are all marked unattended, the person's approval of the plan, whose line
+names where the lists came from and where they go, is that answer
+([manifest.md](manifest.md#MANIFEST-17)). A write whose destination
 is a protected path asks whatever the rules say, an `Edit` allow rule and the trust map included, and
 whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any
 `.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and

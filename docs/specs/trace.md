@@ -99,7 +99,8 @@ question listed it ([SERVERS-7](mcp-servers.md#SERVERS-7)), is not recorded as a
 entry under `approval` naming the call as `alias:tool` and saying an earlier answer covered it and
 nobody was asked, and a no is the refusal above. A planned call that approving its plan answered
 is recorded the same way, one entry under `approval` naming the call and saying the plan's approval
-covered it and nobody was asked at the step.
+covered it and nobody was asked at the step, and so is each call of an `apply` step whose tools are
+all marked unattended.
 
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
