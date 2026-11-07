@@ -283,6 +283,115 @@ pub fn outside_stage_writable_with(
     is_searched(entry, &out, &held) && !within_any(&resolved, &out) && !planted(&resolved, &held)
 }
 
+/// What a variable that selects code to run names.
+///
+/// The variables of one program are listed with the kind each names, and
+/// [`withhold_code_selectors`] applies [`may_be_run`] to each
+/// ([PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Names {
+    /// A program: a bare name is looked up on the reduced `PATH`, and anything with a separator is
+    /// a file.
+    Program,
+    /// A file the program reads and acts on, such as a configuration file that names a command to
+    /// run or a library to load.
+    File,
+    /// A directory the program may source a script or load a library from.
+    Directory,
+    /// A list of directories joined with the platform's path separator, as `PYTHONPATH` is. Every
+    /// entry must be one [`Names::Directory`] accepts, so an empty entry, which is read as the
+    /// current directory, is not.
+    Directories,
+    /// Options for the program or its interpreter, such as `CLOUDSDK_PYTHON_ARGS`. They name no path
+    /// to check: `-c <code>` and `-m <module>` run code whatever directory they are in.
+    ///
+    /// Also a variable that makes the program run what it names and that a start has no use for,
+    /// such as `SSH_ASKPASS`, so no value of it is kept.
+    Options,
+}
+
+/// Whether a program may be left to run or read what `value` names.
+///
+/// A program given by a bare name is looked up on the `PATH` it is started with, which leaves out
+/// the directories a stage may write. Any other value must be an absolute path to something that
+/// exists outside them, with its links followed, and for [`Names::File`] that something is a file.
+/// A relative path is read from the directory the session writes in, and one that does not exist is
+/// made by whoever writes it first.
+///
+/// A [`Names::Directories`] value is split on the path separator and passes only when it has an
+/// entry and every entry passes as a [`Names::Directory`]. [`Names::Options`] never passes.
+pub fn may_be_run(
+    names: Names,
+    value: &Path,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    match names {
+        Names::Program if value.components().count() == 1 && !value.is_absolute() => true,
+        Names::File => value.is_absolute() && value.is_file() && outside_stage_writable(value),
+        Names::Program | Names::Directory => value.is_absolute() && outside_stage_writable(value),
+        Names::Directories => {
+            let mut entries = std::env::split_paths(value.as_os_str()).peekable();
+            entries.peek().is_some()
+                && entries.all(|entry| may_be_run(Names::Directory, &entry, outside_stage_writable))
+        }
+        Names::Options => false,
+    }
+}
+
+/// The entries of a `CODE_SELECTORS` list for variables that more than one program's launcher
+/// reads, so each list names them once ([PATH-006](../../../docs/best-practices/paths.md#PATH-006)).
+///
+/// A list takes an entry by path, as `selectors::BROWSER`, and the constant is named for the
+/// variable. `contrib/check-code-selectors.py` reads such an entry as that variable and requires
+/// the list's own file to test it.
+pub mod selectors {
+    use super::Names;
+
+    /// The command a program opens a page with, which Python's `webbrowser` runs.
+    pub const BROWSER: (&str, Names) = ("BROWSER", Names::Program);
+    /// A configuration file of the OpenSSL a program loads, which can load a provider module.
+    pub const OPENSSL_CONF: (&str, Names) = ("OPENSSL_CONF", Names::File);
+    /// Directories Python imports from, including `sitecustomize.py`.
+    pub const PYTHONPATH: (&str, Names) = ("PYTHONPATH", Names::Directories);
+    /// The prefix Python finds its standard library under.
+    pub const PYTHONHOME: (&str, Names) = ("PYTHONHOME", Names::Directory);
+    /// The user site directory, which holds `usercustomize.py` and `.pth` files.
+    pub const PYTHONUSERBASE: (&str, Names) = ("PYTHONUSERBASE", Names::Directory);
+    /// The tree Python reads compiled modules from, which can hold an unchecked `.pyc`.
+    pub const PYTHONPYCACHEPREFIX: (&str, Names) = ("PYTHONPYCACHEPREFIX", Names::Directory);
+}
+
+/// Take each variable in `selectors` off the environment `command` is started with unless
+/// [`may_be_run`] accepts the value this process holds for it. A variable this process does not
+/// hold is left alone, and so is every name not listed.
+///
+/// For a command built by [`start`], which is what hands it the rest of the environment.
+pub fn withhold_code_selectors(command: &mut Command, selectors: &[(&str, Names)]) {
+    withhold_code_selectors_with(
+        command,
+        selectors,
+        |name| std::env::var_os(name),
+        outside_stage_writable,
+    );
+}
+
+/// [`withhold_code_selectors`] against a given environment and a given judgment of which files are
+/// outside the directories a stage may write.
+pub fn withhold_code_selectors_with(
+    command: &mut Command,
+    selectors: &[(&str, Names)],
+    held: impl Fn(&str) -> Option<OsString>,
+    outside_stage_writable: impl Fn(&Path) -> bool,
+) {
+    for &(name, names) in selectors {
+        if let Some(value) = held(name)
+            && !may_be_run(names, Path::new(&value), &outside_stage_writable)
+        {
+            command.env_remove(name);
+        }
+    }
+}
+
 /// Every path recorded with [`keep_out_where_writable`] so far.
 ///
 /// Copied out, so the lock is not held while every entry on `PATH` is read.
@@ -1778,5 +1887,141 @@ mod tests {
             ),
             Some(kept.into_os_string())
         );
+    }
+
+    /// SANDBOX-30: a variable that names a file is kept only when the value is an absolute path to
+    /// a regular file outside every row, so a directory, a path that does not exist and a link into
+    /// a row are taken off. The regression it rejects is the check `Names::Directory` has, which
+    /// keeps a directory where a file is wanted.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_names_code_must_exist_as_a_file_outside_every_directory_a_stage_may_write() {
+        let parent = scratch_dir("programs-names-file");
+        let (row, safe) = (parent.join("row"), parent.join("safe"));
+        std::fs::create_dir_all(&row).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let (planted, genuine) = (row.join("planted"), safe.join("genuine"));
+        std::fs::write(&planted, "").unwrap();
+        std::fs::write(&genuine, "").unwrap();
+        let link = safe.join("link");
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+        let rows = std::slice::from_ref(&row);
+        let outside = |file: &Path| outside_stage_writable_with(file, rows, &[]);
+
+        assert!(may_be_run(Names::File, &genuine, &outside));
+        assert!(!may_be_run(Names::File, &planted, &outside));
+        assert!(!may_be_run(Names::File, &link, &outside));
+        assert!(!may_be_run(Names::File, &safe, &outside));
+        assert!(!may_be_run(Names::File, &safe.join("absent"), &outside));
+        assert!(!may_be_run(Names::File, Path::new("genuine"), &outside));
+        // A directory is what `Names::Directory` wants, and a bare name is a program's.
+        assert!(may_be_run(Names::Directory, &safe, &outside));
+        assert!(!may_be_run(Names::Directory, &row, &outside));
+        assert!(may_be_run(Names::Program, Path::new("xdg-open"), &outside));
+        assert!(!may_be_run(Names::File, Path::new("xdg-open"), &outside));
+        assert!(!may_be_run(Names::Directory, Path::new("safe"), &outside));
+    }
+
+    /// SANDBOX-30: a variable that holds a list of directories is kept only when it has an entry
+    /// and every entry passes as a directory, so one empty, relative, missing or stage-writable
+    /// entry among good ones takes the whole value off, and a variable that holds options is never
+    /// kept. The regressions it rejects are a check of the first or last entry only, a check of the
+    /// whole value as one path, and a pass for an empty list or for options.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_of_directories_passes_only_when_every_entry_does_and_options_never_do() {
+        let parent = scratch_dir("programs-names-directories");
+        let (row, safe, other) = (
+            parent.join("row"),
+            parent.join("safe"),
+            parent.join("other"),
+        );
+        for dir in [&row, &safe, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let rows = std::slice::from_ref(&row);
+        let outside = |file: &Path| outside_stage_writable_with(file, rows, &[]);
+        let list = |entries: &[&Path]| PathBuf::from(std::env::join_paths(entries).unwrap());
+
+        assert!(may_be_run(Names::Directories, &list(&[&safe]), &outside));
+        assert!(may_be_run(
+            Names::Directories,
+            &list(&[&safe, &other]),
+            &outside
+        ));
+        assert!(!may_be_run(Names::Directories, &list(&[&row]), &outside));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&safe, &row]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&row, &safe]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&safe, Path::new("")]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[Path::new("lib"), &safe]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&safe, &parent.join("absent")]),
+            &outside
+        ));
+        assert!(!may_be_run(Names::Directories, Path::new(""), &outside));
+        assert!(!may_be_run(Names::Options, Path::new(""), &outside));
+        assert!(!may_be_run(Names::Options, &safe, &outside));
+        assert!(!may_be_run(
+            Names::Options,
+            Path::new("-c print(1)"),
+            &outside
+        ));
+    }
+
+    /// SANDBOX-30: `withhold_code_selectors_with` takes off the listed names whose value fails
+    /// `may_be_run` and leaves a listed name that passes, a listed name the environment does not
+    /// hold, and a name that is not listed. A loop that removes every listed name, or none, fails.
+    #[cfg(unix)]
+    #[test]
+    fn a_code_selector_is_taken_off_unless_its_value_passes() {
+        let parent = scratch_dir("programs-withhold-selectors");
+        let (row, safe) = (parent.join("row"), parent.join("safe"));
+        std::fs::create_dir_all(&row).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let (planted, genuine) = (row.join("planted"), safe.join("genuine"));
+        std::fs::write(&planted, "").unwrap();
+        std::fs::write(&genuine, "").unwrap();
+        let rows = std::slice::from_ref(&row);
+        let held = |name: &str| match name {
+            "BAD" | "UNLISTED" => Some(planted.clone().into_os_string()),
+            "GOOD" => Some(genuine.clone().into_os_string()),
+            _ => None,
+        };
+        let mut command = Command::new("true");
+
+        withhold_code_selectors_with(
+            &mut command,
+            &[
+                ("BAD", Names::File),
+                ("GOOD", Names::File),
+                ("UNSET", Names::File),
+            ],
+            held,
+            |file| outside_stage_writable_with(file, rows, &[]),
+        );
+
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_os_string())
+            .collect();
+        assert_eq!(removed, vec![OsString::from("BAD")]);
     }
 }

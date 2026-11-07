@@ -15,6 +15,10 @@
 //! has no interpreter of its own. [`CODE_SELECTORS`] lists them, and one whose value is a path a
 //! stage may write is taken off the environment the CLI is started with.
 //!
+//! Variables the CLI's launcher and auth code read to choose code to run are on that list too, among
+//! them `PYTHONPATH` and `CLOUDSDK_PYTHON_ARGS`. A value that is a list of paths is judged by every
+//! entry, and one that holds options is taken off whatever it holds.
+//!
 //! The token is a credential. [`Secret`] keeps it out of a `Debug` render, the bytes the CLI
 //! printed are cleared once read, and the only use made of it is the `authorization` header of a
 //! request to the host built from the project and location.
@@ -24,6 +28,7 @@
 
 use bravebot_config::Secret;
 use bravebot_i18n::t;
+use bravebot_sandbox::programs::{Names, selectors};
 use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -33,25 +38,46 @@ use std::sync::mpsc;
 /// The program asked for a token, looked for on `PATH` as any command a person runs is.
 const GCLOUD: &str = "gcloud";
 
-/// A variable the CLI reads to choose code to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Names {
-    /// A program: a bare name is looked up on the reduced `PATH`, and anything with a separator is
-    /// a file.
-    Program,
-    /// A directory the CLI may source a script from.
-    Directory,
-}
-
 /// The variables the CLI reads that name code it runs, and what each names.
 ///
 /// A value is kept only when it is outside every directory a stage may write
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable that selects code and
 /// is not listed here reaches the CLI as the person set it, so one added to the CLI's launcher
 /// belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 2] = [
+///
+/// - `CLOUDSDK_PYTHON` is the interpreter the launcher executes, and the launcher sources
+///   `$CLOUDSDK_CONFIG/virtenv/bin/activate` when it has no interpreter of its own.
+/// - `CLOUDSDK_PYTHON_ARGS` is placed before `gcloud.py`, so `-c <code>` and `-m <module>` run. It
+///   names no path, so it is removed whatever it holds.
+/// - The launcher passes neither `-E` nor `-I`, so `PYTHONPATH` (`sitecustomize.py` and any module
+///   it shadows), `PYTHONHOME`, `PYTHONUSERBASE` (`usercustomize.py` and `.pth` files) and
+///   `PYTHONPYCACHEPREFIX` (an unchecked `.pyc`) choose code the interpreter runs.
+/// - `GOOGLE_APPLICATION_CREDENTIALS` names a file that, for an `external_account` credential,
+///   names a command to run and a file to read and send to a host the file names.
+/// - The two `CLOUDSDK_CONTEXT_AWARE_*` files name a binary or a certificate provider command the
+///   CLI runs when `context_aware/use_client_certificate` is true.
+/// - `BROWSER` is what `gcloud auth login` opens a page with, and `OPENSSL_CONF` can load a
+///   provider module into the OpenSSL Python loads. Both are shared with the other lists
+///   ([`bravebot_sandbox::programs::selectors`]).
+const CODE_SELECTORS: [(&str, Names); 12] = [
     ("CLOUDSDK_PYTHON", Names::Program),
     ("CLOUDSDK_CONFIG", Names::Directory),
+    ("CLOUDSDK_PYTHON_ARGS", Names::Options),
+    selectors::PYTHONPATH,
+    selectors::PYTHONHOME,
+    selectors::PYTHONUSERBASE,
+    selectors::PYTHONPYCACHEPREFIX,
+    ("GOOGLE_APPLICATION_CREDENTIALS", Names::File),
+    (
+        "CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH",
+        Names::File,
+    ),
+    (
+        "CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH",
+        Names::File,
+    ),
+    selectors::BROWSER,
+    selectors::OPENSSL_CONF,
 ];
 
 /// Why no token could be had.
@@ -107,27 +133,13 @@ fn command_for_with(
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
     );
-    for (name, names) in CODE_SELECTORS {
-        if let Some(value) = held(name)
-            && !may_be_run(names, Path::new(&value), &outside_stage_writable)
-        {
-            command.env_remove(name);
-        }
-    }
+    bravebot_sandbox::programs::withhold_code_selectors_with(
+        &mut command,
+        &CODE_SELECTORS,
+        held,
+        outside_stage_writable,
+    );
     command
-}
-
-/// Whether the CLI may be left to run what `value` names.
-///
-/// A program given by a bare name is looked up on the `PATH` the CLI is started with, which leaves
-/// out the directories a stage may write. Any other value must be an absolute path to something
-/// that exists outside them, with its links followed. A relative path is read from the directory the
-/// session writes in, and one that does not exist is made by whoever writes it first.
-fn may_be_run(names: Names, value: &Path, outside_stage_writable: &impl Fn(&Path) -> bool) -> bool {
-    if names == Names::Program && value.components().count() == 1 && !value.is_absolute() {
-        return true;
-    }
-    value.is_absolute() && outside_stage_writable(value)
 }
 
 fn token_command(program: &Path) -> Command {
@@ -547,17 +559,285 @@ mod tests {
         assert!(!withheld("CLOUDSDK_CONFIG", &genuine, &session));
     }
 
+    /// A list of directories joined with the platform's separator, as `PYTHONPATH` holds it.
+    fn joined(entries: &[&Path]) -> PathBuf {
+        PathBuf::from(std::env::join_paths(entries).unwrap())
+    }
+
+    /// The regression it rejects: starting `gcloud` with `PYTHONPATH` as the person set it, so the
+    /// launcher's version probe imports a `sitecustomize.py` a stage wrote. A list is judged by every
+    /// entry: one bad entry among good ones, in either position, an empty entry, which Python reads
+    /// as the working directory, and a relative one all remove the whole variable.
+    #[test]
+    fn a_python_path_with_an_entry_a_stage_may_write_is_not_the_one_gcloud_imports_from() {
+        let (session, safe, planted, genuine) = planted_and_genuine("gcloud-python-path");
+        let (planted_dir, genuine_dir) = (planted.parent().unwrap(), genuine.parent().unwrap());
+        let linked = scratch_dir("gcloud-python-path-linked");
+        let _ = std::fs::remove_dir_all(&linked);
+        std::fs::create_dir_all(&linked).unwrap();
+        let link = linked.join("bin");
+        std::os::unix::fs::symlink(planted_dir, &link).unwrap();
+
+        assert!(withheld("PYTHONPATH", &joined(&[planted_dir]), &session));
+        assert!(withheld(
+            "PYTHONPATH",
+            &joined(&[genuine_dir, planted_dir]),
+            &session
+        ));
+        assert!(withheld(
+            "PYTHONPATH",
+            &joined(&[planted_dir, genuine_dir]),
+            &session
+        ));
+        assert!(withheld("PYTHONPATH", &joined(&[&link]), &session));
+        assert!(withheld(
+            "PYTHONPATH",
+            &joined(&[genuine_dir, Path::new("")]),
+            &session
+        ));
+        assert!(withheld("PYTHONPATH", Path::new(""), &session));
+        assert!(withheld(
+            "PYTHONPATH",
+            &joined(&[genuine_dir, Path::new("lib")]),
+            &session
+        ));
+        assert!(withheld(
+            "PYTHONPATH",
+            &joined(&[Path::new("./lib")]),
+            &session
+        ));
+        assert!(withheld(
+            "PYTHONPATH",
+            &joined(&[genuine_dir, &safe.join("not-made-yet")]),
+            &session
+        ));
+    }
+
+    /// A list whose every entry is an existing directory outside every row still reaches the CLI,
+    /// so a loop that removes `PYTHONPATH` whatever it holds fails.
+    #[test]
+    fn a_python_path_outside_every_directory_a_stage_may_write_still_reaches_gcloud() {
+        let (session, safe, _planted, genuine) = planted_and_genuine("gcloud-python-path-kept");
+        let genuine_dir = genuine.parent().unwrap();
+
+        assert!(!withheld("PYTHONPATH", &joined(&[genuine_dir]), &session));
+        assert!(!withheld(
+            "PYTHONPATH",
+            &joined(&[genuine_dir, &safe]),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: starting `gcloud` with `PYTHONHOME`, `PYTHONUSERBASE` or
+    /// `PYTHONPYCACHEPREFIX` as the person set it, so the interpreter loads its standard library, a
+    /// `usercustomize.py` or a `.pth` file, or an unchecked `.pyc` from a directory a stage wrote.
+    #[test]
+    fn a_python_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_load_from() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("gcloud-python-dirs");
+        let planted_dir = planted.parent().unwrap();
+
+        assert!(withheld("PYTHONHOME", planted_dir, &session));
+        assert!(withheld("PYTHONHOME", Path::new("python"), &session));
+        assert!(withheld("PYTHONHOME", &safe.join("not-made-yet"), &session));
+        assert!(withheld("PYTHONUSERBASE", planted_dir, &session));
+        assert!(withheld("PYTHONUSERBASE", Path::new(".local"), &session));
+        assert!(withheld(
+            "PYTHONUSERBASE",
+            &safe.join("not-made-yet"),
+            &session
+        ));
+        assert!(withheld("PYTHONPYCACHEPREFIX", planted_dir, &session));
+        assert!(withheld(
+            "PYTHONPYCACHEPREFIX",
+            Path::new("__pycache__"),
+            &session
+        ));
+        assert!(withheld(
+            "PYTHONPYCACHEPREFIX",
+            &safe.join("not-made-yet"),
+            &session
+        ));
+    }
+
+    /// A directory outside every row still reaches the CLI as each of the three, so a loop that
+    /// removes them whatever they hold fails.
+    #[test]
+    fn a_python_directory_outside_every_directory_a_stage_may_write_still_reaches_gcloud() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("gcloud-python-dirs-kept");
+
+        assert!(!withheld("PYTHONHOME", &safe, &session));
+        assert!(!withheld("PYTHONUSERBASE", &safe, &session));
+        assert!(!withheld("PYTHONPYCACHEPREFIX", &safe, &session));
+    }
+
+    /// The regression it rejects: starting `gcloud` with a credential or client certificate
+    /// configuration file as the person set it. An `external_account` file at
+    /// `GOOGLE_APPLICATION_CREDENTIALS` names a command to run and a file to read and post to a host
+    /// it names, and the two `CLOUDSDK_CONTEXT_AWARE_*` files name a binary or a certificate
+    /// provider command. A link into a row, a directory and a path that does not exist are removed
+    /// too, since each is a file a stage can make or swap.
+    #[test]
+    fn a_credential_or_certificate_file_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("gcloud-files");
+        let linked = scratch_dir("gcloud-files-linked");
+        let _ = std::fs::remove_dir_all(&linked);
+        std::fs::create_dir_all(&linked).unwrap();
+        let link = linked.join("file");
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+        let missing = safe.join("not-made-yet");
+        let directory = planted.parent().unwrap();
+
+        assert!(withheld(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            &planted,
+            &session
+        ));
+        assert!(withheld("GOOGLE_APPLICATION_CREDENTIALS", &link, &session));
+        assert!(withheld(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            Path::new("adc.json"),
+            &session
+        ));
+        assert!(withheld(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            &missing,
+            &session
+        ));
+        assert!(withheld(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            directory,
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH",
+            &planted,
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH",
+            &link,
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH",
+            Path::new("cert.json"),
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH",
+            &planted,
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH",
+            &link,
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH",
+            &missing,
+            &session
+        ));
+    }
+
+    /// A file outside every row still reaches the CLI, so the person's own credential file and the
+    /// configuration the CLI is run to read are not lost, and a loop that removes these whatever
+    /// they hold fails.
+    #[test]
+    fn a_credential_or_certificate_file_outside_every_directory_a_stage_may_write_still_reaches_gcloud()
+     {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("gcloud-files-kept");
+
+        assert!(!withheld(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            &genuine,
+            &session
+        ));
+        assert!(!withheld(
+            "CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH",
+            &genuine,
+            &session
+        ));
+        assert!(!withheld(
+            "CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH",
+            &genuine,
+            &session
+        ));
+    }
+
+    /// The regression it rejects: starting `gcloud` with `OPENSSL_CONF` as the person set it, so the
+    /// OpenSSL Python loads takes a provider module a stage wrote from the file's `module =` line.
+    #[test]
+    fn an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("gcloud-openssl");
+
+        assert!(withheld("OPENSSL_CONF", &planted, &session));
+        assert!(withheld("OPENSSL_CONF", Path::new("openssl.cnf"), &session));
+        assert!(withheld("OPENSSL_CONF", &safe.join("not-yet"), &session));
+    }
+
+    /// A configuration file outside every row still reaches the CLI.
+    #[test]
+    fn an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud() {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("gcloud-openssl-kept");
+
+        assert!(!withheld("OPENSSL_CONF", &genuine, &session));
+    }
+
+    /// The regression it rejects: starting `gcloud` with `BROWSER` as the person set it, so
+    /// `gcloud auth login` opens a page with a program a stage wrote.
+    #[test]
+    fn a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-browser");
+
+        assert!(withheld("BROWSER", &planted, &session));
+        assert!(withheld("BROWSER", Path::new("./opener"), &session));
+        assert!(withheld("BROWSER", Path::new("bin/opener"), &session));
+    }
+
+    /// A bare program name, which the reduced `PATH` resolves, and an absolute path outside every
+    /// row still reach the CLI.
+    #[test]
+    fn a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud() {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("gcloud-browser-kept");
+
+        assert!(!withheld("BROWSER", Path::new("xdg-open"), &session));
+        assert!(!withheld("BROWSER", &genuine, &session));
+    }
+
+    /// The regression it rejects: starting `gcloud` with `CLOUDSDK_PYTHON_ARGS` as the person set it,
+    /// so `-c <code>`, `-m <module>` or a script path is placed before `gcloud.py` and runs. The
+    /// value holds options and no path, so it is removed whatever it holds, a path outside every row
+    /// and an empty value included. A loop that applied a path check to it would keep a value that
+    /// happens to be an existing path, and one that skipped an unreadable value would keep a
+    /// planted one.
+    #[test]
+    fn python_options_are_not_passed_to_gcloud_whatever_they_hold() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("gcloud-python-args");
+
+        assert!(withheld(
+            "CLOUDSDK_PYTHON_ARGS",
+            Path::new("-c print(1)"),
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_PYTHON_ARGS",
+            Path::new("-m planted"),
+            &session
+        ));
+        assert!(withheld("CLOUDSDK_PYTHON_ARGS", &planted, &session));
+        assert!(withheld("CLOUDSDK_PYTHON_ARGS", &genuine, &session));
+        assert!(withheld("CLOUDSDK_PYTHON_ARGS", Path::new(""), &session));
+    }
+
     /// A variable of the CLI's that selects no code is left as the person set it, whatever it names.
     #[test]
     fn a_cloudsdk_value_that_selects_no_code_is_left_as_set() {
         let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-other-values");
 
         assert!(!withheld("CLOUDSDK_CORE_PROJECT", &planted, &session));
-        assert!(!withheld(
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            &planted,
-            &session
-        ));
+        assert!(!withheld("GOOGLE_CLOUD_PROJECT", &planted, &session));
+        assert!(!withheld("PYTHONUNBUFFERED", &planted, &session));
     }
 
     /// The regression it rejects: starting without the credential removal, so the agent's own keys

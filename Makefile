@@ -179,9 +179,11 @@ check:
 	@python3 contrib/check-code-selectors.py
 	@python3 contrib/check-toolchain.py
 
-# Whether every variable gcloud's launcher reads to choose code to run, as listed in
-# CODE_SELECTORS in crates/agent/src/gcloud.rs, has a test that keeps a safe value and a test that
-# removes one a stage may write. It cannot tell that the list is complete: that is PATH-008 in
+# Whether every variable the launchers of gcloud and aws read to choose code to run, as listed in
+# CODE_SELECTORS in crates/agent/src/gcloud.rs, crates/bedrock/src/credentials.rs and
+# crates/cli/src/push_identity.rs, has a test
+# that keeps a safe value and a test that removes one a stage may write. It cannot tell that the
+# list is complete: that is PATH-008 in
 # docs/best-practices/paths.md. Run by `check` and by CI.
 .PHONY: check-code-selectors
 check-code-selectors:

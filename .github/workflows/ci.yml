@@ -447,9 +447,9 @@ jobs:
       - name: Check that every file stating the version agrees
         run: make check-versions
 
-  # Whether each variable gcloud's launcher reads to choose code to run has a test that keeps a safe
-  # value and a test that removes one a stage may write. Standard library Python, so it needs no
-  # toolchain.
+  # Whether each variable the launchers of gcloud and aws read to choose code to run has a test that
+  # keeps a safe value and a test that removes one a stage may write. Standard library Python, so it
+  # needs no toolchain.
   code-selectors:
     name: Code selectors
     runs-on: ubuntu-latest
