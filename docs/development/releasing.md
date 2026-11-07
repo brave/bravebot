@@ -64,10 +64,10 @@ git config bravebot.releaseRemote upstream
 
 The tag push does not publish binaries. GitHub Actions still builds and tests on the tag.
 Signed, configured assets are built, notarised, and uploaded by the Jenkins job
-`bravebot-build` with `UPLOAD` and `RELEASE` enabled. That job builds the tip of the branch it
-is given. A RELEASE run refuses unless tag `v<version>` from `Cargo.toml` already exists and
-points at that commit, then creates a GitHub release of that name and attaches the signed
-binaries plus the `.sha256` files written after signing. `gh release create` fails if that
+`bravebot-build` with `UPLOAD` and `RELEASE` enabled. That job is given a tag and builds the
+commit the tag names. A RELEASE run refuses unless tag `v<version>` from `Cargo.toml` already
+exists and points at that commit, then creates a GitHub release of that name and attaches the
+signed binaries plus the `.sha256` files written after signing. `gh release create` fails if that
 release already exists.
 
 After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
@@ -152,24 +152,99 @@ assets of their own, so `make checksums` leaves them out. Each image holds
 release it ships an agent build of. Its bundle id is `com.brave.bravebot`: macOS keys privacy
 grants and keychain items on it, so it stays the same across releases.
 
-The app is fused and not signed. The fuses turn off `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and
-`--inspect`, each a way to make the signed binary run code that is not the app's, and turn on
-asar integrity validation and loading only from the asar. Fusing rewrites the Electron binary,
-which a signature covers, so it comes first, and `app-release` is two steps with the signing
-between them:
+`app-release` leaves the app fused and not signed. The fuses turn off `ELECTRON_RUN_AS_NODE`,
+`NODE_OPTIONS` and `--inspect`, each a way to make the signed binary run code that is not the
+app's, and turn on asar integrity validation and loading only from the asar. Fusing rewrites the
+Electron binary, which a signature covers, so it comes first, and the signed release is
+`app-bundles`, the signing, `app-dmg`, and the signing of the images. `app-bundles` is run first and
+on its own, so that the app is packaged without the signing credentials in the environment, and
+then the signing:
 
 ```sh
-make app-bundles   # ui/dist/Brave Bot-darwin-arm64/ and ui/dist/Brave Bot-darwin-x64/
-# sign and notarise each Brave Bot.app where it lies
-make app-dmg       # dist/bravebot-app-darwin-<arch>.dmg, then sign and notarise those
+make app-bundles        # ui/dist/Brave Bot-darwin-arm64/ and ui/dist/Brave Bot-darwin-x64/
+SIGN_IDENTITY="Developer ID Application: <name> (<team>)" \
+  APPLE_ID=<id> APPLE_ID_PASSWORD=<app-specific password> APPLE_TEAM_ID=<team> \
+  make app-release-signed
 ```
 
-The two executables in `Contents/Resources/` have to be signed on their own before the app is:
-`codesign --deep` does not look there, and notarisation rejects an unsigned one.
+`app-release-signed` stops with "run `make app-bundles` first" on a tree where it has not been
+run. It runs these in order, each of which can be run alone after the one before it:
 
-Nothing in this repository runs any of it: no CI job packages the app and the tag does not
-either. Like `make strip` and `make checksums`, the targets state the format and the release job
-consumes it.
+```sh
+make app-sign           # sign each bundle from the inside out
+make app-notarize       # submit, wait, staple and assess each Brave Bot.app
+make app-dmg            # dist/bravebot-app-darwin-<arch>.dmg
+make app-dmg-notarize   # sign, submit, wait, staple and assess each image
+```
+
+`SIGN_IDENTITY` is the Developer ID Application identity in the Mac node's keychain, and
+`APPLE_ID`, `APPLE_ID_PASSWORD` (the app-specific password of that Apple ID) and `APPLE_TEAM_ID`
+are the notary credentials. They are read from the environment and not from make arguments, and no
+notary keychain profile is assumed on the node. No target holds any of them, and
+`ui/scripts/sign-mac.mjs` stops before it runs a tool when one it needs is unset or a bundle or
+image it works on is missing.
+
+`app-sign`, `app-notarize` and `app-dmg-notarize` run that script, which calls
+`@electron/osx-sign` and `@electron/notarize`. These are the libraries the packager runs for its
+`osxSign` and `osxNotarize` options. The script calls them after packaging and not as options of
+`ui/scripts/package.mjs`, because that script sets the fuses after the packager returns and
+setting them rewrites the Electron binary, which a signature covers.
+
+`@electron/osx-sign` signs every binary in the bundle from the inside out, which includes the two
+executables in `Contents/Resources/` that `codesign --deep` does not look at and notarisation
+rejects unsigned, the executables in the frameworks, every dylib and framework, the helper apps and
+the main executable, and the app last. Every signature has the hardened runtime and a secure
+timestamp, and none is made with `--deep`, which would give every item the same entitlements. The
+app, its main executable, the helper apps and what is in them are signed with
+`ui/build/entitlements.mac.plist`, which holds `com.apple.security.cs.allow-jit` and nothing else.
+That is also all that the library's own defaults give the renderer and GPU helpers. Its default
+for the app also grants the microphone, camera, Bluetooth, USB, printing, location and photos
+keys. Nothing in `ui/src` uses them, so the app does not carry them. Everything else is signed with
+`ui/build/entitlements.mac.none.plist`, which has no keys, because the library always passes an
+entitlements file. That is the two executables in `Contents/Resources/`, which are Rust programs
+that run no JIT-compiled code, so `allow-jit` would only widen what a compromised agent process may
+do, and the frameworks and dylibs. `ui/scripts/entitlements.test.mjs` holds the two files to
+their contents.
+
+`@electron/notarize` checks the signature, submits with `notarytool submit --wait`, requires the
+status to be `Accepted` because `notarytool` exits 0 for a rejected submission, and staples.
+`@electron/notarize` does not retry a failed `stapler`, so the script runs `xcrun stapler staple`
+again, up to three times, when the library fails with "Failed to staple". It never calls the
+library again, which would submit to Apple again. For an image the script signs it first. The
+targets then run `spctl -a -t exec` on each app and `spctl -a -t open --context
+context:primary-signature` on each image. `spctl` also exits 0 for an Apple or App Store
+signature, so the targets fail unless it reports the source `Notarized Developer ID`.
+
+Stapling rewrites each image, so a checksum of an image is taken after `app-dmg-notarize`. The job
+writes it when it uploads the image, as it does for every asset
+([RELEASE-8](../specs/releases.md#RELEASE-8)).
+
+`ui/scripts/sign-mac.test.mjs` runs the two libraries against stand-ins for `codesign`,
+`security`, `xcrun` and `ditto`, so it holds the order, the flags, the entitlements and the stop on
+a rejection. `crates/cli/tests/app_signing.rs` runs the targets against stand-ins for `node`,
+`spctl`, `ditto` and `hdiutil`, so it holds what each target hands the script, the assessments and
+the order of the targets. Whether the real tools accept the result, and whether Apple notarises it,
+has not been run: it needs the Developer ID identity and the notary service, which only the release
+job has ([RELEASE-23](../specs/releases.md#RELEASE-23)).
+
+No CI job packages or signs the app and the tag does not either. The Jenkins job `bravebot-build`
+is planned to run the targets above on the Mac node and does not yet, which is
+[#3465](https://github.com/brave/bravebot/issues/3465). For that it is to:
+
+- build `bravebot-rpc` and `bravebot-ui-files` for both Mac architectures with the same release
+  configuration as the CLI, and hand them to the Mac node as `dist/bravebot-rpc-darwin-<arch>` and
+  `dist/bravebot-ui-files-darwin-<arch>`, so that the Mac node needs no backend configuration of
+  its own;
+- install `ui/` with `pnpm install --frozen-lockfile`, since `ui/` has a `pnpm-lock.yaml` and no
+  `package-lock.json`;
+- run `make app-bundles`, then `make app-release-signed` with the four variables above in its
+  environment;
+- upload each image with a `.sha256` of its final bytes, and keep the release a draft until both
+  images are attached.
+
+The asset check in `publish-npm.yml` and [RELEASE-10](../specs/releases.md#RELEASE-10) cover the
+six CLI binaries and their checksums and are not widened to the disk images: no npm package holds
+an image, so a missing image cannot break a publish.
 
 `make app-bundle` is the same app for the machine it runs on, from this checkout's own release
 build rather than from `dist/`, left in `ui/dist/` with no image. It refuses a build with no
