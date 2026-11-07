@@ -5,8 +5,9 @@
  * and navigates nowhere. Closing it by hand calls `cancel`; closing it from here does not.
  */
 
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
+import { rendererUrl } from './renderer-url'
 
 export interface SmallWindowOpening {
   title: string
@@ -66,7 +67,8 @@ export function smallWindow(page: string, preferences: Electron.WebPreferences =
       if (!closing) cancel()
       closing = false
     })
-    if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/${page}.html`)
+    const devServer = rendererUrl(app)
+    if (devServer) void window.loadURL(`${devServer}/${page}.html`)
     else void window.loadFile(join(__dirname, `../renderer/${page}.html`))
   }
 
