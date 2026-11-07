@@ -16977,6 +16977,284 @@ fn reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_conte
     }
 }
 
+/// A response asking for any number of tool calls in one round, in order.
+fn tool_requests_in_one_round(calls: &[(&str, &str)]) -> String {
+    let escape = |a: &str| a.replace('\\', "\\\\").replace('"', "\\\"");
+    let calls: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .map(|(at, (tool, arguments))| {
+            format!(
+                r#"{{"id":"c{}","type":"function","function":{{"name":"{tool}","arguments":"{}"}}}}"#,
+                at + 1,
+                escape(arguments)
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{}]}}}}]}}"#,
+        calls.join(",")
+    )
+}
+
+/// A result that comes back as a reference names a processor only while one can still be started
+/// (`processors.md` PROC-4). A later call in the same round can release output, which makes the
+/// context private and closes every processor, so the results of the round's earlier calls must
+/// not tell the planner to use one: it would follow the advice and be refused.
+///
+/// The round has the long output first, which the cap turns into a reference, and a short
+/// `read: true` run after it that the check lets through. The controls are the orders and mixes in
+/// which nothing in the round closes processors, or the close comes before the reference is made.
+#[test]
+fn a_reference_made_before_a_later_call_in_the_round_closes_processors_names_none() {
+    const LONG: &str = r#"{"command":"sed -n p long.txt","read":true}"#;
+    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
+    let cases: [(&str, &[&str], bool); 4] = [
+        ("released-after", &[LONG, SHORT], true),
+        ("released-last-of-three", &[LONG, LONG, SHORT], true),
+        ("released-first", &[SHORT, LONG], true),
+        ("nothing-released", &[LONG, LONG], false),
+    ];
+    for mode in EVERY_MODE {
+        for (name, arguments, closed) in cases {
+            let scratch = Scratch::new(&format!("same-round-close-{name}-{mode:?}"));
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            std::fs::write(
+                scratch.path.join("long.txt"),
+                format!("LONG-SENTINEL {}\n", "x".repeat(200)),
+            )
+            .unwrap();
+            std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
+
+            let calls: Vec<(&str, &str)> = arguments.iter().map(|each| ("run", *each)).collect();
+            let (endpoint, received) = serve_sequence_answering_checks_with(
+                vec![
+                    reply_with(r#"{"verdict": "safe", "reason": "a single path"}"#);
+                    arguments.iter().filter(|each| **each == SHORT).count()
+                ],
+                vec![tool_requests_in_one_round(&calls), reply_with("done")],
+            );
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut conversation = bravebot_agent::Conversation::new();
+            let mut reading = ReadsWhatItRan::new(false);
+            let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("find out")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(true)
+                    .with_output_cap(Some(64)),
+                &mut conversation,
+                &mut confirmer,
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+
+            let sent = every_request(&received);
+            let told = sent
+                .iter()
+                .rfind(|body| !body.contains(A_CHECK_ASKING))
+                .expect("the planner's last round");
+            let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
+                .expect("a request")["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .map(|message| message["content"].to_string())
+                .collect();
+            assert_eq!(
+                results.len(),
+                arguments.len(),
+                "{mode:?} {name}: not every call of the round was answered: {results:?}"
+            );
+            assert_eq!(
+                conversation.holds(),
+                if closed {
+                    bravebot_core::label::Confidentiality::Private
+                } else {
+                    bravebot_core::label::Confidentiality::Public
+                },
+                "{mode:?} {name}: the round did not leave the context as the case needs, so \
+                 nothing here was tested"
+            );
+            let mut references = 0;
+            for (result, each) in results.iter().zip(arguments) {
+                if *each == SHORT {
+                    assert!(
+                        result.contains("SHORT-SENTINEL"),
+                        "{mode:?} {name}: the short output was not released: {result}"
+                    );
+                    continue;
+                }
+                references += 1;
+                assert!(
+                    result.contains("could not be shown to you")
+                        && !result.contains("LONG-SENTINEL"),
+                    "{mode:?} {name}: the long output was not a reference: {result}"
+                );
+                assert_eq!(
+                    result.contains("spawn_processor"),
+                    !closed,
+                    "{mode:?} {name}: a round that {} processors left a result that {} one: \
+                     {result}",
+                    if closed { "closed" } else { "left open" },
+                    if closed { "names" } else { "does not name" }
+                );
+                if closed {
+                    assert!(
+                        result.contains("contents_ref"),
+                        "{mode:?} {name}: the moves that remain were not offered: {result}"
+                    );
+                }
+            }
+            assert!(references > 0, "{mode:?} {name}: no reference was made");
+        }
+    }
+}
+
+/// A result the planner could read but a cap cut short carries a reference to the whole output, and
+/// that reference names a processor only while one can still be started (`processors.md` PROC-4).
+/// A later call in the same round can release output and close every processor, so the reference
+/// in the earlier, visible result must not tell the planner to use one.
+///
+/// The round has a vouched `cat` of a file longer than the output cap, whose output the planner may
+/// read and the cap cuts short, and a short `read: true` run after it that the check lets through.
+/// The control is the same round with a second vouched `cat` in place of that run, which closes
+/// nothing.
+#[test]
+fn a_capped_visible_result_made_before_a_later_call_closes_processors_names_none() {
+    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
+    const CAT_LONG: &str = r#"{"command":"cat long.txt"}"#;
+    const CAT_OTHER: &str = r#"{"command":"cat other.txt"}"#;
+    /// A round: its name, its calls as (tool, arguments), and whether it closes processors.
+    type Round<'a> = (&'a str, &'a [(&'a str, &'a str)], bool);
+    let cases: [Round; 2] = [
+        ("released-after", &[("run", CAT_LONG), ("run", SHORT)], true),
+        (
+            "nothing-released",
+            &[("run", CAT_LONG), ("run", CAT_OTHER)],
+            false,
+        ),
+    ];
+    for mode in EVERY_MODE {
+        for (name, calls, closed) in cases {
+            let scratch = Scratch::new(&format!("same-round-close-visible-{name}-{mode:?}"));
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            for file in ["long.txt", "other.txt"] {
+                std::fs::write(
+                    scratch.path.join(file),
+                    format!("LONG-SENTINEL {}\n", "x".repeat(200)),
+                )
+                .unwrap();
+            }
+            std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
+
+            let programs = bravebot_core::programs::TrustedPrograms::from_iter([
+                vouched_in("cat", &["long.txt"], &scratch.path),
+                vouched_in("cat", &["other.txt"], &scratch.path),
+            ]);
+            let (endpoint, received) = serve_sequence_answering_checks_with(
+                vec![
+                    reply_with(r#"{"verdict": "safe", "reason": "a single path"}"#);
+                    calls.iter().filter(|(_, each)| *each == SHORT).count()
+                ],
+                vec![tool_requests_in_one_round(calls), reply_with("done")],
+            );
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut conversation = bravebot_agent::Conversation::new();
+            let mut reading = ReadsWhatItRan::new(false);
+            let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("find out")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(true)
+                    .with_output_cap(Some(64)),
+                &mut conversation,
+                &mut confirmer,
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut sink,
+                trusting_the_workspace(),
+                programs,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+
+            let sent = every_request(&received);
+            let told = sent
+                .iter()
+                .rfind(|body| !body.contains(A_CHECK_ASKING))
+                .expect("the planner's last round");
+            let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
+                .expect("a request")["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .map(|message| message["content"].to_string())
+                .collect();
+            assert_eq!(
+                results.len(),
+                calls.len(),
+                "{mode:?} {name}: not every call of the round was answered: {results:?}"
+            );
+            assert_eq!(
+                conversation.holds(),
+                if closed {
+                    bravebot_core::label::Confidentiality::Private
+                } else {
+                    bravebot_core::label::Confidentiality::Public
+                },
+                "{mode:?} {name}: the round did not leave the context as the case needs, so \
+                 nothing here was tested"
+            );
+            let mut capped = 0;
+            for (result, (_, each)) in results.iter().zip(calls) {
+                if *each == SHORT {
+                    assert!(
+                        result.contains("SHORT-SENTINEL"),
+                        "{mode:?} {name}: the short output was not released: {result}"
+                    );
+                    continue;
+                }
+                capped += 1;
+                assert!(
+                    result.contains("The whole of this output, middle included, is a reference"),
+                    "{mode:?} {name}: the read was not a capped visible result: {result}"
+                );
+                assert_eq!(
+                    result.contains("spawn_processor"),
+                    !closed,
+                    "{mode:?} {name}: a round that {} processors left a result that {} one: \
+                     {result}",
+                    if closed { "closed" } else { "left open" },
+                    if closed { "names" } else { "does not name" }
+                );
+            }
+            assert!(capped > 0, "{mode:?} {name}: no capped result was made");
+        }
+    }
+}
+
 /// A remark is a claim about a document, and it reaches the transcript when the processor
 /// returns, which is rounds before the question about writing that document. A person was
 /// reading the diff with the claim some way up the screen, and the diff is the only thing that

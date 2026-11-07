@@ -742,6 +742,19 @@ impl Conversation {
         });
     }
 
+    /// Replace the words of the result at `at`, keeping its role, call id and tags.
+    ///
+    /// For a result composed before a later call of the same round changed what the planner can
+    /// do, so the round's results agree when they are read together (PROC-4). The new words are the
+    /// driver's own wording of the same result. A position past the end changes nothing.
+    pub fn reword_result(&mut self, at: usize, words: String) {
+        if let Some(stored) = self.messages.get_mut(at) {
+            let mut message = Message::clone(&stored.message);
+            message.content = Content::Text(words);
+            stored.message = Arc::new(message);
+        }
+    }
+
     /// Take the next reference name.
     ///
     /// Unique across the session rather than across the turn, which is the difference between a
