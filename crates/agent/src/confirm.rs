@@ -2237,8 +2237,9 @@ pub trait Confirmer {
     ///
     /// A yes covers this plan and stops there. There is no standing form of it: a plan is written
     /// afresh for each run, so remembering an answer would be approving steps nobody has seen. It
-    /// is also not an answer to any other question in this trait, and grants nothing a step will
-    /// later ask about.
+    /// is also not an answer to any other question in this trait. What it grants beyond running
+    /// the plan is the default question of each call to a server's tool the plan fixed, which the
+    /// step then does not put (MANIFEST-15).
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision;
 
     /// Ask whether to vouch for a quarantined file the model wants to read. Implementations must

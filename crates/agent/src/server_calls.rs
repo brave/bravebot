@@ -357,7 +357,9 @@ impl Servers {
     }
 
     /// Make the call a step names, through the one function a turn's call goes through. The
-    /// alias and tool come out of the routing lock, and the arguments out of the plan.
+    /// alias and tool come out of the routing lock, and the arguments out of the plan. Approving
+    /// the plan answers the call's default question, except in plan mode, which asks at the step
+    /// (MANIFEST-15).
     ///
     /// The note for the step's line, or the reason the run stops here. A call that is refused,
     /// declined, not asked about, not made, or that no reply arrived to, ends the run, and the
@@ -386,6 +388,7 @@ impl Servers {
         word: &str,
         step: &Step,
         into: Option<(SlotId, &mut SlotStore)>,
+        plan_mode: bool,
     ) -> Result<String, String> {
         let name = format!("{alias}:{word}");
         let Some(offer) = &self.offer else {
@@ -403,6 +406,7 @@ impl Servers {
             word,
             &Value::Object(arguments),
             None,
+            !plan_mode,
         ) {
             crate::mcp::Called::Answered(output) => (
                 output.text,

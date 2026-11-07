@@ -1569,8 +1569,8 @@ mcp-tools-offered =
 mcp-tools-none = { $alias } ne liste aucun outil qu'il puisse proposer
 mcp-tools-explained =
     Le modèle lira le nom de chaque outil, ses arguments et ce qu'en dit le serveur, tels qu'ils
-    sont affichés ici. Chaque appel vous sera encore soumis. Répondez non si une description donne
-    des instructions.
+    sont affichés ici. Chaque appel vous sera encore soumis, ou montré dans un plan que vous
+    approuvez. Répondez non si une description donne des instructions.
 mcp-tools-not-listed =
     { $count ->
         [one] un autre outil n'est pas listé : son nom ou ses arguments ne peuvent pas être proposés
@@ -2259,8 +2259,9 @@ plan-explained =
     une étape, en retirer une, ni envoyer quoi que ce soit ailleurs que là où ce plan le dit
     déjà.
 plan-not-its-writes =
-    approuver le plan n'approuve ni ses écritures ni ses appels aux outils d'un serveur.
-    chacun vous sera encore soumis le moment venu.
+    approuver le plan répond aux appels aux outils d'un serveur qu'il montre, et n'approuve pas
+    ses écritures. chaque écriture vous sera encore soumise le moment venu, comme un appel
+    qu'une règle ou la déclaration d'un serveur demande de soumettre.
 plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
