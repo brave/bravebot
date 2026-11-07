@@ -555,8 +555,10 @@ pub(super) fn commit_message_animated(
 /// Take what the request for a commit message came back with.
 ///
 /// CMD-23: a draft is put in the box and nowhere else, for the person to read and edit, and a
-/// refusal or a stop leaves the box as it was. Apart from [`commit_message_animated`] so a test can
-/// call it without a backend.
+/// refusal or a stop leaves the box as it was. Only a draft the planner could have held is
+/// offered; one that met something untrusted is a note instead, the gate [`handoff_answered`] and
+/// [`enhance_answered`] put their own answers through (LABEL-8). Apart from
+/// [`commit_message_animated`] so a test can call it without a backend.
 pub(super) fn commit_message_answered(
     session: &mut Session,
     done: Result<bravebot_agent::commit_message::Drafted, Unanswered>,
@@ -564,7 +566,11 @@ pub(super) fn commit_message_answered(
     match done {
         Ok(drafted) => {
             session.end_aside_of(drafted.usage);
-            session.propose_commit_message(&drafted.message);
+            let Some(message) = drafted.message else {
+                session.note(t!(commit_message_untrusted));
+                return;
+            };
+            session.propose_commit_message(&message);
             if let Some(written) = &drafted.substituted {
                 session.note(t!(processor_model_substituted, model = written));
             }
