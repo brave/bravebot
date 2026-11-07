@@ -12978,6 +12978,7 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
         tool,
         arguments,
         Some(slots),
+        false,
     ) {
         crate::mcp::Called::Answered(output) => (
             output.text,

@@ -1940,7 +1940,15 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let word = locked(policy, index, "tool")?;
             Ok(Done {
                 note: servers.call(
-                    policy, egress, confirmer, reporter, &alias, &word, step, None,
+                    policy,
+                    egress,
+                    confirmer,
+                    reporter,
+                    &alias,
+                    &word,
+                    step,
+                    None,
+                    permission_mode.get().refuses_writes(),
                 )?,
                 ..Done::default()
             })
@@ -1977,6 +1985,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     &word,
                     step,
                     Some((out_slot, slots)),
+                    permission_mode.get().refuses_writes(),
                 )?,
                 ..Done::default()
             })

@@ -607,6 +607,8 @@ call nobody approved.
 `verified-by: bravebot_agent::manifest_server_calls::the_planner_is_shown_a_vouched_lists_names_and_none_of_its_words`
 `verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_the_list_refuses_is_asked_for_once_more`
+`verified-by: bravebot_agent::manifest_server_calls::an_ask_rule_puts_a_planned_call_to_the_person_at_its_step`
+`verified-by: bravebot_core::policy::approving_a_plan_answers_the_default_question_of_a_call_it_fixed_and_nothing_else`
 `verified-by: bravebot_agent::manifest_server_calls::a_planned_call_to_a_server_asked_every_call_asks_at_its_step`
 `verified-by: bravebot_agent::manifest_server_calls::bypassing_does_not_answer_a_planned_call_to_a_server_asked_every_call`
 `verified-by: bravebot_agent::manifest_server_calls::plan_mode_runs_a_plan_that_calls_a_server_and_asks_at_the_step`
