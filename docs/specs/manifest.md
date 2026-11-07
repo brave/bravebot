@@ -280,10 +280,11 @@ The question is asked once, and there is no standing form of it. Nothing between
 run can reshape the plan, so there is nothing to ask a second time; and a plan is written afresh for
 each run, so remembering an answer would be approving steps nobody has seen.
 
-Approving a plan is not approving its writes, and it is not approving its calls to a server's
-tools. This mode widens the scope of the precommitment and does not replace the gates inside it, so
-each write is still put to the person as its step reaches it, and each call is decided as a turn's
-is ([MANIFEST-15](#MANIFEST-15)).
+Approving a plan is not approving its writes. This mode widens the scope of the precommitment and
+does not replace the gates inside it, so each write is still put to the person as its step reaches
+it. A call to a server's tool is the exception: the line approved shows the call and every argument
+the step will send, so approving the plan answers the question the call would put, and nothing else
+that decides it ([MANIFEST-15](#MANIFEST-15)).
 A connector act is sent to the authority in every mode that runs the plan, bypass included, and its
 request carries no answer: the driver asks nothing about the act, and the person is asked in the
 authority's popup. Plan mode runs no such plan ([permission-modes.md](permission-modes.md)).
@@ -545,9 +546,11 @@ them, in full.
 The call itself is made by the function a turn's call goes through
 ([SERVERS-7](mcp-servers.md#SERVERS-7)), so everything that decides a turn's call decides this one.
 A `deny` rule about the tool refuses it before anybody is asked, in every mode. Of the session's
-rules a plan run reads these and no others. An `allow` rule, a standing answer, a call carrying
-private data, the mode and the egress gate decide it as they do there. Approving the plan answers
-none of it.
+rules a plan run reads these and no others. Where nothing else decides the call, approving the plan
+answers it, and the step puts no question: the person approved this call with these arguments, and
+nothing the run reads can change either. What would put the question in spite of a standing answer
+still puts it at the step: an `ask` rule about the tool, a call carrying private data, and plan
+mode ([MODE-3](permission-modes.md#MODE-3)). The egress gate decides as it does there.
 
 A server declared to ask every call ([SERVERS-21](mcp-servers.md#SERVERS-21)) is asked at the step,
 in every mode, bypassing included, and no answer to it lasts. The plan is not refused for holding
@@ -583,13 +586,15 @@ action and it is approved by what a person can decide alone, the alias and the t
 arguments shown beside them. A plan has read nothing, so every argument is the planner's literal,
 and giving the step no slot is what makes that structural and not a promise. Sending the call
 through the one function that decides a turn's call keeps a `deny` rule and a declaration asking
-every call in force in a plan without a copy of either here. A read is a fetch from a program
-too, but one its server says changes nothing, so it can stand where reads stand. Its reply is held
-as a fetched file is, so the planner still reads none of it, and its arguments are still fixed
-before anything is read. The server's word that a tool only reads is trusted no further than the
-order of the plan: the call is still asked about at its step, and a server that marks an acting
-tool read-only gains an earlier place in the plan for a call the person approves, never a call
-nobody asked about.
+every call in force in a plan without a copy of either here. Asking again at the step would put the
+question the plan's line already put, about the same call with the same arguments, and a question
+that can only repeat an answer teaches a person to give it without reading. A read is a fetch from
+a program too, but one its server says changes nothing, so it can stand where reads stand. Its reply
+is held as a fetched file is, so the planner still reads none of it, and its arguments are still
+fixed before anything is read. The server's word that a tool only reads is trusted no further than
+the order of the plan: the call is approved as any planned call is, and a server that marks an
+acting tool read-only gains an earlier place in the plan for a call the person approved, never a
+call nobody approved.
 
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
@@ -765,5 +770,7 @@ stdio server, so no egress gate stands between the step and it.
 - **A plan holding a call to a server asked every call stops at that step where nobody can be
   asked.** A one-shot run and the desktop application refuse the call, and the steps before it have
   run (MANIFEST-15, [SERVERS-21](mcp-servers.md#SERVERS-21)).
-- **Approving a plan once does not ask once.** Each call is decided as a turn's is, so a call with no
-  `allow` rule and no standing answer is put to the person at its step.
+- **Approving a plan approves its calls to servers.** A person who approves a plan without reading
+  its lines has approved every call on them. Each line gives the call's alias, tool and arguments in
+  full, and a call an `ask` rule names, one carrying private data, and one to a server declared to
+  ask every call are still put at their step.
