@@ -735,6 +735,11 @@ pub(super) fn shortcut_lines(
 /// A directory is dimmer than a file and keeps its trailing slash, because the two are chosen for
 /// different reasons: a file is what a reference ends at, and a directory is somewhere to keep
 /// typing. Nothing here says what a file contains, only that it exists.
+///
+/// Drawn through [`bravebot_agent::confirm::shown_name`], the same marking a vouch prompt gives a
+/// path, so two names that differ only by whitespace or a character that draws as nothing cannot
+/// draw as the same row (NAME-4). A pick still writes `entry.path` itself, unmarked, which is
+/// what NAME-8 governs; only the row drawn here is marked.
 pub(super) fn entry_lines(
     session: &Session,
     offered: &[bravebot_mentions::Entry],
@@ -757,7 +762,7 @@ pub(super) fn entry_lines(
 
             let mut spans = vec![
                 Span::styled(if chosen { "  ❯ " } else { "    " }, style),
-                Span::styled(entry.path.clone(), style),
+                Span::styled(bravebot_agent::confirm::shown_name(&entry.path), style),
             ];
             // A session says what it is, since its name is an id nobody chooses by.
             if let Some(note) = &entry.note {
@@ -766,4 +771,72 @@ pub(super) fn entry_lines(
             Line::from(spans)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Session;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
+
+    /// The row as a terminal actually displays it: one glyph per cell, which is what tells two
+    /// names apart (or fails to) rather than the underlying bytes, which always differ.
+    const WIDTH: u16 = 40;
+
+    fn drawn_row(entry: &bravebot_mentions::Entry) -> String {
+        let session = Session::new("none");
+        let line = entry_lines(&session, std::slice::from_ref(entry))
+            .into_iter()
+            .next()
+            .expect("one row");
+        let area = Rect::new(0, 0, WIDTH, 1);
+        let mut buffer = Buffer::empty(area);
+        line.render(area, &mut buffer);
+        (0..WIDTH)
+            .map(|column| buffer[(column, 0)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    fn file_entry(path: &str) -> bravebot_mentions::Entry {
+        bravebot_mentions::Entry {
+            path: path.to_string(),
+            kind: bravebot_mentions::Kind::File,
+            is_directory: false,
+            note: None,
+            title: None,
+        }
+    }
+
+    /// NAME-4: two entries whose names differ only by whitespace or a character that draws as
+    /// nothing must not draw as the same row, the same claim PROMPT-1 already pins for a vouch
+    /// prompt's own use of `shown_name`.
+    #[test]
+    fn two_names_that_differ_only_by_an_invisible_character_draw_differently() {
+        let pairs = [
+            ("ab.md", "a\u{09}b.md"),
+            ("ab.md", "a\u{200b}b.md"),
+            ("a\u{09}b.md", "a\u{200b}b.md"),
+            ("a b.md", "a\u{a0}b.md"),
+            ("a b.md", "a\u{3000}b.md"),
+            ("a b.md", "a\u{202f}b.md"),
+        ];
+        for (one, other) in pairs {
+            assert_ne!(
+                drawn_row(&file_entry(one)),
+                drawn_row(&file_entry(other)),
+                "{one:?} and {other:?} drew the same row"
+            );
+        }
+    }
+
+    /// The common case, a name with nothing to mark, draws exactly as it is typed: this fix must
+    /// not make an ordinary file name unrecognisable.
+    #[test]
+    fn a_plain_name_draws_as_it_is() {
+        assert_eq!(drawn_row(&file_entry("notes.md")), "    notes.md");
+    }
 }

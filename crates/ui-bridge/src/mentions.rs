@@ -22,6 +22,15 @@ use std::path::{Path, PathBuf};
 /// the terminal, so the window splices them rather than working out where the word begins or how a
 /// name is written (NAME-9).
 ///
+/// Each entry also carries `shownPath`, `path` drawn through
+/// [`bravebot_agent::confirm::shown_name`], the marking a vouch prompt already gives a path, so
+/// two entries whose names differ only by whitespace or a character that draws as nothing cannot
+/// draw as the same row (NAME-4). `path`'s own trailing `/` for a directory is taken off before
+/// marking, since marking would otherwise quote the whole name with the `/` inside the quotes and
+/// the row's own re-adding of it (the window draws the directory and the name in separate spans,
+/// and only the second ever carries a trailing `/`) would have nothing left at the end to find and
+/// take off again. The window draws `shownPath` and picks by `path`, exactly as the terminal does.
+///
 /// The definitions a message may be addressed to come first, the rows `bravebot-mentions` builds
 /// from `definitions` ([ADDRESS-2](../../../docs/specs/addressing-a-definition.md#ADDRESS-2)), and
 /// the files after them. Every entry carries `kind` (`file`, `directory`, `session` or
@@ -49,6 +58,7 @@ pub fn offer(
         .map(|entry| {
             json!({
                 "path": entry.path,
+                "shownPath": bravebot_agent::confirm::shown_name(entry.path.trim_end_matches('/')),
                 "written": bravebot_mentions::escape(&entry.path),
                 "directory": entry.is_directory,
                 "kind": entry.kind.as_str(),
@@ -106,6 +116,51 @@ mod tests {
         assert_eq!(answer["word"], "@My\\ Doc");
         assert_eq!(answer["entries"][0]["path"], "My Documents/");
         assert_eq!(answer["entries"][0]["written"], "My\\ Documents/");
+    }
+
+    /// NAME-4: the window draws `shownPath`, not `path`, so a name holding a character that
+    /// reads as nothing is visible there the same way the terminal's own list marks it, through
+    /// the one function ([`bravebot_agent::confirm::shown_name`]) both front ends call.
+    #[test]
+    fn an_entry_carries_its_path_marked_for_a_character_that_reads_as_nothing() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-offer-marked-")
+            .tempdir()
+            .expect("a scratch project");
+        std::fs::write(root.path().join("a\u{200b}b.md"), "").expect("file");
+        let answer =
+            offer(root.path(), "read @a", 0, || Ok(Vec::new()), Vec::new).expect("answers");
+        assert_eq!(answer["entries"][0]["path"], "a\u{200b}b.md");
+        assert_eq!(
+            answer["entries"][0]["shownPath"],
+            bravebot_agent::confirm::shown_name("a\u{200b}b.md")
+        );
+        assert_ne!(
+            answer["entries"][0]["shownPath"].as_str().unwrap(),
+            "a\u{200b}b.md",
+            "the marking changed nothing, so the test proves nothing"
+        );
+    }
+
+    /// NAME-4: a marked directory's `shownPath` holds no trailing `/`, the same as a marked
+    /// file's holds no quote mark around one that is not there. Marking the path whole, slash
+    /// included, would put the closing quote after the slash, and the row that takes the slash
+    /// off the end to draw the directory's icon and name in their own spans would find the quote
+    /// there instead and take nothing off.
+    #[test]
+    fn a_marked_directorys_shown_path_carries_no_trailing_slash() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-offer-marked-dir-")
+            .tempdir()
+            .expect("a scratch project");
+        std::fs::create_dir_all(root.path().join("a\u{200b}b")).expect("directory");
+        let answer =
+            offer(root.path(), "read @a", 0, || Ok(Vec::new()), Vec::new).expect("answers");
+        assert_eq!(answer["entries"][0]["path"], "a\u{200b}b/");
+        assert_eq!(answer["entries"][0]["directory"], true);
+        let shown = answer["entries"][0]["shownPath"].as_str().unwrap();
+        assert_eq!(shown, bravebot_agent::confirm::shown_name("a\u{200b}b"));
+        assert!(!shown.ends_with('/'), "{shown:?}");
     }
 
     /// NAME-9, NAME-11: the window is offered what the terminal is, so a fragment that begins
