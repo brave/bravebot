@@ -2299,6 +2299,21 @@ A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET
 too, streamed or asked for whole, and never a request that did not get through: the service had the
 request and was still writing. It is not asked for again, since the same reply takes as long again.
 
+A failure the service reported inside a stream and whose code or type is not on the list this build
+holds is neither a refusal nor a reply that stopped. It is the unrecognised category, the one
+fallback of that list, and its sentence says the service answered with a failure this build does not
+recognise and ends with the next step of a refused request. Which category is chosen depends on the
+list alone, never on the code, the type or any text the service wrote, and none of it reaches a
+sentence, a record or the log. It is not asked for again: the code says nothing about whether a second
+attempt could pass, and a repeat resends the whole conversation to fail the same way for a fault this
+build cannot name. That is a decision a maintainer can reverse by adding the category to the failures
+that are asked for again, with one repeat. The category applies to the Responses, Anthropic and
+Google clients, which share the failure; the diagnostic line
+([DIAG-7](diagnostic-log.md#DIAG-7)) is written by the Responses client only. The kind of event it
+names is set by the arm of the stream decoder that routes the event, one arm for `response.failed` and
+one for `error`, and travels with the decoded failure. It is not read from the event's `type` again
+afterwards, so it never depends on the type the service wrote.
+
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
 from a reply, and without it the report names a limit and no way to change it.
@@ -2336,6 +2351,8 @@ person only: the planner is told the category and the request count and no more.
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_session::sessions::a_refused_request_names_its_backend_and_the_fields_the_retries_left_out`
 `verified-by: bravebot_session::sessions::a_refused_request_names_the_model_the_turn_ran_on`
+`verified-by: bravebot_session::sessions::an_unrecognised_failure_is_said_in_its_own_sentence_with_the_refused_next_step`
+`verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
 `verified-by: bravebot_tui::sessions::a_rejected_turn_names_the_configured_model_and_none_of_the_services_words`
 `verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
 `verified-by: bravebot_ui_bridge::history::a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words`
@@ -3996,7 +4013,8 @@ codes with which the ChatGPT account says it has reached its usage limit or may 
 the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of
 that clause without being asked for again. The code of an `error` event is the `code` of an `error` object
 in it or, where that holds none, its own `code`, and the object's wins where both are strings. From any
-other service they are a failure it did not name. A stream that stops before any of them is a reply that
+other service they are a failure it did not name, which ends the turn in the unrecognised category
+([BACKEND-37](#BACKEND-37)) and is written to the diagnostic log once ([DIAG-7](diagnostic-log.md#DIAG-7)). A stream that stops before any of them is a reply that
 did not finish and is asked for again, as many times as the entry's retries allow
 ([BACKEND-55](#BACKEND-55)) and no more.
 
@@ -4090,6 +4108,7 @@ clause was written for.
 `verified-by: bravebot_aichat::client::a_responses_stream_that_stops_short_is_asked_again_and_hands_on_no_unfinished_call`
 `verified-by: bravebot_aichat::client::an_incomplete_responses_reply_keeps_its_words_and_not_its_call`
 `verified-by: bravebot_aichat::client::a_failed_responses_reply_is_named_from_a_closed_set_and_asked_again_only_where_it_could_pass`
+`verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
 `verified-by: bravebot_aichat::client::a_level_a_responses_service_refuses_costs_the_field_and_not_the_turn`
 `verified-by: bravebot_aichat::client::a_models_options_reach_the_responses_body_and_cannot_overwrite_what_the_turn_built`
 `verified-by: bravebot_aichat::client::a_refused_responses_request_does_not_repeat_the_key`

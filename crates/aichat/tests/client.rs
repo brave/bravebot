@@ -7402,6 +7402,106 @@ fn a_failed_responses_reply_is_named_from_a_closed_set_and_asked_again_only_wher
     assert!(!shown.contains("page could have written"), "{shown}");
 }
 
+/// BACKEND-37, DIAG-7: a failure event inside a 200 stream whose code is not on the closed list is
+/// reported as the fallback of that list, is not asked for again, and is written to the diagnostic
+/// log once with the program's own words (the event kind, that the code was unlisted, the time and
+/// the count of requests) and nothing the service wrote. A listed code writes no such line.
+///
+/// The regressions it rejects are a client that sends the request again (a second request), one
+/// that writes no line, one that writes the code or message the service sent, one that names the
+/// event kind from the service's text, and one that writes the line for a listed code.
+#[test]
+fn an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again() {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.path().to_path_buf()));
+    // Points the log nowhere again when an assertion below panics.
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let _unconfigure = Unconfigure;
+
+    let unlisted = "private_code_nobody_documented";
+    let words = "words a page could have written";
+    let failed = |code: &str| {
+        Attempt::Frames(vec![
+            sse(
+                "response.output_text.delta",
+                serde_json::json!({"delta": "partial"}),
+            ),
+            sse(
+                "response.failed",
+                serde_json::json!({"response": {"error": {"code": code, "message": words}}}),
+            ),
+        ])
+    };
+    let error_event = |code: &str| {
+        Attempt::Frames(vec![sse(
+            "error",
+            serde_json::json!({"error": {"code": code, "message": words}}),
+        )])
+    };
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let request = ChatRequest::new("a-responses-gateway/a-model", vec![Message::user("hi")]);
+
+    // One server for each scenario, each followed by a reply that would succeed, so a request sent
+    // again is seen as a second request and as a reply.
+    let mut shown = Vec::new();
+    for event in [
+        failed(unlisted),
+        error_event(unlisted),
+        failed("invalid_prompt"),
+    ] {
+        let (endpoint, received) =
+            serve_attempts(vec![event, Attempt::Frames(text_reply(&["recovered"]))]);
+        let provider = responses_at(&endpoint);
+        let mut client = responses_client(&egress, &provider, "a-model");
+        let error = client
+            .complete(&mut policy, &request)
+            .expect_err("a failure the service reported ends the call");
+        assert_eq!(client.attempts(), 1, "{error}");
+        assert!(matches!(error, ChatError::Reported { .. }), "{error:?}");
+        received.recv().expect("the request was sent");
+        assert!(
+            received.recv_timeout(Duration::from_millis(200)).is_err(),
+            "the request was sent again"
+        );
+        shown.push(error.to_string());
+    }
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("an unlisted failure makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("aichat.stream_failure"))
+        .collect();
+    assert_eq!(lines.len(), 2, "one line for each unlisted failure: {log}");
+    for (line, kind) in lines.iter().zip(["failed", "error"]) {
+        assert!(
+            line.contains(&format!(
+                "ERROR aichat.stream_failure event={kind} code=unlisted elapsed_ms="
+            )),
+            "{line}"
+        );
+        assert!(line.ends_with(" attempts=1"), "{line}");
+    }
+    assert!(!log.contains(unlisted), "{log}");
+    assert!(!log.contains("a page could have written"), "{log}");
+    assert!(!log.contains("partial"), "{log}");
+    for text in &shown {
+        assert!(!text.contains(unlisted), "{text}");
+    }
+}
+
 /// A level a service refuses costs the field and not the turn, and the model is not asked for one
 /// again: what answered is remembered.
 #[test]
