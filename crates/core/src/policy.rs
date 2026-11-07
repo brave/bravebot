@@ -1378,10 +1378,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 needed
             }
             crate::permissions::Decision::Unmatched if standing == McpStanding::PlanApproved => {
-                self.allow(
-                    "approval",
-                    format!("approving the plan covered {alias}:{tool}, no prompt at the step"),
-                );
+                self.record_plan_covered_call(alias, tool);
                 false
             }
             crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
@@ -1408,6 +1405,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// the same round, which listed it (SERVERS-7), so nobody was asked about this one.
     ///
     /// Only a yes is a passed gate here: a no is recorded by [`Self::refuse_unapproved_call`].
+    /// Record that a person's approval of the plan answered this call to `tool` of `alias`, so
+    /// nobody was asked at its step (MANIFEST-15, MANIFEST-17).
+    pub fn record_plan_covered_call(&mut self, alias: &str, tool: &str) {
+        self.allow(
+            "approval",
+            format!("approving the plan covered {alias}:{tool}, no prompt at the step"),
+        );
+    }
+
+    /// Whether a rule the person wrote says to ask about `tool` of `alias`, which a plan's
+    /// approval does not answer (MANIFEST-17). Records nothing.
+    pub fn an_ask_rule_names(&self, alias: &str, tool: &str) -> bool {
+        matches!(
+            self.permissions.for_mcp(alias, tool),
+            crate::permissions::Decision::Ruled(crate::permissions::Ruling::Ask)
+        )
+    }
+
     pub fn record_covered_mcp_call(&mut self, alias: &str, tool: &str, approved: bool) {
         if approved {
             self.allow(

@@ -16,12 +16,13 @@ pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
     Home, Person, applies_line, choices_line, drawn, indent, no_state_directory, problem, say,
+    unattended_line,
 };
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
     self, ApplyArguments, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field,
-    Problem, Projects, Standing, Timeouts, Unreadable,
+    Problem, Projects, Standing, Timeouts, UnattendedTools, Unreadable,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -125,7 +126,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--apply <tool>:<argument>=<kind>]... [--openshell <image>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--apply <tool>:<argument>=<kind>]... [--unattended <tool>]... [--openshell <image>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
@@ -383,6 +384,7 @@ fn declared(
     let mut openshell: Option<String> = None;
     let mut choices = ChoiceArguments::new();
     let mut applies = ApplyArguments::new();
+    let mut unattended = UnattendedTools::new();
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -537,6 +539,15 @@ fn declared(
                 apply(named, &mut applies)?;
                 taken = 1;
             }
+            "--unattended" => {
+                let tool = value.ok_or_else(|| argument(t!(mcp_unattended_needs_a_tool)))?;
+                unattended.insert(tool.clone());
+            }
+            joined if joined.starts_with("--unattended=") => {
+                let tool = joined.strip_prefix("--unattended=").unwrap_or_default();
+                unattended.insert(tool.to_string());
+                taken = 1;
+            }
             "--startup-timeout" => {
                 startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
@@ -651,6 +662,7 @@ fn declared(
                 .map(|declaration| declaration.asking_every_call(ask_every_call))
                 .and_then(|declaration| declaration.choosing(choices))
                 .and_then(|declaration| declaration.applying(applies))
+                .and_then(|declaration| declaration.marking_unattended(unattended))
                 .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)?;
             shares_nothing(&declaration).map_err(argument)?;
@@ -673,6 +685,9 @@ fn declared(
         }
         Some(Transport::Http(_)) if !applies.is_empty() => {
             Err(Refusal::Problem(Problem::Remote("apply_arguments")))
+        }
+        Some(Transport::Http(_)) if !unattended.is_empty() => {
+            Err(Refusal::Problem(Problem::Remote("unattended_tools")))
         }
         Some(Transport::Http(url)) => Declaration::http(url)
             .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
@@ -1127,6 +1142,7 @@ pub(crate) fn report(
                 }
                 rows.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
                 rows.extend(applies_line(declaration).map(|line| format!("{under}{line}")));
+                rows.extend(unattended_line(declaration).map(|line| format!("{under}{line}")));
                 let request = file.map(|file| {
                     match grant(
                         alias,

@@ -2470,11 +2470,14 @@ fn declared(directory: &Path, group: Option<&str>) -> String {
                                     --apply rename_bookmark:url=entry \
                                     --apply rename_bookmark:title=new \
                                     --apply add_reading_list_entry:url=entry \
-                                    --apply add_reading_list_entry:title=entry,new"
+                                    --apply add_reading_list_entry:title=entry,new \
+                                    --unattended create_bookmark_folder \
+                                    --unattended move_bookmark"
             .split_whitespace()
             .fold(String::new(), |line, word| line + " " + word),
         Some("tabs-manage") => {
-            " --apply pin_tab:url=entry --apply group_tabs:urls=entries --apply group_tabs:title=new"
+            " --apply pin_tab:url=entry --apply group_tabs:urls=entries --apply group_tabs:title=new \
+             --unattended pin_tab"
                 .to_string()
         }
         _ => String::new(),

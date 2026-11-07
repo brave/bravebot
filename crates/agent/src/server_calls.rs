@@ -316,12 +316,25 @@ impl Servers {
     /// The words after each call on the line a person approves: its arguments, as the server will
     /// receive them, in full. Compact JSON, so a line break or a control character in a value is
     /// escaped and the line stays one line. Decides nothing.
-    pub(crate) fn notes(plan: &Manifest) -> BTreeMap<usize, String> {
+    /// Whether the declaration of `alias` marks every tool of the step `shape` as running
+    /// unattended (SERVERS-26).
+    fn all_unattended(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
+        self.offer.as_ref().is_some_and(|offer| {
+            shape
+                .tools
+                .iter()
+                .all(|tool| offer.unattended(alias, &tool.name))
+        })
+    }
+
+    pub(crate) fn notes(&self, plan: &Manifest, plan_mode: bool) -> BTreeMap<usize, String> {
         plan.steps()
             .iter()
             .enumerate()
             .filter_map(|(index, step)| match step.tool() {
                 manifest::APPLY => shape_of(step).ok().map(|shape| {
+                    let alias = step.text("server");
+                    let unattended = !plan_mode && self.all_unattended(alias, &shape);
                     let tools: Vec<String> = shape
                         .tools
                         .iter()
@@ -336,11 +349,29 @@ impl Servers {
                             format!("{} ({})", tool.name, arguments.join(", "))
                         })
                         .collect();
+                    // A step that runs unasked says so, and says where its lists' private entries
+                    // were read from and go, since approving the plan is what releases them there.
+                    let asked = match unattended {
+                        true => {
+                            let read: Vec<String> = shape
+                                .lists
+                                .iter()
+                                .map(|list| {
+                                    format!("{list} (read from {})", read_from(plan, index, list))
+                                })
+                                .collect();
+                            format!(
+                                "run without asking you, with {} going to {alias}",
+                                read.join(" and ")
+                            )
+                        }
+                        false => "all put to you as one list first".to_string(),
+                    };
                     (
                         index,
                         format!(
-                            "{}; up to {} calls and {} new names, all put to you as one list \
-                             first; the processor is told \"{}\"",
+                            "{}; up to {} calls and {} new names, {asked}; the processor is told \
+                             \"{}\"",
                             tools.join(", then "),
                             shape.max_rows,
                             shape.max_new,
@@ -590,6 +621,7 @@ impl Servers {
         index: usize,
         alias: &str,
         step: &Step,
+        plan_approved: bool,
     ) -> Result<(String, bravebot_aichat::protocol::Usage), String> {
         let Some(offer) = &self.offer else {
             return Err(format!("{alias} is not offered to this run"));
@@ -708,7 +740,24 @@ impl Servers {
                 .map(|(why, count)| (why.describe().to_string(), *count))
                 .collect(),
         };
-        let decision = confirmer.confirm_apply(&request);
+        // A step whose tools are all marked unattended runs on a person's approval of the plan,
+        // whose line said so; a rule asking about one of its tools still puts the list
+        // (MANIFEST-17).
+        let unasked = plan_approved
+            && self.all_unattended(alias, &shape)
+            && !shape
+                .tools
+                .iter()
+                .any(|tool| policy.an_ask_rule_names(alias, &tool.name));
+        let decision = match unasked {
+            true => {
+                for call in &shown.calls {
+                    policy.record_plan_covered_call(alias, &call.name);
+                }
+                crate::confirm::ApplyDecision::keep((0..shown.calls.len()).collect())
+            }
+            false => confirmer.confirm_apply(&request),
+        };
         if decision.unasked {
             return Err(format!(
                 "the calls to {alias} are put to the person as one list, and nobody could be asked"
@@ -854,6 +903,21 @@ fn dropped_note(resolved: &bravebot_core::apply::Resolved) -> String {
 
 /// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
 /// argument the kind its `arguments` object gives it. Read from the plan's own text.
+/// The server whose read filled the list `list` before step `index`, as the plan line names it.
+fn read_from(plan: &Manifest, index: usize, list: &str) -> String {
+    plan.steps()[..index]
+        .iter()
+        .rev()
+        .find(|earlier| earlier.out_slot().is_some_and(|slot| slot.as_str() == list))
+        .map_or_else(
+            || "a read".to_string(),
+            |earlier| match earlier.text("server") {
+                "" => format!("a {} step", earlier.tool()),
+                server => server.to_string(),
+            },
+        )
+}
+
 pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, String> {
     use bravebot_core::apply::{Shape, Tool};
     let lists: Vec<String> = step.reads().iter().map(ToString::to_string).collect();

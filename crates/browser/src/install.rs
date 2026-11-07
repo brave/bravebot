@@ -256,6 +256,17 @@ const APPLIES: &[(&str, &str, &str, &str)] = &[
     ("tabs-manage", "group_tabs", "title", "new"),
 ];
 
+/// The tools of [`APPLIES`] `install` marks with `--unattended`, whose calls an `apply` step makes on
+/// a person's approval of the plan: each acts only in this browser, deletes and overwrites nothing,
+/// and adds no address. `rename_bookmark` overwrites a title, `add_reading_list_entry` adds an
+/// address, and `group_tabs` can empty a group, which the browser then removes, so none is marked
+/// (`docs/design/manifest-apply.md`).
+const UNATTENDED: &[(&str, &str)] = &[
+    ("bookmarks-write", "create_bookmark_folder"),
+    ("bookmarks-write", "move_bookmark"),
+    ("tabs-manage", "pin_tab"),
+];
+
 impl Installed {
     /// The command that declares a server for `group` of the tools, or for every tool where there
     /// is none, to be pasted into a POSIX shell. A group's server has the alias `brave-<group>` and
@@ -265,7 +276,8 @@ impl Installed {
     /// with the bound of [`relay::IN_BROWSER_TOOL_TIMEOUT`], which is above the wait of its server.
     /// The declaration of a group with tools in [`CHOICES`] also has a `--choice <tool>:<argument>`
     /// for each, after those, and one with tools in [`APPLIES`] an `--apply
-    /// <tool>:<argument>=<kind>` for each. The directory and the program are quoted as [`quoted`] says, and the
+    /// <tool>:<argument>=<kind>` for each, then an `--unattended <tool>` for each of its tools in
+    /// [`UNATTENDED`]. The directory and the program are quoted as [`quoted`] says, and the
     /// line is bytes, since either may be a name that is not UTF-8.
     pub fn declaration(&self, group: Option<&str>) -> OsString {
         let choices: String = CHOICES
@@ -277,6 +289,12 @@ impl Installed {
                     .iter()
                     .filter(|(id, ..)| Some(*id) == group)
                     .map(|(_, tool, argument, kind)| format!(" --apply {tool}:{argument}={kind}")),
+            )
+            .chain(
+                UNATTENDED
+                    .iter()
+                    .filter(|(id, _)| Some(*id) == group)
+                    .map(|(_, tool)| format!(" --unattended {tool}")),
             )
             .collect();
         let (alias, asked, bound, group) = match group {
@@ -691,13 +709,15 @@ mod tests {
              --apply create_bookmark_folder:title=new --apply move_bookmark:url=entry \
              --apply move_bookmark:folder=row,entry --apply rename_bookmark:url=entry \
              --apply rename_bookmark:title=new --apply add_reading_list_entry:url=entry \
-             --apply add_reading_list_entry:title=entry,new --dir /d -- /p/bravebot-browser mcp --group \
+             --apply add_reading_list_entry:title=entry,new --unattended create_bookmark_folder \
+             --unattended move_bookmark --dir /d -- /p/bravebot-browser mcp --group \
              bookmarks-write"
         );
         assert_eq!(
             installed.declaration(Some("tabs-manage")),
             "bravebot mcp add brave-tabs-manage -s user --apply pin_tab:url=entry \
-             --apply group_tabs:urls=entries --apply group_tabs:title=new --dir /d -- \
+             --apply group_tabs:urls=entries --apply group_tabs:title=new --unattended pin_tab \
+             --dir /d -- \
              /p/bravebot-browser mcp --group tabs-manage"
         );
         for other in tools::ids().filter(|id| !["bookmarks-write", "tabs-manage"].contains(id)) {
