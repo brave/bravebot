@@ -213,7 +213,10 @@ result says how many links it did not enter, as a number, and a directory made o
 said not to be empty. That holds when the names are quarantined, where the count comes beside the
 references. To see what is behind a link, list the directory it points to by its own name.
 
-The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
+The glob is literal and the matcher does not backtrack. Matching is case-sensitive, and a brace
+group such as `{r,R}eadme*` covers both cases. A call with a `pattern` whose result holds no file
+says so, and names a character class, an extended glob or a leading `!` as syntax the matcher does
+not have. A truncated listing says it was truncated.
 
 ## `repo_map`
 

@@ -950,7 +950,9 @@ fn table(
                                         depth, \"src/**/*.rs\" to anchor it, or \
                                         \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported. A pattern with a / in it may \
+                                        globs are not supported. Matching is case-sensitive: \
+                                        readme* does not match README.md, and {r,R}eadme* \
+                                        matches both. A pattern with a / in it may \
                                         be written from the directory or from the workspace \
                                         root."
                     },
@@ -1182,7 +1184,9 @@ fn table(
                         "description": "Optional glob limiting which files are searched, \
                                         e.g. \"*.rs\" or \"**/*.{cc,h,mm}\". Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported. A pattern with a / in it may \
+                                        globs are not supported. Matching is case-sensitive: \
+                                        readme* does not match README.md, and {r,R}eadme* \
+                                        matches both. A pattern with a / in it may \
                                         be written from the directory or from the workspace \
                                         root."
                     },

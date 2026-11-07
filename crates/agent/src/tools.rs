@@ -158,6 +158,10 @@ pub struct Output {
     /// never a name, beside the reference for the reason `incomplete` is: a notice written into a
     /// quarantined body reaches nobody who could act on it.
     pub links: usize,
+    /// The driver's sentence for a listing whose `pattern` selected no file, written beside the
+    /// reference for the reason `incomplete` is. Fixed words, and the advice about unsupported
+    /// syntax decided from the pattern the planner typed: no name out of the tree is in it.
+    pub unmatched: Option<String>,
     /// Where a further call resumes, or that this page fell past the end. Beside the reference for
     /// the same reason as `incomplete`.
     pub paging: Option<Paging>,
@@ -1429,6 +1433,8 @@ struct Produced {
     incomplete: bool,
     /// How many symbolic links the walk behind this result did not enter, as [`Output::links`].
     links: usize,
+    /// The sentence for a pattern that selected no file, as [`Output::unmatched`].
+    unmatched: Option<String>,
     /// Where a further call resumes, or that this page fell past the end of the matches.
     ///
     /// Beside `incomplete` and for the same reason: knowing the answer is a sample is no use
@@ -1579,6 +1585,7 @@ impl Produced {
             entries: None,
             incomplete: false,
             links: 0,
+            unmatched: None,
             paging: None,
             whole: None,
             apart: None,
@@ -1809,6 +1816,12 @@ impl Produced {
     /// How many symbolic links the walk did not enter, whoever ends up being allowed to read it.
     fn linked(mut self, links: usize) -> Self {
         self.links = links;
+        self
+    }
+
+    /// Say a listing's pattern selected no file, whoever ends up being allowed to read it.
+    fn unmatched(mut self, unmatched: Option<String>) -> Self {
+        self.unmatched = unmatched;
         self
     }
 
@@ -2274,6 +2287,24 @@ pub(crate) fn search_links_clause(links: usize) -> String {
         tally(links, "symbolic link was", "symbolic links were"),
         if links == 1 { "it" } else { "them" }
     )
+}
+
+/// What a listing says when its `pattern` selected no file. Fixed words, with the advice of
+/// [`reads_as_an_unsupported_glob`] where the pattern leans on syntax the matcher does not have.
+///
+/// An empty answer for a pattern reads the same as an empty directory, and a bounded walk lists
+/// its directories whatever the pattern says, so a listing of only those reads as one where the
+/// pattern worked. Matching is case-sensitive and the tool has no switch for it, so the sentence
+/// says how to cover both cases.
+pub(crate) fn unmatched_pattern_note(advice: Option<&str>) -> String {
+    let mut text = "(no file matched the pattern, so this says nothing about whether such a file \
+                    exists; matching is case-sensitive, so readme* does not match README.md \
+                    and {r,R}eadme* matches both)"
+        .to_string();
+    if let Some(advice) = advice {
+        text.push_str(&format!("\n\n({advice})"));
+    }
+    text
 }
 
 /// Unchanged lines kept around each run of changes, so a hunk can be read in context.
@@ -2948,6 +2979,7 @@ fn output_of(
         entries: produced.entries,
         incomplete: produced.incomplete,
         links: produced.links,
+        unmatched: produced.unmatched,
         paging: produced.paging,
         whole: produced.whole,
         apart: produced.apart,
@@ -5014,6 +5046,18 @@ fn list_files<S: Sink>(
                 )
             });
 
+            // Asked of the pattern alone, which the planner typed and the promote gate left
+            // trusted, as `search` asks it of an `include`: it reads no content of the tree.
+            let bad_glob = pattern.as_ref().and_then(|pattern| {
+                pattern
+                    .clone()
+                    .into_trusted()
+                    .ok()
+                    .and_then(|g| reads_as_an_unsupported_glob(&g))
+            });
+            let had_pattern = pattern.is_some();
+            let unmatched_note = unmatched_pattern_note(bad_glob);
+
             // A listing the planner may not read is handed over one reference per entry rather
             // than as one document it can do nothing with. The names stay wrapped the whole way:
             // this reshapes the listing into a list of them inside the kernel and carries it
@@ -5038,19 +5082,22 @@ fn list_files<S: Sink>(
             let incomplete = truncated || unreadable;
 
             if !listing.label().is_trusted() {
-                // Both numbers out of one release: how many entries there are, and how many of
-                // them are the directories a bounded walk stopped at. The second is what keeps
-                // the quarantined listing describing the same tree the trusted one does, where a
-                // directory is rendered with a trailing slash among the files.
-                let (count, directories) = {
+                // The three numbers out of one release: how many entries there are, how many of
+                // them are the directories a bounded walk stopped at, and how many are files.
+                // The second is what keeps the quarantined listing describing the same tree the
+                // trusted one does, where a directory is rendered with a trailing slash among the
+                // files. The third says whether a pattern selected anything.
+                let (count, directories, files) = {
                     let shaped = policy.render_in_place("list_files", &listing, |listing| {
                         (
                             listing.files.len() + listing.directories.len(),
                             listing.directories.len(),
+                            listing.files.len(),
                         )
                     });
                     let proof = policy.authorise_display_release(
-                        "how many entries a listing has and how many of them it stopped at",
+                        "how many entries a listing has, how many of them it stopped at and how \
+                         many are files",
                     );
                     shaped.declassify(&proof)
                 };
@@ -5064,6 +5111,7 @@ fn list_files<S: Sink>(
                     .of_content()
                     .capped(incomplete)
                     .linked(links)
+                    .unmatched((had_pattern && files == 0).then_some(unmatched_note))
                     .with_entries(Entries {
                         origin: format!("an entry in \"{proposed_dir}\""),
                         paths,
@@ -5073,6 +5121,9 @@ fn list_files<S: Sink>(
             }
 
             let rendered = policy.render_in_place("list_files", &listing, |listing| {
+                // Before the directories are folded in among the files below: a pattern selects
+                // files, and a bounded walk lists its directories whatever the pattern says.
+                let selected_no_file = listing.files.is_empty();
                 let mut entries: Vec<String> = listing.files.clone();
                 entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
                 entries.sort();
@@ -5106,6 +5157,9 @@ fn list_files<S: Sink>(
                 } else {
                     listing.files.join("\n")
                 };
+                if had_pattern && selected_no_file {
+                    body.push_str(&format!("\n\n{unmatched_note}"));
+                }
                 if listing.unreadable {
                     // Said without a name: the directory's own name is a filename out of the
                     // tree, and this sentence is the driver's to word (LIST-2).
@@ -24617,6 +24671,141 @@ mod tests {
 
             assert!(produced.entries.is_some(), "the listing was not reserved");
             assert_eq!(produced.links, 1);
+        }
+
+        /// LIST-7: a pattern that selects no file says so, and says that matching is
+        /// case-sensitive. The regression it rejects: an empty answer that reads the same as an
+        /// empty directory, so `readme*` against `README.md` is taken for proof that no readme
+        /// exists. A pattern that does select a file must stay quiet, or the notice is ignored.
+        #[test]
+        fn a_pattern_that_selects_no_file_says_so_and_says_matching_is_case_sensitive() {
+            let scratch = Scratch::new("list-pattern-none");
+            std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "pattern": "readme*"}),
+            );
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(
+                told.contains("no file matched the pattern"),
+                "an empty answer for a pattern did not say the pattern selected nothing: {told}"
+            );
+            assert!(
+                told.contains("case-sensitive") && told.contains("{r,R}eadme*"),
+                "the notice did not say how to cover both cases: {told}"
+            );
+            assert!(
+                !told.lines().any(|line| line == "README.md"),
+                "the glob is case-sensitive, so this listing should not hold the file: {told}"
+            );
+
+            // The same walk with no pattern keeps its plain wording, and a pattern that selects a
+            // file says nothing about selecting none.
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "pattern": "README*"}),
+            );
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert_eq!(told, "README.md");
+
+            let empty = Scratch::new("list-pattern-none-empty");
+            let workspace = Workspace::new(&empty.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(&mut policy, &workspace, &json!({"directory": "."}));
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert_eq!(
+                told, "(no files)",
+                "a listing with no pattern gained a notice"
+            );
+        }
+
+        /// LIST-7: a pattern the matcher cannot read gets the advice `search` gives for an
+        /// `include`, also when the answer is the directories a bounded walk stopped at. The
+        /// regression it rejects: the advice kept for a completely empty answer, so a depth-1
+        /// listing of a directory with subdirectories shows only those and reads as a listing
+        /// where the pattern worked.
+        #[test]
+        fn a_pattern_leaning_on_missing_syntax_is_named_even_when_directories_are_listed() {
+            let scratch = Scratch::new("list-pattern-class");
+            std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+            std::fs::create_dir(scratch.path.join("docs")).unwrap();
+            std::fs::write(scratch.path.join("docs/guide.md"), "x").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for arguments in [
+                json!({"directory": ".", "pattern": "*[Rr]eadme*"}),
+                json!({"directory": ".", "pattern": "*[Rr]eadme*", "depth": 1}),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy_vouching(&mut sink);
+                let produced = list_files(&mut policy, &workspace, &arguments);
+                let told = super::arguments::told(&mut policy, &produced.text);
+                assert!(
+                    told.contains("no file matched the pattern")
+                        && told.contains("character classes like [abc] are not supported"),
+                    "{arguments}: the pattern was not named as unreadable: {told}"
+                );
+            }
+
+            // The directories a bounded walk stopped at are still listed beside the notice.
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "pattern": "*[Rr]eadme*", "depth": 1}),
+            );
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(told.contains("docs/"), "{told}");
+
+            // A pattern the matcher reads gets no advice about syntax.
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = list_files(
+                &mut policy,
+                &workspace,
+                &json!({"directory": ".", "pattern": "*.nothing", "depth": 1}),
+            );
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert!(told.contains("no file matched the pattern"), "{told}");
+            assert!(!told.contains("not supported"), "{told}");
+        }
+
+        /// LIST-7: both tools that take a glob say that matching is case-sensitive and how to
+        /// cover both cases. The regression it rejects: a description that leaves the planner to
+        /// find out from an empty answer.
+        #[test]
+        fn the_glob_arguments_say_matching_is_case_sensitive() {
+            let offered = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+                Running::Offered,
+            );
+            for (tool, property) in [("list_files", "pattern"), ("search", "include")] {
+                let described = offered
+                    .iter()
+                    .find(|t| t.function.name == tool)
+                    .unwrap_or_else(|| panic!("{tool} is offered"))
+                    .function
+                    .parameters["properties"][property]["description"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{tool}.{property} is described"))
+                    .to_string();
+                assert!(
+                    described.contains("case-sensitive") && described.contains("{r,R}eadme*"),
+                    "{tool}.{property} does not say matching is case-sensitive: {described}"
+                );
+            }
         }
 
         /// SEARCH-13: a search does not enter a symbolic link and says how many it passed, so no
