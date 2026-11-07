@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Holds each variable in a CODE_SELECTORS list to a test that keeps it and one that removes it.
 
-`gcloud` and `aws` are started with the person's environment, so a variable their launchers read to
-choose code to run is taken off when its value names a path a stage may write. Each program has a
+`gcloud`, `aws`, `ssh-keygen`, `ssh` and `git` are started with the person's environment, so a
+variable their launchers read to choose code to run is taken off when its value names a path a
+stage may write. Each program has a
 CODE_SELECTORS list of those variables. A name added to a list with no test is a removal nothing
 pins, and a test that checks only one value of it passes for a loop that never removes anything or
 one that removes everything.
@@ -29,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCES = [
     "crates/agent/src/gcloud.rs",
     "crates/bedrock/src/credentials.rs",
+    "crates/cli/src/push_identity.rs",
 ]
 
 LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*\[(.*?)\]\s*;", re.DOTALL)

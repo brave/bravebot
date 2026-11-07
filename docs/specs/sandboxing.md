@@ -3622,10 +3622,11 @@ file. A new spawn that looks a name up through
   (`Names::Directories`, joined with the platform's path separator) is kept only when it has an
   entry and every entry passes as a directory, so one empty, relative, missing or stage-writable
   entry takes the whole variable off. A variable that holds options (`Names::Options`) names no
-  path to check and is always taken off. A variable not listed is left as set. A variable that
+  path to check and is always taken off, as is a variable that names a program the start has no
+  use for. A variable not listed is left as set. A variable that
   more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
-  in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)) and in
-  `crates/bedrock/src/credentials.rs`:
+  in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
+  `crates/bedrock/src/credentials.rs` and in `crates/cli/src/push_identity.rs`:
 
   | `gcloud` variable | Names | Why it selects code |
   |---|---|---|
@@ -3662,8 +3663,24 @@ file. A new spawn that looks a name up through
   parses and does not run. This list was read from the CLI's own topic pages and the strings of the
   executable and its bundled `libcrypto`, and cannot show that no other variable selects code
   ([PATH-008](../best-practices/paths.md#PATH-008)). `gcloud` is a Python program started without
-  `-E` or `-I`, which is why its list holds the `PYTHON*` variables and the AWS CLI's does not. The
-  other programs bravebot starts for itself have no list yet.
+  `-E` or `-I`, which is why its list holds the `PYTHON*` variables and the AWS CLI's does not.
+
+  The `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` starts are all built by `started`
+  in `crates/cli/src/push_identity.rs`, so one list covers the three:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `SSH_ASKPASS` | options | the program `ssh` runs to ask for a passphrase. This command asks for none from the environment |
+  | `SSH_ASKPASS_REQUIRE` | options | `force` makes `ssh` run `SSH_ASKPASS` even with a terminal |
+  | `SSH_SK_PROVIDER` | options | the library `ssh` and `ssh-keygen` load for a hardware key |
+  | `SSH_SK_HELPER` | options | the program `ssh` runs for a hardware key |
+  | `DEVELOPER_DIR` | a directory | where the macOS `/usr/bin/git` shim finds the toolchain it runs, such as `usr/bin/xcrun` |
+
+  `started` also sets `SHELL` to `/bin/sh` whatever the person's is, because `ssh` runs a
+  `ProxyCommand` or a `LocalCommand` with `$SHELL -c`. `SHELL` is set and not checked, since the
+  person's shell has no use here. The tests in `crates/cli/src/push_identity.rs` hand `started` an
+  environment and read the one it gives the program, so they start no real `ssh`. The other
+  programs bravebot starts for itself have no list yet.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3766,6 +3783,14 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_cli::push_identity::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_cli::push_identity::the_ssh_keygen_ssh_and_git_starts_all_go_through_started`
+`verified-by: bravebot_cli::push_identity::an_askpass_program_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::the_switch_that_forces_the_askpass_program_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::a_security_key_provider_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::a_security_key_helper_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::the_start_is_given_bin_sh_for_shell_whatever_the_person_has`
+`verified-by: bravebot_cli::push_identity::a_developer_directory_a_stage_may_write_is_not_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::a_developer_directory_outside_every_directory_a_stage_may_write_still_reaches_the_start`
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`

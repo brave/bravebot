@@ -110,8 +110,8 @@ whose answer is known, and reads no catalog; `make check-locales` runs it first,
 
 ## check-code-selectors.py
 
-Fails while a variable in a `CODE_SELECTORS` list, in `crates/agent/src/gcloud.rs` or
-`crates/bedrock/src/credentials.rs`, lacks a test.
+Fails while a variable in a `CODE_SELECTORS` list, in `crates/agent/src/gcloud.rs`,
+`crates/bedrock/src/credentials.rs` or `crates/cli/src/push_identity.rs`, lacks a test.
 
 `gcloud` and `aws` are started with the person's environment, and their launchers read variables
 such as `CLOUDSDK_PYTHON` and `AWS_CONFIG_FILE` to choose code to run. `command_for` takes such a

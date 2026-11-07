@@ -208,9 +208,9 @@ bravebot's own executable is not a start of another program, so the rule does no
 either. A reviewer decides the rest from what the start is for, and the diff says which it is when
 that is not plain. This entry does not say that a start the diff does not touch complies. The only
 lists whose values are kept or removed by `may_be_run` are the `CODE_SELECTORS` lists in
-`crates/agent/src/gcloud.rs` and `crates/bedrock/src/credentials.rs`, so a diff that changes the
-browser opener, scheduler or
-push-identity start adds a list for it, or records the gap as [GAP-001](gaps.md#GAP-001) asks.
+`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs` and
+`crates/cli/src/push_identity.rs`, so a diff that changes the browser opener or scheduler start
+adds a list for it, or records the gap as [GAP-001](gaps.md#GAP-001) asks.
 
 In a diff that adds or changes the start of a program bravebot starts for itself, a reviewer reads
 the program's launcher and documentation for every variable that names an interpreter, a plugin or
@@ -221,7 +221,8 @@ breaks the rule. A second list reuses the check by moving it to code the lists s
 ([PATH-006](#PATH-006)), not by copying it.
 
 `make check-code-selectors` confirms only that every name in a `CODE_SELECTORS` list (in
-`crates/agent/src/gcloud.rs` and `crates/bedrock/src/credentials.rs`) has one assertion that
+`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs` and
+`crates/cli/src/push_identity.rs`) has one assertion that
 removes a value and one that keeps a value. A reviewer confirms the rest of these, and that the list
 is complete:
 
@@ -243,8 +244,8 @@ bravebot_sandbox::programs::start(
 )
 
 // Right: the same start, with each listed variable removed unless its value passes the check.
-// This is the loop `programs::withhold_code_selectors_with` has, which `gcloud.rs` and
-// `credentials.rs` both call with their own `CODE_SELECTORS`.
+// This is the loop `programs::withhold_code_selectors_with` has, which `gcloud.rs`,
+// `credentials.rs` and `push_identity.rs` all call with their own `CODE_SELECTORS`.
 let mut command = bravebot_sandbox::programs::start(
     &Resolved::found_earlier(program),
     Inherits::Without(&own_credentials()),

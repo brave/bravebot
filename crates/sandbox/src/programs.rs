@@ -304,6 +304,9 @@ pub enum Names {
     Directories,
     /// Options for the program or its interpreter, such as `CLOUDSDK_PYTHON_ARGS`. They name no path
     /// to check: `-c <code>` and `-m <module>` run code whatever directory they are in.
+    ///
+    /// Also a variable that makes the program run what it names and that a start has no use for,
+    /// such as `SSH_ASKPASS`, so no value of it is kept.
     Options,
 }
 
