@@ -17124,6 +17124,104 @@ fn a_reference_made_before_a_later_call_in_the_round_closes_processors_names_non
     }
 }
 
+/// The reword also runs where a round stops early. A turn cancelled after a `read: true` call
+/// released output, and before the next call runs, keeps its conversation for the next turn, so the
+/// reference made before the release must already say no processor can be started
+/// (`processors.md` PROC-4).
+#[test]
+fn a_round_cancelled_after_a_release_leaves_its_earlier_reference_naming_no_processor() {
+    struct CancelsOnceTheSecondCallPrinted {
+        cancel: bravebot_core::cancel::Cancel,
+        started: usize,
+    }
+
+    impl bravebot_agent::report::Reporter for CancelsOnceTheSecondCallPrinted {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn printed(&mut self, _output: bravebot_agent::report::Printed) {
+            self.started += 1;
+            if self.started == 2 {
+                self.cancel.cancel();
+            }
+        }
+    }
+
+    const LONG: &str = r#"{"command":"sed -n p long.txt","read":true}"#;
+    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("same-round-close-cancelled-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(
+            scratch.path.join("long.txt"),
+            format!("LONG-SENTINEL {}\n", "x".repeat(200)),
+        )
+        .unwrap();
+        std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
+
+        let (endpoint, _received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "safe", "reason": "a single path"}"#,
+            )],
+            vec![
+                tool_requests_in_one_round(&[("run", LONG), ("run", SHORT), ("run", LONG)]),
+                reply_with("never reached"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut reading = ReadsWhatItRan::new(false);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = CancelsOnceTheSecondCallPrinted {
+            cancel: cancel.clone(),
+            started: 0,
+        };
+
+        let round = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true)
+                .with_output_cap(Some(64)),
+            &mut conversation,
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        );
+        assert!(
+            matches!(round.outcome, Err(turn::TurnError::Cancelled { .. })),
+            "{mode:?}: the round was not cancelled, so nothing here was tested"
+        );
+        let stored = conversation
+            .messages()
+            .iter()
+            .map(|each| each.message.content.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            stored.contains("SHORT-SENTINEL"),
+            "{mode:?}: the release did not happen before the stop, so nothing here was tested: \
+             {stored}"
+        );
+        assert!(
+            stored.contains("could not be shown to you") && !stored.contains("LONG-SENTINEL"),
+            "{mode:?}: the earlier output was not kept as a reference: {stored}"
+        );
+        assert!(
+            !stored.contains("spawn_processor"),
+            "{mode:?}: the stopped round left a result naming a processor: {stored}"
+        );
+    }
+}
+
 /// A result the planner could read but a cap cut short carries a reference to the whole output, and
 /// that reference names a processor only while one can still be started (`processors.md` PROC-4).
 /// A later call in the same round can release output and close every processor, so the reference

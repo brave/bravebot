@@ -2416,7 +2416,7 @@ show that a model follows them.
 - **`read_output` on quarantined run output returns all of it, and the output cap does not bound
   that.** [RUN-21](#RUN-21)'s cap bounds a run's result, a `job_output` page and a released page, and
   `read_output` on output nobody vouched for hands back the whole slot, which stays in every later
-  request. The driver's advice now states the size (about N/4 tokens) where the slot's stated size is
+  request. The driver's advice states the size (about N/4 tokens) where the slot's stated size is
   above the cap and names the `stdin_ref` filter that reads part of it, so the cost is told and not
   removed. A planner that ignores the advice still pays it. Stubbing a large result in the requests
   after its round ([COMPACT-18](../compaction.md#COMPACT-18)) would bound it and is not built. The
