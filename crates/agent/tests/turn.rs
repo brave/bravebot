@@ -16977,6 +16977,382 @@ fn reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_conte
     }
 }
 
+/// A response asking for any number of tool calls in one round, in order.
+fn tool_requests_in_one_round(calls: &[(&str, &str)]) -> String {
+    let escape = |a: &str| a.replace('\\', "\\\\").replace('"', "\\\"");
+    let calls: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .map(|(at, (tool, arguments))| {
+            format!(
+                r#"{{"id":"c{}","type":"function","function":{{"name":"{tool}","arguments":"{}"}}}}"#,
+                at + 1,
+                escape(arguments)
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{}]}}}}]}}"#,
+        calls.join(",")
+    )
+}
+
+/// A result that comes back as a reference names a processor only while one can still be started
+/// (`processors.md` PROC-4). A later call in the same round can release output, which makes the
+/// context private and closes every processor, so the results of the round's earlier calls must
+/// not tell the planner to use one: it would follow the advice and be refused.
+///
+/// The round has the long output first, which the cap turns into a reference, and a short
+/// `read: true` run after it that the check lets through. The controls are the orders and mixes in
+/// which nothing in the round closes processors, or the close comes before the reference is made.
+#[test]
+fn a_reference_made_before_a_later_call_in_the_round_closes_processors_names_none() {
+    const LONG: &str = r#"{"command":"sed -n p long.txt","read":true}"#;
+    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
+    let cases: [(&str, &[&str], bool); 4] = [
+        ("released-after", &[LONG, SHORT], true),
+        ("released-last-of-three", &[LONG, LONG, SHORT], true),
+        ("released-first", &[SHORT, LONG], true),
+        ("nothing-released", &[LONG, LONG], false),
+    ];
+    for mode in EVERY_MODE {
+        for (name, arguments, closed) in cases {
+            let scratch = Scratch::new(&format!("same-round-close-{name}-{mode:?}"));
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            std::fs::write(
+                scratch.path.join("long.txt"),
+                format!("LONG-SENTINEL {}\n", "x".repeat(200)),
+            )
+            .unwrap();
+            std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
+
+            let calls: Vec<(&str, &str)> = arguments.iter().map(|each| ("run", *each)).collect();
+            let (endpoint, received) = serve_sequence_answering_checks_with(
+                vec![
+                    reply_with(r#"{"verdict": "safe", "reason": "a single path"}"#);
+                    arguments.iter().filter(|each| **each == SHORT).count()
+                ],
+                vec![tool_requests_in_one_round(&calls), reply_with("done")],
+            );
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut conversation = bravebot_agent::Conversation::new();
+            let mut reading = ReadsWhatItRan::new(false);
+            let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("find out")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(true)
+                    .with_output_cap(Some(64)),
+                &mut conversation,
+                &mut confirmer,
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+
+            let sent = every_request(&received);
+            let told = sent
+                .iter()
+                .rfind(|body| !body.contains(A_CHECK_ASKING))
+                .expect("the planner's last round");
+            let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
+                .expect("a request")["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .map(|message| message["content"].to_string())
+                .collect();
+            assert_eq!(
+                results.len(),
+                arguments.len(),
+                "{mode:?} {name}: not every call of the round was answered: {results:?}"
+            );
+            assert_eq!(
+                conversation.holds(),
+                if closed {
+                    bravebot_core::label::Confidentiality::Private
+                } else {
+                    bravebot_core::label::Confidentiality::Public
+                },
+                "{mode:?} {name}: the round did not leave the context as the case needs, so \
+                 nothing here was tested"
+            );
+            let mut references = 0;
+            for (result, each) in results.iter().zip(arguments) {
+                if *each == SHORT {
+                    assert!(
+                        result.contains("SHORT-SENTINEL"),
+                        "{mode:?} {name}: the short output was not released: {result}"
+                    );
+                    continue;
+                }
+                references += 1;
+                assert!(
+                    result.contains("could not be shown to you")
+                        && !result.contains("LONG-SENTINEL"),
+                    "{mode:?} {name}: the long output was not a reference: {result}"
+                );
+                assert_eq!(
+                    result.contains("spawn_processor"),
+                    !closed,
+                    "{mode:?} {name}: a round that {} processors left a result that {} one: \
+                     {result}",
+                    if closed { "closed" } else { "left open" },
+                    if closed { "names" } else { "does not name" }
+                );
+                if closed {
+                    assert!(
+                        result.contains("contents_ref"),
+                        "{mode:?} {name}: the moves that remain were not offered: {result}"
+                    );
+                }
+            }
+            assert!(references > 0, "{mode:?} {name}: no reference was made");
+        }
+    }
+}
+
+/// The reword also runs where a round stops early. A turn cancelled after a `read: true` call
+/// released output, and before the next call runs, keeps its conversation for the next turn, so the
+/// reference made before the release must already say no processor can be started
+/// (`processors.md` PROC-4).
+#[test]
+fn a_round_cancelled_after_a_release_leaves_its_earlier_reference_naming_no_processor() {
+    struct CancelsOnceTheSecondCallPrinted {
+        cancel: bravebot_core::cancel::Cancel,
+        started: usize,
+    }
+
+    impl bravebot_agent::report::Reporter for CancelsOnceTheSecondCallPrinted {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn printed(&mut self, _output: bravebot_agent::report::Printed) {
+            self.started += 1;
+            if self.started == 2 {
+                self.cancel.cancel();
+            }
+        }
+    }
+
+    const LONG: &str = r#"{"command":"sed -n p long.txt","read":true}"#;
+    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("same-round-close-cancelled-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(
+            scratch.path.join("long.txt"),
+            format!("LONG-SENTINEL {}\n", "x".repeat(200)),
+        )
+        .unwrap();
+        std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
+
+        let (endpoint, _received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "safe", "reason": "a single path"}"#,
+            )],
+            vec![
+                tool_requests_in_one_round(&[("run", LONG), ("run", SHORT), ("run", LONG)]),
+                reply_with("never reached"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut reading = ReadsWhatItRan::new(false);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = CancelsOnceTheSecondCallPrinted {
+            cancel: cancel.clone(),
+            started: 0,
+        };
+
+        let round = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true)
+                .with_output_cap(Some(64)),
+            &mut conversation,
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        );
+        assert!(
+            matches!(round.outcome, Err(turn::TurnError::Cancelled { .. })),
+            "{mode:?}: the round was not cancelled, so nothing here was tested"
+        );
+        let stored = conversation
+            .messages()
+            .iter()
+            .map(|each| each.message.content.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            stored.contains("SHORT-SENTINEL"),
+            "{mode:?}: the release did not happen before the stop, so nothing here was tested: \
+             {stored}"
+        );
+        assert!(
+            stored.contains("could not be shown to you") && !stored.contains("LONG-SENTINEL"),
+            "{mode:?}: the earlier output was not kept as a reference: {stored}"
+        );
+        assert!(
+            !stored.contains("spawn_processor"),
+            "{mode:?}: the stopped round left a result naming a processor: {stored}"
+        );
+    }
+}
+
+/// A result the planner could read but a cap cut short carries a reference to the whole output, and
+/// that reference names a processor only while one can still be started (`processors.md` PROC-4).
+/// A later call in the same round can release output and close every processor, so the reference
+/// in the earlier, visible result must not tell the planner to use one.
+///
+/// The round has a vouched `cat` of a file longer than the output cap, whose output the planner may
+/// read and the cap cuts short, and a short `read: true` run after it that the check lets through.
+/// The control is the same round with a second vouched `cat` in place of that run, which closes
+/// nothing.
+#[test]
+fn a_capped_visible_result_made_before_a_later_call_closes_processors_names_none() {
+    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
+    const CAT_LONG: &str = r#"{"command":"cat long.txt"}"#;
+    const CAT_OTHER: &str = r#"{"command":"cat other.txt"}"#;
+    /// A round: its name, its calls as (tool, arguments), and whether it closes processors.
+    type Round<'a> = (&'a str, &'a [(&'a str, &'a str)], bool);
+    let cases: [Round; 2] = [
+        ("released-after", &[("run", CAT_LONG), ("run", SHORT)], true),
+        (
+            "nothing-released",
+            &[("run", CAT_LONG), ("run", CAT_OTHER)],
+            false,
+        ),
+    ];
+    for mode in EVERY_MODE {
+        for (name, calls, closed) in cases {
+            let scratch = Scratch::new(&format!("same-round-close-visible-{name}-{mode:?}"));
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            for file in ["long.txt", "other.txt"] {
+                std::fs::write(
+                    scratch.path.join(file),
+                    format!("LONG-SENTINEL {}\n", "x".repeat(200)),
+                )
+                .unwrap();
+            }
+            std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
+
+            let programs = bravebot_core::programs::TrustedPrograms::from_iter([
+                vouched_in("cat", &["long.txt"], &scratch.path),
+                vouched_in("cat", &["other.txt"], &scratch.path),
+            ]);
+            let (endpoint, received) = serve_sequence_answering_checks_with(
+                vec![
+                    reply_with(r#"{"verdict": "safe", "reason": "a single path"}"#);
+                    calls.iter().filter(|(_, each)| *each == SHORT).count()
+                ],
+                vec![tool_requests_in_one_round(calls), reply_with("done")],
+            );
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut conversation = bravebot_agent::Conversation::new();
+            let mut reading = ReadsWhatItRan::new(false);
+            let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("find out")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(true)
+                    .with_output_cap(Some(64)),
+                &mut conversation,
+                &mut confirmer,
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut sink,
+                trusting_the_workspace(),
+                programs,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+
+            let sent = every_request(&received);
+            let told = sent
+                .iter()
+                .rfind(|body| !body.contains(A_CHECK_ASKING))
+                .expect("the planner's last round");
+            let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
+                .expect("a request")["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .map(|message| message["content"].to_string())
+                .collect();
+            assert_eq!(
+                results.len(),
+                calls.len(),
+                "{mode:?} {name}: not every call of the round was answered: {results:?}"
+            );
+            assert_eq!(
+                conversation.holds(),
+                if closed {
+                    bravebot_core::label::Confidentiality::Private
+                } else {
+                    bravebot_core::label::Confidentiality::Public
+                },
+                "{mode:?} {name}: the round did not leave the context as the case needs, so \
+                 nothing here was tested"
+            );
+            let mut capped = 0;
+            for (result, (_, each)) in results.iter().zip(calls) {
+                if *each == SHORT {
+                    assert!(
+                        result.contains("SHORT-SENTINEL"),
+                        "{mode:?} {name}: the short output was not released: {result}"
+                    );
+                    continue;
+                }
+                capped += 1;
+                assert!(
+                    result.contains("The whole of this output, middle included, is a reference"),
+                    "{mode:?} {name}: the read was not a capped visible result: {result}"
+                );
+                assert_eq!(
+                    result.contains("spawn_processor"),
+                    !closed,
+                    "{mode:?} {name}: a round that {} processors left a result that {} one: \
+                     {result}",
+                    if closed { "closed" } else { "left open" },
+                    if closed { "names" } else { "does not name" }
+                );
+            }
+            assert!(capped > 0, "{mode:?} {name}: no capped result was made");
+        }
+    }
+}
+
 /// A remark is a claim about a document, and it reaches the transcript when the processor
 /// returns, which is rounds before the question about writing that document. A person was
 /// reading the diff with the claim some way up the screen, and the diff is the only thing that
@@ -19472,6 +19848,274 @@ fn a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write()
             .iter()
             .any(|body| body.contains("nothing written yet")),
         "a run line that never compiled was counted as a write tried"
+    );
+}
+
+/// A repository at `dir` holding `app.txt`, committed, and `fix.patch`, which `git apply` turns
+/// `app.txt` into "changed" with.
+fn a_repository_with_a_file_and_a_patch_for_it(dir: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("git starts");
+        assert!(output.status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("app.txt"), "one\n").unwrap();
+    git(&["add", "app.txt"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
+    std::fs::write(
+        dir.join("fix.patch"),
+        "diff --git a/app.txt b/app.txt\n--- a/app.txt\n+++ b/app.txt\n@@ -1 +1 @@\n-one\n+changed\n",
+    )
+    .unwrap();
+}
+
+/// Every request a turn sent, and the record it ended with, when each of `lines` is a `run` call
+/// in its own round, in order, at the workspace root, and the turn then answers. Runs are approved.
+fn requests_and_work_after_runs(
+    name: &str,
+    lines: &[&str],
+    prepare: impl FnOnce(&std::path::Path),
+) -> (Vec<String>, bravebot_agent::Work, Scratch) {
+    let scratch = Scratch::new(name);
+    prepare(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = lines
+        .iter()
+        .map(|command| {
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": command }).to_string(),
+            )
+        })
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    (every_request(&received), completed.work, scratch)
+}
+
+/// Nine rounds that make a worktree, patch a file in it and copy three files into it, with a
+/// line that only reads between each, which is the order a planner delivering its change through
+/// `run` alone works in.
+const A_CHANGE_DELIVERED_THROUGH_RUN: [&str; 9] = [
+    "git worktree add -q wt",
+    "ls wt",
+    "git -C wt apply ../fix.patch",
+    "cat wt/app.txt",
+    "cp fix.patch wt/copy1.txt",
+    "grep -c changed wt/app.txt",
+    "cp fix.patch wt/copy2.txt",
+    "wc -l wt/app.txt",
+    "cp fix.patch wt/copy3.txt",
+];
+
+/// TURN-3: a turn that makes a worktree, applies a patch and copies files through `run` is not
+/// told, after eight rounds, that nothing is written.
+///
+/// Rejects a signal that only the write tools set, which tells a turn whose every change went
+/// through `run` that it has written nothing and sends it to write what is already on disk.
+#[test]
+fn a_turn_that_delivers_its_change_through_run_lines_is_not_told_nothing_is_written() {
+    if !git_is_installed() {
+        return;
+    }
+    let (bodies, _work, scratch) = requests_and_work_after_runs(
+        "run-delivers-change",
+        &A_CHANGE_DELIVERED_THROUGH_RUN,
+        a_repository_with_a_file_and_a_patch_for_it,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("wt/app.txt")).ok(),
+        Some("changed\n".to_string()),
+        "the patch did not apply, so nothing here was tested"
+    );
+    assert!(
+        scratch.path.join("wt/copy3.txt").exists(),
+        "the last copy did not run, so nothing here was tested"
+    );
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn that wrote through run lines was told nothing is written"
+    );
+}
+
+/// TURN-3: a `git apply` that leaves the tree alone is the only `git` line the turn runs, and eight
+/// rounds of lines that only read follow it. The audited table does not account for `git`, so the
+/// line counts as a write tried, even though the work record has no write to show for it.
+///
+/// `--check` is what keeps the tree alone, so the work record cannot be what silences the line.
+/// Rejects a classification that proves `git` read-only or that reads the line's text for a
+/// program it knows writes.
+#[test]
+fn a_turn_whose_only_git_apply_changed_nothing_is_not_told_nothing_is_written() {
+    if !git_is_installed() {
+        return;
+    }
+    let mut lines = vec!["git apply --check fix.patch".to_string()];
+    lines.extend((1..=ROUNDS_BEFORE_WRITING).map(|n| format!("head -n {n} app.txt")));
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let (bodies, work, scratch) = requests_and_work_after_runs(
+        "run-git-apply-only",
+        &lines,
+        a_repository_with_a_file_and_a_patch_for_it,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("app.txt")).ok(),
+        Some("one\n".to_string()),
+        "the check changed the file, so the work record could be what silenced the line"
+    );
+    assert_eq!(work.writes, 0, "the tree was left alone");
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn that ran `git apply` was told nothing is written"
+    );
+}
+
+/// TURN-3: a turn whose `run` lines are all ones the audited table proves read-only is still told
+/// nothing is written, in the same number of rounds, and its record counts no write.
+///
+/// Rejects counting every `run` line as a write, which would silence the line for a turn that
+/// only looked around with `ls`, `cat`, `grep` and `wc`.
+#[test]
+fn a_turn_that_only_reads_through_run_lines_is_told_nothing_is_written() {
+    let reading = [
+        "ls .",
+        "cat app.txt",
+        "wc -l app.txt",
+        "head -n 1 app.txt",
+        "ls .",
+        "cat app.txt",
+        "wc -l app.txt",
+        "head -n 1 app.txt",
+        "ls .",
+    ];
+    let (bodies, work, _scratch) =
+        requests_and_work_after_runs("run-reads-only", &reading, |dir| {
+            std::fs::write(dir.join("app.txt"), "one\n").unwrap();
+        });
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn that only read through run was not told to write"
+    );
+    assert_eq!(work.writes, 0, "no line changed a file");
+    assert_eq!(work.commands, reading.len(), "every line is a command");
+}
+
+/// GROUND-1: the record of a turn that delivers its change through `run` counts each line that
+/// left the workspace tree different, and none of the lines that only read.
+///
+/// The five lines that make the worktree, apply the patch and copy three files are the writes;
+/// the four between them only read. Rejects a record built from the write tools alone, which says
+/// `writes: 0` for this turn.
+#[test]
+fn the_record_of_a_turn_that_delivers_its_change_through_run_lines_counts_those_writes() {
+    if !git_is_installed() {
+        return;
+    }
+    let (_bodies, work, _scratch) = requests_and_work_after_runs(
+        "run-delivers-change-record",
+        &A_CHANGE_DELIVERED_THROUGH_RUN,
+        a_repository_with_a_file_and_a_patch_for_it,
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 5,
+            commands: 9,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "the worktree, the patch and the three copies are five writes among nine commands"
+    );
+}
+
+/// GROUND-1, Known costs: a `run` line started in the background is a command and no write, even
+/// when the program goes on to change a file. The tree is compared when a foreground line stops,
+/// and a background line has not stopped when its call returns, so its changes are not in the
+/// record. This pins that limit; a change that counts them removes the sentence from the known
+/// costs in the same commit.
+#[test]
+fn a_run_line_started_in_the_background_is_a_command_and_no_write() {
+    let scratch = Scratch::new("background-record");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": "touch made.txt", "background": true }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "a background line is recorded as a command and no write"
     );
 }
 
@@ -29426,6 +30070,25 @@ fn a_tool_description(
         .as_str()
         .expect("a description")
         .to_string()
+}
+
+/// RUN-21. The `read_output` description says that unfiltered output the planner may not read comes
+/// back whole and stays in the context, and that a filter with `stdin_ref` reads part of it.
+/// brave/bravebot#3777.
+#[test]
+fn the_read_output_description_says_what_reading_all_of_a_long_output_costs() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    for (tag, mode) in [("ro-cost-ask", Ask), ("ro-cost-bypass", Bypass)] {
+        let description = the_read_output_description(tag, mode, false);
+        assert!(
+            description.contains("it returns all of it")
+                && description.contains("about a token for every four bytes")
+                && description.contains("stdin_ref")
+                && description.contains("tail or grep"),
+            "{tag}: the description does not say what reading all of a long output costs or how \
+             to read part of it: {description}"
+        );
+    }
 }
 
 /// RUN-14: who answers `read_output` is said once, in the tool's description, from the session's
@@ -56757,6 +57420,61 @@ fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
         "{refused}"
     );
     assert!(!refused.contains("SENTINEL-XYZZY"));
+}
+
+/// OUTPUT-5, RUN-21. A refusal of an offset or a pattern on output nobody vouched for says what
+/// read_output returns when output is above a run's cap and how a filter reads part of it, from
+/// the size the slot states, and carries no byte of the output. brave/bravebot#3777.
+#[test]
+fn a_refusal_over_output_past_the_cap_says_what_read_output_returns() {
+    for argument in [r#""offset":0"#, r#""pattern":"SENTINEL""#] {
+        let scratch = Scratch::new("read-output-refusal-says-the-cost");
+        let mut log = String::from("SENTINEL-XYZZY\n");
+        for line in 0..400 {
+            log.push_str(&format!("line {line} of a long build log\n"));
+        }
+        std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+            tool_request("read_output", &format!(r#"{{"ref":"ref:1",{argument}}}"#)),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut confirmer = ReadsWhatItRan::new(true);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out").with_output_cap(Some(4096)),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        let refused = newest_tool_result(bodies[2].clone());
+        assert!(
+            refused.contains(&format!(
+                "read_output returns all {} bytes of it, about {} tokens",
+                log.len(),
+                log.len() / 4
+            )),
+            "{argument}: {refused}"
+        );
+        assert!(refused.contains("stdin_ref"), "{argument}: {refused}");
+        assert!(!refused.contains("SENTINEL-XYZZY"), "{refused}");
+    }
 }
 
 /// OUTPUT-5. A pattern on output the planner may already read answers with the matching lines,
