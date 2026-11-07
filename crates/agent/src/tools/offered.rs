@@ -600,16 +600,18 @@ fn write_file_contents_ref_description(beside: &dyn Fn(&str) -> bool) -> String 
 /// The description of `edit_file`, naming `write_file` only where `beside` says it is on the list.
 fn edit_file_description(beside: &dyn Fn(&str) -> bool) -> String {
     let diff = if beside("write_file") {
-        " Prefer this to write_file when changing part of a file: the user approves a diff, which \
-         is easier to review than a whole body."
+        " Prefer this to write_file when changing part of a file: a diff is easier to review \
+         than a whole body."
     } else {
         ""
     };
     format!(
-        "Replace an exact passage of text in an existing workspace file.{diff} The user must \
-         approve each edit before it happens, so explain what you are changing. To change \
-         several places in one file, give them together in edits: the user approves one diff. \
-         In a .ipynb notebook, name a cell by the number a read showed instead of a passage: \
+        "Replace an exact passage of text in an existing workspace file.{diff} An edit inside a \
+         directory the user vouched for is applied without a prompt; elsewhere the user \
+         approves each edit as a diff before it happens unless a permission rule or mode \
+         answers for them. Explain what you are changing either \
+         way. To change several places in one file, give them together in edits: they are one \
+         diff. In a .ipynb notebook, name a cell by the number a read showed instead of a passage: \
          give cell and new_text to replace that cell's source (its saved outputs are dropped), \
          or cell_action insert_after or delete."
     )
@@ -950,7 +952,9 @@ fn table(
                                         depth, \"src/**/*.rs\" to anchor it, or \
                                         \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported. A pattern with a / in it may \
+                                        globs are not supported. Matching is case-sensitive: \
+                                        readme* does not match README.md, and {r,R}eadme* \
+                                        matches both. A pattern with a / in it may \
                                         be written from the directory or from the workspace \
                                         root."
                     },
@@ -972,10 +976,14 @@ fn table(
         ),
         Tool::function(
             "write_file",
-            "Write a UTF-8 text file in the workspace. Name the destination with path, or with \
-             path_ref to write back to a file a listing gave you a reference to. Give either \
-             the contents or a reference to quarantined content that becomes the contents. The \
-             user must approve each write before it happens, so explain what you are changing; \
+            "Write a UTF-8 text file in the workspace. If the path already holds a file, this \
+             replaces it whole and the old contents are gone, so read or list the path first \
+             when the file may exist. Name the destination with path, or with path_ref to \
+             write back to a file a listing gave you a reference to. Give either the contents \
+             or a reference to quarantined content that becomes the contents. A write inside a \
+             directory the user vouched for is applied without a prompt; elsewhere the user \
+             approves each write before it happens unless a permission rule or mode answers for \
+             them. Explain what you are changing either way; \
              a write to a path_ref is always shown, since the user is the only one who sees \
              which file it is.",
             json!({
@@ -1182,7 +1190,9 @@ fn table(
                         "description": "Optional glob limiting which files are searched, \
                                         e.g. \"*.rs\" or \"**/*.{cc,h,mm}\". Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported. A pattern with a / in it may \
+                                        globs are not supported. Matching is case-sensitive: \
+                                        readme* does not match README.md, and {r,R}eadme* \
+                                        matches both. A pattern with a / in it may \
                                         be written from the directory or from the workspace \
                                         root."
                     },

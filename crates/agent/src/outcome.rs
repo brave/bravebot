@@ -41,6 +41,10 @@ pub enum Category {
     Incomplete,
     /// The reply arrived and was not the shape it had to be, or carried nothing usable.
     Undecodable,
+    /// The service reported a failure this build has no name for. Chosen only as the fixed
+    /// fallback of a closed list of known codes, so nothing the service wrote decides it or is
+    /// kept in it.
+    Unrecognised,
     /// The model reached its output ceiling before finishing.
     TooLong,
     /// Nothing local could send the request: no credential, no model, no usable address.
@@ -64,6 +68,7 @@ impl Category {
             Self::Transport => "transport",
             Self::Incomplete => "incomplete",
             Self::Undecodable => "undecodable",
+            Self::Unrecognised => "unrecognised",
             Self::TooLong => "too-long",
             Self::Unconfigured => "unconfigured",
             Self::Blocked => "blocked",
@@ -408,6 +413,7 @@ mod tests {
             Category::Transport,
             Category::Incomplete,
             Category::Undecodable,
+            Category::Unrecognised,
             Category::TooLong,
             Category::Unconfigured,
             Category::Blocked,

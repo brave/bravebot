@@ -2622,7 +2622,7 @@ These are the places where another spec states something about this service, eac
   status 503 and a retry under a bounded backoff. A 503
   reply is sent again, up to three requests in all with a pause that doubles from one second. A failed event
   of a stream answered 200 has no status, and either code in one is read as an unknown failure, which is not
-  asked for again and is reported in the incomplete category with nothing of what the service said. The
+  asked for again and is reported in the unrecognised category ([BACKEND-37](backends.md#BACKEND-37)) with nothing of what the service said. The
   documentation says a usage-limit error can arrive that way after streaming has begun. It names no `error`
   event. OpenAI's OpenAPI description states one, with a `code` that is a string or null, and lists no
   `subscription_sharing_` or `chatpass_v2_` code among the codes of a failed response.

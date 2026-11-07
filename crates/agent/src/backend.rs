@@ -305,8 +305,10 @@ impl BackendError {
                     }
                     Failure::RateLimit => Category::RateLimited,
                     Failure::Api | Failure::Overloaded | Failure::Timeout => Category::Unavailable,
-                    // Unknown protocol names must not enter the diagnosis.
-                    Failure::Unknown => Category::Incomplete,
+                    // The fallback of the closed list of codes: a failure the service reported
+                    // and this build cannot name. Its own category, since it is not a reply that
+                    // stopped. The service's name for it never enters the diagnosis.
+                    Failure::Unknown => Category::Unrecognised,
                 },
                 ChatError::TooLong(cut_off) => {
                     return Diagnosis::of(Category::TooLong).at_ceiling(cut_off.ceiling);

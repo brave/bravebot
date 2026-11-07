@@ -11284,6 +11284,60 @@ fn a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter() {
     );
 }
 
+/// LIST-7 for a listing the planner may not read: the sentence that a pattern selected no file
+/// travels beside the references, since the body that would carry it reaches nobody. The
+/// regression it rejects: the notice kept only in the body, so a quarantined empty answer for
+/// `readme*` reads as no readme. A pattern that selects a file adds no such sentence.
+#[test]
+fn a_quarantined_listing_says_when_its_pattern_selected_no_file() {
+    let scratch = Scratch::new("list-pattern-quarantined");
+    std::fs::write(scratch.path.join("Zq-notes.md"), "x").unwrap();
+    std::fs::create_dir(scratch.path.join("Zq-sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Depth 1 lists the subdirectory whatever the pattern says, so the answer is quarantined
+    // even when the pattern selects no file. An empty answer has no names to quarantine and is
+    // shown as text, which would not reach the path under test.
+    for (pattern, selects_nothing) in [("zq*", true), ("Zq*", false)] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "list_files",
+                &format!(r#"{{"directory":".","pattern":"{pattern}","depth":1}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("is there a readme");
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert!(
+            !second.contains("Zq-notes.md") && !second.contains("Zq-sub"),
+            "the names reached the model, so this is not the quarantined case: {second}"
+        );
+        assert_eq!(
+            second.contains("no file matched the pattern"),
+            selects_nothing,
+            "{pattern}: {second}"
+        );
+        if selects_nothing {
+            assert!(second.contains("{r,R}eadme*"), "{second}");
+        }
+    }
+}
+
 /// And the ordinary case must stay quiet, or the model learns to ignore the notice.
 ///
 /// Trusted deliberately. Run against an empty trust store the result is quarantined, the model

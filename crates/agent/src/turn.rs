@@ -4256,10 +4256,17 @@ where
                 };
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
+                // The pattern's own sentence, which the tool wrote from the pattern the planner
+                // typed: the body that would carry it reaches nobody here.
+                let unmatched = output
+                    .unmatched
+                    .as_deref()
+                    .map(|note| format!(" {note}"))
+                    .unwrap_or_default();
                 let listed = |described: &str| {
                     format!(
                         "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}\n\n{described}",
+             quarantined, one reference each.{capped}{linked}{unmatched}\n\n{described}",
                         output.tool,
                         references.len(),
                     )

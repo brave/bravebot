@@ -41,7 +41,7 @@ fn a_failure_anthropic_reports_keeps_its_actionable_category() {
         (Failure::Overloaded, Category::Unavailable),
         (Failure::Api, Category::Unavailable),
         (Failure::Timeout, Category::Unavailable),
-        (Failure::Unknown, Category::Incomplete),
+        (Failure::Unknown, Category::Unrecognised),
     ] {
         let error = BackendError::from(ChatError::Reported { failure });
         assert_eq!(error.diagnosis().category, expected, "{failure}");

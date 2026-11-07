@@ -69,6 +69,7 @@ and an editor say the sentence alone.
 | the request did not get through | nothing reached the service, or no reply began: network, proxy or TLS roots |
 | the reply stopped before it was finished | the reply began and was cut off, went quiet part way, or was still being written when its time ran out |
 | the reply could not be read | a reply arrived that could not be decoded, or the model sent back nothing twice in a row |
+| the service answered with a failure this build does not recognise | the service reported a failure in the middle of a reply, in a form this version has no name for. It is not asked for again, since nothing says a second try would pass. The line ends with the next step: choose another model with `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log is kept. The log holds one line, `aichat.stream_failure`, with the kind of event, the count of requests and the time, and not what the service sent |
 | the model reached its output limit | the reply hit a ceiling, which `BRAVEBOT_OUTPUT_BUDGET` raises. In a turn it is said after the model was asked once to do the work in smaller parts and ran out again |
 | nothing here was configured to send the request | no model service is set up |
 | a gate here would not let the request out | a gate refused it before it left, so it never went |
