@@ -7405,11 +7405,14 @@ fn a_failed_responses_reply_is_named_from_a_closed_set_and_asked_again_only_wher
 /// BACKEND-37, DIAG-7: a failure event inside a 200 stream whose code is not on the closed list is
 /// reported as the fallback of that list, is not asked for again, and is written to the diagnostic
 /// log once with the program's own words (the event kind, that the code was unlisted, the time and
-/// the count of requests) and nothing the service wrote. A listed code writes no such line.
+/// the count of requests) and nothing the service wrote. A code that names the account, arriving
+/// on a gateway that has no account, is unlisted for that service and is written the same way. A
+/// listed code writes no such line.
 ///
 /// The regressions it rejects are a client that sends the request again (a second request), one
 /// that writes no line, one that writes the code or message the service sent, one that names the
-/// event kind from the service's text, and one that writes the line for a listed code.
+/// event kind from the service's text, one that writes the line for a listed code, and one that
+/// writes none for an account code on a gateway.
 #[test]
 fn an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again() {
     let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
@@ -7455,6 +7458,7 @@ fn an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_a
     for event in [
         failed(unlisted),
         error_event(unlisted),
+        failed(USAGE_LIMIT),
         failed("invalid_prompt"),
     ] {
         let (endpoint, received) =
@@ -7484,8 +7488,8 @@ fn an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_a
         .lines()
         .filter(|line| line.contains("aichat.stream_failure"))
         .collect();
-    assert_eq!(lines.len(), 2, "one line for each unlisted failure: {log}");
-    for (line, kind) in lines.iter().zip(["failed", "error"]) {
+    assert_eq!(lines.len(), 3, "one line for each unlisted failure: {log}");
+    for (line, kind) in lines.iter().zip(["failed", "error", "failed"]) {
         assert!(
             line.contains(&format!(
                 "ERROR aichat.stream_failure event={kind} code=unlisted elapsed_ms="
@@ -7495,6 +7499,7 @@ fn an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_a
         assert!(line.ends_with(" attempts=1"), "{line}");
     }
     assert!(!log.contains(unlisted), "{log}");
+    assert!(!log.contains(USAGE_LIMIT), "{log}");
     assert!(!log.contains("a page could have written"), "{log}");
     assert!(!log.contains("partial"), "{log}");
     for text in &shown {
