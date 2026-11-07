@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: CLI reference
-description: Every command, flag and key bravebot takes.
+description: CLI commands and flags, models, authentication, sessions, schedules, triggers, skill evaluation, shell integration, editor protocol, interactive keys, exit codes, streams and limits.
 ---
 
 # CLI reference

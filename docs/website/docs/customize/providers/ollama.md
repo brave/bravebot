@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: Ollama
-description: Reach a model served by a local Ollama with no key, what the first run writes for you, and the block to write yourself.
+description: Connect local Ollama models without an API key, use first-run discovery or manual gateway configuration, and set the context window.
 ---
 
 # Reaching a model through Ollama

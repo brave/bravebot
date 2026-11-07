@@ -1,7 +1,7 @@
 ---
 sidebar_position: 14
 title: Choosing a language
-description: The sources the interface language is read from in order, how to name one, and what stays in English.
+description: Choose the interface language, resolve language-source precedence, name a locale and see which text stays in English.
 ---
 
 # Choosing a language

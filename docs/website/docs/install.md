@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1.5
 title: Install
-description: Install, update and uninstall Brave Bot, and check a download by hand.
+description: Install Brave Bot and Linux packages, verify downloads, check configuration, update to a newer release and uninstall.
 ---
 
 # Install

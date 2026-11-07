@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Security
-description: What Brave Bot defends against, what it does not, and what leaves the process.
+description: Security guarantees, threat model and exceptions, network egress, certificates and proxies, process confinement, data collection and retention, crash reports and reporting vulnerabilities.
 ---
 
 # Security

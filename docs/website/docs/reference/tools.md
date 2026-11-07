@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Tools
-description: Every tool the model may call, what it takes, and what it is allowed to touch.
+description: Built-in tools for files and notebooks, search, git, language servers, commands and jobs, web requests, quarantine, processors, delegates, skills, memory, watches and session messages.
 ---
 
 # Tools
@@ -1049,13 +1049,26 @@ Reads one of the skills the planner was listed, or one `search_skills` found.
 
 | Parameter | |
 |---|---|
-| `name` | the name exactly as it was listed or as `search_skills` returned it, e.g. `commit-style` |
+| `name` | the exact skill name listed or returned by `search_skills`, e.g. `commit-style`, or a compiled help name advertised by `bravebot-help` |
 
 The name selects from a set fixed before the turn started and **never becomes a path**: a name holding
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
 guessed at. A skill whose file says `disable-model-invocation: true` is not in the set, so asking for
 it is refused the same way; you load it by naming it in your own line. See
 [Skills](../customize/skills.md).
+
+For built-in help, load `bravebot-help` for the page index with topics and whole-page Unicode scalar
+character counts, excluding frontmatter and the tool-result wrapper. A page of 12000 characters or
+fewer loads whole by its bare name. A longer page loads by its bare name as an outline: its opening
+text and one line per section with the section's size and its name, `<page>#<section>`, which loads
+that section alone. Load `<page>::headings` for heading selectors without body text, then copy an
+exact `<page>::section:<number>:<heading>` name to load one section with its nested content and
+literal Markdown. This second route works for any page. The one-based number distinguishes
+repeated headings; mismatched numbers, leading zeroes and heading near matches are refused. This
+applies only to published built-in help pages: ordinary skills have no section selectors, and
+`bravebot-help/specs` lists spec pages carrying only clause headings. Shadowing or excluding
+`bravebot-help` removes its built-in routes and loading it grants no file reach. See
+[Built-in help sections](../customize/skills.md#built-in-help-sections).
 
 Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
 and their names. Where a project's skill directory is a link to another directory in the project,

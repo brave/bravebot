@@ -1,7 +1,7 @@
 ---
 sidebar_position: 16
 title: Importing from another agent
-description: What a first run reads from Claude Code and opencode, what it asks a running Ollama, LM Studio or llama-server, and what it writes once you say yes.
+description: First-run import of Claude Code and opencode settings and local Ollama, LM Studio or llama-server models, with approval before configuration is written.
 ---
 
 # Importing from Claude Code, opencode or a local model server

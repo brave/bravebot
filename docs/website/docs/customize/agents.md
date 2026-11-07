@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Delegate definitions
-description: Define a kind of delegate in a file, so the standing part of what it is told has somewhere to live.
+description: Define delegates with standing instructions, tool and model limits, persistent memory, isolated checkouts, definition precedence and trust.
 ---
 
 # Delegate definitions

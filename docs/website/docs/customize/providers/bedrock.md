@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: AWS Bedrock
-description: Reach models through your own AWS account, name more than three, and sign in when AWS has no session.
+description: Configure AWS Bedrock models and extra model names, sign in to AWS, handle replies without tool calls and understand the assumed context window.
 ---
 
 # Reaching a model through AWS Bedrock

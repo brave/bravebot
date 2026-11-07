@@ -1,7 +1,7 @@
 ---
 sidebar_position: 10
 title: Signing in
-description: Every way to sign in to a model service, from one command.
+description: Model-service authentication commands, xAI and gateway sign-in, credential status checks and authentication during incognito sessions.
 ---
 
 # Signing in

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Adding context
-description: Naming files with @path and --file, pasting text and pictures, and dropping files onto the terminal.
+description: Add files with @path or --file, address definitions and earlier sessions, paste text and pictures, drop terminal or desktop attachments, pipe input and understand each route's trust.
 ---
 
 # Adding context

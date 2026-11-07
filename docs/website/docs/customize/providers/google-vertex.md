@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Google Vertex AI
-description: Reach Gemini models through Vertex AI with an API key or Google Cloud credentials, with or without a project, and what express mode is.
+description: Configure Gemini through Google Vertex AI using an API key or Google Cloud credentials, with project-based access or project-free express mode.
 ---
 
 # Reaching Google Vertex AI

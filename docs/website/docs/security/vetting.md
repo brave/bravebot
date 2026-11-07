@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Vetting quarantined content
-description: A second model reads quarantined content and reports what it found, so you have an opinion in front of you before you decide.
+description: Vet quarantined text, pictures, PDFs and browser pages with a second model, read its advisory verdict, approve promotion and configure auto-vetting and its limits.
 ---
 
 # Vetting quarantined content

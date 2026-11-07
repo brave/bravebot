@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2.2
 title: Permission rules
-description: The deny, ask and allow lists that settle in advance whether you are asked or an action happens at all, and what a rule covers and does not.
+description: Configure deny, ask and allow permission rules, understand matching and precedence, and see which actions and approvals a rule cannot cover.
 ---
 
 # Permission rules

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: Editing the way vi does
-description: Vi's INSERT, NORMAL, VISUAL and REPLACE modes in the input box, with its motions, counts, operators and text objects.
+description: Vi-style INSERT, NORMAL, VISUAL and REPLACE input modes, returning to insertion, motions, counts, operators, text objects and selecting a stretch of the prompt.
 ---
 
 # Editing the way vi does

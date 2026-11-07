@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The thirty-one commands the interface acts on itself, and the rules every one of them shares.
+description: Slash commands for configuration, permissions, sessions, files view (/diff), plans, loops, goals, jobs, help, copying, opening files and rewinding; shared rules, skills and MCP prompts.
 ---
 
 # Slash commands

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Quickstart
-description: Run your first task with Brave Bot and understand the questions it asks.
+description: Install and run a first task, answer workspace-trust and file-change approvals, run commands, and try one-shot tasks and piped input.
 ---
 
 # Quickstart

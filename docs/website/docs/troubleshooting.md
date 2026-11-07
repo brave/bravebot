@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: Troubleshooting
-description: What to check when something is not working, and why some behaviour that looks broken is not.
+description: Diagnose configuration and model failures, interface problems, file reads and writes, command execution, long conversations, session storage and Windows issues, and collect a bug report.
 ---
 
 # Troubleshooting

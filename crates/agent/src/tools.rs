@@ -13149,10 +13149,10 @@ fn load_skill<S: Sink>(
     if skills
         .get(crate::help::SKILL)
         .is_some_and(|skill| skill.source == crate::skills::Source::BuiltIn)
-        && let Some(text) = crate::help::page(&name)
+        && let Some(text) = crate::help::load(&name)
     {
         let note = tally(text.lines().count(), "line", "lines");
-        let mut produced = confirmed(text, note);
+        let mut produced = confirmed(text.as_ref(), note);
         produced.origin = "built-in".to_string();
         return produced;
     }
@@ -26646,9 +26646,18 @@ mod tests {
             typed: &[String],
             body: impl FnOnce(&mut Tools<'_>) -> R,
         ) -> R {
+            with_tools_and_skills(workspace, typed, &crate::skills::Catalogue::default(), body)
+        }
+
+        /// Dispatch help against the same resolved catalogue that a turn would offer.
+        pub(super) fn with_tools_and_skills<R>(
+            workspace: &Workspace,
+            typed: &[String],
+            skills: &crate::skills::Catalogue,
+            body: impl FnOnce(&mut Tools<'_>) -> R,
+        ) -> R {
             let config = config();
             let egress = bravebot_net::Egress::new();
-            let skills = crate::skills::Catalogue::default();
             let mut slots = SlotStore::new();
             let mut reads = crate::conversation::ShownReads::default();
             let cancel = bravebot_core::cancel::Cancel::new();
@@ -26661,7 +26670,7 @@ mod tests {
                 output_cap: OUTPUT_CAP,
                 download_cap: DOWNLOAD_CAP,
                 deadlines: Deadlines::BUILT_IN,
-                skills: &skills,
+                skills,
                 slots: &mut slots,
                 reads: &mut reads,
                 chat: Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin()),
@@ -29489,6 +29498,331 @@ mod tests {
         told(policy, &produced.text)
     }
 
+    /// Exercise the planner's dispatch door, including the catalogue guard and labelled result.
+    #[cfg(unix)]
+    fn dispatched_help(
+        policy: &mut Policy<'_, RecordingSink>,
+        workspace: &Workspace,
+        catalogue: &crate::skills::Catalogue,
+        name: &str,
+    ) -> Output {
+        let call: ToolCall = serde_json::from_value(json!({
+            "id": "help",
+            "function": {"name": "load_skill", "arguments": json!({"name": name}).to_string()}
+        }))
+        .unwrap();
+        arguments::with_tools_and_skills(workspace, &[], catalogue, |tools| {
+            dispatch(
+                policy,
+                tools,
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::IgnoreReports,
+                &call,
+            )
+        })
+    }
+
+    /// Runtime checkout docs must not replace the installed version or grant access to any file.
+    #[cfg(unix)]
+    #[test]
+    fn compiled_help_dispatch_is_trusted_and_opens_no_files_or_directories() {
+        let fixture = SkillFixture::new("compiled-help-dispatch");
+        let docs = fixture.project.join("docs/website/docs/using");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("sessions.md"), "CHECKOUT-DOC-DECOY").unwrap();
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let key = workspace.trust_key("docs/website/docs/using/sessions.md");
+        assert!(!policy.trusts_path(&key));
+        let outside = || json!({"path": "~/.bravebot/skills/notes/reference.md"});
+        assert!(skill_call(&mut policy, &workspace, "read_file", outside()).0);
+
+        let mut names = vec![
+            "bravebot-help".to_string(),
+            "bravebot-help/using/sessions".to_string(),
+            "bravebot-help/using/sessions::headings".to_string(),
+            "bravebot-help/specs".to_string(),
+            "bravebot-help/specs/commands".to_string(),
+            // A long page's bare name is its outline, and `#<section>` is one of its sections.
+            "bravebot-help/reference/commands".to_string(),
+            "bravebot-help/reference/commands#request".to_string(),
+        ];
+        let list = dispatched_help(&mut policy, &workspace, &catalogue, &names[2]);
+        let headings = told(&mut policy, &list.text);
+        names.push(
+            headings
+                .lines()
+                .filter_map(|line| line.strip_prefix("- "))
+                .find(|name| name.ends_with(":The files the session wrote"))
+                .unwrap()
+                .to_string(),
+        );
+        for name in names {
+            let output = dispatched_help(&mut policy, &workspace, &catalogue, &name);
+            assert!(
+                !told(&mut policy, &output.text).starts_with("error:"),
+                "{name}"
+            );
+            assert!(output.text.label().is_trusted(), "{name}");
+            assert_eq!(
+                output.text.label().confidentiality,
+                bravebot_core::Confidentiality::Public
+            );
+            assert_eq!(output.origin, "built-in", "{name}");
+            assert!(
+                output.deferred.is_none() && output.loaded.is_none(),
+                "{name}"
+            );
+            let text = told(&mut policy, &output.text);
+            assert!(!text.contains("CHECKOUT-DOC-DECOY"), "{name}");
+            assert!(policy.loaded_skill_directories().is_empty(), "{name}");
+            assert!(!policy.trusts_path(&key), "{name}");
+            assert!(!policy.trusts_path("."), "{name}");
+        }
+        assert!(skill_call(&mut policy, &workspace, "read_file", outside()).0);
+        let (failed, trusted, text) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({"path": "docs/website/docs/using/sessions.md"}),
+        );
+        assert!(
+            !failed && !trusted && !text.contains("CHECKOUT-DOC-DECOY"),
+            "{text}"
+        );
+    }
+
+    /// An advertised name must load through dispatch; normalising a traversal or a near miss must
+    /// not reach either compiled text or an on-disk file with that name.
+    #[cfg(unix)]
+    #[test]
+    fn compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses() {
+        let fixture = SkillFixture::new("help-exact-dispatch");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let output = dispatched_help(&mut policy, &workspace, &catalogue, "bravebot-help");
+        let index = told(&mut policy, &output.text);
+        assert!(!index.contains("CMD-24:") && !index.contains("::section:14:"));
+        let names: Vec<_> = index
+            .lines()
+            .filter_map(|line| line.strip_prefix("- bravebot-help/"))
+            .map(|line| format!("bravebot-help/{}", line.split(": ").next().unwrap()))
+            .collect();
+        assert!(names.len() > 60);
+        for name in names {
+            let output = dispatched_help(&mut policy, &workspace, &catalogue, &name);
+            assert!(
+                !told(&mut policy, &output.text).starts_with("error:"),
+                "{name}"
+            );
+            let page = told(&mut policy, &output.text);
+            assert_ne!(page, index, "{name}");
+            // Every section name an outline gives loads through dispatch as that section.
+            for line in page
+                .lines()
+                .filter(|line| line.starts_with(&format!("- {name}#")))
+            {
+                let section = line[2..].split(": ").next().unwrap();
+                let output = dispatched_help(&mut policy, &workspace, &catalogue, section);
+                let text = told(&mut policy, &output.text);
+                assert!(!text.starts_with("error:"), "{section}");
+                assert_ne!(text, page, "{section}");
+                assert_eq!(output.origin, "built-in", "{section}");
+            }
+            if name != "bravebot-help/specs" {
+                let output = dispatched_help(
+                    &mut policy,
+                    &workspace,
+                    &catalogue,
+                    &format!("{name}::headings"),
+                );
+                assert!(
+                    !told(&mut policy, &output.text).starts_with("error:"),
+                    "{name}"
+                );
+                let headings = told(&mut policy, &output.text);
+                for selector in headings.lines().filter_map(|line| line.strip_prefix("- ")) {
+                    let output = dispatched_help(&mut policy, &workspace, &catalogue, selector);
+                    assert!(
+                        !told(&mut policy, &output.text).starts_with("error:"),
+                        "{selector}"
+                    );
+                }
+            }
+        }
+        for name in [
+            "bravebot-help/using/session::headings",
+            "bravebot-help/using/sessions.md::headings",
+            "bravebot-help/using/../using/sessions::headings",
+            "bravebot-help/using//sessions::headings",
+            "bravebot-help/using/sessions::headings ",
+            "bravebot-help/using/sessions::section:14:The files the session wrot",
+            "bravebot-help/using/sessions::section:014:The files the session wrote",
+            "bravebot-help/using/sessions::section:13:The files the session wrote",
+            "bravebot-help/using/sessions::section:14:the files the session wrote",
+            "bravebot-help/using/sessions::section:999:The files the session wrote",
+            "bravebot-help/using/sessions::section:The files the session wrote",
+            "bravebot-help/specs::headings",
+            "bravebot-help/specs/commands::headings",
+            "bravebot-help/reference/commands#",
+            "bravebot-help/reference/commands#request-",
+            "bravebot-help/reference/commands#Request",
+            "bravebot-help/reference/commands#request#request",
+            "bravebot-help/reference/commands#no-section-has-this-heading",
+            "bravebot-help/using/watches#request",
+            "bravebot-help/specs/commands#request",
+        ] {
+            let output = dispatched_help(&mut policy, &workspace, &catalogue, name);
+            assert!(
+                told(&mut policy, &output.text).starts_with("error: no skill named"),
+                "{name}"
+            );
+        }
+    }
+
+    /// Replacing the index must remove every built-in route, not only the original page route.
+    #[cfg(unix)]
+    #[test]
+    fn custom_help_dispatch_shadows_pages_headings_sections_and_specs() {
+        let fixture = SkillFixture::new("help-all-shadowed-dispatch");
+        let own = fixture.home.join(".bravebot/skills/bravebot-help");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(
+            own.join("SKILL.md"),
+            "---\nname: bravebot-help\ndescription: mine\n---\nmy own help\n",
+        )
+        .unwrap();
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let own = dispatched_help(&mut policy, &workspace, &catalogue, "bravebot-help");
+        assert_eq!(told(&mut policy, &own.text).trim(), "my own help");
+        for name in [
+            "bravebot-help/using/sessions",
+            "bravebot-help/using/sessions::headings",
+            "bravebot-help/using/sessions::section:14:The files the session wrote",
+            "bravebot-help/specs",
+            "bravebot-help/specs/commands",
+            "bravebot-help/reference/commands",
+            "bravebot-help/reference/commands#request",
+        ] {
+            let output = dispatched_help(&mut policy, &workspace, &catalogue, name);
+            assert!(
+                told(&mut policy, &output.text).starts_with("error: no skill named"),
+                "{name}"
+            );
+        }
+    }
+
+    /// A removed or person-only help skill must not leave compiled routes reachable, and the
+    /// section syntax must not become a general skill-body lookup.
+    #[cfg(unix)]
+    #[test]
+    fn excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors() {
+        let fixture = SkillFixture::new("help-excluded-dispatch");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let curated = catalogue.clone().only(&["notes".to_string()]);
+        let without = catalogue.without("bravebot-help");
+        let own = fixture.home.join(".bravebot/skills/bravebot-help");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(
+            own.join("SKILL.md"),
+            "---\nname: bravebot-help\ndescription: private help\ndisable-model-invocation: true\n---\nPRIVATE-HELP-BODY\n",
+        )
+        .unwrap();
+        let person_only = fixture.catalogue(&workspace);
+        assert!(person_only.get("bravebot-help").unwrap().person_only);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        for catalogue in [&curated, &without, &person_only] {
+            for name in [
+                "bravebot-help",
+                "bravebot-help/using/sessions",
+                "bravebot-help/using/sessions::headings",
+                "bravebot-help/using/sessions::section:14:The files the session wrote",
+                "bravebot-help/specs",
+                "bravebot-help/specs/commands",
+                "bravebot-help/reference/commands",
+                "bravebot-help/reference/commands#request",
+                "notes::headings",
+                "notes::section:1:Notes",
+                "notes#request",
+            ] {
+                let output = dispatched_help(&mut policy, &workspace, catalogue, name);
+                let text = told(&mut policy, &output.text);
+                assert!(text.starts_with("error: no skill named"), "{name}: {text}");
+                assert!(policy.loaded_skill_directories().is_empty(), "{name}");
+            }
+        }
+        let output = dispatched_help(&mut policy, &workspace, &curated, "notes");
+        assert!(told(&mut policy, &output.text).starts_with("body of notes\n"));
+    }
+
+    /// Counts and titles must survive dispatch; merely preserving one known spec hides omissions.
+    #[cfg(unix)]
+    #[test]
+    fn compiled_help_dispatch_keeps_every_spec_title_and_clause_count() {
+        fn specs(directory: &std::path::Path, paths: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    specs(&path, paths);
+                } else if path.extension().is_some_and(|ext| ext == "md")
+                    && path.file_name().unwrap() != "README.md"
+                {
+                    paths.push(path);
+                }
+            }
+        }
+        let fixture = SkillFixture::new("help-spec-counts-dispatch");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/specs");
+        let mut paths = Vec::new();
+        specs(&root, &mut paths);
+        let output = dispatched_help(&mut policy, &workspace, &catalogue, "bravebot-help/specs");
+        let list = told(&mut policy, &output.text);
+        assert_eq!(
+            list.lines()
+                .filter(|line| line.starts_with("- bravebot-help/specs/"))
+                .count(),
+            paths.len()
+        );
+        for path in paths {
+            let spec =
+                crate::spec_headings::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let relative = path.strip_prefix(&root).unwrap().with_extension("");
+            let name = format!("bravebot-help/specs/{}", relative.display());
+            let count = spec.headings.len();
+            let noun = if count == 1 { "clause" } else { "clauses" };
+            let proposed = if spec.status == "proposed" {
+                ", proposed"
+            } else {
+                ""
+            };
+            assert!(
+                list.contains(&format!(
+                    "- {name}: {} ({}, {count} {noun}{proposed})\n",
+                    spec.title, spec.prefix
+                )),
+                "{name}"
+            );
+            let output = dispatched_help(&mut policy, &workspace, &catalogue, &name);
+            assert!(
+                !told(&mut policy, &output.text).starts_with("error:"),
+                "{name}"
+            );
+        }
+    }
+
     /// The regression it rejects: the index naming pages that `load_skill` then refuses, or a page
     /// loading as the index does, or any name but an exact one reaching a page.
     #[cfg(unix)]
@@ -29533,24 +29867,40 @@ mod tests {
         let mut policy = skill_policy(&mut sink);
 
         let outline = load_named(&mut policy, &catalogue, "bravebot-help/reference/commands");
+        // The outline is the opening text and one line per section, not the page: it names the
+        // `/request` section and holds none of that section's text.
+        assert!(outline.contains("This page is "), "{outline}");
         assert!(
-            outline.len() < 20_000,
-            "the page loaded whole: {} bytes",
-            outline.len()
-        );
-        let first = outline
-            .lines()
-            .find_map(|line| line.strip_prefix("- "))
-            .and_then(|line| line.split(": ").next())
-            .expect("a section line")
-            .to_string();
-        assert!(
-            first.starts_with("bravebot-help/reference/commands#"),
+            outline.contains("- bravebot-help/reference/commands#request: `/request` ("),
             "{outline}"
         );
-        let section = load_named(&mut policy, &catalogue, &first);
-        assert!(section.starts_with("#"), "{section}");
-        assert!(section.len() < 20_000, "{} bytes", section.len());
+        assert!(
+            !outline.contains("Opens a read-only view of the last request"),
+            "the page loaded whole: {} characters",
+            outline.chars().count()
+        );
+        assert!(outline.chars().count() < 14_000, "{outline}");
+
+        let section = load_named(
+            &mut policy,
+            &catalogue,
+            "bravebot-help/reference/commands#request",
+        );
+        assert!(section.starts_with("## `/request`\n"), "{section}");
+        assert!(
+            section.contains("Opens a read-only view of the last request")
+                && section.contains("`unrecorded`")
+                && section.ends_with("`/request` followed by words is a prompt."),
+            "{section}"
+        );
+        // The sections on either side of it are not part of it.
+        assert!(
+            !section.contains("## `/context`")
+                && !section.contains("Reports what the last request was made of")
+                && !section.contains("## `/status`")
+                && !section.contains("Reports everything the session knows"),
+            "{section}"
+        );
         assert_ne!(section, outline);
 
         let produced = load_skill(
@@ -29560,6 +29910,82 @@ mod tests {
             &json!({ "name": "bravebot-help/reference/commands#no-section-has-this-heading" }),
         );
         assert!(produced.failed, "a section the page lacks loaded");
+    }
+
+    /// A helper-only selector or a full-page fallback would leave real help calls just as large.
+    #[cfg(unix)]
+    #[test]
+    fn the_files_view_answer_loads_through_headings_and_one_small_section() {
+        let fixture = SkillFixture::new("help-headings-load");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let index = load_named(&mut policy, &catalogue, "bravebot-help");
+        let sessions = index
+            .lines()
+            .find(|line| line.starts_with("- bravebot-help/using/sessions: "))
+            .unwrap();
+        assert!(sessions.to_lowercase().contains("files"), "{sessions}");
+        let headings = load_named(
+            &mut policy,
+            &catalogue,
+            "bravebot-help/using/sessions::headings",
+        );
+        assert!(
+            !headings.contains("Ctrl-C"),
+            "body text leaked into headings"
+        );
+        let selector = headings
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .find(|name| name.ends_with(":The files the session wrote"))
+            .unwrap();
+        let section = load_named(&mut policy, &catalogue, selector);
+        assert!(section.starts_with("### The files the session wrote\n"));
+        assert!(
+            section.contains("previous") && section.contains("next"),
+            "{section}"
+        );
+        assert!(
+            section.contains("Esc") && section.contains("Ctrl-C"),
+            "{section}"
+        );
+        assert!(!section.contains("\n### ") && !section.contains("\n## "));
+        // What the two routes cost after the index, which both start from. The bare loads are what
+        // the tool returns for the two candidate pages: an outline for a page over 12000 characters.
+        let size_of = |page: &str| -> usize {
+            let prefix = format!("- bravebot-help/{page}: ");
+            let line = index
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap();
+            line.rsplit_once('(')
+                .and_then(|(_, size)| size.split_whitespace().next())
+                .and_then(|size| size.parse().ok())
+                .unwrap_or_else(|| panic!("no size on {line}"))
+        };
+        let mut bare = 0;
+        for page in ["reference/cli", "using/interactive-mode"] {
+            let loaded = load_named(&mut policy, &catalogue, &format!("bravebot-help/{page}"));
+            let loaded = loaded.chars().count();
+            // A loader that returned the whole page would be the size the index gives.
+            assert!(
+                loaded * 5 < size_of(page),
+                "{page} loaded {loaded} of {} characters",
+                size_of(page)
+            );
+            bare += loaded;
+        }
+        let selected = headings.chars().count() + section.chars().count();
+        eprintln!(
+            "help payload: index={}, headings={}, section={}, bare loads={bare}",
+            index.chars().count(),
+            headings.chars().count(),
+            section.chars().count()
+        );
+        assert!(selected < 10_000, "selected {selected} characters");
+        assert!(selected < bare, "selected {selected}, bare loads {bare}");
     }
 
     /// The regression it rejects: the list of specs or a spec's page being known to `help` and not
@@ -29635,6 +30061,21 @@ mod tests {
             produced.failed,
             "a built-in spec page answered for the user's skill"
         );
+        for name in [
+            "bravebot-help/reference/commands",
+            "bravebot-help/reference/commands#request",
+        ] {
+            let produced = load_skill(
+                &mut policy,
+                &catalogue,
+                Beside::every(),
+                &json!({ "name": name }),
+            );
+            assert!(
+                produced.failed,
+                "{name} answered for the user's skill: a long page's outline or section"
+            );
+        }
     }
 
     /// The regression it rejects: a skill's sibling file being readable before the skill is
