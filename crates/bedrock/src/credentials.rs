@@ -27,7 +27,7 @@
 //! a turn, and the only thing it is ever used for is computing a signature.
 
 use bravebot_config::{Held, Secret};
-use bravebot_sandbox::programs::Names;
+use bravebot_sandbox::programs::{Names, selectors};
 use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -106,8 +106,8 @@ fn absent(command: &Command) -> bool {
 const CODE_SELECTORS: [(&str, Names); 7] = [
     ("AWS_CONFIG_FILE", Names::File),
     ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
-    ("BROWSER", Names::Program),
-    ("OPENSSL_CONF", Names::File),
+    selectors::BROWSER,
+    selectors::OPENSSL_CONF,
     ("OPENSSL_CONF_INCLUDE", Names::Directory),
     ("OPENSSL_ENGINES", Names::Directory),
     ("OPENSSL_MODULES", Names::Directory),

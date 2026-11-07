@@ -192,8 +192,12 @@ shipped, and an extra rule about the wrong file decides what the person never ag
 person's environment, has each variable the program's launcher reads to choose code to run removed,
 unless the value passes a check.** The value passes when it is an absolute path that exists outside
 every stage-writable directory, links followed, or, for a variable that names a program, a bare
-program name, which the program finds on the reduced `PATH`. A variable that only carries a
-credential, such as `GOOGLE_APPLICATION_CREDENTIALS`, stays. A variable that names a directory the
+program name, which the program finds on the reduced `PATH`. A variable that holds a list of
+directories, such as `PYTHONPATH`, passes when every entry does, and one that holds options for an
+interpreter, such as `CLOUDSDK_PYTHON_ARGS`, is removed whatever it holds. A variable that only
+carries a credential the program reads as data, such as `AWS_PROFILE`, stays. A file that can name a
+command to run, such as `GOOGLE_APPLICATION_CREDENTIALS` for `gcloud`, whose `external_account` type
+runs one, does not only carry a credential and is removed unless it passes. A variable that names a directory the
 program reads configuration from counts as code when the program runs files from that directory,
 even though the directory also holds credentials ([BACKEND-65](../specs/backends.md#BACKEND-65)).
 
@@ -203,8 +207,9 @@ prompt run commands the person or the project chose, so the rule does not apply 
 bravebot's own executable is not a start of another program, so the rule does not apply to it
 either. A reviewer decides the rest from what the start is for, and the diff says which it is when
 that is not plain. This entry does not say that a start the diff does not touch complies. The only
-list whose values are kept or removed by `may_be_run` is `CODE_SELECTORS` in
-`crates/agent/src/gcloud.rs`, so a diff that changes the browser opener, scheduler or
+lists whose values are kept or removed by `may_be_run` are the `CODE_SELECTORS` lists in
+`crates/agent/src/gcloud.rs` and `crates/bedrock/src/credentials.rs`, so a diff that changes the
+browser opener, scheduler or
 push-identity start adds a list for it, or records the gap as [GAP-001](gaps.md#GAP-001) asks.
 
 In a diff that adds or changes the start of a program bravebot starts for itself, a reviewer reads

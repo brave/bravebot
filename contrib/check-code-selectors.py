@@ -32,7 +32,14 @@ SOURCES = [
 ]
 
 LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*\[(.*?)\]\s*;", re.DOTALL)
-ENTRY = re.compile(r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)')
+ENTRY = re.compile(
+    r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)'
+    r"|\bselectors::([A-Z0-9_]+)"
+)
+# A name shared between lists, defined once in the sandbox crate: `pub const NAME: (&str, Names) =
+# ("NAME", ...)`. A list names it as `selectors::NAME`.
+SHARED_FILE = "crates/sandbox/src/programs.rs"
+SHARED = re.compile(r'pub const ([A-Z0-9_]+): \(&str, Names\) = \(\s*"([A-Za-z0-9_]+)"')
 TESTS = re.compile(
     r"#\[cfg\(\s*(?:test|all\(\s*test\b[^\]]*)\)\s*\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*\{"
 )
@@ -47,7 +54,26 @@ def selectors(text):
     found = LIST.search(text)
     if not found:
         return None
-    return ENTRY.findall(found.group(1))
+    return [a or b for a, b in ENTRY.findall(found.group(1))]
+
+
+def options_in(text):
+    """The names in CODE_SELECTORS that take options and not a path.
+
+    An option string names nothing outside a stage-writable directory, so it is removed whatever it
+    holds and has no value that is kept. Such a name needs the removal assertion only.
+    """
+    found = LIST.search(text)
+    return re.findall(r'"([A-Za-z0-9_]+)"\s*,\s*Names::Options\b', found.group(1)) if found else []
+
+
+def shared_mismatches(text):
+    """The shared constants whose Rust name is not the variable they hold.
+
+    A list names a shared entry by its constant, and this script takes that constant's name as the
+    variable, so a constant holding another variable would be tested under the wrong name.
+    """
+    return [const for const, name in SHARED.findall(text) if const != name]
 
 
 def tests_of(text):
@@ -77,13 +103,14 @@ def verdict(text, source="the source file"):
     if tests is None:
         return [f"{source} has no test module, so no name in CODE_SELECTORS has a test."]
     complaints = []
+    options = options_in(text)
     for name in names:
         if not asserts(tests, name, kept=False):
             complaints.append(
                 f"{name} is in CODE_SELECTORS in {source} and no test asserts "
                 f"withheld(\"{name}\", ...) for a value a stage may write."
             )
-        if not asserts(tests, name, kept=True):
+        if name not in options and not asserts(tests, name, kept=True):
             complaints.append(
                 f"{name} is in CODE_SELECTORS in {source} and no test asserts "
                 f"!withheld(\"{name}\", ...) for a safe value."
@@ -122,6 +149,31 @@ mod tests {
 # The same list under the plain `#[cfg(test)]` a crate without a unix-only test module has.
 COVERED_PLAIN = COVERED.replace("#[cfg(all(test, unix))]", "#[cfg(test)]")
 
+# A list that takes one of its entries from the shared module.
+SHARED_LIST = """\
+const CODE_SELECTORS: [(&str, Names); 3] = [
+    ("A_PROGRAM", Names::Program),
+    selectors::A_SHARED,
+    (
+        "A_FILE",
+        Names::File,
+    ),
+];
+"""
+
+# A list whose one name takes options, which has no value to keep.
+OPTIONS_LIST = """\
+const CODE_SELECTORS: [(&str, Names); 1] = [
+    ("AN_OPTION", Names::Options),
+];
+#[cfg(test)]
+mod tests {
+    fn t() {
+        assert!(withheld("AN_OPTION", &genuine, &session));
+    }
+}
+"""
+
 
 def selftest():
     """Prove the parse and the verdict on inputs whose answer is known.
@@ -136,6 +188,38 @@ def selftest():
 
     got = selectors(COVERED)
     case("parse: all names are read", got == ["A_PROGRAM", "A_DIRECTORY", "A_FILE"], got)
+    got = selectors(SHARED_LIST)
+    case(
+        "parse: a shared entry is read as its constant's name",
+        got == ["A_PROGRAM", "A_SHARED", "A_FILE"],
+        got,
+    )
+    case(
+        "shared: a constant named for its variable passes",
+        shared_mismatches('pub const A_SHARED: (&str, Names) = ("A_SHARED", Names::File);') == [],
+        None,
+    )
+    case(
+        "shared: a constant holding another variable is found",
+        shared_mismatches('pub const A_SHARED: (&str, Names) = ("OTHER", Names::File);')
+        == ["A_SHARED"],
+        None,
+    )
+    case(
+        "verdict: an options name needs only the removal assertion",
+        verdict(OPTIONS_LIST) == [],
+        verdict(OPTIONS_LIST),
+    )
+    case(
+        "verdict: an options name with no removal assertion fails once",
+        len(verdict(OPTIONS_LIST.replace('assert!(withheld("AN_OPTION"', 'let _ = ("AN_OPTION"'))) == 1,
+        verdict(OPTIONS_LIST.replace('assert!(withheld("AN_OPTION"', 'let _ = ("AN_OPTION"')),
+    )
+    case(
+        "verdict: a path name is not excused for lacking a keep assertion",
+        len(verdict(OPTIONS_LIST.replace("Names::Options", "Names::File"))) == 1,
+        verdict(OPTIONS_LIST.replace("Names::Options", "Names::File")),
+    )
     case("parse: a file with no list is not an empty list", selectors("fn main() {}") is None, None)
     case("verdict: a covered list passes", verdict(COVERED) == [], verdict(COVERED))
     case(
@@ -203,6 +287,15 @@ def main():
         return selftest()
     complaints = []
     total = 0
+    shared = ROOT / SHARED_FILE
+    if shared.exists():
+        for const in shared_mismatches(shared.read_text(encoding="utf-8")):
+            complaints.append(
+                f"{const} in {SHARED_FILE} holds another variable's name, so a list naming "
+                f"selectors::{const} would be tested under the wrong name."
+            )
+    else:
+        complaints.append(f"{shared} is not there")
     for relative in SOURCES:
         source = ROOT / relative
         if not source.exists():

@@ -4295,14 +4295,30 @@ The environment names the service by `GOOGLE_CLOUD_PROJECT` alone ([BACKEND-50](
 program is `gcloud`, found on `PATH` without the directories a stage may write, started with fixed arguments and
 this agent's own credentials taken off its environment, and no value from a settings file, a model or the
 workspace reaches it ([BACKEND-1](#BACKEND-1), [SANDBOX-30](sandboxing.md#SANDBOX-30)). It is not named by
-a file. `GOOGLE_APPLICATION_CREDENTIALS` is read by the CLI and not by bravebot.
+a file.
 
-Two variables the CLI reads name code it then runs: `CLOUDSDK_PYTHON`, the interpreter its launcher
-executes, and `CLOUDSDK_CONFIG`, whose `virtenv/bin/activate` the launcher sources when it has no
-interpreter of its own. Each is taken off the environment the program is started with unless its value is
-an absolute path outside every directory a stage may write, with links followed. `CLOUDSDK_PYTHON` given
-as a bare name is kept, since the program's `PATH` leaves those directories out. A relative path, and a path
-to something that does not exist, are taken off. The rest of the environment is left as it is.
+The CLI's launcher and auth code read variables that name code it then runs, or that change what the
+interpreter it starts runs. Each is taken off the environment the program is started with unless its
+value is an absolute path outside every directory a stage may write, with links followed, that exists, and
+is a regular file for a variable that names a file:
+
+- `CLOUDSDK_PYTHON`, the interpreter its launcher executes, given as a bare name is kept, since the
+  program's `PATH` leaves those directories out. `BROWSER`, the command `gcloud auth login` opens a page
+  with, is judged the same way.
+- `CLOUDSDK_CONFIG`, whose `virtenv/bin/activate` the launcher sources when it has no interpreter of
+  its own, `PYTHONHOME`, `PYTHONUSERBASE` and `PYTHONPYCACHEPREFIX` name a directory.
+- `PYTHONPATH` is a list of directories split on the platform's path separator. It is kept only when
+  it has an entry and every entry passes, so one empty, relative, missing or stage-writable entry
+  takes the whole variable off.
+- `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH`,
+  `CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH` and `OPENSSL_CONF` name a file. A credential
+  file of type `external_account` names a command to run and a file to read and send to a host it
+  names, so one a stage can write is taken off.
+- `CLOUDSDK_PYTHON_ARGS` holds options for the interpreter, such as `-c <code>`, and is always taken off.
+
+A relative path, and a path to something that does not exist, are taken off. The rest of the
+environment is left as it is. A person whose credential file or interpreter lives in a directory a
+stage may write has it taken off, and `gcloud` then signs in as it would with none set.
 
 The sign-in is asked for before work starts, and only for a model this service answers
 ([BACKEND-9](#BACKEND-9)): where the CLI gives no token, `gcloud auth application-default login` is run and
@@ -4340,6 +4356,17 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::gcloud::an_interpreter_with_no_directory_is_kept_and_a_relative_or_missing_one_is_not`
 `verified-by: bravebot_agent::gcloud::a_config_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
 `verified-by: bravebot_agent::gcloud::a_cloudsdk_value_that_selects_no_code_is_left_as_set`
+`verified-by: bravebot_agent::gcloud::a_python_path_with_an_entry_a_stage_may_write_is_not_the_one_gcloud_imports_from`
+`verified-by: bravebot_agent::gcloud::a_python_path_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_python_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_load_from`
+`verified-by: bravebot_agent::gcloud::a_python_directory_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
+`verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
 `verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
 
 <a id="BACKEND-68"></a>

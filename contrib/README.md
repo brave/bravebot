@@ -119,7 +119,9 @@ variable off when its value names a path a stage may write. For each name in a l
 an
 `assert!(withheld("NAME", ...))` and an `assert!(!withheld("NAME", ...))` in the test module of the
 same file. A loop that keeps every value fails the first, and one that removes every value fails the
-second.
+second. A name of the `Options` kind has no value to keep and needs only the first. A list may take
+an entry from `selectors::` in `crates/sandbox/src/programs.rs`, which this script reads as the
+variable the constant is named for.
 
 ```sh
 make check-code-selectors   # or contrib/check-code-selectors.py

@@ -298,6 +298,13 @@ pub enum Names {
     File,
     /// A directory the program may source a script or load a library from.
     Directory,
+    /// A list of directories joined with the platform's path separator, as `PYTHONPATH` is. Every
+    /// entry must be one [`Names::Directory`] accepts, so an empty entry, which is read as the
+    /// current directory, is not.
+    Directories,
+    /// Options for the program or its interpreter, such as `CLOUDSDK_PYTHON_ARGS`. They name no path
+    /// to check: `-c <code>` and `-m <module>` run code whatever directory they are in.
+    Options,
 }
 
 /// Whether a program may be left to run or read what `value` names.
@@ -307,6 +314,9 @@ pub enum Names {
 /// exists outside them, with its links followed, and for [`Names::File`] that something is a file.
 /// A relative path is read from the directory the session writes in, and one that does not exist is
 /// made by whoever writes it first.
+///
+/// A [`Names::Directories`] value is split on the path separator and passes only when it has an
+/// entry and every entry passes as a [`Names::Directory`]. [`Names::Options`] never passes.
 pub fn may_be_run(
     names: Names,
     value: &Path,
@@ -316,7 +326,36 @@ pub fn may_be_run(
         Names::Program if value.components().count() == 1 && !value.is_absolute() => true,
         Names::File => value.is_absolute() && value.is_file() && outside_stage_writable(value),
         Names::Program | Names::Directory => value.is_absolute() && outside_stage_writable(value),
+        Names::Directories => {
+            let mut entries = std::env::split_paths(value.as_os_str()).peekable();
+            entries.peek().is_some()
+                && entries.all(|entry| may_be_run(Names::Directory, &entry, outside_stage_writable))
+        }
+        Names::Options => false,
     }
+}
+
+/// The entries of a `CODE_SELECTORS` list for variables that more than one program's launcher
+/// reads, so each list names them once ([PATH-006](../../../docs/best-practices/paths.md#PATH-006)).
+///
+/// A list takes an entry by path, as `selectors::BROWSER`, and the constant is named for the
+/// variable. `contrib/check-code-selectors.py` reads such an entry as that variable and requires
+/// the list's own file to test it.
+pub mod selectors {
+    use super::Names;
+
+    /// The command a program opens a page with, which Python's `webbrowser` runs.
+    pub const BROWSER: (&str, Names) = ("BROWSER", Names::Program);
+    /// A configuration file of the OpenSSL a program loads, which can load a provider module.
+    pub const OPENSSL_CONF: (&str, Names) = ("OPENSSL_CONF", Names::File);
+    /// Directories Python imports from, including `sitecustomize.py`.
+    pub const PYTHONPATH: (&str, Names) = ("PYTHONPATH", Names::Directories);
+    /// The prefix Python finds its standard library under.
+    pub const PYTHONHOME: (&str, Names) = ("PYTHONHOME", Names::Directory);
+    /// The user site directory, which holds `usercustomize.py` and `.pth` files.
+    pub const PYTHONUSERBASE: (&str, Names) = ("PYTHONUSERBASE", Names::Directory);
+    /// The tree Python reads compiled modules from, which can hold an unchecked `.pyc`.
+    pub const PYTHONPYCACHEPREFIX: (&str, Names) = ("PYTHONPYCACHEPREFIX", Names::Directory);
 }
 
 /// Take each variable in `selectors` off the environment `command` is started with unless
@@ -1878,6 +1917,69 @@ mod tests {
         assert!(may_be_run(Names::Program, Path::new("xdg-open"), &outside));
         assert!(!may_be_run(Names::File, Path::new("xdg-open"), &outside));
         assert!(!may_be_run(Names::Directory, Path::new("safe"), &outside));
+    }
+
+    /// SANDBOX-30: a variable that holds a list of directories is kept only when it has an entry
+    /// and every entry passes as a directory, so one empty, relative, missing or stage-writable
+    /// entry among good ones takes the whole value off, and a variable that holds options is never
+    /// kept. The regressions it rejects are a check of the first or last entry only, a check of the
+    /// whole value as one path, and a pass for an empty list or for options.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_of_directories_passes_only_when_every_entry_does_and_options_never_do() {
+        let parent = scratch_dir("programs-names-directories");
+        let (row, safe, other) = (
+            parent.join("row"),
+            parent.join("safe"),
+            parent.join("other"),
+        );
+        for dir in [&row, &safe, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let rows = std::slice::from_ref(&row);
+        let outside = |file: &Path| outside_stage_writable_with(file, rows, &[]);
+        let list = |entries: &[&Path]| PathBuf::from(std::env::join_paths(entries).unwrap());
+
+        assert!(may_be_run(Names::Directories, &list(&[&safe]), &outside));
+        assert!(may_be_run(
+            Names::Directories,
+            &list(&[&safe, &other]),
+            &outside
+        ));
+        assert!(!may_be_run(Names::Directories, &list(&[&row]), &outside));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&safe, &row]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&row, &safe]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&safe, Path::new("")]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[Path::new("lib"), &safe]),
+            &outside
+        ));
+        assert!(!may_be_run(
+            Names::Directories,
+            &list(&[&safe, &parent.join("absent")]),
+            &outside
+        ));
+        assert!(!may_be_run(Names::Directories, Path::new(""), &outside));
+        assert!(!may_be_run(Names::Options, Path::new(""), &outside));
+        assert!(!may_be_run(Names::Options, &safe, &outside));
+        assert!(!may_be_run(
+            Names::Options,
+            Path::new("-c print(1)"),
+            &outside
+        ));
     }
 
     /// SANDBOX-30: `withhold_code_selectors_with` takes off the listed names whose value fails
