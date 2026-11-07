@@ -156,6 +156,9 @@ status that is the failure.
 `verified-by: bravebot_aichat::client::a_reply_cut_off_part_way_is_written_to_the_diagnostic_log_as_well_as_its_retries`
 `verified-by: bravebot_aichat::client::a_retry_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_bedrock::lib::a_retry_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_bedrock::lib::a_streams_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped`
+`verified-by: bravebot_agent::turn::a_fetch_urls_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped`
+`verified-by: bravebot_agent::turn::a_downloads_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped`
 `verified-by: bravebot_mcp::stdio::a_launch_that_failed_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::stdio::a_handshake_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::http_log::a_handshake_is_written_to_the_diagnostic_log_when_it_works`

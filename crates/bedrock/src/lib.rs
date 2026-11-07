@@ -5076,4 +5076,169 @@ mod tests {
             "a quiet reply was waited on past the stated 300 ms: {result:?}"
         );
     }
+
+    /// DIAG-7: `stream_once` reads its body with [`read_in_background`], a thread of its own
+    /// rather than the caller's, and nothing had pinned that a body it cuts still reaches the
+    /// diagnostic log the way `bravebot-net`'s and `bravebot-aichat`'s own cut bodies already do,
+    /// or that one cut after the turn was stopped does not.
+    ///
+    /// The stop arrives from a thread of the test's own, a second and a half after the reply
+    /// began and well before the long idle bound the stopped case is given, so what ends the read
+    /// is the stop and not the clock. The unstopped case is given a short idle bound instead, so
+    /// the same cut connection produces a genuine body failure for it to log.
+    #[test]
+    fn a_streams_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        use std::io::{BufRead, Read, Write};
+
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        for stopped in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            // A retry the cut does not itself end (the unstopped case) reaches this server again,
+            // so every connection is answered the same cut way rather than only the first.
+            std::thread::spawn(move || {
+                while let Ok((mut stream, _)) = listener.accept() {
+                    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    if reader.read_exact(&mut body).is_err() {
+                        return;
+                    }
+
+                    let frame = eventstream::tests::frame(
+                        "contentBlockDelta",
+                        br#"{"contentBlockIndex":0,"delta":{"text":"partial"}}"#,
+                    );
+                    // Announced far larger than what follows, and nothing follows the one frame:
+                    // the client is left waiting for a body that never finishes arriving.
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                        frame.len() * 50
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&frame);
+                    let _ = stream.flush();
+                    std::thread::sleep(Duration::from_secs(60));
+                }
+            });
+
+            let config = config();
+            let bound = if stopped {
+                Duration::from_secs(4)
+            } else {
+                Duration::from_millis(400)
+            };
+            let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+                idle: bound,
+                reply: bound,
+                ..bravebot_net::Timeouts::default()
+            });
+            let cancel = Cancel::new();
+            let pressed = cancel.clone();
+            if stopped {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(1_500));
+                    pressed.cancel();
+                });
+            }
+            let mut client = BedrockClient::new(&config, &egress)
+                .with_cancel(cancel)
+                .with_backoff(Duration::from_millis(1));
+            client.test_request = Some(Request::post(
+                format!("http://{address}/converse"),
+                b"{}".to_vec(),
+            ));
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+
+            let dir = tempfile::tempdir().expect("a scratch directory");
+            bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
+            let result = client.complete_streaming(
+                &mut policy,
+                &ChatRequest::new("opus-arn", vec![]),
+                |_| {},
+            );
+            if stopped {
+                // `complete_streaming` returns as soon as the outer loop notices the stop, which
+                // is quicker than the background thread's own read gives up on the connection. If
+                // the cancel token had not reached that read, it would still be waiting out the
+                // idle bound on its own and would write a stray failure when that runs out, after
+                // this call already returned (DIAG-7's known cost). Outlasting the bound here is
+                // what would catch that line arriving late.
+                std::thread::sleep(bound + Duration::from_millis(500));
+            }
+            let log: String = std::fs::read_dir(dir.path().join("logs"))
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+                        .collect()
+                })
+                .unwrap_or_default();
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+            if stopped {
+                assert!(
+                    matches!(result, Err(BedrockError::Cancelled)),
+                    "stopped: {stopped}: {result:?}"
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "stopped: {stopped}: a cut stream did not fail"
+                );
+            }
+            // Scoped to this test's own host: the diagnostic log's state is process-wide, so a
+            // transport failure an unrelated test makes while this one holds it configured would
+            // otherwise be counted as this test's own.
+            let host = format!("host={address}");
+            let cut = log
+                .lines()
+                .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+                .count();
+            if stopped {
+                assert_eq!(
+                    cut, 0,
+                    "stopped: {stopped}: a request the person stopped was logged as a failure: {log}"
+                );
+            } else {
+                assert_eq!(
+                    cut,
+                    client.attempts() as usize,
+                    "stopped: {stopped}: each cut attempt should have logged its own failure: {log}"
+                );
+                assert!(
+                    cut > 0,
+                    "stopped: {stopped}: a cut body was not logged: {log}"
+                );
+            }
+        }
+    }
 }

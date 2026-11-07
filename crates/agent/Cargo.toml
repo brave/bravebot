@@ -53,3 +53,9 @@ sha2.workspace = true
 # ending the process group a stage leads and finding whether anything is left in it. rustix rather
 # than libc so the calls do not need unsafe at this crate.
 rustix = { workspace = true, features = ["fs", "process", "system"] }
+
+[dev-dependencies]
+# A test that a cut or a stopped fetch reaches, or does not reach, the diagnostic log points it at
+# a scratch directory and reads the file back.
+bravebot-diag = { path = "../diag" }
+tempfile = { workspace = true }
