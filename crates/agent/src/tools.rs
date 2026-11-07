@@ -17449,18 +17449,20 @@ mod tests {
     #[test]
     fn the_edit_file_description_names_write_file_only_where_the_list_holds_it() {
         let full = description_of(&the_table_without(&[]), "edit_file");
-        let prefer = " Prefer this to write_file when changing part of a file: the user approves a \
-                      diff, which is easier to review than a whole body.";
+        let prefer = " Prefer this to write_file when changing part of a file: a diff is easier \
+                      to review than a whole body.";
         assert_eq!(
             full,
             format!(
-                "Replace an exact passage of text in an existing workspace file.{prefer} The \
-                 user must approve each edit before it happens, so explain what you are \
-                 changing. To change several places in one file, give them together in edits: \
-                 the user approves one diff. In a .ipynb notebook, name a cell by the number a \
-                 read showed instead of a passage: give cell and new_text to replace that \
-                 cell's source (its saved outputs are dropped), or cell_action insert_after or \
-                 delete."
+                "Replace an exact passage of text in an existing workspace file.{prefer} An \
+                 edit inside a directory the user vouched for is applied without a prompt; \
+                 elsewhere the user approves each edit as a diff before it happens unless a \
+                 permission rule or mode answers for them. Explain what you are changing \
+                 either way. To change several places in one file, give them together in \
+                 edits: they are one diff. In a .ipynb notebook, name a cell \
+                 by the number a read showed instead of a passage: give cell and new_text to \
+                 replace that cell's source (its saved outputs are dropped), or cell_action \
+                 insert_after or delete."
             )
         );
         let without = description_of(&the_table_without(&["write_file"]), "edit_file");
@@ -17473,6 +17475,37 @@ mod tests {
                 "taking {other} off changed the edit_file description"
             );
         }
+    }
+
+    /// WRITE-3. The descriptions of the two writing tools do not say every write is put to the
+    /// user: a write to a trusted path with trusted data is applied unasked (TRUST-4). write_file
+    /// also says it replaces an existing file whole and that the path should be read or listed
+    /// first when the file may exist.
+    #[test]
+    fn the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces() {
+        let table = the_table_without(&[]);
+        let write = description_of(&table, "write_file");
+        let edit = description_of(&table, "edit_file");
+        for (name, text) in [("write_file", &write), ("edit_file", &edit)] {
+            assert!(
+                text.contains(
+                    "inside a directory the user vouched for is applied without a prompt"
+                ),
+                "{name}: {text}"
+            );
+            assert!(
+                !text.contains("must approve"),
+                "{name} still says every call needs approval: {text}"
+            );
+        }
+        assert!(
+            write.contains("replaces it whole and the old contents are gone"),
+            "{write}"
+        );
+        assert!(
+            write.contains("read or list the path first when the file may exist"),
+            "{write}"
+        );
     }
 
     /// TOOL-6. `repo_map`, `lsp` and `vet_content` name `read_file`, `read_file` and

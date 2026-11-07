@@ -18,8 +18,8 @@ that is merely carried.
 | [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
-| [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, every time** |
+| [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, unless the path is vouched for and the contents are trusted** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, unless the path is vouched for** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
@@ -418,7 +418,9 @@ text at it are labelled, and where the index is cached are in [the lsp tool](lsp
 ## `write_file`
 
 Writes a UTF-8 text file in the workspace, or a picture or PDF the agent holds only as a reference.
-**You approve every write before it happens.**
+**You approve a write before it happens, except where the path is one you vouched for and the
+contents are trusted, which is written without a prompt.** A write to a path that already holds a
+file replaces it whole, and the agent is told to read or list the path first when the file may exist.
 
 | Parameter | |
 |---|---|
@@ -472,7 +474,8 @@ file written from a `contents_ref` reports nothing.
 
 ## `edit_file`
 
-Replaces an exact passage in an existing file. **You approve every edit, as a diff.** The agent
+Replaces an exact passage in an existing file. **You approve an edit as a diff, except in a
+directory you vouched for, where it is applied without a prompt.** The agent
 prefers this to rewriting a whole body.
 
 | Parameter | |
