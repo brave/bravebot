@@ -273,6 +273,16 @@ a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is:
 program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
 the built-in, and the pages go with it.
 
+Each line of the index ends with the size of the page in characters. A page of more than 12000
+characters loads as its opening text and a list of its sections, one line each with the name
+`bravebot-help/<place of the page>#<section>` and the size of the section, and not as its whole
+text. A section is a `##` heading outside a code fence, or a `###` heading where the page has no
+`##` heading, and everything under it up to the next one.
+Its name is the heading lowercased, with each run of characters other than letters and digits
+written as one hyphen and `-2`, `-3` added to a heading that repeats. A section loads with
+`load_skill` by that name, matched exactly against the sections of the compiled page, so it is
+never a path. A page of 12000 characters or fewer loads whole.
+
 The clause headings of `docs/specs/` are carried the same way. The index has one more line, for the
 page `bravebot-help/specs`, which lists every spec with its title and the number of its clauses. The
 page of one spec is `bravebot-help/specs/<place of the spec file>`, such as
@@ -297,6 +307,14 @@ wording of a rule is answered from its heading, and the program holds the clause
 `verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
 `verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`
 `verified-by: bravebot_agent::help::every_spec_is_carried_with_the_clause_headings_its_file_holds`
+`verified-by: bravebot_agent::help::a_section_runs_to_the_next_heading_and_a_fenced_heading_starts_none`
+`verified-by: bravebot_agent::help::a_long_page_loads_as_its_sections_and_a_section_loads_alone`
+`verified-by: bravebot_agent::help::a_short_page_loads_whole`
+`verified-by: bravebot_agent::help::a_page_with_only_third_level_headings_splits_at_them`
+`verified-by: bravebot_agent::help::every_long_page_has_sections_to_load_it_by`
+`verified-by: bravebot_agent::help::a_section_is_found_by_its_exact_name_and_nothing_else`
+`verified-by: bravebot_agent::help::the_index_gives_the_size_of_every_page_and_says_which_load_by_section`
+`verified-by: bravebot_agent::tools::a_long_documentation_page_loads_by_section_through_the_tool`
 `verified-by: bravebot_agent::help::a_spec_page_holds_the_heading_of_a_clause_and_names_its_file`
 `verified-by: bravebot_agent::help::a_spec_page_is_found_by_its_exact_name_and_nothing_else`
 `verified-by: bravebot_agent::help::the_list_of_specs_names_a_page_that_loads_for_each_spec`
