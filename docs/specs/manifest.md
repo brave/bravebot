@@ -546,11 +546,15 @@ them, in full.
 The call itself is made by the function a turn's call goes through
 ([SERVERS-7](mcp-servers.md#SERVERS-7)), so everything that decides a turn's call decides this one.
 A `deny` rule about the tool refuses it before anybody is asked, in every mode. Of the session's
-rules a plan run reads these and no others. Where nothing else decides the call, approving the plan
-answers it, and the step puts no question: the person approved this call with these arguments, and
-nothing the run reads can change either. What would put the question in spite of a standing answer
-still puts it at the step: an `ask` rule about the tool, a call carrying private data, and plan
-mode ([MODE-3](permission-modes.md#MODE-3)). The egress gate decides as it does there.
+rules a plan run reads these and no others. Where a person approved the plan and nothing else
+decides the call, that approval answers it, and the step puts no question: the person approved this
+call with these arguments, and nothing the run reads can change either. A plan bypassing approved
+was seen by nobody, so its calls are decided by the mode as a turn's are. What would put the
+question in spite of a standing answer still puts it at the step: an `ask` rule about the tool, a
+call carrying private data, and plan mode ([MODE-3](permission-modes.md#MODE-3)). So does a call
+whose arguments hold a character the plan's line would draw as nothing, since the step's question
+writes each one out ([PROMPT-13](prompting.md#PROMPT-13)) and the line the person approved could
+not. The egress gate decides as it does there.
 
 A server declared to ask every call ([SERVERS-21](mcp-servers.md#SERVERS-21)) is asked at the step,
 in every mode, bypassing included, and no answer to it lasts. The plan is not refused for holding
@@ -608,6 +612,8 @@ call nobody approved.
 `verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_the_list_refuses_is_asked_for_once_more`
 `verified-by: bravebot_agent::manifest_server_calls::an_ask_rule_puts_a_planned_call_to_the_person_at_its_step`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_bypass_approved_answers_no_call_for_a_person`
+`verified-by: bravebot_agent::manifest_server_calls::a_planned_call_holding_a_hidden_character_is_asked_at_its_step`
 `verified-by: bravebot_core::policy::approving_a_plan_answers_the_default_question_of_a_call_it_fixed_and_nothing_else`
 `verified-by: bravebot_agent::manifest_server_calls::a_planned_call_to_a_server_asked_every_call_asks_at_its_step`
 `verified-by: bravebot_agent::manifest_server_calls::bypassing_does_not_answer_a_planned_call_to_a_server_asked_every_call`

@@ -2239,8 +2239,17 @@ pub trait Confirmer {
     /// afresh for each run, so remembering an answer would be approving steps nobody has seen. It
     /// is also not an answer to any other question in this trait. What it grants beyond running
     /// the plan is the default question of each call to a server's tool the plan fixed, which the
-    /// step then does not put (MANIFEST-15).
+    /// step then does not put (MANIFEST-15), and only where a person gave it.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision;
+
+    /// [`Confirmer::confirm_manifest`], and the mode that answered where a mode did rather than a
+    /// person, so a plan bypassing approved is not taken for one somebody read (MANIFEST-15).
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_manifest(request), None)
+    }
 
     /// Ask whether to vouch for a quarantined file the model wants to read. Implementations must
     /// default to refusal when they cannot ask.
@@ -3301,6 +3310,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
         request: &VouchRequest,
     ) -> (Decision, Option<&'static str>) {
         self.timing(|inner| inner.confirm_vouch_noting_the_mode(request))
+    }
+
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_manifest_noting_the_mode(request))
     }
 
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {

@@ -1022,6 +1022,56 @@ fn bypassing_does_not_answer_a_planned_call_to_a_server_asked_every_call() {
     assert!(asking.called.is_empty(), "{:?}", asking.called);
 }
 
+/// A plan bypass mode approved was seen by nobody, so its approval answers no call for a person:
+/// the mode answers each call as it does in a turn, and the trail credits the mode, never the plan.
+///
+/// Rejects an implementation that takes the mode's approval of a plan for a person's, which would
+/// let the calls of a plan nobody read go unasked after a switch to asking.
+#[test]
+fn a_plan_bypass_approved_answers_no_call_for_a_person() {
+    let scratch = Scratch::new("bypass-plan");
+    let (url, mcp) = serve_browser();
+    let ran = ran(
+        PermissionMode::Bypass,
+        session(&url, &scratch, false, true),
+        &mcp,
+        vec![call("open_tab", json!({"url": "https://example.com"}))],
+    );
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.called.len(), 1);
+    assert!(
+        !ran.events.iter().any(|event| matches!(
+            event,
+            bravebot_core::event::Event::GatePassed { gate: "approval", detail }
+                if detail.starts_with("approving the plan covered")
+        )),
+        "the trail credited a plan nobody saw"
+    );
+}
+
+/// A call whose arguments hold a character the plan's line draws as nothing is asked at its step,
+/// where the question writes each such character out, since the line the person approved could not
+/// show it.
+///
+/// Rejects an implementation that lets approving a plan answer arguments the person could not read.
+#[test]
+fn a_planned_call_holding_a_hidden_character_is_asked_at_its_step() {
+    let scratch = Scratch::new("hidden");
+    let (url, mcp) = serve_browser();
+    let ran = ran(
+        PermissionMode::Ask,
+        session(&url, &scratch, false, true),
+        &mcp,
+        vec![call(
+            "open_tab",
+            json!({"url": "https://example.com/\u{E0041}\u{200B}"}),
+        )],
+    );
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    let asked: Vec<String> = ran.asked.calls.iter().map(McpCallRequest::name).collect();
+    assert_eq!(asked, ["brave:open_tab"]);
+}
+
 /// Plan mode does not refuse a plan for a call, and asks at the step as it does in a turn.
 ///
 /// Rejects an implementation that refuses the plan as it does one that writes, and one that lets

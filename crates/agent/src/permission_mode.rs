@@ -587,12 +587,22 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// question, and a person in plan mode who wants a run planned before it touches anything is
     /// asking for exactly what this mode does.
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
-        match self.mode.get() {
-            PermissionMode::Bypass => Decision::Approve,
+        self.confirm_manifest_noting_the_mode(request).0
+    }
+
+    /// The answer and, where bypassing gave it, the mode, read from one look at the mode, so a plan
+    /// nobody saw answers no call's question for a person (MANIFEST-15, MODE-8).
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
+        let mode = self.mode.get();
+        match mode {
+            PermissionMode::Bypass => (Decision::Approve, Some(mode.name())),
             PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
-            | PermissionMode::Auto => self.asking().confirm_manifest(request),
+            | PermissionMode::Auto => (self.asking().confirm_manifest(request), None),
         }
     }
 

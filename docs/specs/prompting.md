@@ -35,6 +35,7 @@ kept_in:
   - Confirmer::confirm_server: language servers started
   - Confirmer::confirm_server_noting_the_mode: language servers started
   - Confirmer::confirm_manifest: one effect
+  - Confirmer::confirm_manifest_noting_the_mode: one effect
   - Confirmer::confirm_vouch: the trust map
   - Confirmer::confirm_vouch_noting_the_mode: the trust map
   - Confirmer::confirm_exposing_read: files sent despite a credential
