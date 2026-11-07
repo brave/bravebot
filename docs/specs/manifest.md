@@ -719,6 +719,31 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_choice::rows::a_value_is_sent_as_its_declared_type_and_a_row_that_is_not_is_dropped`
 `verified-by: bravebot_choice::rows::rows_point_into_several_lists_and_take_arrays_of_entries`
 
+<a id="MANIFEST-17"></a>
+### MANIFEST-17: a step whose tools are all marked unattended runs on a person's approval of the plan
+
+Where every tool of an `apply` step is marked unattended in the person's declaration of its server
+([mcp-servers.md](mcp-servers.md#SERVERS-26)), and a person answered the plan's question, the step's
+resolved calls are made with no question at the step, within the caps the plan line stated, and what
+became of each is drawn as for any `apply` step. The plan's line for such a step says it runs
+without asking, and names the server each of its lists was read from and the server its calls go to,
+so approving the plan releases the lists' private entries to that server as it releases a connector
+act's content ([MANIFEST-14](#MANIFEST-14)).
+
+The list is still put, as for any `apply` step, where bypass mode answered the plan, in plan mode,
+and where an `ask` rule names one of the step's tools. Who answered the plan is taken when it is
+answered, so a later change of mode does not change it.
+
+**Why.** A tool a person marks is one whose every call, within the caps, is acceptable on its own:
+it acts only on their own machine, deletes or overwrites nothing, and adds no address. Every target
+is copied from a list a read returned and no call falls outside the tools the plan names, so the
+worst a hostile entry can choose is which of those acceptable calls are made. That bound holds
+whether or not the step asks, which is what lets a person approve a run once and not again at each
+step.
+
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
+`verified-by: bravebot_agent::manifest_server_calls::a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks`
+
 ## Known costs
 
 - **A plan answered at a terminal is answered on one line, with no way back to the steps above it.**
