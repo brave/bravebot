@@ -19475,6 +19475,274 @@ fn a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write()
     );
 }
 
+/// A repository at `dir` holding `app.txt`, committed, and `fix.patch`, which `git apply` turns
+/// `app.txt` into "changed" with.
+fn a_repository_with_a_file_and_a_patch_for_it(dir: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("git starts");
+        assert!(output.status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("app.txt"), "one\n").unwrap();
+    git(&["add", "app.txt"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
+    std::fs::write(
+        dir.join("fix.patch"),
+        "diff --git a/app.txt b/app.txt\n--- a/app.txt\n+++ b/app.txt\n@@ -1 +1 @@\n-one\n+changed\n",
+    )
+    .unwrap();
+}
+
+/// Every request a turn sent, and the record it ended with, when each of `lines` is a `run` call
+/// in its own round, in order, at the workspace root, and the turn then answers. Runs are approved.
+fn requests_and_work_after_runs(
+    name: &str,
+    lines: &[&str],
+    prepare: impl FnOnce(&std::path::Path),
+) -> (Vec<String>, bravebot_agent::Work, Scratch) {
+    let scratch = Scratch::new(name);
+    prepare(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = lines
+        .iter()
+        .map(|command| {
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": command }).to_string(),
+            )
+        })
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    (every_request(&received), completed.work, scratch)
+}
+
+/// Nine rounds that make a worktree, patch a file in it and copy three files into it, with a
+/// line that only reads between each, which is the order a planner delivering its change through
+/// `run` alone works in.
+const A_CHANGE_DELIVERED_THROUGH_RUN: [&str; 9] = [
+    "git worktree add -q wt",
+    "ls wt",
+    "git -C wt apply ../fix.patch",
+    "cat wt/app.txt",
+    "cp fix.patch wt/copy1.txt",
+    "grep -c changed wt/app.txt",
+    "cp fix.patch wt/copy2.txt",
+    "wc -l wt/app.txt",
+    "cp fix.patch wt/copy3.txt",
+];
+
+/// TURN-3: a turn that makes a worktree, applies a patch and copies files through `run` is not
+/// told, after eight rounds, that nothing is written.
+///
+/// Rejects a signal that only the write tools set, which tells a turn whose every change went
+/// through `run` that it has written nothing and sends it to write what is already on disk.
+#[test]
+fn a_turn_that_delivers_its_change_through_run_lines_is_not_told_nothing_is_written() {
+    if !git_is_installed() {
+        return;
+    }
+    let (bodies, _work, scratch) = requests_and_work_after_runs(
+        "run-delivers-change",
+        &A_CHANGE_DELIVERED_THROUGH_RUN,
+        a_repository_with_a_file_and_a_patch_for_it,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("wt/app.txt")).ok(),
+        Some("changed\n".to_string()),
+        "the patch did not apply, so nothing here was tested"
+    );
+    assert!(
+        scratch.path.join("wt/copy3.txt").exists(),
+        "the last copy did not run, so nothing here was tested"
+    );
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn that wrote through run lines was told nothing is written"
+    );
+}
+
+/// TURN-3: a `git apply` that leaves the tree alone is the only `git` line the turn runs, and eight
+/// rounds of lines that only read follow it. The audited table does not account for `git`, so the
+/// line counts as a write tried, even though the work record has no write to show for it.
+///
+/// `--check` is what keeps the tree alone, so the work record cannot be what silences the line.
+/// Rejects a classification that proves `git` read-only or that reads the line's text for a
+/// program it knows writes.
+#[test]
+fn a_turn_whose_only_git_apply_changed_nothing_is_not_told_nothing_is_written() {
+    if !git_is_installed() {
+        return;
+    }
+    let mut lines = vec!["git apply --check fix.patch".to_string()];
+    lines.extend((1..=ROUNDS_BEFORE_WRITING).map(|n| format!("head -n {n} app.txt")));
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let (bodies, work, scratch) = requests_and_work_after_runs(
+        "run-git-apply-only",
+        &lines,
+        a_repository_with_a_file_and_a_patch_for_it,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("app.txt")).ok(),
+        Some("one\n".to_string()),
+        "the check changed the file, so the work record could be what silenced the line"
+    );
+    assert_eq!(work.writes, 0, "the tree was left alone");
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn that ran `git apply` was told nothing is written"
+    );
+}
+
+/// TURN-3: a turn whose `run` lines are all ones the audited table proves read-only is still told
+/// nothing is written, in the same number of rounds, and its record counts no write.
+///
+/// Rejects counting every `run` line as a write, which would silence the line for a turn that
+/// only looked around with `ls`, `cat`, `grep` and `wc`.
+#[test]
+fn a_turn_that_only_reads_through_run_lines_is_told_nothing_is_written() {
+    let reading = [
+        "ls .",
+        "cat app.txt",
+        "wc -l app.txt",
+        "head -n 1 app.txt",
+        "ls .",
+        "cat app.txt",
+        "wc -l app.txt",
+        "head -n 1 app.txt",
+        "ls .",
+    ];
+    let (bodies, work, _scratch) =
+        requests_and_work_after_runs("run-reads-only", &reading, |dir| {
+            std::fs::write(dir.join("app.txt"), "one\n").unwrap();
+        });
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn that only read through run was not told to write"
+    );
+    assert_eq!(work.writes, 0, "no line changed a file");
+    assert_eq!(work.commands, reading.len(), "every line is a command");
+}
+
+/// GROUND-1: the record of a turn that delivers its change through `run` counts each line that
+/// left the workspace tree different, and none of the lines that only read.
+///
+/// The five lines that make the worktree, apply the patch and copy three files are the writes;
+/// the four between them only read. Rejects a record built from the write tools alone, which says
+/// `writes: 0` for this turn.
+#[test]
+fn the_record_of_a_turn_that_delivers_its_change_through_run_lines_counts_those_writes() {
+    if !git_is_installed() {
+        return;
+    }
+    let (_bodies, work, _scratch) = requests_and_work_after_runs(
+        "run-delivers-change-record",
+        &A_CHANGE_DELIVERED_THROUGH_RUN,
+        a_repository_with_a_file_and_a_patch_for_it,
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 5,
+            commands: 9,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "the worktree, the patch and the three copies are five writes among nine commands"
+    );
+}
+
+/// GROUND-1, Known costs: a `run` line started in the background is a command and no write, even
+/// when the program goes on to change a file. The tree is compared when a foreground line stops,
+/// and a background line has not stopped when its call returns, so its changes are not in the
+/// record. This pins that limit; a change that counts them removes the sentence from the known
+/// costs in the same commit.
+#[test]
+fn a_run_line_started_in_the_background_is_a_command_and_no_write() {
+    let scratch = Scratch::new("background-record");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": "touch made.txt", "background": true }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("make a file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "a background line is recorded as a command and no write"
+    );
+}
+
 /// TURN-3: a background `run` line counts as a foreground one does.
 ///
 /// The background path returns before the program ends, so a signal set only where a foreground
