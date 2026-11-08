@@ -40670,6 +40670,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
     let shown = confirmer.shown.clone();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
     turn::resume(
         &config,
@@ -40678,7 +40679,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
         &Task::new("find out").with_auto_vetting(true),
         &mut bravebot_agent::Conversation::new(),
         &mut confirmer,
-        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut reporter,
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
@@ -40691,6 +40692,11 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
     assert!(
         !shown.lock().unwrap().is_empty(),
         "a failed check did not fall back to the question"
+    );
+    assert_eq!(
+        reporter.spent.last().map(|spent| spent.requests),
+        Some(3),
+        "the three planner rounds completed and the check that could not be made did not (SESSION-40)"
     );
     let lines = vetting_lines(&sink);
     assert!(
