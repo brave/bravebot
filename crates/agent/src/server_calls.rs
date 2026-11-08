@@ -313,9 +313,53 @@ impl Servers {
         Ok(())
     }
 
-    /// The words after each call on the line a person approves: its arguments, as the server will
-    /// receive them, in full. Compact JSON, so a line break or a control character in a value is
-    /// escaped and the line stays one line. Decides nothing.
+    /// The `apply` steps of `plan` that run on a person's approval of it: each whose tools the
+    /// declaration of its server all marks unattended, where no `ask` rule names one of them and
+    /// `mode` is neither plan mode, which asks at the step, nor bypassing, which approves the plan
+    /// in place of a person (MANIFEST-17). Decided once, before the plan's line is written, so the
+    /// line and the step agree.
+    pub(crate) fn unattended_steps(
+        &self,
+        plan: &Manifest,
+        permissions: &bravebot_core::permissions::Permissions,
+        mode: crate::PermissionMode,
+    ) -> std::collections::BTreeSet<usize> {
+        if matches!(
+            mode,
+            crate::PermissionMode::Plan | crate::PermissionMode::Bypass
+        ) {
+            return std::collections::BTreeSet::new();
+        }
+        plan.steps()
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step.tool() == manifest::APPLY)
+            .filter(|(_, step)| {
+                let alias = step.text("server");
+                shape_of(step).is_ok_and(|shape| {
+                    let literals_hide =
+                        shape
+                            .tools
+                            .iter()
+                            .flat_map(|tool| &tool.arguments)
+                            .any(|(_, kind)| {
+                                matches!(kind, bravebot_core::apply::Kind::Literal(value)
+                                if hides_a_character(value))
+                            });
+                    !literals_hide
+                        && self.all_unattended(alias, &shape)
+                        && !shape.tools.iter().any(|tool| {
+                            permissions.for_mcp(alias, &tool.name)
+                                == bravebot_core::permissions::Decision::Ruled(
+                                    bravebot_core::permissions::Ruling::Ask,
+                                )
+                        })
+                })
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     /// Whether the declaration of `alias` marks every tool of the step `shape` as running
     /// unattended (SERVERS-26).
     fn all_unattended(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
@@ -327,14 +371,21 @@ impl Servers {
         })
     }
 
-    pub(crate) fn notes(&self, plan: &Manifest, plan_mode: bool) -> BTreeMap<usize, String> {
+    /// The words after each call on the line a person approves: its arguments, as the server will
+    /// receive them, in full. Compact JSON, so a line break or a control character in a value is
+    /// escaped and the line stays one line. Decides nothing.
+    pub(crate) fn notes(
+        &self,
+        plan: &Manifest,
+        unattended: &std::collections::BTreeSet<usize>,
+    ) -> BTreeMap<usize, String> {
         plan.steps()
             .iter()
             .enumerate()
             .filter_map(|(index, step)| match step.tool() {
                 manifest::APPLY => shape_of(step).ok().map(|shape| {
                     let alias = step.text("server");
-                    let unattended = !plan_mode && self.all_unattended(alias, &shape);
+                    let unattended = unattended.contains(&index);
                     let tools: Vec<String> = shape
                         .tools
                         .iter()
@@ -621,7 +672,7 @@ impl Servers {
         index: usize,
         alias: &str,
         step: &Step,
-        plan_approved: bool,
+        unattended: bool,
     ) -> Result<(String, bravebot_aichat::protocol::Usage), String> {
         let Some(offer) = &self.offer else {
             return Err(format!("{alias} is not offered to this run"));
@@ -740,16 +791,17 @@ impl Servers {
                 .map(|(why, count)| (why.describe().to_string(), *count))
                 .collect(),
         };
-        // A step whose tools are all marked unattended runs on a person's approval of the plan,
-        // whose line said so; a rule asking about one of its tools still puts the list
-        // (MANIFEST-17).
-        let unasked = plan_approved
-            && self.all_unattended(alias, &shape)
-            && !shape
-                .tools
-                .iter()
-                .any(|tool| policy.an_ask_rule_names(alias, &tool.name));
-        let decision = match unasked {
+        // A step the plan's line said runs without asking does so on the person's approval of
+        // the plan (MANIFEST-17); which steps those are was decided once, before the line.
+        // A value holding a character the line would draw as nothing is put on the list, where the
+        // question writes each one out, as a fixed call holding one is asked at its step.
+        let unattended = unattended
+            && !shown.calls.iter().any(|call| {
+                call.arguments
+                    .iter()
+                    .any(|(_, value, _)| hides_a_character(value))
+            });
+        let decision = match unattended {
             true => {
                 for call in &shown.calls {
                     policy.record_plan_covered_call(alias, &call.name);
@@ -901,8 +953,12 @@ fn dropped_note(resolved: &bravebot_core::apply::Resolved) -> String {
     }
 }
 
-/// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
-/// argument the kind its `arguments` object gives it. Read from the plan's own text.
+/// Whether `value` holds a character a line would draw as nothing or as something else, which the
+/// list question writes out (PROMPT-13).
+fn hides_a_character(value: &str) -> bool {
+    bravebot_core::invisible::spelled_code(value).hidden > 0
+}
+
 /// The server whose read filled the list `list` before step `index`, as the plan line names it.
 fn read_from(plan: &Manifest, index: usize, list: &str) -> String {
     plan.steps()[..index]
@@ -918,6 +974,8 @@ fn read_from(plan: &Manifest, index: usize, list: &str) -> String {
         )
 }
 
+/// The shape an apply step's fields give: its tools in the order `tools` names them, and for each
+/// argument the kind its `arguments` object gives it. Read from the plan's own text.
 pub(crate) fn shape_of(step: &Step) -> Result<bravebot_core::apply::Shape, String> {
     use bravebot_core::apply::{Shape, Tool};
     let lists: Vec<String> = step.reads().iter().map(ToString::to_string).collect();
@@ -1087,9 +1145,14 @@ fn kind_in_words(kind: &bravebot_core::apply::Kind, shape: &bravebot_core::apply
     use bravebot_core::apply::Kind;
     match kind {
         // A number or a switch is sent as one, so it reads as one; text reads quoted.
+        // Escaped as compact JSON, with every character that would draw as nothing written out,
+        // so the line shows the value the call sends and stays one line.
         Kind::Literal(value) => match serde_json::from_str::<Value>(value) {
             Ok(Value::Number(_) | Value::Bool(_)) => value.clone(),
-            _ => format!("\"{value}\""),
+            _ => {
+                let quoted = Value::String(value.clone()).to_string();
+                bravebot_core::invisible::spelled_code(&quoted).text
+            }
         },
         Kind::Entry { list, field } => format!(
             "the {field} of an entry of {}",

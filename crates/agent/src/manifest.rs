@@ -892,6 +892,9 @@ fn stopped(attempt: Attempt, error: TurnError) -> TurnError {
 /// What planning produced, ready for a driver.
 struct Planned {
     plan: Manifest,
+    /// The `apply` steps whose plan line says they run without asking, decided once from the
+    /// declarations, the mode and the rules before the line was written (MANIFEST-17).
+    unattended: std::collections::BTreeSet<usize>,
     /// The label the plan carries, which every field lifted out of it carries too.
     label: Label,
     model: String,
@@ -1110,7 +1113,7 @@ fn plan<S: Sink, R: Reporter>(
         catalogue(connectors, servers)
     );
     let mut round = "fit";
-    let (plan, label) = loop {
+    let (plan, label, unattended) = loop {
         let proposal_wire = ask(
             config,
             egress,
@@ -1153,7 +1156,9 @@ fn plan<S: Sink, R: Reporter>(
         // in from the item it lands on, so the plan a person reads says both.
         let mut notes = connectors.notes(&plan);
         // And the arguments of each server call, in full, since a person approves the call by them.
-        notes.extend(servers.notes(&plan, task.permission_mode.get().refuses_writes()));
+        let unattended =
+            servers.unattended_steps(&plan, &task.permissions, task.permission_mode.get());
+        notes.extend(servers.notes(&plan, &unattended));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
@@ -1167,7 +1172,7 @@ fn plan<S: Sink, R: Reporter>(
         // the task and the driver's words alone. A plan with no connector step passes the check,
         // so this never asks again in a run that uses no connector and calls no server.
         match connectors.check(&plan).and_then(|()| servers.check(&plan)) {
-            Ok(()) => break (plan, label),
+            Ok(()) => break (plan, label, unattended),
             Err(why) if round == "fit" => {
                 reporter.narration(format!(
                     "The plan failed a connector check, so it was asked for once more: {why}"
@@ -1236,6 +1241,7 @@ fn plan<S: Sink, R: Reporter>(
 
     Ok(Planned {
         plan,
+        unattended,
         label,
         model,
         clean: policy.finish(),
@@ -1350,6 +1356,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 ) -> Result<Outcome, TurnError> {
     let Planned {
         plan,
+        unattended,
         label,
         model,
         clean: planning_was_clean,
@@ -1438,6 +1445,12 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     // a person (MANIFEST-15).
     let (verdict, answered_by) = waiting.confirm_manifest_noting_the_mode(&proposal);
     let a_person_answered = answered_by.is_none();
+    // The steps the line said run without asking do so only where a person answered it outside
+    // plan mode; otherwise each puts its list, which asks more than the line promised, never less.
+    let unattended = match a_person_answered && !permission_mode.get().refuses_writes() {
+        true => unattended,
+        false => std::collections::BTreeSet::new(),
+    };
     accounting.elapsed.stalled += waiting.waited();
     accounting.publish(reporter);
     if verdict == Decision::Reject {
@@ -1507,6 +1520,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut asking,
                 permission_mode,
                 a_person_answered,
+                unattended.contains(&index),
                 index,
                 shown_only(&plan, index),
                 step,
@@ -1715,6 +1729,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
     a_person_answered: bool,
+    unattended: bool,
     index: usize,
     shown_only: bool,
     step: &Step,
@@ -1963,17 +1978,10 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let alias = locked(policy, index, "server")?;
             locked(policy, index, "tools")?;
             let began = std::time::Instant::now();
+            // A change of mode since the plan was answered can add the list, never take it away.
+            let unattended = unattended && !permission_mode.get().refuses_writes();
             let applied = servers.apply(
-                policy,
-                chat,
-                egress,
-                confirmer,
-                reporter,
-                slots,
-                index,
-                &alias,
-                step,
-                a_person_answered && !permission_mode.get().refuses_writes(),
+                policy, chat, egress, confirmer, reporter, slots, index, &alias, step, unattended,
             );
             accounting.elapsed.inference += began.elapsed();
             let (note, usage) = applied?;

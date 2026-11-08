@@ -1401,10 +1401,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
-    /// Record that a call to `tool` of `alias` was answered by the question about an earlier call of
-    /// the same round, which listed it (SERVERS-7), so nobody was asked about this one.
-    ///
-    /// Only a yes is a passed gate here: a no is recorded by [`Self::refuse_unapproved_call`].
     /// Record that a person's approval of the plan answered this call to `tool` of `alias`, so
     /// nobody was asked at its step (MANIFEST-15, MANIFEST-17).
     pub fn record_plan_covered_call(&mut self, alias: &str, tool: &str) {
@@ -1414,15 +1410,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// Whether a rule the person wrote says to ask about `tool` of `alias`, which a plan's
-    /// approval does not answer (MANIFEST-17). Records nothing.
-    pub fn an_ask_rule_names(&self, alias: &str, tool: &str) -> bool {
-        matches!(
-            self.permissions.for_mcp(alias, tool),
-            crate::permissions::Decision::Ruled(crate::permissions::Ruling::Ask)
-        )
-    }
-
+    /// Record that a call to `tool` of `alias` was answered by the question about an earlier call of
+    /// the same round, which listed it (SERVERS-7), so nobody was asked about this one.
+    ///
+    /// Only a yes is a passed gate here: a no is recorded by [`Self::refuse_unapproved_call`].
     pub fn record_covered_mcp_call(&mut self, alias: &str, tool: &str, approved: bool) {
         if approved {
             self.allow(
