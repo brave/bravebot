@@ -168,12 +168,22 @@ deny-rule cell that is not covered, is a defect. A change that fixes a spelling 
 a spelling with no row gets one in the same commit as its test.
 
 The rows a volume can make without a person opening another directory are `ALIASES` in
-`crates/agent/test-support/aliases.rs`. Five tests ask each consumer about every row, skip a row
+`crates/agent/test-support/aliases.rs`. Six tests ask each consumer about every row, skip a row
 the volume holds apart, and fail on a row listed as unhandled once it is handled. The fifth is the
 lookup of a program bravebot starts itself ([SANDBOX-30](sandboxing.md#SANDBOX-30)), which is asked
 of the rows that spell a directory another way and leaves out an entry under every spelling of a
 directory a stage may write, by device and inode where the names differ. The other rows are
-pinned by the test the last column names.
+pinned by the test the last column names. The variables that name code to run (`BROWSER` and the
+`XDG_` directories of the browser opener, the AWS CLI, the gcloud launcher and `doctor --push-identity`,
+[the program lookup](sandboxing.md#SANDBOX-30)) are asked the rows that spell a directory another way
+by a sixth consumer, `CodeSelectorValue`: the directory spelled as the name is one a stage may write,
+and a value that is the file spelled as the alias, alone as a path, as an entry of a list and as a
+command with and without ` %s`, must be removed, while the same forms of an installed file must be
+kept. The drive-letter, short-name and stream spellings are not rows of `ALIASES` (it holds the
+spellings a Unix volume can make), so they are not asked of these values. `may_be_run` follows links
+and resolves a file with `canonicalize` before it compares it with the directories a stage may write,
+which is what resolves those spellings on Windows, and no test has run that on a Windows host. A value
+that is not text is judged as the bytes it is, which a test of each start pins.
 
 | Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
 |---|---|---|---|---|
@@ -289,6 +299,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::workspace::a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file`
 `verified-by: bravebot_core::trust::a_refusal_recorded_about_one_form_of_a_name_decides_the_other`

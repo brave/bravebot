@@ -130,6 +130,7 @@ pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> 
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Reduced,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     );
     let child = command
         .args(arguments)

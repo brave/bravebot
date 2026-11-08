@@ -45,6 +45,11 @@ pub enum Consumer {
     /// the alias, when the directory spelled as the name is one a stage may write (SANDBOX-30).
     /// Asked of the rows that spell a directory another way.
     ProgramLookup,
+    /// Whether a value of `BROWSER` or an `XDG_` directory variable, spelled as the alias, is judged
+    /// as the directory a stage may write when the directory spelled as the name is one
+    /// (SANDBOX-30). Asked of the rows that spell a directory another way, for each kind of value
+    /// the variables hold: a path, a list of paths and a list of commands.
+    CodeSelectorValue,
 }
 
 pub struct Alias {

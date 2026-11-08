@@ -4316,7 +4316,8 @@ this agent's own credentials taken off its environment, and no value from a sett
 workspace reaches it ([BACKEND-1](#BACKEND-1), [SANDBOX-30](sandboxing.md#SANDBOX-30)). It is not named by
 a file.
 
-The CLI's launcher and auth code read variables that name code it then runs, or that change what the
+The start is a checked start ([SANDBOX-30](sandboxing.md#SANDBOX-30)): it removes the generic names that
+clause lists, and the names below. The CLI's launcher and auth code read variables that name code it then runs, or that change what the
 interpreter it starts runs. Each is taken off the environment the program is started with unless its
 value is an absolute path outside every directory a stage may write, with links followed, that exists, and
 is a regular file for a variable that names a file:
@@ -4386,6 +4387,7 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
+`verified-by: bravebot_agent::gcloud::a_started_gcloud_has_the_generic_code_selectors_removed_as_well`
 `verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
 
 <a id="BACKEND-68"></a>

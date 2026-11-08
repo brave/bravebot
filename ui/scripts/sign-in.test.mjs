@@ -238,7 +238,7 @@ test('a link in the main window opens only a web page', () => {
   for (const url of ['https://brave.com/', 'http://localhost:3000/']) assert.equal(opensExternally(url), true, url)
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'smb://host/share', 'x-apple.systempreferences:', 'mailto:a@b', 'not a url']) assert.equal(opensExternally(url), false, url)
   const index = readFileSync('src/main/index.ts', 'utf8')
-  assert.match(index, /setWindowOpenHandler\(\(\{ url \}\) => \{\s*if \(opensExternally\(url\)\) void shell\.openExternal\(url\)/)
+  assert.match(index, /setWindowOpenHandler\(\(\{ url \}\) => \{\s*if \(opensExternally\(url\)\) void openExternal\(url\)/)
 })
 
 test('cancelling sends cancelSignIn; a bridge that cannot be asked ends the attempt here', async () => {

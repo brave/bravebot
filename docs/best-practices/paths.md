@@ -123,7 +123,8 @@ as the program, the test that shows the same for a name the program itself start
 program is given, and whether `own_credentials()` is removed from its environment
 ([CRED-14](../specs/credential-protection.md#CRED-14)).** `clippy.toml` refuses every call the
 tree starts a program with, and a start goes through `bravebot_sandbox::programs::start`, which takes
-a `Resolved`, what the program inherits and the `PATH` it is given. A reviewer reads what neither
+a `Resolved`, what the program inherits, the `PATH` it is given and whether its code-selecting
+variables are checked ([PATH-008](#PATH-008)). A reviewer reads what neither
 can decide: that the constructor in the diff (`own_executable`, `written_in_source`,
 `named_by_person`, `found_earlier`, `to_confine`) names who chose the program truthfully, and what
 the program itself starts by name (SANDBOX-30).
@@ -160,7 +161,9 @@ leaves is recorded as [GAP-001](gaps.md#GAP-001) says. [PATH-004](#PATH-004) sta
 for the spellings of a path.
 
 **Why:** the programs on the list are started from different code, so a fix at one start does not
-reach the others unless it is made in code they share.
+reach the others unless it is made in code they share. `may_be_run`, `Names` and the generic
+`CODE_SELECTORS` table are in `crates/sandbox/src/programs.rs` for that reason, and a start states
+its own names to `start` and does not copy the check.
 
 ---
 
@@ -189,42 +192,52 @@ shipped, and an extra rule about the wrong file decides what the person never ag
 ## A program's code-selecting variables are removed unless they name a safe file
 
 **A diff that adds or changes the start of a program bravebot starts for itself, with the
-person's environment, has each variable the program's launcher reads to choose code to run removed,
-unless the value passes a check.** The value passes when it is an absolute path that exists outside
-every stage-writable directory, links followed, or, for a variable that names a program, a bare
-program name, which the program finds on the reduced `PATH`. A variable that holds a list of
-directories, such as `PYTHONPATH`, passes when every entry does, and one that holds options for an
-interpreter, such as `CLOUDSDK_PYTHON_ARGS`, is removed whatever it holds. A variable that only
-carries a credential the program reads as data, such as `AWS_PROFILE`, stays. A file that can name a
-command to run, such as `GOOGLE_APPLICATION_CREDENTIALS` for `gcloud`, whose `external_account` type
-runs one, does not only carry a credential and is removed unless it passes. A variable that names a directory the
-program reads configuration from counts as code when the program runs files from that directory,
-even though the directory also holds credentials ([BACKEND-65](../specs/backends.md#BACKEND-65)).
+person's environment, passes `CodeSelectors::Checked` with every variable the program's launcher
+reads to choose code to run, or `CodeSelectors::Kept` with the reason.** A checked start removes
+each such variable unless the value passes a check. The value passes when it is an absolute path
+that exists outside every stage-writable directory, links followed, or, for a variable that names a
+program, a bare program name, which the program finds on the reduced `PATH`. A variable that holds
+a list of directories, such as `PYTHONPATH`, passes when every entry does, and one that holds
+options for an interpreter, such as `CLOUDSDK_PYTHON_ARGS`, is removed whatever it holds. A start
+may also remove a variable whatever it holds when no value of it is safe to keep, such as
+`GIT_TEMPLATE_DIR` or `DEVELOPER_DIR` for the sandbox usability suite
+([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21)), and a prefix of such variables, such as
+`DYLD_` and `LD_` for the `gh` that reads the stored login. A variable that only carries a
+credential the program reads as data, such as `AWS_PROFILE` or an API token, stays. A file that can
+name a command to run, such as `GOOGLE_APPLICATION_CREDENTIALS` for `gcloud`, whose
+`external_account` type runs one, does not only carry a credential and is removed unless it
+passes. A variable that names a directory the program reads configuration from counts as code when
+the program runs files from that directory, even though the directory also holds
+credentials ([BACKEND-65](../specs/backends.md#BACKEND-65)).
 
 A program bravebot starts for itself is one the person and the project did not ask to run. A `run`
 stage, a `run` command in the background, a hook, a language server and a line typed at the `!`
-prompt run commands the person or the project chose, so the rule does not apply to them. A start of
-bravebot's own executable is not a start of another program, so the rule does not apply to it
-either. A reviewer decides the rest from what the start is for, and the diff says which it is when
-that is not plain. This entry does not say that a start the diff does not touch complies. The only
-lists whose values are kept or removed by `may_be_run` are the `CODE_SELECTORS` lists in
-`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs` and
-`crates/cli/src/push_identity.rs`, so a diff that changes the browser opener or scheduler start
-adds a list for it, or records the gap as [GAP-001](gaps.md#GAP-001) asks.
+prompt run commands the person or the project chose, so they are kept starts. A start of
+bravebot's own executable is not a start of another program, so it is kept too. A reviewer decides
+the rest from what the start is for, and the diff says which it is when that is not plain. This
+entry does not say that a start the diff does not touch complies. The generic table
+(`CODE_SELECTORS` in `crates/sandbox/src/programs.rs`) is applied to every checked start, and a
+program's own names are the `CODE_SELECTORS` list in `crates/agent/src/gcloud.rs`,
+`crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs` or
+`crates/tui/src/opener.rs`, so a diff that adds a start lists only the names its program reads that
+the table does not hold, or passes `Checked(&[])` and records the gap as
+[GAP-001](gaps.md#GAP-001) asks. A launcher that takes its handler from a list of commands, such as
+`BROWSER`, is listed as `Names::Commands`: every entry must be one program, alone or followed by
+` %s`, so a value with arguments or a second command is removed.
 
 In a diff that adds or changes the start of a program bravebot starts for itself, a reviewer reads
 the program's launcher and documentation for every variable that names an interpreter, a plugin or
 module directory, a configuration directory it runs files from, or a wrapper to run first. Each one
-is either listed in the program's selector list with tests, or the diff says why the program never
-reads it. Such a start with no list, or with a variable the launcher reads missing from the list,
-breaks the rule. A second list reuses the check by moving it to code the lists share
-([PATH-006](#PATH-006)), not by copying it.
+is either in the generic table, listed in the start's own names with tests, or the diff says why the
+program never reads it. A variable the launcher reads that is in neither breaks the rule. A
+program's names are passed to `start` and the check stays in shared code ([PATH-006](#PATH-006)).
 
-`make check-code-selectors` confirms only that every name in a `CODE_SELECTORS` list (in
-`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs` and
-`crates/cli/src/push_identity.rs`) has one assertion that
-removes a value and one that keeps a value. A reviewer confirms the rest of these, and that the list
-is complete:
+`make check-code-selectors` confirms that every call of `start` and `start_against` states
+`CodeSelectors::Kept` with a comment or `CodeSelectors::Checked`, and that every name in a
+`CODE_SELECTORS` list (in `crates/sandbox/src/programs.rs`, `crates/agent/src/gcloud.rs`,
+`crates/bedrock/src/credentials.rs` and `crates/cli/src/push_identity.rs`) has one test that removes
+a value and one that keeps a value (an options variable needs only the first). A reviewer confirms
+the rest of these, and that the list is complete:
 
 - A value inside a stage-writable directory is removed.
 - A link from outside to inside such a directory is removed.
@@ -241,22 +254,22 @@ bravebot_sandbox::programs::start(
     &Resolved::found_earlier(program),
     Inherits::Without(&own_credentials()),
     SearchPath::Reduced,
+    CodeSelectors::Kept,
 )
 
 // Right: the same start, with each listed variable removed unless its value passes the check.
-// This is the loop `programs::withhold_code_selectors_with` has, which `gcloud.rs`,
-// `credentials.rs` and `push_identity.rs` all call with their own `CODE_SELECTORS`.
-let mut command = bravebot_sandbox::programs::start(
+// `OWN` is the program's own `CODE_SELECTORS` list, such as the one `gcloud.rs` passes; the generic
+// table is removed as well, by `programs::withhold_code_selectors_with`.
+bravebot_sandbox::programs::start(
     &Resolved::found_earlier(program),
     Inherits::Without(&own_credentials()),
     SearchPath::Reduced,
-);
-bravebot_sandbox::programs::withhold_code_selectors(&mut command, &CODE_SELECTORS);
-command
+    CodeSelectors::Checked(&OWN),
+)
 ```
 
 **Why:** the sandbox confines what a stage runs. A program started outside it runs, with the
 person's authority, whatever file a variable names as its interpreter or as a directory it sources
-scripts from. The list of variables is read from the program, so a reviewer who does not read the
+scripts from. The names are read from the program, so a reviewer who does not read the
 launcher cannot tell that one is missing.
 

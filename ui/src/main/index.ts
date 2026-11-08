@@ -8,7 +8,8 @@
  */
 
 import { saveHooks } from './agent-settings'
-import { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker } from 'electron'
+import { openExternal } from './external-open'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Bridge, BridgeError } from './bridge'
@@ -184,7 +185,7 @@ const signIn = new SignIn<BrowserWindow>({
   ask: askAgent,
   window: () => window,
   showMessageBox: (parent, options) => dialog.showMessageBox(parent, options),
-  openExternal: (url) => shell.openExternal(url),
+  openExternal: (url) => openExternal(url),
   tell: (notice) => tell('bravebot:signIn:event', notice),
   showWindow: (state) => showSignInWindow(state, window, () => void signIn.cancelShown()),
   updateWindow: updateSignInWindow,
@@ -456,7 +457,7 @@ function createWindow(): void {
   // Nothing in this app navigates anywhere. A link opens in the user's browser, and an
   // in-window navigation is refused outright rather than sandboxed.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (opensExternally(url)) void shell.openExternal(url)
+    if (opensExternally(url)) void openExternal(url)
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event) => event.preventDefault())

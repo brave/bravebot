@@ -10,10 +10,16 @@
 //! is can be workspace content, so the lookup leaves out the directories a stage may write
 //! ([`bravebot_sandbox::programs::find_on`]).
 //!
-//! Two of the variables the CLI reads name code it then runs: `CLOUDSDK_PYTHON` is the interpreter
-//! its launcher executes, and the launcher sources `$CLOUDSDK_CONFIG/virtenv/bin/activate` when it
-//! has no interpreter of its own. [`CODE_SELECTORS`] lists them, and one whose value is a path a
-//! stage may write is taken off the environment the CLI is started with.
+//! Three of the variables the CLI reads name code it then runs: `CLOUDSDK_PYTHON` is the interpreter
+//! its launcher executes, the launcher sources `$CLOUDSDK_CONFIG/virtenv/bin/activate` when it
+//! has no interpreter of its own, and `GOOGLE_APPLICATION_CREDENTIALS` names a file that, as an
+//! `external_account` credential, holds a command the CLI runs. The login the CLI is asked for when
+//! no token can be had opens a browser, which reads `BROWSER` and the `XDG_` directories to choose
+//! the program it runs. [`CODE_SELECTORS`] lists them.
+//!
+//! The start passes [`bravebot_sandbox::programs::CodeSelectors::Checked`]. A variable in the list
+//! whose value is a path a stage may write is taken off the environment the CLI is started with,
+//! and so is each generic name every checked start removes.
 //!
 //! Variables the CLI's launcher and auth code read to choose code to run are on that list too, among
 //! them `PYTHONPATH` and `CLOUDSDK_PYTHON_ARGS`. A value that is a list of paths is judged by every
@@ -38,11 +44,13 @@ use std::sync::mpsc;
 /// The program asked for a token, looked for on `PATH` as any command a person runs is.
 const GCLOUD: &str = "gcloud";
 
-/// The variables the CLI reads that name code it runs, and what each names.
+/// The variables the CLI reads that name code it runs, and what each names. They are judged on top
+/// of the generic names ([`bravebot_sandbox::programs::CODE_SELECTORS`]) every checked start
+/// removes.
 ///
 /// A value is kept only when it is outside every directory a stage may write
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable that selects code and
-/// is not listed here reaches the CLI as the person set it, so one added to the CLI's launcher
+/// is in neither list reaches the CLI as the person set it, so one added to the CLI's launcher
 /// belongs in this list.
 ///
 /// - `CLOUDSDK_PYTHON` is the interpreter the launcher executes, and the launcher sources
@@ -58,8 +66,14 @@ const GCLOUD: &str = "gcloud";
 ///   CLI runs when `context_aware/use_client_certificate` is true.
 /// - `BROWSER` is what `gcloud auth login` opens a page with, and `OPENSSL_CONF` can load a
 ///   provider module into the OpenSSL Python loads. Both are shared with the other lists
-///   ([`bravebot_sandbox::programs::selectors`]).
-const CODE_SELECTORS: [(&str, Names); 12] = [
+///   ([`bravebot_sandbox::programs::selectors`]). `BROWSER` is judged as a list of commands.
+/// - `gcloud auth application-default login` ([`login_command`]) opens the sign-in page with
+///   Python's `webbrowser`, which with a display runs `xdg-open`, which reads the four `XDG_`
+///   directories to choose the handler it runs. The names and kinds are those of the browser
+///   opener (`crates/tui/src/opener.rs`) and the AWS start (`crates/bedrock/src/credentials.rs`).
+///   `XDG_DATA_DIRS` is also in the generic list and is repeated here so this list reads as
+///   complete.
+const CODE_SELECTORS: [(&str, Names); 16] = [
     ("CLOUDSDK_PYTHON", Names::Program),
     ("CLOUDSDK_CONFIG", Names::Directory),
     ("CLOUDSDK_PYTHON_ARGS", Names::Options),
@@ -78,6 +92,10 @@ const CODE_SELECTORS: [(&str, Names); 12] = [
     ),
     selectors::BROWSER,
     selectors::OPENSSL_CONF,
+    ("XDG_DATA_HOME", Names::Directory),
+    ("XDG_DATA_DIRS", Names::Directories),
+    ("XDG_CONFIG_HOME", Names::Directory),
+    ("XDG_CONFIG_DIRS", Names::Directories),
 ];
 
 /// Why no token could be had.
@@ -109,15 +127,14 @@ fn installed_in(path: &OsStr) -> PathBuf {
 }
 
 /// A command for `program` with this agent's own credentials taken off it
-/// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)) and each of
-/// [`CODE_SELECTORS`] that names a path a stage may write. The rest of the environment stays, since
-/// `GOOGLE_APPLICATION_CREDENTIALS` and the other `CLOUDSDK_*` values are what the CLI is run to
-/// read.
+/// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)) and each variable that
+/// selects code, generic or in [`CODE_SELECTORS`], that names a path a stage may write. The rest of
+/// the environment stays, since the other `CLOUDSDK_*` values are what the CLI is run to read.
 fn command_for(program: &Path) -> Command {
     command_for_with(
         program,
-        |name| std::env::var_os(name),
-        bravebot_sandbox::programs::outside_stage_writable,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     )
 }
 
@@ -125,21 +142,17 @@ fn command_for(program: &Path) -> Command {
 /// directories a stage may write.
 fn command_for_with(
     program: &Path,
-    held: impl Fn(&str) -> Option<OsString>,
-    outside_stage_writable: impl Fn(&Path) -> bool,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> Command {
-    let mut command = bravebot_sandbox::programs::start(
+    bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-    );
-    bravebot_sandbox::programs::withhold_code_selectors_with(
-        &mut command,
-        &CODE_SELECTORS,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
         held,
         outside_stage_writable,
-    );
-    command
+    )
 }
 
 fn token_command(program: &Path) -> Command {
@@ -422,8 +435,8 @@ mod tests {
         let rows = std::slice::from_ref(&row);
         let command = command_for_with(
             Path::new("/usr/bin/gcloud"),
-            |asked| (asked == name).then(|| value.as_os_str().to_os_string()),
-            |file| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+            [(OsString::from(name), value.as_os_str().to_os_string())],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
         );
         command
             .get_envs()
@@ -562,6 +575,76 @@ mod tests {
     /// A list of directories joined with the platform's separator, as `PYTHONPATH` holds it.
     fn joined(entries: &[&Path]) -> PathBuf {
         PathBuf::from(std::env::join_paths(entries).unwrap())
+    }
+
+    /// `gcloud auth application-default login` opens a browser with Python's `webbrowser`, which
+    /// runs each entry of `BROWSER`, and `xdg-open` reads the `XDG_` directories to choose the
+    /// handler it runs. The regression it rejects: the gcloud start left without those names, so a
+    /// value naming a file a stage wrote is run by the login.
+    #[test]
+    fn a_browser_or_xdg_directory_a_stage_may_write_is_not_the_one_the_gcloud_login_is_told_to_use()
+    {
+        let (session, _safe, planted, genuine) = planted_and_genuine("gcloud-browser");
+        let planted_dir = planted.parent().unwrap();
+        let genuine_dir = genuine.parent().unwrap();
+        let with_s = |p: &Path| PathBuf::from(format!("{} %s", p.display()));
+
+        assert!(withheld("BROWSER", &planted, &session));
+        assert!(withheld("BROWSER", &with_s(&planted), &session));
+        assert!(withheld(
+            "BROWSER",
+            &joined(&[&genuine, &planted]),
+            &session
+        ));
+        assert!(withheld(
+            "BROWSER",
+            Path::new("firefox --new-window %s"),
+            &session
+        ));
+        assert!(!withheld("BROWSER", Path::new("firefox"), &session));
+        assert!(!withheld("BROWSER", &genuine, &session));
+        assert!(!withheld("BROWSER", &with_s(&genuine), &session));
+
+        assert!(withheld("XDG_DATA_HOME", planted_dir, &session));
+        assert!(!withheld("XDG_DATA_HOME", genuine_dir, &session));
+        assert!(withheld("XDG_CONFIG_HOME", planted_dir, &session));
+        assert!(!withheld("XDG_CONFIG_HOME", genuine_dir, &session));
+        let mixed = joined(&[genuine_dir, planted_dir]);
+        assert!(withheld("XDG_DATA_DIRS", Path::new(&mixed), &session));
+        assert!(!withheld("XDG_DATA_DIRS", genuine_dir, &session));
+        assert!(withheld("XDG_CONFIG_DIRS", Path::new(&mixed), &session));
+        assert!(!withheld("XDG_CONFIG_DIRS", genuine_dir, &session));
+    }
+
+    /// A `BROWSER` entry that is not text is judged as the bytes it is: a lossy rendering would
+    /// read `fire\u{FFFD}ox` as a bare program name and keep it.
+    #[test]
+    fn a_gcloud_browser_entry_that_is_not_text_is_removed() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (session, _safe, _planted, _genuine) = planted_and_genuine("gcloud-browser-not-text");
+
+        assert!(withheld(
+            "BROWSER",
+            Path::new(OsStr::from_bytes(b"fire\xffox")),
+            &session
+        ));
+        assert!(!withheld("BROWSER", Path::new("fire\u{FFFD}ox"), &session));
+    }
+
+    /// The variables the login is run to read are left as the person set them.
+    #[test]
+    fn the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-display");
+
+        for name in [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "XDG_SESSION_TYPE",
+        ] {
+            assert!(!withheld(name, &planted, &session), "{name} was removed");
+        }
     }
 
     /// The regression it rejects: starting `gcloud` with `PYTHONPATH` as the person set it, so the
@@ -838,6 +921,19 @@ mod tests {
         assert!(!withheld("CLOUDSDK_CORE_PROJECT", &planted, &session));
         assert!(!withheld("GOOGLE_CLOUD_PROJECT", &planted, &session));
         assert!(!withheld("PYTHONUNBUFFERED", &planted, &session));
+    }
+
+    /// The regression it rejects: a gcloud start that passes `Kept`, or `Checked` with its own list
+    /// replacing the generic table, so a generic name (`LD_PRELOAD`, a `GIT_CONFIG_` name) reaches
+    /// the CLI as the person set it.
+    #[test]
+    fn a_started_gcloud_has_the_generic_code_selectors_removed_as_well() {
+        let (session, safe, planted, genuine) = planted_and_genuine("gcloud-generic");
+
+        assert!(withheld("LD_PRELOAD", &planted, &session));
+        assert!(withheld("NODE_OPTIONS", &genuine, &session));
+        assert!(withheld("GIT_CONFIG_GLOBAL", &safe, &session));
+        assert!(!withheld("LD_PRELOAD", &genuine, &session));
     }
 
     /// The regression it rejects: starting without the credential removal, so the agent's own keys

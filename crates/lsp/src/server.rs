@@ -884,6 +884,8 @@ impl Server {
             &bravebot_sandbox::programs::Resolved::found_earlier(resolved),
             bravebot_sandbox::programs::Inherits::Without(withheld),
             bravebot_sandbox::programs::SearchPath::Inherited,
+            // A language server runs the project's toolchain on purpose (LSP-5).
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         );
         command.args(&args);
 

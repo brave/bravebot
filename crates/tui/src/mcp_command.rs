@@ -348,6 +348,8 @@ fn through_the_program(root: &Path, args: &[&str]) -> Ran {
             &me,
             bravebot_sandbox::programs::Inherits::All,
             bravebot_sandbox::programs::SearchPath::Inherited,
+            // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         )
         .args(args)
         .current_dir(root)

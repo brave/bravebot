@@ -47,7 +47,8 @@ repository and reach the same code the person's own files reach. A candidate in 
 sets a destination, a credential, a permission, a program that starts, a path the program opens or a
 string shown to the person is not dropped under this question.
 
-The `identity`, `checkout-controls`, `output-sinks`, `tooling` and `supply-chain` lanes can describe a
+The `identity`, `checkout-controls`, `output-sinks`, `tooling`, `inherited-environment` and `supply-chain`
+lanes can describe a
 defect whose effect is something other than bytes in a context: a path that resolves to a credential
 location, a request sent to a host a clone names, text that hides what a prompt asks, a hook that runs
 a branch's file. For a candidate from one of them the question becomes: does the input it names,

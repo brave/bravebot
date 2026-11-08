@@ -93,7 +93,11 @@ fn absent(command: &Command) -> bool {
 /// - `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` replace `~/.aws/config` and
 ///   `~/.aws/credentials`. A profile in either can name a `credential_process` command, and a
 ///   `[plugins]` section in the first loads a Python module from `cli_legacy_plugin_path`.
-/// - `BROWSER` is the command `aws sso login` opens the sign-in page with.
+/// - `BROWSER` is the command `aws sso login` opens the sign-in page with, judged as a list of
+///   commands. Python's `webbrowser` runs each entry and, with a display, `xdg-open`, which reads
+///   the four `XDG_` directories to choose the handler it runs. Those names and kinds are those of
+///   the browser opener (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list
+///   and is repeated here so this list reads as complete.
 /// - `OPENSSL_CONF` is a configuration file of the OpenSSL the CLI bundles, which can load an
 ///   engine or a provider module, and `OPENSSL_CONF_INCLUDE` is where its `.include` lines are read
 ///   from. `OPENSSL_ENGINES` and `OPENSSL_MODULES` are where those engines and providers are loaded
@@ -103,7 +107,7 @@ fn absent(command: &Command) -> bool {
 /// and runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start here has
 /// piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
 /// `SSL_CERT_DIR` name certificates, and `AWS_WEB_IDENTITY_TOKEN_FILE` names a token; none is run.
-const CODE_SELECTORS: [(&str, Names); 7] = [
+const CODE_SELECTORS: [(&str, Names); 11] = [
     ("AWS_CONFIG_FILE", Names::File),
     ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
     selectors::BROWSER,
@@ -111,13 +115,17 @@ const CODE_SELECTORS: [(&str, Names); 7] = [
     ("OPENSSL_CONF_INCLUDE", Names::Directory),
     ("OPENSSL_ENGINES", Names::Directory),
     ("OPENSSL_MODULES", Names::Directory),
+    ("XDG_DATA_HOME", Names::Directory),
+    ("XDG_DATA_DIRS", Names::Directories),
+    ("XDG_CONFIG_HOME", Names::Directory),
+    ("XDG_CONFIG_DIRS", Names::Directories),
 ];
 
 fn command_for(program: &Path) -> Command {
     command_for_with(
         program,
-        |name| std::env::var_os(name),
-        bravebot_sandbox::programs::outside_stage_writable,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     )
 }
 
@@ -125,25 +133,21 @@ fn command_for(program: &Path) -> Command {
 /// directories a stage may write.
 fn command_for_with(
     program: &Path,
-    held: impl Fn(&str) -> Option<OsString>,
-    outside_stage_writable: impl Fn(&Path) -> bool,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> Command {
     // The names the CLI starts itself (an `env` shebang, a `credential_process` command) search
-    // only the entries the lookup above searches (SANDBOX-30).
-    let mut command = bravebot_sandbox::programs::start(
+    // only the entries the lookup above searches (SANDBOX-30). The rest of the environment stays:
+    // `AWS_PROFILE`, `AWS_REGION` and the credentials the person keeps there are what the CLI is
+    // run to resolve.
+    bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-    );
-    // The rest of the environment stays: `AWS_PROFILE`, `AWS_REGION` and the credentials the person
-    // keeps there are what the CLI is run to resolve.
-    bravebot_sandbox::programs::withhold_code_selectors_with(
-        &mut command,
-        &CODE_SELECTORS,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
         held,
         outside_stage_writable,
-    );
-    command
+    )
 }
 
 /// The export, as a command, so what it is handed can be read without running it.
@@ -967,6 +971,81 @@ mod tests {
         file
     }
 
+    /// Whether the AWS start takes `name` off, when the person's environment holds `name` set to
+    /// `value` and only a path under `/safe` is outside the directories a stage may write.
+    fn withheld_value(name: &str, value: &str) -> bool {
+        withheld_bytes(name, OsStr::new(value))
+    }
+
+    /// [`withheld_value`] for a value that need not be text.
+    fn withheld_bytes(name: &str, value: &OsStr) -> bool {
+        let command = command_for_with(
+            Path::new("/usr/bin/aws"),
+            [(OsString::from(name), value.to_os_string())],
+            &|path: &Path| path.starts_with("/safe"),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. `aws sso login` opens a browser with Python's `webbrowser`, which runs each entry
+    /// of `BROWSER`, and `xdg-open` reads the `XDG_` directories to choose the handler it runs. The
+    /// regression it rejects: the AWS start left as `Checked(&[])`, so a value a stage wrote is run
+    /// by the sign-in.
+    #[test]
+    fn the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write() {
+        assert!(withheld_value("BROWSER", "/stage/browser.sh %s"));
+        assert!(withheld_value(
+            "BROWSER",
+            "/safe/bin/firefox:/stage/browser.sh"
+        ));
+        assert!(withheld_value("BROWSER", "firefox --new-window %s"));
+        assert!(!withheld_value("BROWSER", "firefox"));
+        assert!(!withheld_value("BROWSER", "/safe/bin/firefox %s"));
+
+        assert!(withheld_value("XDG_DATA_HOME", "/stage/share"));
+        assert!(!withheld_value("XDG_DATA_HOME", "/safe/share"));
+        assert!(withheld_value("XDG_DATA_DIRS", "/safe/share:/stage/share"));
+        assert!(!withheld_value("XDG_DATA_DIRS", "/safe/share"));
+        assert!(withheld_value("XDG_CONFIG_HOME", "/stage/config"));
+        assert!(!withheld_value("XDG_CONFIG_HOME", "/safe/config"));
+        assert!(withheld_value("XDG_CONFIG_DIRS", "/safe/etc:/stage/etc"));
+        assert!(!withheld_value("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+    }
+
+    /// A variable the sign-in reads that selects no code is left as the person set it.
+    #[test]
+    fn the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read() {
+        for name in [
+            "AWS_PROFILE",
+            "AWS_REGION",
+            "HOME",
+            "DISPLAY",
+            "XDG_RUNTIME_DIR",
+        ] {
+            assert!(
+                !withheld_value(name, "/stage/anything"),
+                "{name} was removed"
+            );
+        }
+    }
+
+    /// A `BROWSER` entry that is not text is judged as the bytes it is: a lossy rendering would
+    /// read `fire\u{FFFD}ox` as a bare program name and keep it.
+    #[cfg(unix)]
+    #[test]
+    fn an_aws_browser_entry_that_is_not_text_is_removed() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(withheld_bytes("BROWSER", OsStr::from_bytes(b"fire\xffox")));
+        assert!(withheld_bytes(
+            "BROWSER",
+            OsStr::from_bytes(b"/safe/bin/fire\xffox %s")
+        ));
+        assert!(!withheld_value("BROWSER", "fire\u{FFFD}ox"));
+    }
+
     /// A confined stage can write `.venv/bin/aws`, and an activated environment puts that
     /// directory first on `PATH`. The CLI is started unconfined with the person's access to
     /// `~/.aws`, so the one behind it is the one that has to run.
@@ -1133,8 +1212,8 @@ mod tests {
         let rows = std::slice::from_ref(&row);
         let command = command_for_with(
             Path::new("/usr/bin/aws"),
-            |asked| (asked == name).then(|| value.as_os_str().to_os_string()),
-            |file| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+            [(OsString::from(name), value.as_os_str().to_os_string())],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
         );
         command
             .get_envs()
@@ -1284,10 +1363,20 @@ mod tests {
             "AWS_PAGER",
             "AWS_DATA_PATH",
             "SSL_CERT_FILE",
-            "PYTHONPATH",
         ] {
             assert!(!withheld(other, &planted, &session), "{other}");
         }
+    }
+
+    /// A checked start removes the generic names of `CODE_SELECTORS` in the sandbox crate as well
+    /// as the CLI's own, so `PYTHONPATH` and a `GIT_CONFIG_` name a stage may write do not reach it.
+    #[test]
+    fn an_aws_start_has_the_generic_code_selectors_removed_as_well() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-generic");
+
+        assert!(withheld("PYTHONPATH", &planted, &session));
+        assert!(!withheld("PYTHONPATH", &genuine, &session));
+        assert!(withheld("GIT_CONFIG_GLOBAL", &genuine, &session));
     }
 
     /// The whole path from the process environment to the program started: the real

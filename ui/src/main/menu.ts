@@ -36,7 +36,8 @@
  * kept, and `scripts/drive-menu.mjs` asserts they survived.
  */
 
-import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'electron'
+import { openExternal as openExternally } from './external-open'
 import { basename } from 'node:path'
 import { recents } from './recents'
 import { offerDirectories } from './opened'
@@ -256,7 +257,7 @@ export function refreshMenu(next: WindowState): void {
 
 /** Open a link the app itself chose. Never a URL the renderer supplied. */
 export function openExternal(url: string): void {
-  void shell.openExternal(url)
+  void openExternally(url)
 }
 
 /**
