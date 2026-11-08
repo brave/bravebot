@@ -3766,7 +3766,7 @@ where
             }
             client.complete_streaming(policy, &request, |progress| {
                 let phase = if progress.attempt > 1 && progress.output_tokens == 0 {
-                    Phase::Reconnecting
+                    Phase::Reconnecting(progress.retry)
                 } else {
                     round
                 };

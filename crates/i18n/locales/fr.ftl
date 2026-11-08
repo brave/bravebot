@@ -2569,6 +2569,8 @@ indicator-checking = { $lines ->
    *[other] Vérification de { $lines } lignes
     }
 indicator-waiting-on-delegate = En attente de { $delegate }
+indicator-reconnecting-in = Reconnexion, prochain essai dans { $wait }
+indicator-reconnecting-until = Reconnexion, prochain essai dans { $wait }, abandon dans { $left }
 indicator-hook = Exécution du hook : { $program } ({ $moment })
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF

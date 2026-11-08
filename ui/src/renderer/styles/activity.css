@@ -144,6 +144,7 @@
   --leo-progressring-color: var(--accent);
 }
 .working-word {
+  font-variant-numeric: tabular-nums;
   background: linear-gradient(90deg, var(--ink-tertiary) 20%, var(--ink-primary) 50%, var(--ink-tertiary) 80%);
   background-size: 200% 100%;
   background-clip: text;

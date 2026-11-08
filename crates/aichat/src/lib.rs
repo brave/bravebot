@@ -989,19 +989,11 @@ impl<'a> AichatClient<'a> {
             plan,
             &mut progress,
             |client, progress, attempt| client.stream_once(policy, &request, attempt, progress),
-            |progress, attempt| {
+            |progress, retry| {
                 // Announced before the wait rather than after it, so the pause is explained
                 // while it is happening. Reply content and progress start again from nothing;
                 // completed costs remain in the call total.
-                progress(Progress {
-                    written: Labelled::new("", Label::untrusted_public()),
-                    output_tokens: 0,
-                    calling: None,
-                    thinking: Labelled::new("", Label::untrusted_public()),
-                    counted_by_server: false,
-                    prose: false,
-                    attempt,
-                });
+                progress(Progress::announcing(retry));
             },
         )
     }
@@ -1136,7 +1128,7 @@ impl<'a> AichatClient<'a> {
                 thinking: Labelled::new(&thinking, label),
                 counted_by_server: reported.is_some(),
                 prose: Progress::has_prose(accumulated.content()),
-                attempt,
+                ..Progress::quiet(attempt)
             });
         }
 
@@ -1232,9 +1224,43 @@ pub struct Progress<'a> {
     /// count goes back to zero with it, so a display that only ever saw the number climb would
     /// otherwise show it falling for no stated reason.
     pub attempt: u32,
+    /// When the next attempt will be sent, on the report that announces the wait before it and
+    /// on no other.
+    ///
+    /// Numbers the driver worked out from a count and a timer. A display that has this knows how
+    /// long to say the request will be quiet, which it cannot tell from the attempt number alone.
+    pub retry: Option<call::Retry>,
 }
 
 impl Progress<'_> {
+    /// A report of attempt `attempt` that has said nothing yet: no words, no thinking, no call, no
+    /// tokens and no wait. A client sets what its stream has delivered and takes the rest from
+    /// here.
+    pub fn quiet(attempt: u32) -> Progress<'static> {
+        Progress {
+            written: Labelled::new("", Label::untrusted_public()),
+            output_tokens: 0,
+            calling: None,
+            thinking: Labelled::new("", Label::untrusted_public()),
+            counted_by_server: false,
+            prose: false,
+            attempt,
+            retry: None,
+        }
+    }
+
+    /// The report that announces `retry`, before the pause it names.
+    ///
+    /// Nothing of the reply so far is in it, since the attempt that failed is thrown away, and its
+    /// `prose` is false because the request that follows has said nothing. A line typed meanwhile
+    /// may therefore end the wait (INPUT-10).
+    pub fn announcing(retry: call::Retry) -> Progress<'static> {
+        Progress {
+            retry: Some(retry),
+            ..Progress::quiet(retry.attempt)
+        }
+    }
+
     /// Whether `text`, the reply written so far, is anything at all, for a client to state in the
     /// report it makes of that reply. Only whether a text event has delivered something is asked:
     /// the text is not read.

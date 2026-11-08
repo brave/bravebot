@@ -63,7 +63,26 @@ pub fn phase(phase: Phase) -> &'static str {
         Phase::Planning => "planning",
         Phase::Thinking => "thinking",
         Phase::Compacting => "compacting",
-        Phase::Reconnecting => "reconnecting",
+        Phase::Reconnecting(_) => "reconnecting",
+    }
+}
+
+/// When a request waiting to be sent again will be sent, or `null` for every other phase and for
+/// an attempt that is already out.
+///
+/// Milliseconds from the moment the event is sent, because the two ends do not share a clock: the
+/// front end adds them to the time it received the event. The numbers are the driver's own,
+/// worked out from a count and a timer, and `gives_up_in_ms` is `null` where a count and not a
+/// window decides how long the request goes on.
+pub fn retry(phase: Phase) -> Value {
+    let millis = |span: std::time::Duration| u64::try_from(span.as_millis()).unwrap_or(u64::MAX);
+    match phase {
+        Phase::Reconnecting(Some(retry)) => json!({
+            "attempt": retry.attempt,
+            "in_ms": millis(retry.pause),
+            "gives_up_in_ms": retry.gives_up_in.map(millis),
+        }),
+        _ => Value::Null,
     }
 }
 

@@ -214,7 +214,7 @@ impl Reporter for Tells {
     }
 
     fn phase(&mut self, phase: Phase) {
-        if phase == Phase::Reconnecting {
+        if matches!(phase, Phase::Reconnecting(Some(_))) {
             let _ = self.told.send("reconnecting");
         }
     }

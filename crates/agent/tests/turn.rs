@@ -14361,13 +14361,23 @@ fn a_turn_survives_a_connection_that_died_mid_request() {
 
     assert_eq!(outcome.reply_for_display(), "the answer, eventually");
 
-    // And the wait is explained rather than looking like the model thinking for longer.
+    // And the wait is explained rather than looking like the model thinking for longer, with the
+    // pause that follows it and the time left before the request would be given up on.
+    let announced = reporter.phases.iter().find_map(|phase| match phase {
+        bravebot_agent::report::Phase::Reconnecting(Some(retry)) => Some(*retry),
+        _ => None,
+    });
+    let retry = announced.unwrap_or_else(|| {
+        panic!("the pause was not explained: {:?}", reporter.phases);
+    });
+    assert_eq!(retry.attempt, 2, "{retry:?}");
+    assert_eq!(retry.pause, std::time::Duration::from_secs(1), "{retry:?}");
+    let left = retry
+        .gives_up_in
+        .expect("a window decides how long it goes on");
     assert!(
-        reporter
-            .phases
-            .contains(&bravebot_agent::report::Phase::Reconnecting),
-        "the pause was not explained: {:?}",
-        reporter.phases
+        left <= std::time::Duration::from_secs(300) && left > std::time::Duration::from_secs(290),
+        "{retry:?}"
     );
 }
 
@@ -68680,7 +68690,7 @@ fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
     impl bravebot_agent::report::Reporter for StopOnRetry {
         fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
         fn phase(&mut self, phase: bravebot_agent::report::Phase) {
-            if phase == bravebot_agent::report::Phase::Reconnecting {
+            if matches!(phase, bravebot_agent::report::Phase::Reconnecting(_)) {
                 self.0.cancel();
             }
         }

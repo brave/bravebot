@@ -22,7 +22,7 @@ fn every_enum_has_the_tag_the_protocol_promises() {
     assert_eq!(wire::phase(Phase::Planning), "planning");
     assert_eq!(wire::phase(Phase::Thinking), "thinking");
     assert_eq!(wire::phase(Phase::Compacting), "compacting");
-    assert_eq!(wire::phase(Phase::Reconnecting), "reconnecting");
+    assert_eq!(wire::phase(Phase::Reconnecting(None)), "reconnecting");
 
     assert_eq!(wire::reach(Reach::NotThePlanner), "not_the_planner");
     assert_eq!(wire::reach(Reach::NoModel), "no_model");

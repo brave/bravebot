@@ -144,6 +144,49 @@ fn every_other_report_is_passed_through_unfiltered() {
     );
 }
 
+/// BACKEND-55: a request waiting to be sent again crosses with the time to the next attempt and to
+/// giving up, in milliseconds from the event, and the attempt that follows crosses with none. The
+/// window cannot add them to a clock it shares with the bridge, so a value that is not relative, or
+/// a phase that dropped them, leaves it counting down from nothing.
+#[test]
+fn a_request_waiting_to_be_sent_again_crosses_with_its_times() {
+    use bravebot_agent::report::Retry;
+    use std::time::Duration;
+
+    let (mut reporter, events) = harness();
+
+    reporter.phase(Phase::Reconnecting(Some(Retry {
+        attempt: 4,
+        pause: Duration::from_millis(38_000),
+        gives_up_in: Some(Duration::from_secs(3130)),
+    })));
+    reporter.phase(Phase::Reconnecting(Some(Retry {
+        attempt: 2,
+        pause: Duration::from_secs(1),
+        gives_up_in: None,
+    })));
+    reporter.phase(Phase::Reconnecting(None));
+    reporter.phase(Phase::Thinking);
+
+    let events = events.lock().expect("not poisoned");
+    let sent: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e.name == "phase")
+        .map(|e| &e.data)
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            &serde_json::json!({"phase": "reconnecting",
+                "retry": {"attempt": 4, "in_ms": 38_000, "gives_up_in_ms": 3_130_000}}),
+            &serde_json::json!({"phase": "reconnecting",
+                "retry": {"attempt": 2, "in_ms": 1_000, "gives_up_in_ms": null}}),
+            &serde_json::json!({"phase": "reconnecting", "retry": null}),
+            &serde_json::json!({"phase": "thinking", "retry": null}),
+        ]
+    );
+}
+
 /// A check is a whole model call inside the tool call already reported, and an interface told
 /// nothing about it draws a finished-looking row for as long as the check takes. Both halves
 /// cross, and the end crosses however the check ended: a front-end told only that one began has
