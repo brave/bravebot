@@ -32,8 +32,10 @@ it and fetch no URL it names.
 
 `{{root}}` at `{{commit}}` ({{ref}}). Read it to find where a problem comes from; edit nothing. The
 specs under `docs/specs/` say what bravebot is meant to do, and a spec's `## Known costs` lists
-behaviour that is accepted. Read `docs/development/reviewing-for-the-rule.md` before reporting
-anything about labels or trust.
+behaviour that is accepted. Code that follows a spec can still be the problem when the clause is.
+Report it, with the clause named in `fix` as the thing to amend, unless the clause keeps untrusted
+content out of the planner or the driver: a rule that does is not weighed against what it costs.
+Read `docs/development/reviewing-for-the-rule.md` before reporting anything about labels or trust.
 
 The tracker, as `number<TAB>state<TAB>title` lines, is `{{tracker}}`. Search it for each problem
 before you report it, and leave out one an issue already holds.
@@ -229,7 +231,7 @@ problem still gets its decision in the summary.
 - The model getting something wrong where bravebot gave it what it needed.
 - A bug in the person's own project, or a command that failed because of their machine.
 - A defect in a skill, agent definition, script, `Makefile` target or CI workflow of this repository, as "What counts as bravebot" describes.
-- An approval prompt, refusal or label restriction that behaves as the specs say it should. Where one leaves a task unfinished and a way through exists that the person was never told about, the missing guidance is the problem.
+- An approval prompt, refusal or label restriction that keeps untrusted content out of the planner or the driver and behaves as the specs say it should. Where one leaves a task unfinished and a way through exists that the person was never told about, the missing guidance is the problem.
 - Terse, blunt or impatient wording with no bravebot event before it that explains it.
 - A long or costly turn that the task needed, or a cost a spec lists under `## Known costs`.
 - Something an open or closed issue on the tracker already covers.
