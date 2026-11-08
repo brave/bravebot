@@ -218,8 +218,8 @@ the rest from what the start is for, and the diff says which it is when that is 
 entry does not say that a start the diff does not touch complies. The generic table
 (`CODE_SELECTORS` in `crates/sandbox/src/programs.rs`) is applied to every checked start, and a
 program's own names are the `CODE_SELECTORS` list in `crates/agent/src/gcloud.rs`,
-`crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs` or
-`crates/tui/src/opener.rs`, so a diff that adds a start lists only the names its program reads that
+`crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
+`crates/tui/src/opener.rs` or `crates/tui/src/powershell.rs`, so a diff that adds a start lists only the names its program reads that
 the table does not hold, or passes `Checked(&[])` and records the gap as
 [GAP-001](gaps.md#GAP-001) asks. A launcher that takes its handler from a list of commands, such as
 `BROWSER`, is listed as `Names::Commands`: every entry must be one program, alone or followed by

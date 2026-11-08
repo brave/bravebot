@@ -28,6 +28,7 @@ governs:
   - crates/sandbox/src/openshell.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
+  - crates/tui/src/powershell.rs
 guards:
   - symbol: find_in
     sites:
@@ -3651,7 +3652,8 @@ file. A new spawn that looks a name up through
   program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
   ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
   `doctor --push-identity`'s in `crates/cli/src/push_identity.rs`, the browser opener's in
-  `crates/tui/src/opener.rs` and the sandbox usability suite's in `crates/agent/src/usability.rs`.
+  `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
+  the sandbox usability suite's in `crates/agent/src/usability.rs`.
   The browser opener adds `BROWSER` and the four `XDG_` directories that `xdg-open` reads to choose
   the handler it runs (`XDG_DATA_DIRS` is also in the generic table). The AWS CLI, the gcloud
   launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list the same names,
@@ -3742,7 +3744,8 @@ file. A new spawn that looks a name up through
   use for. A variable not listed is left as set. A variable that
   more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
   in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
-  `crates/bedrock/src/credentials.rs` and in `crates/cli/src/push_identity.rs`:
+  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs` and in
+  `crates/tui/src/powershell.rs`:
 
   | `gcloud` variable | Names | Why it selects code |
   |---|---|---|
@@ -3795,8 +3798,33 @@ file. A new spawn that looks a name up through
   `started` also sets `SHELL` to `/bin/sh` whatever the person's is, because `ssh` runs a
   `ProxyCommand` or a `LocalCommand` with `$SHELL -c`. `SHELL` is set and not checked, since the
   person's shell has no use here. The tests in `crates/cli/src/push_identity.rs` hand `started` an
-  environment and read the one it gives the program, so they start no real `ssh`. The other
-  programs bravebot starts for itself have no list yet.
+  environment and read the one it gives the program, so they start no real `ssh`.
+
+  The `powershell` that the clipboard tool and `/caffeinate` start on Windows is started by
+  `powershell::start` in `crates/tui/src/powershell.rs`, which both call. It gives a program whose
+  name is `powershell` (with or without `.exe`, in any case) this list and every other program the
+  generic table alone:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `PSModulePath` | a list of directories | the directories PowerShell searches for modules, which it loads and runs when a command names a module found in one of them |
+  | `COR_ENABLE_PROFILING`, `COR_PROFILER` | options | switch on, and name by class id, a profiler that the .NET Framework runtime of Windows PowerShell 5.1 loads into the process. They name no path and the starts have no use for a profiler |
+  | `CORECLR_ENABLE_PROFILING`, `CORECLR_PROFILER` | options | the same for the .NET runtime of PowerShell 7 |
+  | `COR_PROFILER_PATH`, `COR_PROFILER_PATH_32`, `COR_PROFILER_PATH_64` | a file | the library the .NET Framework runtime loads as the profiler, for any process or one of that width |
+  | `CORECLR_PROFILER_PATH`, `CORECLR_PROFILER_PATH_32`, `CORECLR_PROFILER_PATH_64` | a file | the same for the .NET runtime |
+
+  This list was read from PowerShell's `about_PSModulePath` topic and from the .NET documentation
+  of the profiling environment variables. It was not shown by running `powershell` on Windows that
+  any of these variables changes what runs, and it cannot show that no other variable does
+  ([PATH-008](../best-practices/paths.md#PATH-008)). Both starts pass `-NoProfile`, so no variable
+  that names a profile script is listed. `gcloud.cmd` and `APPDATA` are not listed, since nothing
+  read shows that either selects code for these starts. Windows matches the names without regard to
+  case. The tests in `crates/tui/src/powershell.rs` hand the start an
+  environment and read the one it gives the program, so they run on every platform and start no real
+  `powershell`. One of them reads `clipboard.rs` and `caffeinate.rs` as text and fails when either
+  starts a program other than through `powershell::start`, because no test on a host without
+  Windows runs those starts. The other programs bravebot starts for itself, apart from the ones
+  with a list above, have no list yet.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3838,9 +3866,11 @@ caller lists, and a name nobody listed reaches the program. The lists were read 
 documentation and launchers, and these were not shown by running the program:
 
 - The Windows `powershell` starts of the clipboard tool (`crates/tui/src/clipboard.rs`) and of the
-  inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table. `PSModulePath`,
-  `COR_ENABLE_PROFILING` and `COR_PROFILER` are candidates for names and are not in it, and
-  `gcloud.cmd` and `APPDATA` have not been checked on Windows. It is tracked by #3808.
+  inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table and the list in
+  `crates/tui/src/powershell.rs`. That list was written from documentation. It has not been shown by
+  running `powershell` on Windows that any variable in it changes what runs, or that no other
+  variable does. `gcloud.cmd` and `APPDATA` are not in it, and have not been checked on Windows. It
+  is tracked by #3808.
 - The dynamic-loader names (`LD_*`, `GCONV_PATH`) are read from ld.so(8) and not shown by running a
   loader. It is tracked by #3810.
 - `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
@@ -3972,6 +4002,13 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_tui::opener::a_browser_entry_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+`verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
+`verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
+`verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
+`verified-by: bravebot_tui::powershell::a_variable_that_selects_no_code_is_left_as_set_for_powershell`
+`verified-by: bravebot_tui::powershell::a_program_other_than_powershell_is_not_given_the_powershell_names`
+`verified-by: bravebot_tui::powershell::powershell_is_known_by_its_name_whatever_extension_or_case_the_lookup_found`
+`verified-by: bravebot_tui::powershell::the_clipboard_tool_and_the_inhibitor_start_powershell_through_the_checked_start`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`
 `verified-by: bravebot_bedrock::credentials::an_aws_browser_entry_that_is_not_text_is_removed`

@@ -58,14 +58,10 @@ const COPY_TOOLS: &[(&str, &[&str])] = &[
 /// The command that starts a clipboard tool found as `program`.
 ///
 /// A tool that is a script or a launcher starts programs by name too, so it is given only the
-/// `PATH` entries the lookup searched (SANDBOX-30).
+/// `PATH` entries the lookup searched (SANDBOX-30). `powershell`, which Windows pastes through, is
+/// also given the variables it reads to choose code ([`crate::powershell::CODE_SELECTORS`]).
 fn start_tool(program: PathBuf) -> Command {
-    bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Reduced,
-        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
-    )
+    crate::powershell::start(program)
 }
 
 /// Run a tool and write the text to it, reporting whether it took it.
