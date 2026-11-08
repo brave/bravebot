@@ -3194,21 +3194,28 @@ export const TOOLS = {
     refuseBlocked(await blockedSites(chrome), url);
     const bookmark = await bookmarkAt(chrome, url);
     const folder = await bookmarkFolder(chrome, title);
+    // The folder it leaves, so a person reading the reply can put it back.
+    const from =
+      bookmark.parentId === undefined
+        ? ""
+        : await folderTitled(chrome, bookmark.parentId).catch(() => "");
     const moved = await chrome.bookmarks.move(bookmark.id, {
       parentId: folder.id,
     });
-    return { url, folder: await folderTitled(chrome, moved.parentId) };
+    return { url, from, folder: await folderTitled(chrome, moved.parentId) };
   },
 
-  // Changes the title of the bookmark at `url`. The reply carries the title the
+  // Changes the title of the bookmark at `url`. The reply carries the title it
+  // replaced, so a person reading it can give that title back, and the title the
   // browser holds.
   async rename_bookmark(chrome, params) {
     const url = text(params, "url");
     const title = text(params, "title");
     refuseBlocked(await blockedSites(chrome), url);
     const bookmark = await bookmarkAt(chrome, url);
+    const replaced = bookmark.title ?? "";
     const renamed = await chrome.bookmarks.update(bookmark.id, { title });
-    return { url, title: renamed.title ?? "" };
+    return { url, replaced, title: renamed.title ?? "" };
   },
 
   // Adds an entry for an HTTP or HTTPS URL to the reading list, unread unless

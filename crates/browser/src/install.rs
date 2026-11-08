@@ -257,13 +257,15 @@ const APPLIES: &[(&str, &str, &str, &str)] = &[
 ];
 
 /// The tools of [`APPLIES`] `install` marks with `--unattended`, whose calls an `apply` step makes on
-/// a person's approval of the plan: each acts only in this browser, deletes and overwrites nothing,
-/// and adds no address. `rename_bookmark` overwrites a title, `add_reading_list_entry` adds an
-/// address, and `group_tabs` can empty a group, which the browser then removes, so none is marked
-/// (`docs/design/manifest-apply.md`).
+/// a person's approval of the plan: each acts only in this browser, deletes nothing, overwrites
+/// nothing its reply does not record, and adds no address. `move_bookmark` says the folder a
+/// bookmark left and `rename_bookmark` the title it replaced, so each can be undone by hand.
+/// `add_reading_list_entry` adds an address, and `group_tabs` can empty a group, which the browser
+/// then removes, so neither is marked (`docs/design/manifest-apply.md`).
 const UNATTENDED: &[(&str, &str)] = &[
     ("bookmarks-write", "create_bookmark_folder"),
     ("bookmarks-write", "move_bookmark"),
+    ("bookmarks-write", "rename_bookmark"),
     ("tabs-manage", "pin_tab"),
 ];
 
@@ -710,7 +712,8 @@ mod tests {
              --apply move_bookmark:folder=row,entry --apply rename_bookmark:url=entry \
              --apply rename_bookmark:title=new --apply add_reading_list_entry:url=entry \
              --apply add_reading_list_entry:title=entry,new --unattended create_bookmark_folder \
-             --unattended move_bookmark --dir /d -- /p/bravebot-browser mcp --group \
+             --unattended move_bookmark --unattended rename_bookmark --dir /d -- \
+             /p/bravebot-browser mcp --group \
              bookmarks-write"
         );
         assert_eq!(

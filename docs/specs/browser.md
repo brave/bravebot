@@ -1741,7 +1741,9 @@ URL does not name one bookmark`. A folder is named by its title in the same way 
 and `create_bookmark_folder`, for the folder the new node goes in, and by `move_bookmark` for the
 folder the bookmark goes to: the call fails, creating and moving nothing, where no folder has the
 title or more than one does. The bookmark and the folder of `move_bookmark` are both found before
-anything is moved.
+anything is moved. The reply of `move_bookmark` names the folder the bookmark left as well as the
+one it is in, and that of `rename_bookmark` the title it replaced as well as the one it holds, so a
+change can be undone by hand.
 
 The built-in folders at the top of the tree, which the browser makes and titles in the person's
 language, are named by their title like any other folder, by `create_bookmark`,

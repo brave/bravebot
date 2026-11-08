@@ -6733,13 +6733,13 @@ test("create_bookmark_folder refuses a title or parent that is not text, a paren
   }
 });
 
-test("move_bookmark moves the bookmark at exactly that URL to the end of the folder with exactly that title, and says the folder the browser put it in", async () => {
+test("move_bookmark moves the bookmark at exactly that URL to the end of the folder with exactly that title, and says the folder it left and the folder the browser put it in", async () => {
   const chrome = browser({ bookmarkTree: saved, stored: writingOn });
   const reply = await call(chrome, "move_bookmark", {
     url: "https://docs.rs/",
     folder: "Reading",
   });
-  assert.deepEqual(reply.result, { url: "https://docs.rs/", folder: "Reading" });
+  assert.deepEqual(reply.result, { url: "https://docs.rs/", from: "Work", folder: "Reading" });
   assert.deepEqual(writes(chrome, "bookmarks.search"), [
     ["bookmarks.search", { url: "https://docs.rs/" }],
     ["bookmarks.search", { title: "Reading" }],
@@ -6754,7 +6754,7 @@ test("move_bookmark moves the bookmark at exactly that URL to the end of the fol
     url: "https://docs.rs/",
     folder: "Reading",
   });
-  assert.deepEqual(kept.result, { url: "https://docs.rs/", folder: "Work" });
+  assert.deepEqual(kept.result, { url: "https://docs.rs/", from: "Work", folder: "Work" });
 });
 
 // A bookmark is named by its URL, as a tab is, so a URL that is not exactly one
@@ -6989,13 +6989,18 @@ test("move_bookmark moves a bookmark into a built-in folder and back out of it",
   });
   assert.deepEqual(into.result, {
     url: "https://docs.rs/",
+    from: "Work",
     folder: "Other bookmarks",
   });
   const back = await call(chrome, "move_bookmark", {
     url: "https://docs.rs/",
     folder: "Work",
   });
-  assert.deepEqual(back.result, { url: "https://docs.rs/", folder: "Work" });
+  assert.deepEqual(back.result, {
+    url: "https://docs.rs/",
+    from: "Other bookmarks",
+    folder: "Work",
+  });
   assert.deepEqual(writes(chrome, "bookmarks.move"), [
     ["bookmarks.move", "11", { parentId: "2" }],
     ["bookmarks.move", "11", { parentId: "10" }],
@@ -7073,13 +7078,13 @@ test("list_bookmark_folder with no folder lists the titles of the built-in folde
   );
 });
 
-test("rename_bookmark gives the bookmark at exactly that URL the title asked for and nothing else, and says the title the browser holds", async () => {
+test("rename_bookmark gives the bookmark at exactly that URL the title asked for and nothing else, and says the title it replaced and the title the browser holds", async () => {
   const chrome = browser({ bookmarkTree: saved, stored: writingOn });
   const reply = await call(chrome, "rename_bookmark", {
     url: "https://docs.rs/",
     title: "Rust docs",
   });
-  assert.deepEqual(reply.result, { url: "https://docs.rs/", title: "Rust docs" });
+  assert.deepEqual(reply.result, { url: "https://docs.rs/", replaced: "Docs", title: "Rust docs" });
   assert.deepEqual(writes(chrome, "bookmarks.update"), [
     ["bookmarks.update", "11", { title: "Rust docs" }],
   ]);
@@ -7089,7 +7094,7 @@ test("rename_bookmark gives the bookmark at exactly that URL the title asked for
     url: "https://docs.rs/",
     title: "Rust docs",
   });
-  assert.deepEqual(kept.result, { url: "https://docs.rs/", title: "Docs" });
+  assert.deepEqual(kept.result, { url: "https://docs.rs/", replaced: "Docs", title: "Docs" });
 
   for (const params of [
     { url: "https://docs.rs/" },

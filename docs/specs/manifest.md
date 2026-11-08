@@ -680,7 +680,8 @@ included. Only the terminal interface puts the list; in any other client, and wh
 asked, the step is refused. The calls the person keeps are made in row order, each through a grant
 bound to its server, tool and place in the list, and a `deny` rule is read before each. A call whose
 tool reports a failure skips the calls that depend on it and ends nothing. A call refused or not
-made ends the run. What became of every call is drawn after them, and reaches no model.
+made ends the run. What each call that was made returned is drawn behind the untrusted margin, and
+what became of every call is drawn after them; neither reaches a model.
 
 **Why.** The planner cannot know which items a task touches without reading them, and must never
 read them. Numbers leave nothing to imitate, so every target a call acts on is copied from a list a
@@ -739,11 +740,11 @@ out. Who answered the plan is taken when it is answered, so no other change of m
 unasked.
 
 **Why.** A tool a person marks is one whose every call, within the caps, is acceptable on its own:
-it acts only on their own machine, deletes or overwrites nothing, and adds no address. Every target
-is copied from a list a read returned and no call falls outside the tools the plan names, so the
-worst a hostile entry can choose is which of those acceptable calls are made. That bound holds
-whether or not the step asks, which is what lets a person approve a run once and not again at each
-step.
+it acts only on their own machine, deletes nothing, overwrites nothing its reply does not record,
+and adds no address. Every target is copied from a list a read returned and no call falls outside
+the tools the plan names, so the worst a hostile entry can choose is which of those acceptable calls
+are made. That bound holds whether or not the step asks, which is what lets a person approve a run
+once and not again at each step.
 
 `verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 `verified-by: bravebot_agent::manifest_server_calls::a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks`
