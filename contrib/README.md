@@ -112,8 +112,9 @@ whose answer is known, and reads no catalog; `make check-locales` runs it first,
 
 Fails while a call of `programs::start` or `programs::start_against` does not state
 `CodeSelectors`, or a variable in a `CODE_SELECTORS` list, in `crates/sandbox/src/programs.rs`,
-`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs` or
-`crates/cli/src/push_identity.rs`, lacks a test.
+`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs`,
+`crates/cli/src/push_identity.rs`, `crates/tui/src/opener.rs` or `crates/tui/src/powershell.rs`,
+lacks a test.
 
 A program bravebot starts for itself is started with the person's environment, and the programs
 can read variables that choose code to run, such as `CLOUDSDK_PYTHON` and `AWS_CONFIG_FILE`.

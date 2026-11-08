@@ -50,6 +50,7 @@ SOURCES = [
     "crates/bedrock/src/credentials.rs",
     "crates/cli/src/push_identity.rs",
     "crates/tui/src/opener.rs",
+    "crates/tui/src/powershell.rs",
 ]
 
 LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
