@@ -734,8 +734,9 @@ Which steps run unasked is decided once, before the plan's line is written, so t
 agree. The list is still put, as for any `apply` step, where bypass mode answered the plan, in plan
 mode, including a move into it after the plan was answered, where an `ask` or a `deny` rule names
 one of the step's tools, and where a value the step would send holds a character a line would draw
-as nothing, since the list writes each one out and the line could not. Who answered the plan is
-taken when it is answered, so no other change of mode makes a step run unasked.
+as nothing, since only the list shows each value the step resolved, with such characters written
+out. Who answered the plan is taken when it is answered, so no other change of mode makes a step run
+unasked.
 
 **Why.** A tool a person marks is one whose every call, within the caps, is acceptable on its own:
 it acts only on their own machine, deletes or overwrites nothing, and adds no address. Every target
@@ -748,6 +749,8 @@ step.
 `verified-by: bravebot_agent::manifest_server_calls::a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks`
 `verified-by: bravebot_agent::manifest_server_calls::a_marked_step_holding_a_hidden_character_puts_its_list`
 `verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_about_a_marked_tool_puts_the_steps_list`
+`verified-by: bravebot_agent::manifest_server_calls::a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list`
+`verified-by: bravebot_agent::manifest_server_calls::a_marked_step_sending_an_entry_holding_a_hidden_character_puts_its_list`
 
 ## Known costs
 

@@ -2216,8 +2216,9 @@ export const TOOLS = {
       .slice(0, wanted);
     const folders = new Map();
     for (const id of new Set(kept.map((node) => node.parentId))) {
+      // A folder the browser cannot find names no folder, rather than failing the list.
       if (id !== undefined) {
-        folders.set(id, await folderTitled(chrome, id));
+        folders.set(id, await folderTitled(chrome, id).catch(() => ""));
       }
     }
     return kept.map((node) => ({
