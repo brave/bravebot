@@ -156,6 +156,14 @@ impl Driven for ResponsesClient<'_> {
         worth_another_attempt_or_report(self.provider.patience, attempt, error)
     }
 
+    fn retry_window(&self) -> Option<Duration> {
+        self.provider.patience.retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        crate::failed_connection(error)
+    }
+
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
         pause_before_retry(self.pace.backoff, failures, error)
     }

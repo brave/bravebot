@@ -28,7 +28,7 @@ use bravebot_aichat::ATTEMPTS;
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, OpenCall, Progress, attempts_allowed, pause_after_failure,
+    Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff, pause_after_failure,
     rate_limit_backoff, rate_limit_without_wait, read_in_background, reply_bound,
     retryable_within_ceiling,
 };
@@ -390,6 +390,14 @@ impl Driven for BedrockClient<'_> {
             attempt,
             error,
         )
+    }
+
+    fn retry_window(&self) -> Option<Duration> {
+        self.config.patience().retry_window()
+    }
+
+    fn of_the_connection(error: &BedrockError) -> bool {
+        matches!(error, BedrockError::Egress(e) if retryable_within_ceiling(e))
     }
 
     fn pause(&self, failures: u32, error: &BedrockError) -> Duration {
@@ -1210,10 +1218,6 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
         BedrockError::Frame(_) => true,
         _ => false,
     }
-}
-
-fn backoff(base: Duration, failures: u32) -> Duration {
-    base * 2u32.pow(failures - 1)
 }
 
 /// The service's name for a throttle it reports part way through a reply.
@@ -3447,7 +3451,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
         for (streaming, base_ms) in [(false, 7), (true, 11)] {
-            let config = config();
+            let config = account_stating(Some(2), None);
             let egress = Egress::new();
             let (http, received) = refused_requests(vec![503; 3]);
             let mut client =
@@ -4836,6 +4840,16 @@ mod tests {
         config().with_patience(bravebot_config::provider::Patience {
             max_retries,
             idle_timeout: idle_ms.map(Duration::from_millis),
+            retry_window: None,
+        })
+    }
+
+    /// The configured account with the retry count and window a `provider` block would have stated.
+    fn account_stating_a_window(max_retries: Option<u32>, window_ms: u64) -> Bedrock {
+        config().with_patience(bravebot_config::provider::Patience {
+            max_retries,
+            idle_timeout: None,
+            retry_window: Some(Duration::from_millis(window_ms)),
         })
     }
 
@@ -4904,26 +4918,90 @@ mod tests {
     }
 
     /// The count is how many times a request is sent again: a stated four is five requests and not
-    /// four or six, and an account that states nothing is sent the three it always was.
+    /// four or six.
     #[test]
     fn an_account_stating_a_retry_count_is_asked_again_that_many_times() {
         for streaming in [false, true] {
-            for (stated, asked) in [(Some(4), 5), (None, ATTEMPTS)] {
-                let (http, received) = refused_requests(vec![503; 8]);
-                let (result, attempts) = asked_through(
-                    &account_stating(stated, None),
-                    &Egress::new(),
-                    http,
-                    streaming,
-                );
-                assert!(result.is_err(), "streaming {streaming}: {result:?}");
-                assert_eq!(attempts, asked, "streaming {streaming}, stated {stated:?}");
-                assert_eq!(
-                    received.try_iter().count() as u32,
-                    asked,
-                    "streaming {streaming}, stated {stated:?}"
-                );
-            }
+            let (http, received) = refused_requests(vec![503; 8]);
+            let (result, attempts) = asked_through(
+                &account_stating(Some(4), None),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(result.is_err(), "streaming {streaming}: {result:?}");
+            assert_eq!(attempts, 5, "streaming {streaming}");
+            assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
+        }
+    }
+
+    /// BACKEND-55: an account that states nothing sends a request whose connection failed again for
+    /// as long as the default window holds, so a service that recovers on the fourth request is
+    /// reached. Rejects a client still held to the three requests it used to send.
+    #[test]
+    fn an_account_stating_nothing_is_asked_again_while_the_default_window_holds() {
+        let (http, received) = scripted_responses(vec![
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            answered(),
+        ]);
+        let (result, attempts) =
+            asked_through(&account_stating(None, None), &Egress::new(), http, true);
+        assert!(
+            result.is_ok(),
+            "a service that recovered on the fourth request was given up on: {result:?}"
+        );
+        assert_eq!(attempts, 4);
+        assert_eq!(received.try_iter().count(), 4);
+    }
+
+    /// BACKEND-55: a stated window sends a failed connection again past the stated count and ends
+    /// the call when the next pause would not fit. Rejects a client that reads the count as the
+    /// whole of the limit, and one that sits out the window and past it.
+    #[test]
+    fn an_account_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window() {
+        // The count alone would stop at the second request, and the window carries on to the fifth.
+        let (http, _received) = scripted_responses(vec![
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            answered(),
+        ]);
+        let (result, attempts) = asked_through(
+            &account_stating_a_window(Some(1), 60_000),
+            &Egress::new(),
+            http,
+            true,
+        );
+        assert!(
+            result.is_ok(),
+            "the count was taken for the whole limit: {result:?}"
+        );
+        assert_eq!(attempts, 5);
+
+        for streaming in [false, true] {
+            // A service that never recovers is given up on when the window is spent, well before
+            // the sixty requests it was ready to refuse.
+            let (http, _received) = refused_requests(vec![503; 60]);
+            let started = std::time::Instant::now();
+            let (result, attempts) = asked_through(
+                &account_stating_a_window(None, 150),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(result.is_err(), "streaming {streaming}: {result:?}");
+            assert!(
+                (4..30).contains(&attempts),
+                "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "streaming {streaming}: the call outlasted its window: {:?}",
+                started.elapsed()
+            );
         }
     }
 

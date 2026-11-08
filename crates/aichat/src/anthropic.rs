@@ -149,6 +149,18 @@ impl Driven for AnthropicClient<'_> {
         worth_asking_again(self.provider.patience, attempt, error)
     }
 
+    fn retry_window(&self) -> Option<Duration> {
+        self.provider.patience.retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        crate::failed_connection(error)
+            || matches!(
+                error,
+                ChatError::Egress(EgressError::Status { status, .. }) if *status == OVERLOADED
+            )
+    }
+
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
         pause_before_retry(self.pace.backoff, failures, error)
     }

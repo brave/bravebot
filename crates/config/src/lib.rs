@@ -1319,6 +1319,13 @@ pub struct Config {
     /// would have configured is simply absent ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
     /// Empty for a `Config` built from a bare lookup, which has no layers to name.
     pub refused_regions: Vec<bedrock::RefusedRegion>,
+    /// How often a request to Brave's endpoint is sent again, and for how long.
+    ///
+    /// The defaults, since that endpoint and an account the tier variables alone configure have no
+    /// `provider` block to state anything in ([BACKEND-55](../../../docs/specs/backends.md#BACKEND-55)).
+    /// Held here so a test of a turn that ends on a failed request can say that a count decides how
+    /// many requests it takes, as it can for a gateway through the block.
+    patience: provider::Patience,
 }
 
 /// The Bedrock regions refused in the layers in force, each with where it was written.
@@ -1779,7 +1786,20 @@ impl Config {
             budget_was_advertised,
             listed_inputs: None,
             refused_regions: Vec::new(),
+            patience: provider::Patience::default(),
         })
+    }
+
+    /// The same configuration with the retry count and window its requests to Brave's endpoint are
+    /// held to.
+    pub fn with_patience(mut self, patience: provider::Patience) -> Self {
+        self.patience = patience;
+        self
+    }
+
+    /// How often a request to Brave's endpoint is sent again, and for how long.
+    pub fn patience(&self) -> provider::Patience {
+        self.patience
     }
 
     /// Take what the roster lists `model` as taking, replacing what was listed before.
@@ -4638,26 +4658,28 @@ mod tests {
         assert_eq!(ids, vec!["approved"]);
     }
 
-    /// A gateway the machine-level layer approves is held to the retry count and the quiet gap that
-    /// layer states, and a person's own entry for the same id does not lend it more.
+    /// A gateway the machine-level layer approves is held to the retry count, the retry window and
+    /// the quiet gap that layer states, and a person's own entry for the same id does not lend it
+    /// more.
     #[test]
     fn a_managed_gateway_states_its_own_retry_count_and_idle_gap() {
         let managed = managed::scratch(
             "resolve-gateways-patience",
             r#"{"provider": {"approved": {"options": {
                 "baseURL": "https://approved.example/v1",
-                "maxRetries": 1, "idleTimeoutMs": 30000}}}}"#,
+                "maxRetries": 1, "idleTimeoutMs": 30000, "retryWindowMs": 60000}}}}"#,
         );
         let settings = Settings::parse(
             r#"{"provider": {"approved": {"options": {
                 "baseURL": "https://approved.example/v1",
-                "maxRetries": 7, "idleTimeoutMs": 600000}}}}"#,
+                "maxRetries": 7, "idleTimeoutMs": 600000, "retryWindowMs": 3600000}}}}"#,
         );
         let config =
             resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
         let patience = config.providers[0].patience;
         assert_eq!(patience.max_retries, Some(1));
         assert_eq!(patience.idle_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(patience.retry_window, Some(Duration::from_secs(60)));
     }
 
     /// The token each gateway resolves to, by id, from the sources named.

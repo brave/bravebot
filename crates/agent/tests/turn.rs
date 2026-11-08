@@ -67753,6 +67753,16 @@ fn take_a_turn_reporting(
     .outcome
 }
 
+/// What a test that ends a turn on a service that keeps failing states, so that the count decides
+/// how many requests that takes: three, as a service with nothing stated used to be sent. Without
+/// it the default holds a failed connection for minutes (BACKEND-55).
+fn three_requests_and_no_more() -> bravebot_config::provider::Patience {
+    bravebot_config::provider::Patience {
+        max_retries: Some(2),
+        ..bravebot_config::provider::Patience::default()
+    }
+}
+
 fn why_it_failed(error: &turn::TurnError) -> bravebot_agent::Diagnosis {
     match error.ending() {
         bravebot_agent::Ending::Failed(diagnosis) => diagnosis,
@@ -67777,7 +67787,7 @@ fn a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_mad
         Served::Status(503),
         Served::Status(503),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
@@ -67843,7 +67853,7 @@ fn a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it() {
         Served::DiagnosticStatus(503),
         Served::Reply(reply_with("the request failed")),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
@@ -68150,7 +68160,7 @@ fn a_model_the_service_keeps_failing_is_followed_by_a_request_naming_the_fallbac
         let mut script = vec![Served::Status(status); attempts];
         script.push(Served::Reply(reply_with("answered by the fallback")));
         let (endpoint, received) = serve_script(script);
-        let mut config = config_for(&endpoint);
+        let mut config = config_for(&endpoint).with_patience(three_requests_and_no_more());
         config.fallback_model = Some("fallback-model".into());
         let mut conversation = bravebot_agent::Conversation::new();
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -71161,7 +71171,8 @@ mod usage {
                 config_with_budget(&endpoint, 1_000)
             } else {
                 config_for(&endpoint)
-            };
+            }
+            .with_patience(three_requests_and_no_more());
             let reports = Arc::new(Mutex::new(Reports::default()));
             let mut reporter = Live(Arc::clone(&reports));
             let cancel = bravebot_core::cancel::Cancel::new();

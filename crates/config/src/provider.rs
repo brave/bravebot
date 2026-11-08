@@ -457,8 +457,8 @@ impl Model {
 
 /// The most times a request is sent again that a block may state.
 ///
-/// The pauses the doubling from one second gives total 127 seconds at the cap, and none is longer
-/// than 64, which stays inside the two minutes after which a service's own request to wait is
+/// The pauses the doubling from one second gives total 123 seconds at the cap, and none is longer
+/// than 60, which stays inside the two minutes after which a service's own request to wait is
 /// refused rather than waited out. A wait a service asks for is taken in place of the pause, so the
 /// whole wait is bounded by this count and by that figure per retry.
 pub const MAX_RETRIES: u32 = 7;
@@ -469,13 +469,27 @@ pub const MAX_RETRIES: u32 = 7;
 /// be the one that ended it.
 pub const MAX_IDLE_TIMEOUT_MS: u64 = 600_000;
 
+/// The longest window a block may state for sending a request again after its connection failed, in
+/// milliseconds: one hour.
+///
+/// A longer window would keep a turn waiting on a network that has been down for a working day, which
+/// is a state the person is better told about than waited on.
+pub const MAX_RETRY_WINDOW_MS: u64 = 3_600_000;
+
+/// How long a request is sent again after its connection failed, where a block states neither a
+/// window nor a retry count.
+///
+/// Long enough for a machine to come back from sleep, a VPN to reconnect or a service to recover
+/// from a short outage, and short enough that a person who is offline is told so within minutes.
+pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
+
 /// What a block states about repeating a request and about waiting on a reply gone quiet.
 ///
-/// Both are plain numbers a person chose, and only ever set a count or a timer: the decision to send
-/// a request again is still taken from the status or the failure that came back, never from this.
-/// `None` is nothing stated, which the clients read as the figures they have always used. Read out of
-/// the block's `options` for a gateway and for an AWS account alike, and so only from the layers a
-/// `provider` block is read from.
+/// All three are plain numbers a person chose, and only ever set a count or a timer: the decision to
+/// send a request again is still taken from the status or the failure that came back, never from
+/// this. `None` is nothing stated, which the clients read as the figures they have always used. Read
+/// out of the block's `options` for a gateway and for an AWS account alike, and so only from the
+/// layers a `provider` block is read from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Patience {
     /// `options.maxRetries`: how many times a request is sent again, at most [`MAX_RETRIES`].
@@ -485,11 +499,14 @@ pub struct Patience {
     /// `options.idleTimeoutMs`: how long a reply may go quiet before it is given up on, at most
     /// [`MAX_IDLE_TIMEOUT_MS`].
     pub idle_timeout: Option<Duration>,
+    /// `options.retryWindowMs`: how long after its first failure a request whose connection failed
+    /// is still sent again, at most [`MAX_RETRY_WINDOW_MS`].
+    pub retry_window: Option<Duration>,
 }
 
 impl Patience {
     /// What a block's `options` state. A figure above its cap is the cap, as Codex reads its own;
-    /// anything that is not a whole number, and a zero gap, states nothing.
+    /// anything that is not a whole number, and a zero gap or window, states nothing.
     pub(crate) fn from_options(
         options: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> Self {
@@ -500,13 +517,30 @@ impl Patience {
                 .and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok()),
             idle_timeout: positive(stated("idleTimeoutMs"))
                 .map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS))),
+            retry_window: positive(stated("retryWindowMs"))
+                .map(|window| Duration::from_millis(window.min(MAX_RETRY_WINDOW_MS))),
         }
     }
 
     /// How many requests are sent before a failure is the caller's: `default` where no retry count
     /// was stated, and one more than the count where one was.
+    ///
+    /// The count of every failure but a failed connection, which [`Patience::retry_window`] can
+    /// extend.
     pub fn attempts(&self, default: u32) -> u32 {
         self.max_retries.map_or(default, |retries| retries + 1)
+    }
+
+    /// How long after its first failure a request whose connection failed, or that was told to try
+    /// again later, is still sent again, in place of the count.
+    ///
+    /// The window the block stated. Where it stated none, [`DEFAULT_RETRY_WINDOW`], unless it
+    /// stated a retry count: a person who chose a count has chosen how often a request is sent, and
+    /// a window they did not ask for does not override it. `None` is no window, so the count alone
+    /// decides.
+    pub fn retry_window(&self) -> Option<Duration> {
+        self.retry_window
+            .or_else(|| self.max_retries.is_none().then_some(DEFAULT_RETRY_WINDOW))
     }
 }
 
@@ -2921,12 +2955,84 @@ mod tests {
         }
     }
 
-    /// An AWS account is stated the same two keys, read from the block's `options` beside the
-    /// region, and the entry keeps them where a client reaching the account can read them.
+    /// BACKEND-55: `retryWindowMs` is how long a failed connection is retried, capped at an hour. A
+    /// window of zero and one that is not a whole number state nothing, so a mistyped figure costs
+    /// the setting and not the entry. Rejects a read that lets a day-long figure through, which
+    /// would keep a turn waiting on a network down since the morning.
     #[test]
-    fn an_aws_entry_states_the_same_two_figures() {
+    fn a_block_states_how_long_a_failed_connection_is_retried_and_an_hour_is_the_most() {
+        let at = |figure: &str| {
+            one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                    "retryWindowMs": {figure}}}}}}}}}"#
+            ))
+            .patience
+        };
+
+        assert_eq!(
+            at("600000").retry_window,
+            Some(Duration::from_millis(600_000))
+        );
+        assert_eq!(
+            at("86400000").retry_window,
+            Some(Duration::from_millis(MAX_RETRY_WINDOW_MS))
+        );
+        assert_eq!(
+            at(&MAX_RETRY_WINDOW_MS.to_string()).retry_window,
+            Some(Duration::from_secs(60 * 60))
+        );
+        for stated_nothing in ["0", r#""600000""#, "-1", "1.5", "true", "null", "[]"] {
+            assert_eq!(
+                at(stated_nothing).retry_window,
+                None,
+                "{stated_nothing} stated a window"
+            );
+        }
+    }
+
+    /// BACKEND-55: where a block states neither a window nor a count a failed connection is retried
+    /// for the default window, a stated count is the person's choice of how often and is not
+    /// overridden by a window they did not state, and a stated window replaces the count for a
+    /// failed connection. Zero retries sending each request once is the case a default window would
+    /// break first.
+    #[test]
+    fn a_window_replaces_the_count_only_where_nothing_or_a_window_was_stated() {
+        let patience = |max_retries, retry_window| Patience {
+            max_retries,
+            retry_window,
+            ..Patience::default()
+        };
+        let ten_minutes = Duration::from_secs(600);
+
+        assert_eq!(
+            Patience::default().retry_window(),
+            Some(DEFAULT_RETRY_WINDOW)
+        );
+        assert_eq!(patience(Some(3), None).retry_window(), None);
+        assert_eq!(
+            patience(Some(0), None).retry_window(),
+            None,
+            "zero retries took a window"
+        );
+        assert_eq!(
+            patience(None, Some(ten_minutes)).retry_window(),
+            Some(ten_minutes)
+        );
+        assert_eq!(
+            patience(Some(0), Some(ten_minutes)).retry_window(),
+            Some(ten_minutes),
+            "a stated window did not replace the count"
+        );
+        assert_eq!(patience(Some(3), None).attempts(3), 4, "the count moved");
+    }
+
+    /// An AWS account is stated the same keys, read from the block's `options` beside the region,
+    /// and the entry keeps them where a client reaching the account can read them.
+    #[test]
+    fn an_aws_entry_states_the_same_three_figures() {
         let provider = one(r#"{"provider": {"amazon-bedrock": {
-                "options": {"region": "us-west-2", "maxRetries": 4, "idleTimeoutMs": 240000},
+                "options": {"region": "us-west-2", "maxRetries": 4, "idleTimeoutMs": 240000,
+                            "retryWindowMs": 900000},
                 "models": {"arn:aws:bedrock:us-west-2:111122223333:inference-profile/x": {}}
             }}}"#);
         let account = provider.bedrock.expect("an account");
@@ -2934,6 +3040,10 @@ mod tests {
         assert_eq!(
             account.patience().idle_timeout,
             Some(Duration::from_millis(240_000))
+        );
+        assert_eq!(
+            account.patience().retry_window,
+            Some(Duration::from_millis(900_000))
         );
 
         let silent =

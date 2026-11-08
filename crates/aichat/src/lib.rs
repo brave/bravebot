@@ -669,12 +669,13 @@ impl<'a> AichatClient<'a> {
         self
     }
 
-    /// The retry count the gateway's block stated, which is none where it stated none.
+    /// What the request is held to: the gateway block's figures, or the configuration's for
+    /// Brave's own endpoint.
     fn patience(&self) -> Patience {
-        self.gateway
-            .as_ref()
-            .map(|gateway| gateway.provider.patience)
-            .unwrap_or_default()
+        self.gateway.as_ref().map_or_else(
+            || self.config.patience(),
+            |gateway| gateway.provider.patience,
+        )
     }
 
     /// Wait this long before the first retry instead of the default one-second wait. Later
@@ -1275,6 +1276,13 @@ const RATE_LIMIT_FIRST_WAIT_FACTOR: u32 = 8;
 /// which only bounds the figure the network layer will carry.
 pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
 
+/// The longest pause the client chooses between two attempts, which the doubling from [`BACKOFF`]
+/// stays at once it reaches it.
+///
+/// Half of [`LONGEST_WAIT`], so a pause the client chose is never longer than one it would sit
+/// through for a service. A wait a service asks for is not held to it.
+pub const LONGEST_PAUSE: Duration = Duration::from_secs(60);
+
 /// The slowest a reply is taken to be written, in tokens a second.
 ///
 /// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
@@ -1408,6 +1416,14 @@ impl Driven for AichatClient<'_> {
         worth_another_attempt(self.patience(), attempt, error)
     }
 
+    fn retry_window(&self) -> Option<Duration> {
+        self.patience().retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        failed_connection(error)
+    }
+
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
         pause_before_retry(self.pace.backoff, failures, error)
     }
@@ -1415,6 +1431,12 @@ impl Driven for AichatClient<'_> {
     fn log_retry(&self, attempt: u32, pause: Duration) {
         log_retry(attempt, pause);
     }
+}
+
+/// Whether `error` is the connection failing, or a status that means not now, that a second attempt
+/// is worth: a failure of the transport, not of a reply that began.
+fn failed_connection(error: &ChatError) -> bool {
+    matches!(error, ChatError::Egress(e) if retryable_within_ceiling(e))
 }
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
@@ -1437,8 +1459,13 @@ fn worth_another_attempt(patience: Patience, attempt: u32, error: &ChatError) ->
     }
 }
 
-fn backoff(base: Duration, failures: u32) -> Duration {
-    base * 2u32.pow(failures - 1)
+/// The pause after `failures` failed attempts: `base` doubled for each failure after the first, and
+/// never more than [`LONGEST_PAUSE`].
+///
+/// Saturating, so a window of an hour of failures cannot overflow the doubling.
+pub fn backoff(base: Duration, failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(31);
+    base.saturating_mul(1 << doublings).min(LONGEST_PAUSE)
 }
 
 /// Whether a failed attempt should be repeated, for a client that also reads a failure the service
@@ -2557,6 +2584,30 @@ mod tests {
         assert_eq!(
             pause_after_failure(second, 2, &other_status(503, Some(Duration::from_secs(90)))),
             Duration::from_secs(2)
+        );
+    }
+
+    /// BACKEND-55: the pause between attempts doubles from the base, stops growing at a minute, and
+    /// stays there however many failures there have been. Rejects a pause with no cap, which an
+    /// hour of failures would take to days, and one that overflows on a long run of them.
+    #[test]
+    fn the_pause_doubles_to_a_cap_and_stays_there() {
+        let seconds = |failures| backoff(BACKOFF, failures).as_secs();
+
+        let first_seven: Vec<u64> = (1..=7).map(seconds).collect();
+        assert_eq!(first_seven, [1, 2, 4, 8, 16, 32, 60]);
+        for failures in [8, 9, 20, 32, 33, 100, u32::MAX] {
+            assert_eq!(seconds(failures), 60, "after {failures} failures");
+        }
+        assert_eq!(
+            backoff(Duration::from_millis(1), 3),
+            Duration::from_millis(4),
+            "a base below a second doubles from itself"
+        );
+        assert_eq!(
+            backoff(Duration::from_secs(90), 1),
+            LONGEST_PAUSE,
+            "a base above the cap is held to it"
         );
     }
 }
