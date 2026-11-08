@@ -1269,7 +1269,12 @@ mod tests {
     fn stage_with(name: &OsStr, value: &OsStr, writable: &Path) -> Command {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let index = NEXT.fetch_add(1, Ordering::Relaxed);
-        let places = Places::new(&scratch_dir("usability-places"), index, "stage").unwrap();
+        let places = Places::new(
+            &scratch_dir(&format!("usability-places-{}", std::process::id())),
+            index,
+            "stage",
+        )
+        .unwrap();
         stage_command(
             Path::new("/usr/bin/git"),
             &[],
@@ -1283,7 +1288,7 @@ mod tests {
     /// The command the stored-login `gh` is started with, when the environment holds `name` as
     /// `value`.
     fn login_with(name: &OsStr, value: &OsStr, writable: &Path) -> Command {
-        let home = scratch_dir("usability-login-home");
+        let home = scratch_dir(&format!("usability-login-home-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         login_command(
             Path::new("/usr/bin/gh"),
