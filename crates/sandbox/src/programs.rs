@@ -2358,6 +2358,33 @@ mod tests {
         ));
     }
 
+    /// The regression it rejects: a table row typed as a program, whose bare name is kept because
+    /// the reduced `PATH` resolves it, so `LD_PRELOAD=x.so` reaches a program that the loader then
+    /// searches for the library. A relative path, a bare name, an empty value and a path that names
+    /// nothing yet are each read from, or made in, a directory a stage writes, so every row of the
+    /// table is tried with each.
+    #[cfg(unix)]
+    #[test]
+    fn a_checked_start_removes_each_generic_name_whose_value_is_relative_empty_or_missing() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t2r");
+        let missing = safe.join("not-made-yet");
+
+        for (name, _) in CODE_SELECTORS {
+            for value in [
+                Path::new("lib/x.so"),
+                Path::new("x.so"),
+                Path::new(""),
+                missing.as_path(),
+            ] {
+                assert!(
+                    checked(name, value, &session),
+                    "{name}={} was kept",
+                    value.display()
+                );
+            }
+        }
+    }
+
     /// The regression it rejects: judging the spelling of the value, so a link from outside a
     /// writable directory to a file inside it is kept.
     #[cfg(unix)]

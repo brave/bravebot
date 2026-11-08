@@ -3952,6 +3952,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_sandbox::programs::a_checked_start_removes_each_generic_name_that_names_a_file_a_stage_may_write`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_each_generic_name_that_names_a_file_outside_every_writable_directory`
 `verified-by: bravebot_sandbox::programs::a_kept_start_leaves_every_generic_name_set`
+`verified-by: bravebot_sandbox::programs::a_checked_start_removes_each_generic_name_whose_value_is_relative_empty_or_missing`
 `verified-by: bravebot_sandbox::programs::a_value_that_links_into_a_directory_a_stage_may_write_is_removed`
 `verified-by: bravebot_sandbox::programs::a_relative_or_missing_value_is_removed_and_a_bare_program_name_is_kept`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_that_exists_outside_every_writable_directory_is_kept`
