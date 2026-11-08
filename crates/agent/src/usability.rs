@@ -53,6 +53,7 @@ const HOST_VARIABLES: &[&str] = &[
     "GIT_EXEC_PATH",
     "GIT_TEMPLATE_DIR",
     "GIT_WORK_TREE",
+    "GOENV",
     "GOROOT",
     "MAKEFILES",
     "SSH_ASKPASS",
@@ -72,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 15] = [
+const CODE_SELECTORS: [(&str, Names); 21] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -88,8 +89,14 @@ const CODE_SELECTORS: [(&str, Names); 15] = [
     ("RUSTC_WRAPPER", Names::Program),
     ("RUSTC_WORKSPACE_WRAPPER", Names::Program),
     ("CARGO_BUILD_RUSTC_WRAPPER", Names::Program),
+    ("CARGO_BUILD_RUSTC", Names::Program),
+    ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", Names::Program),
+    ("CARGO_BUILD_RUSTDOC", Names::Program),
+    ("RUSTDOC", Names::Program),
     ("RUSTFLAGS", Names::Options),
     ("CARGO_ENCODED_RUSTFLAGS", Names::Options),
+    ("CARGO_BUILD_RUSTFLAGS", Names::Options),
+    ("RUSTDOCFLAGS", Names::Options),
     // go: flags that name a tool to run (`-toolexec`).
     ("GOFLAGS", Names::Options),
 ];
@@ -1326,6 +1333,7 @@ mod tests {
             "MAKEFILES",
             "DEVELOPER_DIR",
             "GOROOT",
+            "GOENV",
         ] {
             assert!(HOST_VARIABLES.contains(&name), "{name}");
             let parent = genuine.parent().unwrap();
@@ -1444,6 +1452,10 @@ mod tests {
             "RUSTC_WRAPPER",
             "RUSTC_WORKSPACE_WRAPPER",
             "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_BUILD_RUSTC",
+            "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+            "CARGO_BUILD_RUSTDOC",
+            "RUSTDOC",
         ] {
             assert!(withheld(name, &planted, &session), "{name}");
             assert!(!withheld(name, &genuine, &session), "{name}");
@@ -1457,6 +1469,8 @@ mod tests {
             "MFLAGS",
             "RUSTFLAGS",
             "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_BUILD_RUSTFLAGS",
+            "RUSTDOCFLAGS",
             "GOFLAGS",
         ] {
             assert!(withheld(name, &genuine, &session), "{name}");
