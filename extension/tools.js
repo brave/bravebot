@@ -2197,25 +2197,35 @@ export const TOOLS = {
       );
   },
 
-  // The newest bookmarks, newest first. While a site is blocked the browser is
-  // asked for more than the count, as a history search is, so that leaving
-  // out the entries at a blocked site does not return fewer than there are.
+  // The newest bookmarks, newest first, each with the title of the folder it
+  // sits in, so a plan can move a bookmark into a folder that already exists
+  // rather than make a second of the same title. While a site is blocked the
+  // browser is asked for more than the count, as a history search is, so that
+  // leaving out the entries at a blocked site does not return fewer than there
+  // are.
   async list_recent_bookmarks(chrome, params) {
     const sites = await blockedSites(chrome);
     const wanted = count(params);
     const nodes = await chrome.bookmarks.getRecent(
       sites.length === 0 ? wanted : BLOCKED_SCAN_LIMIT,
     );
-    return nodes
+    const kept = nodes
       .filter((node) => typeof node.url === "string")
       .filter((node) => !isBlocked(sites, node.url))
       .sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0))
-      .slice(0, wanted)
-      .map((node) => ({
-        title: node.title ?? "",
-        url: node.url,
-        added: isoTime(node.dateAdded),
-      }));
+      .slice(0, wanted);
+    const folders = new Map();
+    for (const id of new Set(kept.map((node) => node.parentId))) {
+      if (id !== undefined) {
+        folders.set(id, await folderTitled(chrome, id));
+      }
+    }
+    return kept.map((node) => ({
+      title: node.title ?? "",
+      url: node.url,
+      added: isoTime(node.dateAdded),
+      folder: folders.get(node.parentId) ?? "",
+    }));
   },
 
   // The reading list, newest first. An entry at a blocked site is left out.

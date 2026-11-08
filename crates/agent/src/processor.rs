@@ -178,7 +178,7 @@ row N: tool T name=kind:N name=kind:N
 A new line gives short text, one line of at most {longest} characters, for a thing a call creates. \
 A row is one call: the tool by its number and each argument the tool lists below, and no other. \
 Number new lines and rows from 1. A row that names another row comes after it. Give at most {rows} \
-rows and {news} new lines. Leave out anything that needs no call.{used} If nothing in the list \
+rows and {news} new lines. Leave out anything that needs no call.{used}{reuse} If nothing in the list \
 needs a call, your whole answer is the one word: none
 
 The tools:
@@ -187,6 +187,7 @@ The tools:
         rows = shape.max_rows,
         news = shape.max_new,
         used = made_for_later(shape),
+        reuse = reuse_before_making(shape),
         names = shape.lists.join(" N, or "),
         tools = tools.join("\n")
     )
@@ -219,6 +220,38 @@ fn made_for_later(shape: &bravebot_core::apply::Shape) -> String {
                 " Give a row of tool {} only where a later row uses what it creates.",
                 tool + 1
             )
+        })
+        .collect()
+}
+
+/// Where an argument may take either what an earlier row created or a field of an entry, that the
+/// processor should name the entry where one already holds the value it wants, so it never makes a
+/// second of something that exists, such as a folder of a title a folder already has. Said from the
+/// plan's shape alone.
+fn reuse_before_making(shape: &bravebot_core::apply::Shape) -> String {
+    use bravebot_core::apply::Kind;
+    shape
+        .tools
+        .iter()
+        .flat_map(|tool| tool.arguments.iter().map(move |argument| (tool, argument)))
+        .filter_map(|(tool, (argument, kind))| {
+            let Kind::Either(kinds) = kind else {
+                return None;
+            };
+            let made = kinds.iter().any(|kind| matches!(kind, Kind::Row { .. }));
+            let held = kinds.iter().find_map(|kind| match kind {
+                Kind::Entry { list, field } => Some((list, field)),
+                _ => None,
+            });
+            match (made, held) {
+                (true, Some((list, field))) => Some(format!(
+                    " Where an entry of {} already holds the {field} you want for {}'s {argument}, \
+                     give that entry, and create nothing for it.",
+                    shape.lists.get(*list).map_or("the list", String::as_str),
+                    tool.name
+                )),
+                _ => None,
+            }
         })
         .collect()
 }
@@ -599,6 +632,51 @@ fn exchange<S: Sink>(
 
 #[cfg(test)]
 mod tests {
+    /// Where a folder a bookmark moves to may be one an earlier row made or one an entry already
+    /// names, the processor is told to name the entry rather than make a second folder of the same
+    /// title; where it may only be one an earlier row made, nothing is said of entries.
+    #[test]
+    fn a_processor_is_told_to_use_what_an_entry_holds_before_making_another() {
+        use bravebot_core::apply::{Kind, Shape, Tool};
+        let shape = |folder: Kind| Shape {
+            lists: vec!["marks".to_string()],
+            tools: vec![
+                Tool {
+                    types: Default::default(),
+                    name: "create_bookmark_folder".to_string(),
+                    arguments: vec![("title".to_string(), Kind::New)],
+                },
+                Tool {
+                    types: Default::default(),
+                    name: "move_bookmark".to_string(),
+                    arguments: vec![("folder".to_string(), folder)],
+                },
+            ],
+            max_rows: 50,
+            max_new: 12,
+        };
+        let row = Kind::Row {
+            tool: 0,
+            argument: "title".to_string(),
+        };
+        let either = Kind::Either(vec![
+            row.clone(),
+            Kind::Entry {
+                list: 0,
+                field: "folder".to_string(),
+            },
+        ]);
+        let told = super::rows_prompt(&shape(either));
+        assert!(
+            told.contains(
+                "Where an entry of marks already holds the folder you want for move_bookmark's \
+                 folder, give that entry, and create nothing for it."
+            ),
+            "{told}"
+        );
+        assert!(!super::rows_prompt(&shape(row)).contains("already holds"));
+    }
+
     use super::*;
     use crate::backend::Backend;
     use bravebot_aichat::SubscriptionCredential;
