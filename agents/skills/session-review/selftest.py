@@ -745,6 +745,46 @@ class Prompts(unittest.TestCase):
         for name in ("analyze.md", "verify.md", "SKILL.md", "session-review.py", "digest.py"):
             self.assertNotIn("\u2014", (HERE / name).read_text(), name)
 
+    def test_neither_prompt_calls_the_audit_trail_a_log_of_tool_calls(self):
+        """The trail has no event for a `run`, `spawn_agent`, `fetch_url` or MCP call, so a count from it is wrong."""
+        for name in ("analyze.md", "verify.md"):
+            text = (HERE / name).read_text()
+            self.assertNotIn("audit trail holds every tool call", text, name)
+            self.assertIn("not a log of tool calls", text, name)
+            self.assertIn("`run`, `spawn_agent`, `fetch_url` or MCP call", text, name)
+
+    def test_the_analyzer_is_told_a_bypass_turn_shows_no_approval_answered_and_the_verifier_kills_such_a_claim(self):
+        self.assertIn("cannot show an approval answered over and over", (HERE / "analyze.md").read_text())
+        self.assertIn("in a turn that began in bypass mode", (HERE / "verify.md").read_text())
+
+    def test_every_digest_field_the_prompts_name_is_one_the_digest_writes(self):
+        record = {
+            "id": "s",
+            "tokens": 10,
+            "split": {"read": 8, "written": 2, "cache": {"read_tokens": 4, "written_tokens": 1}},
+            "spend": {"1": 5, "2": 5},
+            "timing": {"1": {"wall_ms": 1}, "2": {"wall_ms": 1}},
+            "todos": {"2": [{"content": "x", "status": "pending"}]},
+            "work": {"writes": 1, "commands": 1, "ran_after_last_write": False, "last_command_failed": True},
+            "conversation": {"messages": rounds("read_file", "read_file", path="a")},
+            "history": [turn_of(1, 0, 4, outcome={"kind": "cancelled", "reason": "r"}), turn_of(2, 4, 4)],
+        }
+        events = [
+            audit_line(1, "gate_passed", gate="permission_mode", detail="the turn began in ask mode"),
+            audit_line(2, "gate_passed", gate="permission_mode", detail="the turn began in bypass mode"),
+            audit_line(2, "gate_blocked", gate="sandbox", reason="r"),
+        ]
+        digest = sr.digest.build(record, events, 0)
+        written = set(digest) | set(digest["work"]) | {k for row in digest["rows"] for k in row}
+        prompts = (HERE / "analyze.md").read_text() + (HERE / "verify.md").read_text()
+        for field in (
+            "repeated_reads", "repeated_runs", "reread_after_compaction", "serial_read_rounds", "times_median", "requests",
+            "calls", "prompt_similarity_to_previous", "most_repeated_refusal", "mode_changes", "tasks_in_last_list", "tasks",
+            "absent", "mode", "outcome", "last_command_failed", "ran_after_last_write", "writes", "work",
+        ):
+            self.assertIn(f"`{field}`", prompts, field)
+            self.assertIn(field, written, field)
+
     def test_the_skill_names_the_issue_poster_definition(self):
         self.assertIn("issue-poster", (HERE / "SKILL.md").read_text())
 
