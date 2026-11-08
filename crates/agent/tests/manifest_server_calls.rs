@@ -2876,6 +2876,47 @@ fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rul
     }
 }
 
+/// A `deny` rule about a tool of a marked step makes the step put its list, as an `ask` rule does,
+/// so its plan line does not promise a run that the rule would stop part-way, and the trail credits
+/// the plan's approval for no call.
+///
+/// Rejects an implementation that promises an unattended run of a tool a rule refuses, and one that
+/// records approvals for calls that were never made.
+#[test]
+fn a_deny_rule_about_a_marked_tool_puts_the_steps_list() {
+    let scratch = Scratch::new("unattended-deny");
+    let (url, mcp) = serve_marks();
+    let (denying, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(brave:move_mark)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders").with_permissions(denying),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(!line.contains("run without asking you"), "{line}");
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+    assert!(!ran.events.iter().any(|event| matches!(
+        event,
+        bravebot_core::event::Event::GatePassed { gate: "approval", detail }
+            if detail.starts_with("approving the plan covered brave:move_mark")
+    )));
+}
+
 /// A marked step whose values hold a character the plan's line draws as nothing puts its list, where
 /// the question writes each one out, and its line does not say it runs without asking.
 ///
