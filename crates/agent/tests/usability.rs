@@ -42,6 +42,10 @@ fn every_workflow_works_under_the_default() {
     if !usability::available() {
         return;
     }
+    // Every stage inherits this process's environment, and the tests that set a variable for a
+    // stage hold this lock while they do. Taking it keeps a variable they set from reaching the
+    // programs this test starts.
+    let _environment = Environment::held(&[], &[]);
     let report = run("all", &usability::workflows());
 
     for row in report.skipped() {
