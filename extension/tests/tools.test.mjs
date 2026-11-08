@@ -3554,15 +3554,21 @@ test("list_bookmark_folder refuses a title that is not exactly one folder", asyn
 
 // The browser is asked for as many as the call wants, or for more while a site
 // is blocked, since the entries at it are dropped after. An entry with no
-// address is a folder.
-test("list_recent_bookmarks gives the newest bookmarks first with when each was added, leaving out a blocked site", async () => {
+// address is a folder. Each bookmark names the folder it sits in, so a plan
+// can move a bookmark into a folder that already exists instead of making a
+// second of the same title.
+test("list_recent_bookmarks gives the newest bookmarks first with when each was added and its folder, leaving out a blocked site", async () => {
   const recent = [
-    { id: "1", title: "B", url: "https://b.example/", dateAdded: 1_700_000_100_000 },
-    { id: "2", title: "Bank", url: `${bank}/`, dateAdded: 1_700_000_300_000 },
-    { id: "3", title: "A", url: "https://a.example/", dateAdded: 1_700_000_200_000 },
-    { id: "4", title: "Folder", dateAdded: 1_700_000_400_000 },
+    { id: "1", title: "B", url: "https://b.example/", dateAdded: 1_700_000_100_000, parentId: "f1" },
+    { id: "2", title: "Bank", url: `${bank}/`, dateAdded: 1_700_000_300_000, parentId: "f1" },
+    { id: "3", title: "A", url: "https://a.example/", dateAdded: 1_700_000_200_000, parentId: "f2" },
+    { id: "4", title: "Folder", dateAdded: 1_700_000_400_000, parentId: "f2" },
   ];
-  const open = browser({ recent, stored: bookmarksOn });
+  const bookmarkTree = [
+    { id: "f1", title: "Work", children: [] },
+    { id: "f2", title: "News", children: [] },
+  ];
+  const open = browser({ recent, bookmarkTree, stored: bookmarksOn });
   const unlimited = await handle(
     { id: 1, method: "list_recent_bookmarks", params: { max_results: 2 } },
     open,
@@ -3576,14 +3582,14 @@ test("list_recent_bookmarks gives the newest bookmarks first with when each was 
     ["Bank", "B"],
   );
 
-  const chrome = browser({ recent, stored: blocking([bank], bookmarksOn) });
+  const chrome = browser({ recent, bookmarkTree, stored: blocking([bank], bookmarksOn) });
   const reply = await handle(
     { id: 2, method: "list_recent_bookmarks", params: { max_results: 2 } },
     chrome,
   );
   assert.deepEqual(reply.result, [
-    { title: "A", url: "https://a.example/", added: "2023-11-14T22:16:40.000Z" },
-    { title: "B", url: "https://b.example/", added: "2023-11-14T22:15:00.000Z" },
+    { title: "A", url: "https://a.example/", added: "2023-11-14T22:16:40.000Z", folder: "News" },
+    { title: "B", url: "https://b.example/", added: "2023-11-14T22:15:00.000Z", folder: "Work" },
   ]);
   assert.deepEqual(
     chrome.calls.find(([name]) => name === "bookmarks.getRecent"),

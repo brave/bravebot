@@ -513,7 +513,8 @@ does. It returns the title and URL of each bookmark in the folder and the title 
 it. Where no folder is named it returns the title of each built-in folder and nothing else, no id and
 no URL, so a title can be learned in a browser set to another language. `list_recent_bookmarks`
 returns the newest bookmarks and `list_reading_list` the reading list, each newest first with the
-time it was added, and `list_reading_list` also whether the entry was read. Each of the three takes a
+time it was added, `list_recent_bookmarks` also the title of the folder each bookmark sits in, and
+`list_reading_list` also whether the entry was read. Each of the three takes a
 count, at most 100 and 20 where none is given, and `list_bookmark_folder` also the optional title of
 the folder; none takes another argument. `list_requests` names a tab by its exact URL and is described in
 [BROWSER-25](#BROWSER-25).
