@@ -2003,7 +2003,29 @@ each toolchain, so a first run on an account that never ran the tool is not what
 ([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the withheld
 names removed from the process environment, and a host variable that
 moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARGO_HOME`) or names
-an agent socket removed.
+an agent socket removed. The suite starts its programs as a checked start
+([SANDBOX-30](#SANDBOX-30)), so the generic table applies to a stage, and the suite adds the
+variables the programs it starts read to choose code: `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`,
+`GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT` are removed whatever they hold; `GIT_SSH`,
+`GIT_EXTERNAL_DIFF`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and
+`CARGO_BUILD_RUSTC_WRAPPER` are kept only when they name a program outside every directory a stage
+may write; `GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`,
+`GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` and `GOFLAGS` are removed, as are
+`GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER` and
+`CARGO_TARGET_<triple>_RUNNER`.
+
+The variables below were examined for the programs the suite starts and are not removed, because
+planting a file under each and running the program as a stage runs it ran nothing. `xcrun` and the
+`/usr/bin` shims did not run a file planted under any value of `TOOLCHAINS`, `SDKROOT` or
+`XCODE_DEVELOPER_DIR_PATH` (`SDKROOT` makes `xcrun` fail to read a property list when it names a
+directory without one, and `TOOLCHAINS` and `XCODE_DEVELOPER_DIR_PATH` change nothing it finds), while
+the same planted file ran under `DEVELOPER_DIR`. `vim -es -u NONE`, which the editor workflow
+starts, did not run the command in `VIMINIT`, and `vim` without `-es` did, so a workflow that starts
+an interactive `vim` needs `VIMINIT` added. `python3 -c` and `python3 -m unittest` did not run the
+file in `PYTHONSTARTUP`, which only an interactive interpreter reads, and `sh -c` and a shell script
+did not run the file in `ENV`, which only an interactive `sh` reads. No workflow starts an
+interactive `python3` or `sh`, so none of the three is removed. `GOROOT` is removed, since
+`go vet` ran a `vet` planted under it.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
 `~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
@@ -2032,7 +2054,13 @@ exits zero. It passes when the run under the
 sandbox exits zero and fails otherwise, with a fix that names `sandbox.filesystem.allowRead`
 ([SANDBOX-25](#SANDBOX-25)) and `gh auth login --insecure-storage`. The CI suite does not run it,
 since it depends on the host's login. Token variables are removed from the environment of both
-runs, so the row measures the stored login.
+runs, so the row measures the stored login. The `gh` that reads the stored login is also a checked
+start with no names of its own, and every variable that begins `DYLD_` or `LD_` is removed from it
+whatever it holds, since a library the dynamic loader loads into it runs with the account's home.
+The two prefixes are a list in `crates/agent/src/usability.rs` and not in
+`CODE_SELECTOR_PREFIXES`, because the shared prefixes are applied to every checked start and a
+start that kept `LD_DEBUG` ([SANDBOX-30](#SANDBOX-30)) would lose it; `make check-code-selectors`
+covers only the shared lists, so a reviewer reads this one.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -2059,6 +2087,25 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_login_file_on_the_allow_read_list_passes`
 `verified-by: bravebot_agent::usability::no_login_outside_the_sandbox_gives_no_row`
 `verified-by: bravebot_agent::usability::the_login_probe_keeps_no_token`
+`verified-by: bravebot_agent::usability::the_variables_that_choose_the_code_a_stage_runs_are_removed_whatever_they_hold`
+`verified-by: bravebot_agent::usability::git_configuration_given_through_the_environment_is_removed_for_any_index`
+`verified-by: bravebot_agent::usability::a_variable_name_that_is_not_text_does_not_break_a_start`
+`verified-by: bravebot_agent::usability::a_program_or_option_variable_of_a_workflow_tool_is_removed`
+`verified-by: bravebot_agent::usability::the_program_cargo_runs_for_a_target_is_removed_and_its_target_directory_is_not`
+`verified-by: bravebot_agent::usability::the_loader_variables_are_removed_from_the_stored_login_gh_whatever_they_hold`
+`verified-by: bravebot_agent::usability::the_token_variables_are_removed_from_the_stored_login_gh`
+`verified-by: bravebot_agent::usability::the_twelve_host_variables_that_move_a_read_row_or_hand_over_a_socket_are_removed`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_template_directory`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_parameters`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_an_exec_path`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_common_directory`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makefiles`
+`verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
+`verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
+`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
+`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`
@@ -3599,9 +3646,18 @@ file. A new spawn that looks a name up through
   reach the program. Every checked start is given the generic table, which
   `programs::withhold_code_selectors_with` applies together with the program's own list: gcloud's
   is in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in
-  `crates/bedrock/src/credentials.rs` and `doctor --push-identity`'s in
-  `crates/cli/src/push_identity.rs`. The names another program reads are added to its start when
-  that program is audited. `make check-code-selectors` runs
+  `crates/bedrock/src/credentials.rs`, `doctor --push-identity`'s in
+  `crates/cli/src/push_identity.rs` and the sandbox usability suite's in
+  `crates/agent/src/usability.rs`. The names another program reads are added to its start when
+  that program is audited. The usability suite's list adds the names `git`, `make`, `cargo`, `go`
+  and `xcrun` read to choose code, and its stored-login `gh` removes every `DYLD_` and `LD_` name
+  ([SANDBOX-21](#SANDBOX-21)). The suite also removes `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`,
+  `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT` whatever they hold, and records the
+  names it examined and left (`TOOLCHAINS`, `SDKROOT`, `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`,
+  `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and `LD_` prefixes are a list in
+  `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES` applies to every checked start and
+  would remove `LD_DEBUG` from gcloud and the browser opener; `make check-code-selectors` does not
+  read that prefix list. `make check-code-selectors` runs
   `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
   whose fourth argument is not written at the call as `CodeSelectors::Kept` or
   `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its

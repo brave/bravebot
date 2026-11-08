@@ -13,11 +13,12 @@
 
 use crate::confine::Confinement;
 use bravebot_core::command::Step;
+use bravebot_sandbox::programs::Names;
 use bravebot_sandbox::rules::Lists;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// How long one stage may run before it is stopped and counted as failed. A cold `cargo build` is
@@ -25,21 +26,98 @@ use std::time::{Duration, Instant};
 const LIMIT: Duration = Duration::from_secs(300);
 
 /// Names a host environment may set that would move what a workflow reads away from its scratch
-/// home, or hand it an agent socket the machine's owner left open.
+/// home, hand it an agent socket the machine's owner left open, or choose the code a stage's
+/// `git`, `make` or `/usr/bin` shim runs: a template directory whose hooks `git init` copies, the
+/// directory `git` takes its helpers and `PATH` from, the directory it takes hooks and
+/// configuration from, the makefiles `make` parses before the workflow's own, the developer
+/// directory the `xcrun` shims run, and the Go installation `go vet` takes its tool from.
+///
+/// Variables the programs read that were examined and are not listed: `TOOLCHAINS`, `SDKROOT` and
+/// `XCODE_DEVELOPER_DIR_PATH` (`xcrun` ran no file planted under any value of them), and
+/// `VIMINIT`, `PYTHONSTARTUP` and `ENV` (read only by an interactive `vim`, `python3` or `sh`, and
+/// no stage starts one). [SANDBOX-21](../../../docs/specs/sandboxing.md#SANDBOX-21) gives the
+/// evidence.
+///
+/// Every start removes them whatever they hold. A stage runs the program the machine installs with
+/// a scratch home, so a setting that selects other code is not part of what the workflow tests, and
+/// a setup stage or a refused row's control run has the person's access.
 const HOST_VARIABLES: &[&str] = &[
     "CARGO_HOME",
+    "DEVELOPER_DIR",
     "GH_CONFIG_DIR",
     "GIT_ASKPASS",
+    "GIT_COMMON_DIR",
     "GIT_CONFIG_GLOBAL",
     "GIT_CONFIG_SYSTEM",
     "GIT_DIR",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
     "GIT_WORK_TREE",
+    "GOROOT",
+    "MAKEFILES",
     "SSH_ASKPASS",
     "SSH_AUTH_SOCK",
     "XDG_CACHE_HOME",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
 ];
+
+/// The variables the programs the workflows start read that name code to run, beyond the generic
+/// names ([`bravebot_sandbox::programs::CODE_SELECTORS`]) and the prefixes
+/// ([`bravebot_sandbox::programs::CODE_SELECTOR_PREFIXES`]) every checked start removes, and what
+/// each names. `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` and
+/// `GIT_CONFIG_PARAMETERS` are removed by the `GIT_CONFIG_` prefix.
+///
+/// A value is kept only when it is outside every directory a stage may write
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
+/// read that is in neither list reaches them as the person set it, so one added to a program a
+/// workflow starts belongs in this list.
+const CODE_SELECTORS: [(&str, Names); 15] = [
+    // git: programs it starts for the transport, a diff, and a rebase's editor.
+    ("GIT_SSH", Names::Program),
+    ("GIT_SSH_COMMAND", Names::Options),
+    ("GIT_PROXY_COMMAND", Names::Options),
+    ("GIT_EXTERNAL_DIFF", Names::Program),
+    ("GIT_SEQUENCE_EDITOR", Names::Options),
+    // make: options that read another makefile or run a command.
+    ("MAKEFLAGS", Names::Options),
+    ("GNUMAKEFLAGS", Names::Options),
+    ("MFLAGS", Names::Options),
+    // cargo and rustc: a compiler or wrapper to run first, and flags that load a plugin.
+    ("RUSTC", Names::Program),
+    ("RUSTC_WRAPPER", Names::Program),
+    ("RUSTC_WORKSPACE_WRAPPER", Names::Program),
+    ("CARGO_BUILD_RUSTC_WRAPPER", Names::Program),
+    ("RUSTFLAGS", Names::Options),
+    ("CARGO_ENCODED_RUSTFLAGS", Names::Options),
+    // go: flags that name a tool to run (`-toolexec`).
+    ("GOFLAGS", Names::Options),
+];
+
+/// Whether the variable `name` gives cargo a program to run for a target: `CARGO_TARGET_<triple>_LINKER`
+/// and `CARGO_TARGET_<triple>_RUNNER`. The triple is part of the name, so these are matched as a
+/// family and not listed.
+fn names_a_target_program(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name.starts_with("CARGO_TARGET_")
+            && (name.ends_with("_LINKER") || name.ends_with("_RUNNER"))
+    })
+}
+
+/// The variables the stored-login `gh` is not handed because they load code into it: the dynamic
+/// loader's (`DYLD_INSERT_LIBRARIES`, `LD_PRELOAD` and the rest of the `DYLD_` and `LD_` names).
+/// `gh auth token` needs none of them, so each is removed whatever it holds.
+///
+/// The list is local because [`bravebot_sandbox::programs::CODE_SELECTOR_PREFIXES`] applies to
+/// every checked start, and removing these prefixes there would change the environment of gcloud
+/// and the browser opener, which SANDBOX-30 says keep `LD_DEBUG`.
+const LOADER_PREFIXES: &[&str] = &["DYLD_", "LD_"];
+
+fn is_loader_name(name: &OsStr) -> bool {
+    LOADER_PREFIXES
+        .iter()
+        .any(|prefix| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
+}
 
 /// What a workflow is expected to do under the sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,18 +580,66 @@ fn start(
         routes: Vec::new(),
     };
 
+    let command = stage_command(
+        &started_as,
+        &args,
+        places,
+        confinement,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
+    );
+
+    let mut command = match confinement {
+        Some(confinement) => confinement
+            .wrap(command, &step, &places.session)
+            .map_err(|error| Started::NotConfined(error.to_string()))?,
+        None => command,
+    };
+    let output = std::fs::File::create(log).map_err(|_| Started::Other)?;
+    let errors = output.try_clone().map_err(|_| Started::Other)?;
+    command.stdin(Stdio::null()).stdout(output).stderr(errors);
+    let child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+        .map_err(|_| Started::Other)?;
+    Ok(wait_for(child))
+}
+
+/// The command that starts a stage's program, with the environment settled.
+///
+/// `held` is the environment whose code-selecting variables are checked, this process's own in
+/// production, and `outside_stage_writable` judges a file as [`outside_stage_writable`] does.
+///
+/// [`outside_stage_writable`]: bravebot_sandbox::programs::outside_stage_writable
+fn stage_command(
+    started_as: &Path,
+    args: &[String],
+    places: &Places,
+    confinement: Option<&Confinement>,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> Command {
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(&started_as),
+    let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let target_programs: Vec<OsString> = held
+        .iter()
+        .map(|(name, _)| name.clone())
+        .filter(|name| names_a_target_program(name))
+        .collect();
+    let mut command = bravebot_sandbox::programs::start_against(
+        &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
         inherits,
         unconfined_path(confinement),
-        // The tool the check re-runs unconfined is one bravebot found, so its code-selecting
-        // variables are checked. #3797 adds the names `make`, `git` and `xcrun` read.
-        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
+        // The tool the check re-runs unconfined is one bravebot found, so the variables that
+        // select code are checked: the generic names and these.
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
+        held,
+        outside_stage_writable,
     );
-    command.args(&args).current_dir(&places.session);
+    command.args(args).current_dir(&places.session);
     for name in HOST_VARIABLES {
+        command.env_remove(name);
+    }
+    for name in target_programs {
         command.env_remove(name);
     }
     command
@@ -533,19 +659,7 @@ fn start(
     }
     // After the suite's own variables, so a name a person's `run.scrubEnv` lists is still removed.
     inherits.withhold(&mut command);
-
-    let mut command = match confinement {
-        Some(confinement) => confinement
-            .wrap(command, &step, &places.session)
-            .map_err(|error| Started::NotConfined(error.to_string()))?,
-        None => command,
-    };
-    let output = std::fs::File::create(log).map_err(|_| Started::Other)?;
-    let errors = output.try_clone().map_err(|_| Started::Other)?;
-    command.stdin(Stdio::null()).stdout(output).stderr(errors);
-    let child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
-        .map_err(|_| Started::Other)?;
-    Ok(wait_for(child))
+    command
 }
 
 /// The exit code of `child`, or `None` when a signal ended it or it ran past [`LIMIT`].
@@ -638,6 +752,49 @@ pub fn login_row_for(
     }))
 }
 
+/// The command that asks the stored-login `gh` for a token.
+///
+/// `held` and `outside_stage_writable` are as for [`stage_command`]. The dynamic loader's names
+/// are removed whatever they hold ([`LOADER_PREFIXES`]), and the token variables are removed so
+/// that `gh` answers from its stored login.
+fn login_command(
+    gh: &Path,
+    args: &[String],
+    home: &Path,
+    session: &Path,
+    confinement: Option<&Confinement>,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> Command {
+    let withheld = bravebot_config::scrub::withheld();
+    let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+    let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let loader: Vec<OsString> = held
+        .iter()
+        .map(|(name, _)| name.clone())
+        .filter(|name| is_loader_name(name))
+        .collect();
+    let mut command = bravebot_sandbox::programs::start_against(
+        &bravebot_sandbox::programs::Resolved::found_earlier(gh),
+        inherits,
+        unconfined_path(confinement),
+        // The stored-login `gh` is a program bravebot found, so the generic names that select
+        // code are checked. `gh auth token` reads none of its own that run code.
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
+        held,
+        outside_stage_writable,
+    );
+    command.args(args).current_dir(session).env("HOME", home);
+    for name in LOGIN_VARIABLES {
+        command.env_remove(name);
+    }
+    for name in loader {
+        command.env_remove(name);
+    }
+    inherits.withhold(&mut command);
+    command
+}
+
 fn ask_for_the_login(
     gh: &Path,
     home: &Path,
@@ -653,20 +810,15 @@ fn ask_for_the_login(
         environment: Vec::new(),
         routes: Vec::new(),
     };
-    let withheld = bravebot_config::scrub::withheld();
-    let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(gh),
-        inherits,
-        unconfined_path(confinement),
-        // The stored-login `gh` is a program bravebot found. #3797 adds the loader names it reads.
-        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
+    let command = login_command(
+        gh,
+        &args,
+        home,
+        session,
+        confinement,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     );
-    command.args(&args).current_dir(session).env("HOME", home);
-    for name in LOGIN_VARIABLES {
-        command.env_remove(name);
-    }
-    inherits.withhold(&mut command);
     let mut command = match confinement {
         Some(confinement) => confinement
             .wrap(command, &step, session)
@@ -1063,4 +1215,310 @@ fn refused_workflows() -> Vec<Workflow> {
         );
     }
     refused
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used, reason = "test helpers unwrap")]
+mod tests {
+    use super::*;
+    use crate::testutil::scratch_dir;
+    use std::os::unix::ffi::OsStringExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A file or directory a stage can plant, under a row it holds, and a genuine one beside it that
+    /// is outside every row.
+    fn planted_and_genuine(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let session = scratch_dir(&format!("{name}-session"));
+        let safe = scratch_dir(&format!("{name}-safe"));
+        for dir in [&session, &safe] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        let planted_bin = session.join(".venv").join("bin");
+        let genuine_bin = safe.join("venv").join("bin");
+        for dir in [&planted_bin, &genuine_bin] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let planted = planted_bin.join("tool");
+        let genuine = genuine_bin.join("tool");
+        for file in [&planted, &genuine] {
+            std::fs::write(file, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        (session, planted, genuine)
+    }
+
+    fn judged(writable: &Path) -> impl Fn(&Path) -> bool {
+        let row = writable.to_path_buf();
+        move |file: &Path| {
+            bravebot_sandbox::programs::outside_stage_writable_with(
+                file,
+                std::slice::from_ref(&row),
+                &[],
+            )
+        }
+    }
+
+    /// The command a stage's program is started with, when the environment holds `name` as `value`.
+    fn stage_with(name: &OsStr, value: &OsStr, writable: &Path) -> Command {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let index = NEXT.fetch_add(1, Ordering::Relaxed);
+        let places = Places::new(&scratch_dir("usability-places"), index, "stage").unwrap();
+        stage_command(
+            Path::new("/usr/bin/git"),
+            &[],
+            &places,
+            None,
+            [(name.to_os_string(), value.to_os_string())],
+            &judged(writable),
+        )
+    }
+
+    /// The command the stored-login `gh` is started with, when the environment holds `name` as
+    /// `value`.
+    fn login_with(name: &OsStr, value: &OsStr, writable: &Path) -> Command {
+        let home = scratch_dir("usability-login-home");
+        std::fs::create_dir_all(&home).unwrap();
+        login_command(
+            Path::new("/usr/bin/gh"),
+            &["auth".to_string(), "token".to_string()],
+            &home,
+            writable,
+            None,
+            [(name.to_os_string(), value.to_os_string())],
+            &judged(writable),
+        )
+    }
+
+    fn removed(command: &Command, name: &OsStr) -> bool {
+        command
+            .get_envs()
+            .any(|(set, now)| set == name && now.is_none())
+    }
+
+    fn set_to(command: &Command, name: &str) -> Option<OsString> {
+        command
+            .get_envs()
+            .find(|(set, _)| *set == OsStr::new(name))
+            .and_then(|(_, now)| now.map(OsStr::to_os_string))
+    }
+
+    /// Whether a stage's program is started without `name`, when the environment holds `value`.
+    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+        removed(
+            &stage_with(OsStr::new(name), value.as_os_str(), writable),
+            OsStr::new(name),
+        )
+    }
+
+    /// The regression it rejects: leaving the names that choose code out of `HOST_VARIABLES`, so a
+    /// setup stage or a control run starts `git` or `make` with a template directory, helper
+    /// directory, common directory, makefile or developer directory the person's environment names
+    /// (brave/bravebot#3797). The value is a genuine file outside every row, so the removal is not
+    /// a judgment of the value.
+    #[test]
+    fn the_variables_that_choose_the_code_a_stage_runs_are_removed_whatever_they_hold() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-host");
+
+        for name in [
+            "GIT_TEMPLATE_DIR",
+            "GIT_EXEC_PATH",
+            "GIT_COMMON_DIR",
+            "MAKEFILES",
+            "DEVELOPER_DIR",
+            "GOROOT",
+        ] {
+            assert!(HOST_VARIABLES.contains(&name), "{name}");
+            let parent = genuine.parent().unwrap();
+            assert!(
+                removed(
+                    &stage_with(OsStr::new(name), parent.as_os_str(), &session),
+                    OsStr::new(name)
+                ),
+                "{name}"
+            );
+        }
+        for name in HOST_VARIABLES {
+            assert!(
+                removed(
+                    &stage_with(OsStr::new(name), genuine.as_os_str(), &session),
+                    OsStr::new(name)
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    /// The regression it rejects: dropping one of the twelve host variables that moved a read row
+    /// or handed a stage an agent socket before brave/bravebot#3797, which no test named. Each name
+    /// is written here, and the check reads the command a stage is started with and not the list,
+    /// so a name missing from `HOST_VARIABLES` fails it. `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM`
+    /// also begin `GIT_CONFIG_`, so the checked start removes them as well; the test still holds
+    /// that they are removed.
+    #[test]
+    fn the_twelve_host_variables_that_move_a_read_row_or_hand_over_a_socket_are_removed() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-older-host");
+
+        assert!(withheld("CARGO_HOME", &genuine, &session));
+        assert!(withheld("GH_CONFIG_DIR", &genuine, &session));
+        assert!(withheld("GIT_ASKPASS", &genuine, &session));
+        assert!(withheld("GIT_CONFIG_GLOBAL", &genuine, &session));
+        assert!(withheld("GIT_CONFIG_SYSTEM", &genuine, &session));
+        assert!(withheld("GIT_DIR", &genuine, &session));
+        assert!(withheld("GIT_WORK_TREE", &genuine, &session));
+        assert!(withheld("SSH_ASKPASS", &genuine, &session));
+        assert!(withheld("SSH_AUTH_SOCK", &genuine, &session));
+        assert!(withheld("XDG_CACHE_HOME", &genuine, &session));
+        assert!(withheld("XDG_CONFIG_HOME", &genuine, &session));
+        assert!(withheld("XDG_DATA_HOME", &genuine, &session));
+    }
+
+    /// The regression it rejects: removing only `GIT_CONFIG_COUNT`, or only index 0, so
+    /// `core.hooksPath` or `core.fsmonitor` set through `GIT_CONFIG_KEY_1` and
+    /// `GIT_CONFIG_VALUE_1` or through `GIT_CONFIG_PARAMETERS` still reaches `git`; and removing the
+    /// prefix so widely that `GIT_CONFIG_NOSYSTEM`, which the suite sets itself, is lost.
+    #[test]
+    fn git_configuration_given_through_the_environment_is_removed_for_any_index() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-config");
+
+        for name in [
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_KEY_1",
+            "GIT_CONFIG_KEY_17",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_VALUE_1",
+            "GIT_CONFIG_VALUE_17",
+            "GIT_CONFIG_PARAMETERS",
+        ] {
+            assert!(withheld(name, &genuine, &session), "{name}");
+        }
+        let nosystem = stage_with(OsStr::new("GIT_CONFIG_NOSYSTEM"), OsStr::new("0"), &session);
+        assert_eq!(
+            set_to(&nosystem, "GIT_CONFIG_NOSYSTEM"),
+            Some(OsString::from("1"))
+        );
+    }
+
+    /// The regression it rejects: unwrapping a variable's name as text, so a variable whose name is
+    /// not UTF-8 panics the start. A name that begins `GIT_CONFIG_` is removed whatever follows,
+    /// since the prefix rule of a checked start reads the name's bytes. A non-text name `cargo`
+    /// does not read is not one the suite removes, so the start leaves it as it is.
+    #[test]
+    fn a_variable_name_that_is_not_text_does_not_break_a_start() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-bytes");
+        let config = OsString::from_vec(b"GIT_CONFIG_KEY_\xff".to_vec());
+        let target = OsString::from_vec(b"CARGO_TARGET_\xff_LINKER".to_vec());
+
+        assert!(removed(
+            &stage_with(&config, genuine.as_os_str(), &session),
+            &config
+        ));
+        assert!(!removed(
+            &stage_with(&target, genuine.as_os_str(), &session),
+            &target
+        ));
+    }
+
+    /// The regression it rejects: a variable that names a program or options, set by the person to
+    /// one a stage may write, reaching `git`, `make`, `cargo` or `go`; a name dropped from the
+    /// list, or listed with the wrong kind, which the loops over the list cannot see because they
+    /// read the list they check.
+    #[test]
+    fn a_program_or_option_variable_of_a_workflow_tool_is_removed() {
+        let (session, planted, genuine) = planted_and_genuine("usability-selectors");
+
+        for (name, _) in CODE_SELECTORS {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+        }
+        for (name, kind) in CODE_SELECTORS {
+            if matches!(kind, Names::Options) {
+                assert!(withheld(name, &genuine, &session), "{name} was kept");
+                continue;
+            }
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+        for name in [
+            "GIT_SSH",
+            "GIT_EXTERNAL_DIFF",
+            "RUSTC",
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "CARGO_BUILD_RUSTC_WRAPPER",
+        ] {
+            assert!(withheld(name, &planted, &session), "{name}");
+            assert!(!withheld(name, &genuine, &session), "{name}");
+        }
+        for name in [
+            "GIT_SSH_COMMAND",
+            "GIT_PROXY_COMMAND",
+            "GIT_SEQUENCE_EDITOR",
+            "MAKEFLAGS",
+            "GNUMAKEFLAGS",
+            "MFLAGS",
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "GOFLAGS",
+        ] {
+            assert!(withheld(name, &genuine, &session), "{name}");
+        }
+    }
+
+    /// The regression it rejects: leaving `CARGO_TARGET_<triple>_LINKER` and `_RUNNER`, which name a
+    /// program cargo runs, because they are a family and not in a fixed list; or removing every
+    /// `CARGO_TARGET_` name, which includes `CARGO_TARGET_DIR`.
+    #[test]
+    fn the_program_cargo_runs_for_a_target_is_removed_and_its_target_directory_is_not() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-cargo");
+
+        for name in [
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+        ] {
+            assert!(withheld(name, &genuine, &session), "{name}");
+        }
+        assert!(!withheld("CARGO_TARGET_DIR", &genuine, &session));
+        assert!(!withheld("CARGO_TERM_COLOR", &genuine, &session));
+    }
+
+    /// The regression it rejects: leaving the dynamic loader's names on the stored-login `gh`, so
+    /// `DYLD_INSERT_LIBRARIES` or `LD_PRELOAD` loads a library into it with the account's home
+    /// (brave/bravebot#3797). The names are a prefix, so one that is in no list is removed too, and
+    /// a name that only begins with the same letters is kept.
+    #[test]
+    fn the_loader_variables_are_removed_from_the_stored_login_gh_whatever_they_hold() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-loader");
+
+        for name in [
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            "DYLD_PRINT_LIBRARIES",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_DEBUG",
+        ] {
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(removed(&command, OsStr::new(name)), "{name}");
+        }
+        let bytes = OsString::from_vec(b"LD_\xff".to_vec());
+        assert!(removed(
+            &login_with(&bytes, genuine.as_os_str(), &session),
+            &bytes
+        ));
+        for name in ["LDAP_URI", "LDFLAGS", "DYLDX", "XDG_DATA_DIRS"] {
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(!removed(&command, OsStr::new(name)), "{name}");
+        }
+    }
+
+    /// The regression it rejects: the token variables reaching the login `gh`, which would answer
+    /// from the environment and hide a login the sandbox takes away.
+    #[test]
+    fn the_token_variables_are_removed_from_the_stored_login_gh() {
+        let (session, _planted, genuine) = planted_and_genuine("usability-login-token");
+
+        for name in LOGIN_VARIABLES {
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(removed(&command, OsStr::new(name)), "{name}");
+        }
+    }
 }

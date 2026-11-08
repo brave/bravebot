@@ -371,9 +371,10 @@ which `make check-versions` runs first.
 `CodeSelectors::Kept` (with a comment giving the reason, outside a test) or
 `CodeSelectors::Checked(&NAME)`, and holds each variable in a `CODE_SELECTORS` list, in
 `crates/sandbox/src/programs.rs` (the generic table), `crates/agent/src/gcloud.rs`,
-`crates/bedrock/src/credentials.rs` and `crates/cli/src/push_identity.rs`, to a test that keeps a
-safe value and a test that removes one a stage may write. An options variable needs only the
-second. `make check` runs it and so does CI. It cannot tell that a list is complete, which
+`crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs` and the sandbox usability
+suite's in `crates/agent/src/usability.rs`, to a test that keeps a safe value and a test that
+removes one a stage may write. An options variable needs only the second. `make check` runs it and
+so does CI. It cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer.
 
 `make check-narration` fails a pull request whose commit messages, title, body or added lines

@@ -198,12 +198,16 @@ each such variable unless the value passes a check. The value passes when it is 
 that exists outside every stage-writable directory, links followed, or, for a variable that names a
 program, a bare program name, which the program finds on the reduced `PATH`. A variable that holds
 a list of directories, such as `PYTHONPATH`, passes when every entry does, and one that holds
-options for an interpreter, such as `CLOUDSDK_PYTHON_ARGS`, is removed whatever it holds. A
-variable that only carries a credential the program reads as data, such as `AWS_PROFILE` or an API
-token, stays. A file that can name a command to run, such as `GOOGLE_APPLICATION_CREDENTIALS` for
-`gcloud`, whose `external_account` type runs one, does not only carry a credential and is removed
-unless it passes. A variable that names a directory the program reads configuration from counts as
-code when the program runs files from that directory, even though the directory also holds
+options for an interpreter, such as `CLOUDSDK_PYTHON_ARGS`, is removed whatever it holds. A start
+may also remove a variable whatever it holds when no value of it is safe to keep, such as
+`GIT_TEMPLATE_DIR` or `DEVELOPER_DIR` for the sandbox usability suite
+([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21)), and a prefix of such variables, such as
+`DYLD_` and `LD_` for the `gh` that reads the stored login. A variable that only carries a
+credential the program reads as data, such as `AWS_PROFILE` or an API token, stays. A file that can
+name a command to run, such as `GOOGLE_APPLICATION_CREDENTIALS` for `gcloud`, whose
+`external_account` type runs one, does not only carry a credential and is removed unless it
+passes. A variable that names a directory the program reads configuration from counts as code when
+the program runs files from that directory, even though the directory also holds
 credentials ([BACKEND-65](../specs/backends.md#BACKEND-65)).
 
 A program bravebot starts for itself is one the person and the project did not ask to run. A `run`
