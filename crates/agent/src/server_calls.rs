@@ -348,11 +348,16 @@ impl Servers {
                             });
                     !literals_hide
                         && self.all_unattended(alias, &shape)
+                        // A rule about a tool decides it: an ask asks, and a deny would stop the
+                        // step part-way, so a step either names runs only with its list put.
                         && !shape.tools.iter().any(|tool| {
-                            permissions.for_mcp(alias, &tool.name)
-                                == bravebot_core::permissions::Decision::Ruled(
-                                    bravebot_core::permissions::Ruling::Ask,
+                            matches!(
+                                permissions.for_mcp(alias, &tool.name),
+                                bravebot_core::permissions::Decision::Ruled(
+                                    bravebot_core::permissions::Ruling::Ask
+                                        | bravebot_core::permissions::Ruling::Deny
                                 )
+                            )
                         })
                 })
             })
@@ -802,12 +807,7 @@ impl Servers {
                     .any(|(_, value, _)| hides_a_character(value))
             });
         let decision = match unattended {
-            true => {
-                for call in &shown.calls {
-                    policy.record_plan_covered_call(alias, &call.name);
-                }
-                crate::confirm::ApplyDecision::keep((0..shown.calls.len()).collect())
-            }
+            true => crate::confirm::ApplyDecision::keep((0..shown.calls.len()).collect()),
             false => confirmer.confirm_apply(&request),
         };
         if decision.unasked {
@@ -824,6 +824,11 @@ impl Servers {
             let called = crate::mcp::call_applied(
                 policy, offer, egress, confirmer, reporter, alias, at, &resolved,
             );
+            // The plan's approval is recorded for a call it covered that was sent, and for none a
+            // rule refused or the run did not reach.
+            if unattended && !matches!(called, crate::mcp::Called::Problem(_)) {
+                policy.record_plan_covered_call(alias, &shown.calls[at].name);
+            }
             match called {
                 crate::mcp::Called::Answered(_) => applying.made(at),
                 crate::mcp::Called::Failed(text) => {
@@ -1148,7 +1153,7 @@ fn kind_in_words(kind: &bravebot_core::apply::Kind, shape: &bravebot_core::apply
         // Escaped as compact JSON, with every character that would draw as nothing written out,
         // so the line shows the value the call sends and stays one line.
         Kind::Literal(value) => match serde_json::from_str::<Value>(value) {
-            Ok(Value::Number(_) | Value::Bool(_)) => value.clone(),
+            Ok(parsed @ (Value::Number(_) | Value::Bool(_))) => parsed.to_string(),
             _ => {
                 let quoted = Value::String(value.clone()).to_string();
                 bravebot_core::invisible::spelled_code(&quoted).text
