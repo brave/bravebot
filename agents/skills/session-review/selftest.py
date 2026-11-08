@@ -616,6 +616,31 @@ class Digest(unittest.TestCase):
         self.assertEqual(digest["cached_share"], 0.6)
         self.assertFalse(any(a.startswith("split.cache") for a in digest["absent"]))
 
+    def test_a_turns_recorded_counts_are_copied_with_its_own_cached_share(self):
+        counts = {"requests": 3, "written_tokens": 100, "cache_read_tokens": 450, "cache_written_tokens": 0, "compactions": 1}
+        record = {
+            "history": [turn_of(n, 0, 0) for n in (1, 2, 3, 4)],
+            "spend": {"1": 1000, "2": 500, "3": 100, "4": 100},
+            "timing": {
+                "1": {"wall_ms": 5, "activity": counts},
+                "2": {"wall_ms": 5, "activity": dict(counts, cache_read_tokens=0, cache_written_tokens=0)},
+                "3": {"wall_ms": 5, "activity": dict(counts, written_tokens=10, cache_read_tokens=200)},
+            },
+        }
+        digest = sr.digest.build(record, [], 0)
+        rows = {r["turn"]: r for r in digest["rows"]}
+        self.assertEqual({k: v for k, v in rows[1]["activity"].items() if k != "cached_share"}, counts)
+        self.assertEqual(rows[1]["activity"]["cached_share"], 0.5, "450 of the 900 tokens the model read")
+        self.assertIsNone(rows[2]["activity"]["cached_share"], "a service that stated no cache figure has no share")
+        self.assertEqual(rows[3]["activity"]["cached_share"], 1.0, "a share past the whole is held at the whole")
+        self.assertNotIn("activity", rows[4])
+        self.assertFalse(any(a.startswith("activity") for a in digest["absent"]))
+
+    def test_a_record_with_no_counts_for_any_turn_says_so(self):
+        digest = sr.digest.build({"history": [turn_of(1, 0, 0)], "timing": {"1": {"wall_ms": 5}}}, [], 0)
+        self.assertTrue(any(a.startswith("activity") for a in digest["absent"]), digest["absent"])
+        self.assertNotIn("activity", digest["rows"][0])
+
     def test_a_turn_is_compared_with_the_median_turn_and_the_turns_to_review_are_marked(self):
         record = {"history": [turn_of(n, 0, 0) for n in (1, 2, 3)], "spend": {"1": 10, "2": 10, "3": 100}}
         rows = self.rows(record, from_turn=2)
@@ -763,7 +788,7 @@ class Prompts(unittest.TestCase):
             "tokens": 10,
             "split": {"read": 8, "written": 2, "cache": {"read_tokens": 4, "written_tokens": 1}},
             "spend": {"1": 5, "2": 5},
-            "timing": {"1": {"wall_ms": 1}, "2": {"wall_ms": 1}},
+            "timing": {"1": {"wall_ms": 1, "activity": {"requests": 2, "written_tokens": 1, "cache_read_tokens": 3, "cache_written_tokens": 1, "compactions": 0}}, "2": {"wall_ms": 1}},
             "todos": {"2": [{"content": "x", "status": "pending"}]},
             "work": {"writes": 1, "commands": 1, "ran_after_last_write": False, "last_command_failed": True},
             "conversation": {"messages": rounds("read_file", "read_file", path="a")},
@@ -776,11 +801,13 @@ class Prompts(unittest.TestCase):
         ]
         digest = sr.digest.build(record, events, 0)
         written = set(digest) | set(digest["work"]) | {k for row in digest["rows"] for k in row}
+        written |= {k for row in digest["rows"] for k in row.get("activity", {})}
         prompts = (HERE / "analyze.md").read_text() + (HERE / "verify.md").read_text()
         for field in (
             "repeated_reads", "repeated_runs", "reread_after_compaction", "serial_read_rounds", "times_median", "requests",
             "calls", "prompt_similarity_to_previous", "most_repeated_refusal", "mode_changes", "tasks_in_last_list", "tasks",
             "absent", "mode", "outcome", "last_command_failed", "ran_after_last_write", "writes", "work",
+            "activity", "cached_share", "compactions",
         ):
             self.assertIn(f"`{field}`", prompts, field)
             self.assertIn(field, written, field)

@@ -134,23 +134,28 @@ Look for places where the session spent more than the task needed. The record ho
 turn spent (`spend`) and where each turn's time went (`timing`). It holds the tokens the whole
 session read and wrote under `split`, and under `split.cache` how many of the tokens read the
 service served from its cache (`read_tokens`) and how many it wrote into it (`written_tokens`).
-These are totals for the session: the record has no read, written or cache figure for one turn. The
-conversation holds every tool call, and the digest counts them. Measure before you report: compare
-turns in the session with each other, and count calls in the conversation. A finding with no number or count behind it is not
-reported.
+These are totals for the session. A turn's entry under `timing` may also hold `activity`: the
+model requests that completed, the tokens the model wrote, the tokens served from the cache and
+written into it, and the summaries the turn made. The digest has them in the turn's row as
+`activity`, with the turn's `cached_share`. A turn with no `activity` was written by a build that did
+not keep it, or made no request. The counts are of the turn's own work: a request made beside it
+(`/compact`, a question) is in the turn's `tokens` and not in `activity`, so `activity` can come to
+less than `tokens` says. The conversation holds every tool call, and the digest counts them. Measure
+before you report: compare turns in the session with each other, and count calls in the
+conversation. A finding with no number or count behind it is not reported.
 
 Context:
 
 - the same file or output read into the conversation more than once, or a whole large file read where a search or a range would have answered;
 - a tool result so long that it filled the context, was cut off, or had to be fetched again;
 - the context growing much faster in one turn than in others because of one tool, one result or one delegate's report;
-- compaction run often, run soon after a resume, or followed by re-reading what it dropped;
+- compaction run often (`compactions` in each turn's `activity`), run soon after a resume, or followed by re-reading what it dropped (`reread_after_compaction`);
 - a prompt, tool description or preamble that is large relative to what a turn uses it for.
 
 Cost:
 
 - a turn costing several times the median turn without the person asking for more work (`times_median`, and `requests` for how many requests it made);
-- the session's cached share (`split.cache.read_tokens` over `split.read`) being low although each request began with the same prompt, which means something changed the start of the prompt between requests;
+- the session's cached share (`split.cache.read_tokens` over `split.read`) being low although each request began with the same prompt, which means something changed the start of the prompt between requests. A turn's own `cached_share` says which turns missed: a low session share with a high one in most turns is a few turns and not the prompt's start;
 - retries and repeated failing calls that each spent a request;
 - a delegate started for work one read would have answered, or several delegates reading the same files (`spawn_agent` in the row's `calls`, against the turn's `times_median`).
 

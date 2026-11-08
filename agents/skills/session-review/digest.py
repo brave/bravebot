@@ -18,6 +18,10 @@ What it counts, and from where:
 - Tool calls are in `tool_calls` on assistant messages, not in the audit trail. The trail's
   `action_field` events cover a few file tools only.
 - Permission mode, approvals and refusals are gates in the trail.
+- A turn's `activity` is copied from the record's `timing` entry for it (docs/specs/sessions.md
+  SESSION-40), with the share of the turn's read tokens the service served from its cache. That
+  share is of the turn's spend less what the model wrote, and the spend includes requests made
+  beside the work that `activity` does not count, so it is a little low for a turn that had any.
 """
 
 import difflib
@@ -34,6 +38,8 @@ READ_ONLY = frozenset({"read_file", "search", "list_files", "read_git", "read_ou
 CHANGES = frozenset({"edit_file", "write_file"})
 # Rounds in a row of one read-only call each, from which a person could have batched them.
 SERIAL_RUN = 3
+# The counts under a turn's `timing.activity`, in the order the record writes them.
+ACTIVITY = ("requests", "written_tokens", "cache_read_tokens", "cache_written_tokens", "compactions")
 BYPASS_ANSWER = "answered by bypass mode"
 LEFT_TO_PERSON = "left to the confirmer"
 # The `permission_mode` gate's detail: "the turn began in <mode> mode" (crates/core/src/policy.rs).
@@ -163,6 +169,19 @@ def audit_by_turn(events):
     return turns, kinds
 
 
+def activity_of(clock, tokens):
+    """A turn's recorded counts and its cached share, or None where the record has no counts for it."""
+    counts = clock.get("activity") if isinstance(clock.get("activity"), dict) else None
+    if not counts:
+        return None
+    found = {k: counts[k] for k in ACTIVITY if is_count(counts.get(k))}
+    served = found.get("cache_read_tokens", 0)
+    read = tokens - found.get("written_tokens", 0) if is_count(tokens) else 0
+    cached = served + found.get("cache_written_tokens", 0) > 0 and read > 0
+    found["cached_share"] = round(min(served / read, 1.0), 2) if cached else None
+    return found
+
+
 def similarity(before, after):
     """How alike two prompts are, from 0 to 1, as a number and nothing of their words."""
     if not isinstance(before, str) or not isinstance(after, str) or not before.strip() or not after.strip():
@@ -249,6 +268,9 @@ def build(record, events=None, from_turn=0):
             "file_wait_ms": clock.get("file_wait_ms"),
             "prompt_similarity_to_previous": similarity(history[position - 1].get("prompt"), h.get("prompt")) if position else None,
         }
+        counted = activity_of(clock, spend.get(number))
+        if counted is not None:
+            row["activity"] = counted
         if number in ranges:
             row.update(
                 {
@@ -290,6 +312,8 @@ def build(record, events=None, from_turn=0):
         absent.append("split.cache: the cached share was not recorded")
     if not timing:
         absent.append("timing")
+    if rows and not any("activity" in row for row in rows):
+        absent.append("activity: no turn has its requests and cache counted")
     if events is None:
         absent.append("audit trail")
     if len(ranges) < len(history):
