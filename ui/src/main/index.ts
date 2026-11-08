@@ -74,6 +74,7 @@ import {
 import { printToPdf } from './export'
 import { applyNativeAppearance } from './theme'
 import { relaunchUnlessRunning } from './relaunch'
+import { rendererUrl } from './renderer-url'
 import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
@@ -550,8 +551,9 @@ function createWindow(): void {
   }, 1000)
   window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void window.loadURL(process.env.ELECTRON_RENDERER_URL)
+  const devServer = rendererUrl(app)
+  if (devServer) {
+    void window.loadURL(devServer)
   } else {
     void window.loadFile(join(__dirname, '../renderer/index.html'))
   }
