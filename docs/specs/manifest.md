@@ -730,9 +730,12 @@ without asking, and names the server each of its lists was read from and the ser
 so approving the plan releases the lists' private entries to that server as it releases a connector
 act's content ([MANIFEST-14](#MANIFEST-14)).
 
-The list is still put, as for any `apply` step, where bypass mode answered the plan, in plan mode,
-and where an `ask` rule names one of the step's tools. Who answered the plan is taken when it is
-answered, so a later change of mode does not change it.
+Which steps run unasked is decided once, before the plan's line is written, so the line and the run
+agree. The list is still put, as for any `apply` step, where bypass mode answered the plan, in plan
+mode, including a move into it after the plan was answered, where an `ask` rule names one of the
+step's tools, and where a value the step would send holds a character a line would draw as nothing,
+since the list writes each one out and the line could not. Who answered the plan is taken when it is
+answered, so no other change of mode makes a step run unasked.
 
 **Why.** A tool a person marks is one whose every call, within the caps, is acceptable on its own:
 it acts only on their own machine, deletes or overwrites nothing, and adds no address. Every target
@@ -743,6 +746,7 @@ step.
 
 `verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 `verified-by: bravebot_agent::manifest_server_calls::a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks`
+`verified-by: bravebot_agent::manifest_server_calls::a_marked_step_holding_a_hidden_character_puts_its_list`
 
 ## Known costs
 
