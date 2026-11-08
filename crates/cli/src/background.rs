@@ -321,6 +321,8 @@ fn supervisor_command(program: &std::path::Path) -> std::process::Command {
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.arg("__bg-supervisor").current_dir("/");
     command
@@ -338,6 +340,8 @@ pub(crate) fn host_command(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.arg("__bg-host").arg(id).arg(mode.word());
     if let Some(directory) = directory {

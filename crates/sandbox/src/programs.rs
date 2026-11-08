@@ -91,9 +91,35 @@ pub fn keep_out_where_writable(directory: &Path) {
 /// Neither a path nor a string is accepted, and the field cannot be written to by a caller:
 ///
 /// ```compile_fail
-/// use bravebot_sandbox::programs::{Inherits, SearchPath};
+/// use bravebot_sandbox::programs::{CodeSelectors, Inherits, SearchPath};
 /// let path = std::path::PathBuf::from("/usr/bin/git");
-/// let _ = bravebot_sandbox::programs::start(&path, Inherits::All, SearchPath::Inherited);
+/// let _ = bravebot_sandbox::programs::start(
+///     &path,
+///     Inherits::All,
+///     SearchPath::Inherited,
+///     CodeSelectors::Kept,
+/// );
+/// ```
+///
+/// Neither does a start that leaves out whether the program's code-selecting variables are
+/// checked or kept ([`CodeSelectors`]); the same call with a `Resolved` and that argument is the
+/// control that compiles:
+///
+/// ```compile_fail
+/// use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
+/// let program = Resolved::written_in_source("/usr/bin/git");
+/// let _ = bravebot_sandbox::programs::start(&program, Inherits::All, SearchPath::Inherited);
+/// ```
+///
+/// ```
+/// use bravebot_sandbox::programs::{CodeSelectors, Inherits, Resolved, SearchPath};
+/// let program = Resolved::written_in_source("/usr/bin/git");
+/// let _ = bravebot_sandbox::programs::start(
+///     &program,
+///     Inherits::All,
+///     SearchPath::Inherited,
+///     CodeSelectors::Kept,
+/// );
 /// ```
 ///
 /// ```compile_fail
@@ -205,6 +231,61 @@ pub enum SearchPath {
     Reduced,
 }
 
+/// The variables that make a program run code, whichever program reads them, and what each names.
+///
+/// A start passed [`CodeSelectors::Checked`] has each of these that this process holds taken off
+/// its environment unless its value passes [`may_be_run`] for the [`Names`] listed here. The
+/// program's own variables are the list [`CodeSelectors::Checked`] carries, and are judged the
+/// same way ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+///
+/// Python's variables come from [`selectors`], so a list that names them as well spells each once.
+pub const CODE_SELECTORS: &[(&str, Names)] = &[
+    // The dynamic loader: libraries loaded into the program before it runs.
+    ("LD_PRELOAD", Names::Directories),
+    ("LD_LIBRARY_PATH", Names::Directories),
+    ("LD_AUDIT", Names::Directories),
+    ("GCONV_PATH", Names::Directories),
+    ("DYLD_INSERT_LIBRARIES", Names::Directories),
+    // Language runtimes and shells: modules, startup files and tools the program runs.
+    selectors::PYTHONPATH,
+    selectors::PYTHONUSERBASE,
+    selectors::PYTHONPYCACHEPREFIX,
+    selectors::PYTHONHOME,
+    ("BASH_ENV", Names::File),
+    ("DEVELOPER_DIR", Names::Directory),
+    ("GIT_EXEC_PATH", Names::Directory),
+    ("XDG_DATA_DIRS", Names::Directories),
+    // Options and inline configuration.
+    ("NODE_OPTIONS", Names::Options),
+    ("RUBYOPT", Names::Options),
+    ("PERL5OPT", Names::Options),
+    ("JAVA_TOOL_OPTIONS", Names::Options),
+    ("CLOUDSDK_PYTHON_ARGS", Names::Options),
+];
+
+/// Prefixes of variable names that are all [`Names::Options`]. `GIT_CONFIG_COUNT`,
+/// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` write configuration, which can name a program
+/// to run, and `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name the files it is read from.
+pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_"];
+
+/// Whether the variables of a started program that make it run code are checked.
+///
+/// There is no default: a start says which, so a new one cannot leave out the check
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+#[derive(Clone, Copy, Debug)]
+pub enum CodeSelectors<'a> {
+    /// The environment is left as it is, because the program is run on the person's own account
+    /// or runs what the planner chose or a project carries, and is confined or chosen by them
+    /// rather than found by bravebot: a line typed at the `!` prompt, a hook, the editor, a
+    /// language server, an MCP server, the `run` stage, a scheduled entry's destination, and this
+    /// program started again.
+    Kept,
+    /// Each variable in [`CODE_SELECTORS`], and in these names the program reads besides, is taken
+    /// off the environment unless its value is one the program may be left to run. `&[]` checks
+    /// the generic names alone.
+    Checked(&'a [(&'a str, Names)]),
+}
+
 /// Whether `held`, the name of a variable this process holds, is `kept`. Windows reads a variable's
 /// name without regard to case, so `Path` is `PATH` there.
 fn is_variable(held: &OsStr, kept: &str) -> bool {
@@ -215,17 +296,95 @@ fn is_variable(held: &OsStr, kept: &str) -> bool {
     }
 }
 
+/// Whether `held` begins with `prefix`, with the case rule of [`is_variable`]. Read as bytes, so a
+/// name that is not text but begins with the prefix does.
+fn begins_variable(held: &OsStr, prefix: &str) -> bool {
+    held.as_encoded_bytes()
+        .get(..prefix.len())
+        .is_some_and(|start| {
+            if cfg!(windows) {
+                start.eq_ignore_ascii_case(prefix.as_bytes())
+            } else {
+                start == prefix.as_bytes()
+            }
+        })
+}
+
+/// What a [`CodeSelectors::Checked`] start takes off `command`: the names in `own` and in
+/// [`CODE_SELECTORS`] by [`withhold_code_selectors_with`], and every held name that begins with one
+/// of [`CODE_SELECTOR_PREFIXES`], which are [`Names::Options`] and so never pass.
+///
+/// A name in both `own` and [`CODE_SELECTORS`] is judged by both, so it is taken off when either
+/// says so. The prefix rule reads the names themselves, so it covers a name that is not text.
+fn withhold_checked(
+    command: &mut Command,
+    own: &[(&str, Names)],
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) {
+    let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    for (name, _) in &held {
+        if CODE_SELECTOR_PREFIXES
+            .iter()
+            .any(|prefix| begins_variable(name, prefix))
+        {
+            command.env_remove(name);
+        }
+    }
+    let listed: Vec<(&str, Names)> = own.iter().chain(CODE_SELECTORS).copied().collect();
+    withhold_code_selectors_with(
+        command,
+        &listed,
+        |wanted| {
+            held.iter()
+                .find(|(name, _)| is_variable(name, wanted))
+                .map(|(_, value)| value.clone())
+        },
+        outside_stage_writable,
+    );
+}
+
 /// The one place a program is started.
 ///
 /// `clippy.toml` refuses `Command::new` everywhere else, so every start reaches here with a
 /// [`Resolved`] and a program named by a variable or a helper no longer slips past a check that
-/// reads literals. It also reaches here with an [`Inherits`] and a [`SearchPath`], which have
-/// no default, so what the program is handed shows in the diff that starts it.
+/// reads literals. It also reaches here with an [`Inherits`], a [`SearchPath`] and a
+/// [`CodeSelectors`], which have no default, so what the program is handed shows in the diff that
+/// starts it.
 ///
-/// The environment is settled before this returns: the `inherits` rule first, then the `path`. A
-/// variable the caller sets on the command afterwards replaces what was removed here, so a caller
-/// that sets variables from input it does not control calls [`Inherits::withhold`] again.
-pub fn start(program: &Resolved, inherits: Inherits<'_>, path: SearchPath) -> Command {
+/// The environment is settled before this returns: the `inherits` rule first, then the `path`,
+/// then the `selectors`. A variable the caller sets on the command afterwards replaces what was
+/// removed here, so a caller that sets variables from input it does not control calls
+/// [`Inherits::withhold`] again.
+pub fn start(
+    program: &Resolved,
+    inherits: Inherits<'_>,
+    path: SearchPath,
+    selectors: CodeSelectors<'_>,
+) -> Command {
+    start_against(
+        program,
+        inherits,
+        path,
+        selectors,
+        std::env::vars_os(),
+        &outside_stage_writable,
+    )
+}
+
+/// [`start`] against a given environment to check, and a given judgment of which files are
+/// outside the directories a stage may write, for a test of what a start removes.
+///
+/// `held` is read only for [`CodeSelectors::Checked`]. The `inherits` rule reads this process's
+/// own environment.
+pub fn start_against(
+    program: &Resolved,
+    inherits: Inherits<'_>,
+    path: SearchPath,
+    selectors: CodeSelectors<'_>,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> Command {
     #[allow(
         clippy::disallowed_methods,
         reason = "the one start: its argument is a `Resolved`, which only the lookup and the \
@@ -242,6 +401,9 @@ pub fn start(program: &Resolved, inherits: Inherits<'_>, path: SearchPath) -> Co
     }
     if path == SearchPath::Reduced {
         restrict_path(&mut command);
+    }
+    if let CodeSelectors::Checked(own) = selectors {
+        withhold_checked(&mut command, own, held, outside_stage_writable);
     }
     command
 }
@@ -766,12 +928,19 @@ fn usable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Inherits, Resolved, SearchPath, start};
+    #[cfg(unix)]
+    use super::{CODE_SELECTORS, start_against};
+    use super::{CodeSelectors, Inherits, Names, Resolved, SearchPath, may_be_run, start};
     use std::ffi::OsStr;
 
     /// [`start`] with the environment and `PATH` left as they are.
     fn started(program: &Resolved) -> std::process::Command {
-        start(program, Inherits::All, SearchPath::Inherited)
+        start(
+            program,
+            Inherits::All,
+            SearchPath::Inherited,
+            CodeSelectors::Kept,
+        )
     }
 
     /// `start` runs the program its argument names. The regression it rejects: a start that
@@ -800,10 +969,15 @@ mod tests {
     fn start_removes_the_names_it_is_given_and_no_others() {
         let program = Resolved::named_by_person("true");
         let removed = |inherits| {
-            let mut removed: Vec<_> = start(&program, inherits, SearchPath::Inherited)
-                .get_envs()
-                .map(|(name, value)| (name.to_os_string(), value.is_none()))
-                .collect();
+            let mut removed: Vec<_> = start(
+                &program,
+                inherits,
+                SearchPath::Inherited,
+                CodeSelectors::Kept,
+            )
+            .get_envs()
+            .map(|(name, value)| (name.to_os_string(), value.is_none()))
+            .collect();
             removed.sort();
             removed
         };
@@ -862,6 +1036,7 @@ mod tests {
             &Resolved::named_by_person("true"),
             Inherits::Only(&kept),
             SearchPath::Inherited,
+            CodeSelectors::Kept,
         );
 
         let mut removed: Vec<OsString> = command
@@ -895,9 +1070,14 @@ mod tests {
     /// The names `env` printed for a program started with these rules, which is what it was handed.
     #[cfg(unix)]
     fn handed(inherits: Inherits<'_>, path: SearchPath) -> Vec<String> {
-        let printed = start(&Resolved::written_in_source("/usr/bin/env"), inherits, path)
-            .output()
-            .expect("env runs");
+        let printed = start(
+            &Resolved::written_in_source("/usr/bin/env"),
+            inherits,
+            path,
+            CodeSelectors::Kept,
+        )
+        .output()
+        .expect("env runs");
         String::from_utf8_lossy(&printed.stdout)
             .lines()
             .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
@@ -915,6 +1095,7 @@ mod tests {
                 &Resolved::named_by_person("true"),
                 inherits,
                 SearchPath::Inherited,
+                CodeSelectors::Kept,
             );
             command.env("BRAVEBOT_PROBE_KEY", "the-lines-own");
             inherits.withhold(&mut command);
@@ -943,7 +1124,7 @@ mod tests {
     fn start_gives_a_reduced_path_only_where_it_is_asked_for() {
         let program = Resolved::named_by_person("true");
         let sets_path = |path| {
-            start(&program, Inherits::All, path)
+            start(&program, Inherits::All, path, CodeSelectors::Kept)
                 .get_envs()
                 .any(|(name, _)| name == OsStr::new("PATH"))
         };
@@ -2023,5 +2204,384 @@ mod tests {
             .map(|(name, _)| name.to_os_string())
             .collect();
         assert_eq!(removed, vec![OsString::from("BAD")]);
+    }
+
+    /// Whether a start given `selectors` and this process-independent `held` environment takes
+    /// `name` off, when `writable` is the one directory a stage may write.
+    #[cfg(unix)]
+    fn removes(selectors: CodeSelectors<'_>, name: &str, value: &OsStr, writable: &Path) -> bool {
+        let row = writable.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let command = start_against(
+            &Resolved::written_in_source("/usr/bin/env"),
+            Inherits::All,
+            SearchPath::Inherited,
+            selectors,
+            [(OsString::from(name), value.to_os_string())],
+            &|file: &Path| outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    #[cfg(unix)]
+    fn checked(name: &str, value: &Path, writable: &Path) -> bool {
+        removes(
+            CodeSelectors::Checked(&[]),
+            name,
+            value.as_os_str(),
+            writable,
+        )
+    }
+
+    /// A file a stage can plant under `session`, and a genuine one under `safe`.
+    #[cfg(unix)]
+    fn planted_and_genuine(test: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let session = scratch_dir(&format!("programs-selectors-{test}-session"));
+        let safe = scratch_dir(&format!("programs-selectors-{test}-safe"));
+        let planted = executable(&session.join(".venv").join("lib"), "x.so");
+        let genuine = executable(&safe.join("lib"), "x.so");
+        (session, safe, planted, genuine)
+    }
+
+    /// The regression it rejects: a checked start that leaves a generic name as the person set it,
+    /// so the program loads or runs a file a stage wrote, outside confinement. Every row of the
+    /// table is tried with a planted value.
+    #[cfg(unix)]
+    #[test]
+    fn a_checked_start_removes_each_generic_name_that_names_a_file_a_stage_may_write() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("t1");
+
+        for (name, _) in CODE_SELECTORS {
+            assert!(checked(name, &planted, &session), "{name} was kept");
+        }
+        assert!(checked("GIT_CONFIG_GLOBAL", &planted, &session));
+        assert!(checked("GIT_CONFIG_COUNT", &planted, &session));
+    }
+
+    /// The regression it rejects: a name dropped from the table, which the loop over the table
+    /// cannot see. The names are the ones SANDBOX-30 lists, written out here.
+    #[cfg(unix)]
+    #[test]
+    fn the_table_holds_each_name_sandbox_30_lists() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("t1n");
+
+        for name in [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "GCONV_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "PYTHONPATH",
+            "PYTHONUSERBASE",
+            "PYTHONPYCACHEPREFIX",
+            "PYTHONHOME",
+            "BASH_ENV",
+            "DEVELOPER_DIR",
+            "GIT_EXEC_PATH",
+            "XDG_DATA_DIRS",
+            "NODE_OPTIONS",
+            "RUBYOPT",
+            "PERL5OPT",
+            "JAVA_TOOL_OPTIONS",
+            "CLOUDSDK_PYTHON_ARGS",
+        ] {
+            assert!(checked(name, &planted, &session), "{name} was kept");
+        }
+    }
+
+    /// The regression it rejects: a checked start that removes a listed name whatever it holds,
+    /// which breaks a person's genuine toolchain setting. An option variable is removed whatever
+    /// it holds, so it has no keep case.
+    #[cfg(unix)]
+    #[test]
+    fn a_checked_start_keeps_each_generic_name_that_names_a_file_outside_every_writable_directory()
+    {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("t1k");
+
+        for (name, names) in CODE_SELECTORS {
+            if *names == Names::Options {
+                continue;
+            }
+            assert!(!checked(name, &genuine, &session), "{name} was removed");
+        }
+    }
+
+    /// The regression it rejects: a start that does not read its argument, or reads `Kept` as
+    /// `Checked`, so a program the person chose loses variables they set on purpose.
+    #[cfg(unix)]
+    #[test]
+    fn a_kept_start_leaves_every_generic_name_set() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("t2");
+
+        for (name, _) in CODE_SELECTORS {
+            assert!(
+                !removes(CodeSelectors::Kept, name, planted.as_os_str(), &session),
+                "{name} was removed"
+            );
+        }
+        assert!(!removes(
+            CodeSelectors::Kept,
+            "GIT_CONFIG_GLOBAL",
+            planted.as_os_str(),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: judging the spelling of the value, so a link from outside a
+    /// writable directory to a file inside it is kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_value_that_links_into_a_directory_a_stage_may_write_is_removed() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t3");
+        let link = safe.join("linked.so");
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+        let directory_link = safe.join("linked-lib");
+        std::os::unix::fs::symlink(planted.parent().unwrap(), &directory_link).unwrap();
+
+        assert!(checked("LD_PRELOAD", &link, &session));
+        assert!(checked("PYTHONHOME", &directory_link, &session));
+        assert!(!checked("LD_PRELOAD", &genuine, &session));
+    }
+
+    /// The regression it rejects: keeping a relative path or one that names nothing yet, which is
+    /// read from or made in a directory a stage writes. A bare name is kept only for a program.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_or_missing_value_is_removed_and_a_bare_program_name_is_kept() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t4");
+        let own = [
+            ("TOOL_PROGRAM", Names::Program),
+            ("TOOL_HOME", Names::Directory),
+        ];
+        let with_own = |name, value: &str| {
+            removes(
+                CodeSelectors::Checked(&own),
+                name,
+                OsStr::new(value),
+                &session,
+            )
+        };
+
+        assert!(!with_own("TOOL_PROGRAM", "python3"));
+        assert!(with_own("TOOL_PROGRAM", "./python3"));
+        assert!(with_own("TOOL_PROGRAM", "bin/python3"));
+        assert!(with_own("TOOL_PROGRAM", ""));
+        assert!(with_own("TOOL_HOME", "python3"));
+        assert!(with_own("TOOL_HOME", "../home"));
+        assert!(checked("PYTHONHOME", &safe.join("not-made-yet"), &session));
+        assert!(checked("PYTHONHOME", Path::new("lib"), &session));
+    }
+
+    /// The regression it rejects: removing a value that is a genuine absolute path outside every
+    /// directory a stage may write, which would break a person's real toolchain setting.
+    #[cfg(unix)]
+    #[test]
+    fn an_absolute_path_that_exists_outside_every_writable_directory_is_kept() {
+        let (session, safe, _planted, genuine) = planted_and_genuine("t5");
+
+        assert!(!checked("LD_PRELOAD", &genuine, &session));
+        assert!(!checked("PYTHONHOME", &safe, &session));
+        assert!(!checked("GIT_EXEC_PATH", &safe, &session));
+    }
+
+    /// The regression it rejects: skipping a value that cannot be converted to text, which keeps a
+    /// planted one, or judging its lossy rendering, which judges the genuine file whose name holds
+    /// `U+FFFD` instead ([PATH-003]).
+    ///
+    /// [PATH-003]: ../../../docs/best-practices/paths.md
+    #[cfg(unix)]
+    #[test]
+    fn a_value_that_is_not_text_is_judged_as_the_bytes_it_is() {
+        use std::os::unix::ffi::OsStrExt;
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t6");
+        let lookalike = executable(&safe, "tool-\u{FFFD}");
+        let bytes = OsStr::from_bytes(b"tool-\xff");
+        let one_of = |value: &Path| checked("PYTHONHOME", value, &session);
+
+        assert!(one_of(&session.join(bytes)));
+        assert!(one_of(&safe.join(bytes)));
+        assert!(!one_of(&lookalike));
+        assert!(removes(
+            CodeSelectors::Checked(&[]),
+            "PYTHONPATH",
+            safe.join(bytes).as_os_str(),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: judging only the first entry of a list, or none of them, or
+    /// reading an empty entry as nothing. An empty entry means the current directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_is_removed_when_any_entry_fails_or_is_empty_and_kept_when_every_entry_is_safe() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t7");
+        let join = |entries: &[&Path]| path_of(entries);
+        let listed =
+            |value: OsString| removes(CodeSelectors::Checked(&[]), "PYTHONPATH", &value, &session);
+
+        assert!(!listed(join(&[&genuine, &safe])));
+        assert!(listed(join(&[&genuine, &planted])));
+        assert!(listed(join(&[&planted, &genuine])));
+        assert!(listed(join(&[&genuine, Path::new("relative")])));
+        let mut trailing = join(&[&genuine]);
+        trailing.push(":");
+        assert!(listed(trailing));
+        let mut leading = OsString::from(":");
+        leading.push(join(&[&genuine]));
+        assert!(listed(leading));
+        assert!(listed(OsString::new()));
+    }
+
+    /// The regression it rejects: reading the value of an option variable, so a value that looks
+    /// harmless (or names a safe file) is kept although the options can name code.
+    #[cfg(unix)]
+    #[test]
+    fn an_option_variable_is_removed_whatever_it_holds() {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("t8");
+
+        for name in [
+            "NODE_OPTIONS",
+            "RUBYOPT",
+            "PERL5OPT",
+            "JAVA_TOOL_OPTIONS",
+            "CLOUDSDK_PYTHON_ARGS",
+        ] {
+            assert!(checked(name, Path::new("--harmless"), &session), "{name}");
+            assert!(checked(name, &genuine, &session), "{name}");
+            assert!(checked(name, Path::new(""), &session), "{name}");
+        }
+        for name in [
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ] {
+            assert!(checked(name, &genuine, &session), "{name}");
+        }
+    }
+
+    /// The regression it rejects: removing by a looser rule than the table says, so a variable
+    /// that selects no code (or that only shares a prefix with a name) is taken from the program.
+    #[cfg(unix)]
+    #[test]
+    fn a_variable_that_selects_no_code_is_left_as_set() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("t9");
+
+        for name in [
+            "HOME",
+            "GIT_CONFIG",
+            "GIT_CONFIGURED",
+            "MY_GIT_CONFIG_X",
+            "LD_DEBUG",
+            "PYTHONDONTWRITEBYTECODE",
+        ] {
+            assert!(!checked(name, &planted, &session), "{name} was removed");
+        }
+    }
+
+    /// The regression it rejects: a caller's own names ignored, or replacing the generic table.
+    #[cfg(unix)]
+    #[test]
+    fn a_callers_own_names_are_judged_on_top_of_the_generic_ones() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("t10");
+        let own = [("TOOL_PLUGINS", Names::Directories)];
+        let checked_with = |name| {
+            removes(
+                CodeSelectors::Checked(&own),
+                name,
+                planted.as_os_str(),
+                &session,
+            )
+        };
+
+        assert!(checked_with("TOOL_PLUGINS"));
+        assert!(checked_with("LD_PRELOAD"));
+        assert!(!checked("TOOL_PLUGINS", &planted, &session));
+        assert!(!checked_with("TOOL_OTHER"));
+    }
+
+    /// The regression it rejects: a checked start that stops removing a name the `inherits` rule
+    /// already withheld, or a `Without` start that stops withholding because it is checked.
+    #[cfg(unix)]
+    #[test]
+    fn a_checked_start_keeps_what_the_inherits_rule_withheld() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("t11");
+        let withheld = [String::from("BRAVEBOT_PROBE_SECRET")];
+        let row = session.clone();
+        let command = start_against(
+            &Resolved::written_in_source("/usr/bin/env"),
+            Inherits::Without(&withheld),
+            SearchPath::Inherited,
+            CodeSelectors::Checked(&[]),
+            [
+                (OsString::from("LD_PRELOAD"), planted.into_os_string()),
+                (OsString::from("PYTHONHOME"), genuine.into_os_string()),
+            ],
+            &|file: &Path| outside_stage_writable_with(file, std::slice::from_ref(&row), &[]),
+        );
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_os_string())
+            .collect();
+
+        assert!(removed.contains(&OsString::from("BRAVEBOT_PROBE_SECRET")));
+        assert!(removed.contains(&OsString::from("LD_PRELOAD")));
+        assert!(!removed.contains(&OsString::from("PYTHONHOME")));
+    }
+
+    /// A checked start judges a value against the directories recorded with [`keep_out`], which
+    /// is the set a `doctor` command records for the directory it ran in and its checkout, and a
+    /// session records for each directory it opens. The regression it rejects: a checked start
+    /// that judges against a set of its own, so a directory recorded for the lookup is not left
+    /// out of the environment.
+    #[cfg(unix)]
+    #[test]
+    fn a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("t12");
+        let judged = |value: &Path| {
+            let command = start_against(
+                &Resolved::written_in_source("/usr/bin/env"),
+                Inherits::All,
+                SearchPath::Inherited,
+                CodeSelectors::Checked(&[]),
+                [(
+                    OsString::from("LD_PRELOAD"),
+                    value.as_os_str().to_os_string(),
+                )],
+                &outside_stage_writable,
+            );
+            command
+                .get_envs()
+                .any(|(name, now)| name == OsStr::new("LD_PRELOAD") && now.is_none())
+        };
+
+        assert!(!judged(&planted), "nothing is recorded yet");
+        keep_out(&session);
+        assert!(registered().contains(&session));
+        assert!(judged(&planted));
+        assert!(!judged(&genuine));
+    }
+
+    /// The regression it rejects: `may_be_run` accepting an option variable, an empty list, a
+    /// relative path or a path with a separator for a program, or refusing a bare program name.
+    #[test]
+    fn may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list() {
+        let anything = |_: &Path| true;
+
+        assert!(!may_be_run(Names::Options, Path::new("/safe"), &anything));
+        assert!(!may_be_run(Names::Directories, Path::new(""), &anything));
+        assert!(!may_be_run(
+            Names::Directory,
+            Path::new("relative"),
+            &anything
+        ));
+        assert!(!may_be_run(Names::Program, Path::new("a/b"), &anything));
+        assert!(may_be_run(Names::Program, Path::new("python3"), &|_| {
+            false
+        }));
     }
 }

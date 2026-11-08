@@ -4711,6 +4711,7 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
         "identity": [{"path": "crates/agent/src/workspace.rs"}],
         "deny_judgements": [{"path": "crates/agent/src/walker.rs"}],
     }
+    found_starts = {**found, "program_starts": [{"path": "crates/cli/src/browser.rs"}]}
     was = audit.mechanics.changed_files
     try:
         for touched, lane, shown in [
@@ -4725,6 +4726,10 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
             ("contrib/check-source.py", "tooling", found),
             (".githooks/pre-push", "tooling", found),
             ("Makefile", "tooling", found),
+            ("crates/sandbox/src/programs.rs", "inherited-environment", found),
+            ("docs/specs/sandboxing.md", "inherited-environment", found),
+            ("docs/best-practices/paths.md", "inherited-environment", found),
+            ("crates/cli/src/browser.rs", "inherited-environment", found_starts),
         ]:
             audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
             lanes = audit.changed_lanes("base", [Governing()], shown)
@@ -4879,6 +4884,51 @@ def test_no_name_in_the_enumerator_is_bound_twice():
         "every module-level name in security-audit.py, findings.py and workflow_checks.py is bound once",
         not twice,
         ", ".join(twice),
+    )
+
+
+def test_the_inherited_environment_lane_lists_each_start_with_its_selectors():
+    """The lane starts from every `programs::start` and says which selectors argument each passes."""
+    sources = {
+        Path("crates/a/src/one.rs"): [
+            "fn a() {",
+            "    let c = programs::start(p, i, s,",
+            "        CodeSelectors::Checked(&[]));",
+            "}",
+            "// programs::start(commented)",
+        ],
+        Path("crates/a/src/two.rs"): [
+            "use bravebot_sandbox::programs::{Inherits, start};",
+            "fn b() {",
+            "    start(p, i, s, CodeSelectors::Kept);",
+            "}",
+        ],
+        Path("crates/a/src/three.rs"): ["fn c() {", "    start(1);", "}"],
+        Path("crates/a/tests/four.rs"): ["fn d() { programs::start(p, i, s, CodeSelectors::Kept); }"],
+    }
+    found = [(s["path"], s["line"], s["selectors"]) for s in audit.program_starts(sources)]
+    check(
+        "a qualified start and a bare start in a file that imports it are listed with their selectors, and a "
+        "comment, an unrelated start and a test file are not",
+        found == [("crates/a/src/one.rs", 2, "Checked"), ("crates/a/src/two.rs", 3, "Kept")],
+        str(found),
+    )
+
+    def real():
+        specs = audit.load_specs()
+        surface = audit.surface(audit.mechanics.load_sources(), specs)
+        return surface, audit.build_lane(
+            "inherited-environment", surface, specs, Path("results.json"), Path("surface.json"), Path("tracker.txt")
+        )
+
+    surface, prompt = with_cwd(ROOT, real)
+    check(
+        "the tree's own starts are listed, and the prompt names the table and has no placeholder left",
+        any(s["path"] == "crates/sandbox/src/programs.rs" or s["selectors"] for s in surface["program_starts"])
+        and f"{len(surface['program_starts'])} starts of a program" in prompt
+        and "CODE_SELECTORS" in prompt
+        and not SURVIVING.search(prompt.replace("{start_sites}", "")),
+        str(SURVIVING.findall(prompt)),
     )
 
 
@@ -5527,6 +5577,7 @@ TESTS = (
     test_the_tracker_is_written_for_the_lanes,
     test_no_name_in_the_enumerator_is_bound_twice,
     test_every_lane_has_its_file_and_its_row,
+    test_the_inherited_environment_lane_lists_each_start_with_its_selectors,
     test_the_exemption_stops_at_the_person_s_own_configuration,
     test_candidates_that_make_one_claim_are_checked_together,
     test_a_group_is_one_verifier_and_the_others_are_in_its_prompt,

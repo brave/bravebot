@@ -116,8 +116,8 @@ const CODE_SELECTORS: [(&str, Names); 7] = [
 fn command_for(program: &Path) -> Command {
     command_for_with(
         program,
-        |name| std::env::var_os(name),
-        bravebot_sandbox::programs::outside_stage_writable,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     )
 }
 
@@ -125,25 +125,21 @@ fn command_for(program: &Path) -> Command {
 /// directories a stage may write.
 fn command_for_with(
     program: &Path,
-    held: impl Fn(&str) -> Option<OsString>,
-    outside_stage_writable: impl Fn(&Path) -> bool,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> Command {
     // The names the CLI starts itself (an `env` shebang, a `credential_process` command) search
-    // only the entries the lookup above searches (SANDBOX-30).
-    let mut command = bravebot_sandbox::programs::start(
+    // only the entries the lookup above searches (SANDBOX-30). The rest of the environment stays:
+    // `AWS_PROFILE`, `AWS_REGION` and the credentials the person keeps there are what the CLI is
+    // run to resolve.
+    bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-    );
-    // The rest of the environment stays: `AWS_PROFILE`, `AWS_REGION` and the credentials the person
-    // keeps there are what the CLI is run to resolve.
-    bravebot_sandbox::programs::withhold_code_selectors_with(
-        &mut command,
-        &CODE_SELECTORS,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
         held,
         outside_stage_writable,
-    );
-    command
+    )
 }
 
 /// The export, as a command, so what it is handed can be read without running it.
@@ -1133,8 +1129,8 @@ mod tests {
         let rows = std::slice::from_ref(&row);
         let command = command_for_with(
             Path::new("/usr/bin/aws"),
-            |asked| (asked == name).then(|| value.as_os_str().to_os_string()),
-            |file| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+            [(OsString::from(name), value.as_os_str().to_os_string())],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
         );
         command
             .get_envs()
@@ -1284,10 +1280,20 @@ mod tests {
             "AWS_PAGER",
             "AWS_DATA_PATH",
             "SSL_CERT_FILE",
-            "PYTHONPATH",
         ] {
             assert!(!withheld(other, &planted, &session), "{other}");
         }
+    }
+
+    /// A checked start removes the generic names of `CODE_SELECTORS` in the sandbox crate as well
+    /// as the CLI's own, so `PYTHONPATH` and a `GIT_CONFIG_` name a stage may write do not reach it.
+    #[test]
+    fn an_aws_start_has_the_generic_code_selectors_removed_as_well() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-generic");
+
+        assert!(withheld("PYTHONPATH", &planted, &session));
+        assert!(!withheld("PYTHONPATH", &genuine, &session));
+        assert!(withheld("GIT_CONFIG_GLOBAL", &genuine, &session));
     }
 
     /// The whole path from the process environment to the program started: the real

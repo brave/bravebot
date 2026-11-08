@@ -102,6 +102,8 @@ fn opening(program: &Resolved, arguments: &[String]) -> std::process::Command {
         program,
         Inherits::Without(&bravebot_config::scrub::own_credentials()),
         SearchPath::Reduced,
+        // #3798 adds the names the opener programs read.
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     );
     command
         .args(arguments)

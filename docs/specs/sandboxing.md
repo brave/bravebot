@@ -3475,14 +3475,16 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
 `clippy.toml` refuses every call the tree starts a program with, `std::process::Command::new` and
 `CreateProcessW`, whatever names the program: a string literal, a variable, an alias, or a helper
 that passes it on. A program is started with `bravebot_sandbox::programs::start(program, inherits,
-path)`. `program` is a `Resolved` and not a path or a string. Only the lookup (`Resolved::find`,
+path, selectors)`. `program` is a `Resolved` and not a path or a string. Only the lookup (`Resolved::find`,
 `Resolved::find_on`) and a named constructor build one, and each constructor says who chose the
 program: `own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`.
 `inherits` is `Inherits::All`, `Inherits::Without` the names
 [CRED-14](credential-protection.md#CRED-14) removes, or `Inherits::Only` the names it passes on, and
-`path` is `SearchPath::Reduced` or `SearchPath::Inherited`. Neither has a default and `start`
-applies both, so a new spawn picks a constructor, what the program inherits and which `PATH` it is
-given in the diff, and does not compile until it has. `start` holds the one `Command::new` the tree
+`path` is `SearchPath::Reduced` or `SearchPath::Inherited`, and `selectors` is
+`CodeSelectors::Kept` or `CodeSelectors::Checked` (below). None of the three has a default and
+`start` applies all of them, so a new spawn picks a constructor, what the program inherits, which
+`PATH` it is given and whether its code-selecting variables are checked in the diff, and does not
+compile until it has. `start` holds the one `Command::new` the tree
 has outside a build script and a test. `make check-security` fails a
 `#[allow(clippy::disallowed_methods, reason = "...")]` mark in a production file other than the three
 it lists (`start`, the one `CreateProcessW` and a build script) or a second mark in one of those, a
@@ -3576,6 +3578,43 @@ file. A new spawn that looks a name up through
   `NAME` back ([RUN-12](tools/run.md#RUN-12)). `start` cannot tell which argument of a program names
   a program for it to start, so that argument is still passed as an absolute path by the caller, as
   the inhibitor's `cat` is, and PATH-005 has a reviewer read it.
+- **A checked start has the variables that make a program run code taken off.** The fourth
+  argument of `start` is `CodeSelectors::Kept` or `CodeSelectors::Checked(names)`. Checked removes
+  from the environment each variable in `CODE_SELECTORS` in `crates/sandbox/src/programs.rs`, every
+  variable whose name begins `GIT_CONFIG_`, and each variable in `names`, unless its value is one
+  the program may be left to run. `names` is `&[]` for a program with no variables of its own in the
+  list. Windows matches a name without regard to case. A variable the `inherits` rule withheld stays
+  withheld, and one it passes on is judged. A start is checked or kept as the last bullet of this
+  list states. The generic table holds, by what each variable names:
+
+  | Variable | Names |
+  |---|---|
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH` | one directory (`Names::Directory`) |
+  | `BASH_ENV` | one file (`Names::File`) |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, and every `GIT_CONFIG_` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+
+  A value is kept when `may_be_run` accepts it for what the variable names, as the last bullet of
+  this list states. A variable in no list is left as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG`
+  reach the program. Every checked start is given the generic table, which
+  `programs::withhold_code_selectors_with` applies together with the program's own list: gcloud's
+  is in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in
+  `crates/bedrock/src/credentials.rs` and `doctor --push-identity`'s in
+  `crates/cli/src/push_identity.rs`. The names another program reads are added to its start when
+  that program is audited. `make check-code-selectors` runs
+  `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
+  whose fourth argument is not written at the call as `CodeSelectors::Kept` or
+  `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
+  reason, and a name in any `CODE_SELECTORS` list that lacks a test that keeps a safe value or a
+  test that removes a value a stage may write. A list of options needs only the second. The check
+  cannot tell that a list is complete, which [PATH-008](../best-practices/paths.md#PATH-008) leaves
+  to a reviewer.
+- **A kept start leaves the environment as it is.** The program is one the person chose, or it
+  runs what the planner chose or a project carries, so removing a variable would change what the
+  person asked for. The check covers the programs bravebot starts for its own purposes. It does not
+  change the environment of a program the person chose to run, and it does not protect this
+  process: a variable already in bravebot's environment applies when bravebot is launched, as
+  `LD_PRELOAD` does on Linux, before any start removes it from a child.
 - **What each start inherits is stated here.** The programs a `run` stage, a background job, a hook, a
   language server, the AWS CLI, the browser opener, `doctor --push-identity` and `doctor --sandbox-check`
   start get this process's environment without this agent's own credentials
@@ -3588,6 +3627,16 @@ file. A new spawn that looks a name up through
   it: each is the person's own program or holds no credential to hand on. `xcode-select`,
   `sandbox-exec` and the program a sandbox backend starts confined are started with all of it, and
   the environment a confined program has is the one its caller asks the backend for.
+- **Each start is checked or kept.** These are checked: the AWS CLI, the gcloud launcher, the
+  browser opener, the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, the clipboard
+  tools and `osascript`, the inhibitor `/caffeinate` starts, the `crontab`, `launchctl` and
+  `systemctl` of the scheduler, the tool a workflow is run again with in `doctor --sandbox-check`,
+  the stored-login `gh`, `xcode-select` and the OpenShell command line. These are kept: a line
+  typed at the `!` prompt, a hook, the editor, a language server, a `run` stage, a background job,
+  the program a sandbox backend confines, which a local MCP server is, and `sandbox-exec`, the
+  credential authority, the client the host starts, the delivery program of a scheduled entry, the
+  `sysctl` that reads a machine identifier with an empty environment, and this program started
+  again. A start added to either list is added here in the same change.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -3717,6 +3766,30 @@ program named by a bare name that lies in a directory a started server may write
 launch that records the directory and not by a later resolution in the same process, such as a
 reconnect. A program named by an absolute path is not judged by any lookup and starts as before.
 
+**What a checked start does not cover.** A checked start removes the generic names and the names its
+caller lists, and a name nobody listed reaches the program. The lists were read from the programs'
+documentation and launchers, and these were not shown by running the program:
+
+- The Windows `powershell` starts of the clipboard tool (`crates/tui/src/clipboard.rs`) and of the
+  inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table. `PSModulePath`,
+  `COR_ENABLE_PROFILING` and `COR_PROFILER` are candidates for names and are not in it, and
+  `gcloud.cmd` and `APPDATA` have not been checked on Windows. It is tracked by #3808.
+- The dynamic-loader names (`LD_*`, `GCONV_PATH`) are read from ld.so(8) and not shown by running a
+  loader. It is tracked by #3810.
+- `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
+  and no names of their own, and have not been run on Linux. It is tracked by #3810.
+- A Homebrew or pip `aws` script, an asdf or pyenv shim and `gio open` and `kde-open` start an
+  interpreter or another program by variables of their own, which are not listed. It is tracked by
+  #3809.
+- `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
+  tracked by #3809.
+- The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
+  are given the generic table. The names `make`, `git` and `xcrun` read are added by #3797. Running
+  each of the others with a name planted is tracked by #3811.
+- `tput` is started by bare name by crossterm 0.29.0 (`src/terminal/sys/unix.rs`, line 273) when a
+  terminal-size query fails. The dependency makes that start and it does not go through
+  `programs::start`, so it has no `CodeSelectors` argument. It is tracked by #3802.
+
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
 `verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
@@ -3809,6 +3882,21 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 `verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_tui::opener::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
 `verified-by: bravebot_tui::opener::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_sandbox::programs::a_checked_start_removes_each_generic_name_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_sandbox::programs::a_checked_start_keeps_each_generic_name_that_names_a_file_outside_every_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_kept_start_leaves_every_generic_name_set`
+`verified-by: bravebot_sandbox::programs::a_value_that_links_into_a_directory_a_stage_may_write_is_removed`
+`verified-by: bravebot_sandbox::programs::a_relative_or_missing_value_is_removed_and_a_bare_program_name_is_kept`
+`verified-by: bravebot_sandbox::programs::an_absolute_path_that_exists_outside_every_writable_directory_is_kept`
+`verified-by: bravebot_sandbox::programs::a_value_that_is_not_text_is_judged_as_the_bytes_it_is`
+`verified-by: bravebot_sandbox::programs::a_list_is_removed_when_any_entry_fails_or_is_empty_and_kept_when_every_entry_is_safe`
+`verified-by: bravebot_sandbox::programs::an_option_variable_is_removed_whatever_it_holds`
+`verified-by: bravebot_sandbox::programs::a_variable_that_selects_no_code_is_left_as_set`
+`verified-by: bravebot_sandbox::programs::a_callers_own_names_are_judged_on_top_of_the_generic_ones`
+`verified-by: bravebot_sandbox::programs::a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup`
+`verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
+`verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
+`verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`

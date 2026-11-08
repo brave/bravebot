@@ -272,8 +272,8 @@ const SHELL: &str = "/bin/sh";
 fn started(program: &Path) -> std::process::Command {
     started_with(
         program,
-        |name| std::env::var_os(name),
-        bravebot_sandbox::programs::outside_stage_writable,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     )
 }
 
@@ -281,17 +281,14 @@ fn started(program: &Path) -> std::process::Command {
 /// directories a stage may write.
 fn started_with(
     program: &Path,
-    held: impl Fn(&str) -> Option<std::ffi::OsString>,
-    outside_stage_writable: impl Fn(&Path) -> bool,
+    held: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
+    let mut command = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-    );
-    bravebot_sandbox::programs::withhold_code_selectors_with(
-        &mut command,
-        &CODE_SELECTORS,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
         held,
         outside_stage_writable,
     );
@@ -632,8 +629,8 @@ mod tests {
         // credentials alone whatever the machine running the test has set.
         let command = started_with(
             Path::new("/usr/bin/ssh"),
-            |_| None,
-            bravebot_sandbox::programs::outside_stage_writable,
+            [],
+            &bravebot_sandbox::programs::outside_stage_writable,
         );
         assert_eq!(withheld_from(&command), expected);
     }
@@ -718,8 +715,11 @@ mod tests {
         let rows = std::slice::from_ref(&row);
         let command = started_with(
             Path::new("/usr/bin/ssh"),
-            |asked| (asked == name).then(|| value.as_os_str().to_os_string()),
-            |file| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+            [(
+                std::ffi::OsString::from(name),
+                value.as_os_str().to_os_string(),
+            )],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
         );
         command
             .get_envs()
@@ -819,12 +819,11 @@ mod tests {
         for held in [Some(planted), Some(genuine), None] {
             let command = started_with(
                 Path::new("/usr/bin/ssh"),
-                |asked| {
-                    (asked == "SHELL")
-                        .then(|| held.clone().map(PathBuf::into_os_string))
-                        .flatten()
+                held.clone()
+                    .map(|shell| (std::ffi::OsString::from("SHELL"), shell.into_os_string())),
+                &|file: &Path| {
+                    bravebot_sandbox::programs::outside_stage_writable_with(file, &rows, &[])
                 },
-                |file| bravebot_sandbox::programs::outside_stage_writable_with(file, &rows, &[]),
             );
             let shell: Vec<_> = command
                 .get_envs()
@@ -970,6 +969,7 @@ mod tests {
             &own,
             bravebot_sandbox::programs::Inherits::All,
             bravebot_sandbox::programs::SearchPath::Inherited,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         )
         .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
         .env(SESSION, &session.path)

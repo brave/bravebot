@@ -429,6 +429,8 @@ impl LandlockSandbox {
             &crate::programs::Resolved::to_confine(program),
             crate::programs::Inherits::All,
             crate::programs::SearchPath::Inherited,
+            // The program is confined by the policy this call applies (SANDBOX-30).
+            crate::programs::CodeSelectors::Kept,
         );
         command.args(args);
         if let Some(directory) = &policy.starting_in {

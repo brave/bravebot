@@ -1,23 +1,35 @@
 #!/usr/bin/env python3
-"""Holds each variable in a CODE_SELECTORS list to a test that keeps it and one that removes it.
+"""Holds every `programs::start` call and every CODE_SELECTORS name to what SANDBOX-30 requires.
 
-`gcloud`, `aws`, `ssh-keygen`, `ssh` and `git` are started with the person's environment, so a
-variable their launchers read to choose code to run is taken off when its value names a path a
-stage may write. Each program has a
-CODE_SELECTORS list of those variables. A name added to a list with no test is a removal nothing
-pins, and a test that checks only one value of it passes for a loop that never removes anything or
-one that removes everything.
+A program bravebot starts reads variables that name code to run (`LD_PRELOAD`, `PYTHONPATH`,
+`CLOUDSDK_PYTHON`, `NODE_OPTIONS`, and so on). `start` and `start_against` take a fourth argument,
+`CodeSelectors::Kept` or `CodeSelectors::Checked(&list)`, so a call site says whether those
+variables are taken off when their value names a path a stage may write. `gcloud`, `aws`,
+`ssh-keygen`, `ssh` and `git` each pass a CODE_SELECTORS list of their own, and the generic list
+every checked start removes is in crates/sandbox/src/programs.rs. This script fails for:
 
-So this fails while a name in a list lacks either test in the same file:
+1. A `programs::start` or `programs::start_against` call outside crates/sandbox/src/programs.rs
+   whose fourth argument is not written as `CodeSelectors::Kept` or
+   `CodeSelectors::Checked(&[...])` at the call. A value held in a variable or chosen by a branch
+   hides the classification from a reader.
+2. A `CodeSelectors::Kept` call in code that is not a test with no comment in its argument list
+   saying why the program may run what the environment names.
+3. A `CodeSelectors::Checked(&NAME)` call in a file that does not define `const CODE_SELECTORS`.
+4. A file that must hold a CODE_SELECTORS list (the generic list and the three above) and does
+   not, or whose list this script reads as empty.
+5. A name in a `const CODE_SELECTORS` list, in any file, that lacks a test in the same file:
+   - an assertion that the name is removed (`assert!(withheld("NAME", ...))` or
+     `assert!(checked("NAME", ...))`), which a loop that keeps every value fails, and
+   - for a name whose value is a path, program or list, an assertion that a safe value is kept
+     (`assert!(!withheld("NAME", ...))` or `assert!(!checked(...))`), which a loop that removes
+     every value fails. A name whose value is a set of options is removed whatever it holds, so it
+     has no keep test.
+6. A constant in `selectors` whose Rust name is not the variable it holds, since a list names it
+   as `selectors::NAME` and this script takes the constant's name as the variable.
 
-- an assertion that the name is withheld (`assert!(withheld("NAME", ...))`), which a loop that
-  keeps every value fails, and
-- an assertion that it is kept for a safe value (`assert!(!withheld("NAME", ...))`), which a loop
-  that removes every value fails.
-
-It cannot tell that a list is complete. A variable the launcher reads that is not listed is found
-by reading the launcher, which is what PATH-008 in docs/best-practices/paths.md asks a reviewer to
-do. A program added to the sources below has the same check.
+It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
+reads that is not listed is found by reading the program, which PATH-008 in
+docs/best-practices/paths.md asks a reviewer to do.
 """
 
 import re
@@ -25,26 +37,38 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+CRATES = ROOT / "crates"
 
-# The files that hold a CODE_SELECTORS list, each with the tests for it in the same file.
+# The file that holds the generic list and the shared names.
+PROGRAMS = "crates/sandbox/src/programs.rs"
+
+# The files that hold a program's own CODE_SELECTORS list, each with the tests for it in the same
+# file.
 SOURCES = [
     "crates/agent/src/gcloud.rs",
     "crates/bedrock/src/credentials.rs",
     "crates/cli/src/push_identity.rs",
 ]
 
-LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*\[(.*?)\]\s*;", re.DOTALL)
+LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
 ENTRY = re.compile(
     r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)'
     r"|\bselectors::([A-Z0-9_]+)"
 )
 # A name shared between lists, defined once in the sandbox crate: `pub const NAME: (&str, Names) =
 # ("NAME", ...)`. A list names it as `selectors::NAME`.
-SHARED_FILE = "crates/sandbox/src/programs.rs"
 SHARED = re.compile(r'pub const ([A-Z0-9_]+): \(&str, Names\) = \(\s*"([A-Za-z0-9_]+)"')
 TESTS = re.compile(
     r"#\[cfg\(\s*(?:test|all\(\s*test\b[^\]]*)\)\s*\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*\{"
 )
+CALL = re.compile(r"programs::start(?:_against)?\(")
+BARE_CALL = re.compile(r"(?<![\w.:])start(?:_against)?\(")
+BARE_IMPORT = re.compile(
+    r"^\s*use\s+[\w:]*programs::(?:start(?:_against)?\b|\{[^}]*\bstart(?:_against)?\b)",
+    re.MULTILINE,
+)
+FOURTH = re.compile(r"^(?:[\w:]*::)?CodeSelectors::(Kept|Checked\(\s*&(.*?)\s*\))$", re.DOTALL)
+FOLLOWS_TEST_ATTRIBUTE = re.compile(r"#\[cfg\(\s*(?:all\(\s*)?test\b")
 
 
 def selectors(text):
@@ -85,14 +109,19 @@ def tests_of(text):
 
 
 def asserts(tests, name, kept):
-    """Whether a test asserts `withheld("name", ...)`, or `!withheld("name", ...)` where `kept`."""
+    """Whether a test asserts `withheld("name", ...)` or `checked("name", ...)`, negated if `kept`."""
     bang = r"!\s*" if kept else ""
-    pattern = r"assert!\(\s*" + bang + r'withheld\(\s*"' + re.escape(name) + r'"'
-    return re.search(pattern, tests) is not None
+    pattern = r"assert!\(\s*" + bang + r'(?:withheld|checked)\(\s*"' + re.escape(name) + r'"'
+    if re.search(pattern, tests):
+        return True
+    # A loop over the whole list covers every name in it, including one added later.
+    loop = r"for\s*\(\s*name\s*,\s*\w+\s*\)\s*in\s*(?:&?)CODE_SELECTORS\s*\{(.*?)\n        \}"
+    inside = r"assert!\(\s*" + bang + r"(?:withheld|checked)\("
+    return any(re.search(inside, body) for body in re.findall(loop, tests, re.DOTALL))
 
 
-def verdict(text, source="the source file"):
-    """Every way the list and the tests disagree, as complaints to print."""
+def list_complaints(text, source="the source file"):
+    """Every way a file's CODE_SELECTORS list and its tests disagree, as complaints to print."""
     names = selectors(text)
     if names is None:
         return [f"CODE_SELECTORS is not in {source}. If it moved, teach check-code-selectors.py."]
@@ -110,21 +139,132 @@ def verdict(text, source="the source file"):
         if not asserts(tests, name, kept=False):
             complaints.append(
                 f"{name} is in CODE_SELECTORS in {source} and no test asserts "
-                f"withheld(\"{name}\", ...) for a value a stage may write."
+                f'withheld("{name}", ...) for a value a stage may write.'
             )
         if name not in options and not asserts(tests, name, kept=True):
             complaints.append(
                 f"{name} is in CODE_SELECTORS in {source} and no test asserts "
-                f"!withheld(\"{name}\", ...) for a safe value."
+                f'!withheld("{name}", ...) for a safe value.'
             )
     return complaints
 
 
+def arguments(text, open_paren):
+    """The top-level arguments of the call whose `(` is at `open_paren`, as raw text, or None."""
+    depth = 0
+    start = open_paren + 1
+    found = []
+    index = open_paren
+    while index < len(text):
+        char = text[index]
+        if text.startswith("//", index):
+            index = text.find("\n", index)
+            if index == -1:
+                return None
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                last = text[start:index]
+                if without_comments(last):
+                    found.append(last)
+                return found
+        elif char == "," and depth == 1:
+            found.append(text[start:index])
+            start = index + 1
+        index += 1
+    return None
+
+
+def without_comments(raw):
+    return re.sub(r"//[^\n]*", "", raw).strip()
+
+
+def in_test_code(label, text, position):
+    """Whether the call at `position` is in a test file or after a test module attribute."""
+    if "/tests/" in label:
+        return True
+    return FOLLOWS_TEST_ATTRIBUTE.search(text, 0, position) is not None
+
+
+def call_complaints(label, text):
+    """Every `programs::start` or `start_against` call in `text` that does not state its class."""
+    positions = [found.end() - 1 for found in CALL.finditer(text)]
+    if BARE_IMPORT.search(text):
+        positions += [
+            found.end() - 1
+            for found in BARE_CALL.finditer(text)
+            if not text[: found.start()].rstrip().endswith("fn")
+        ]
+    complaints = []
+    for position in sorted(set(positions)):
+        line = text.count("\n", 0, position) + 1
+        if text[:position].rsplit("\n", 1)[-1].lstrip().startswith("//"):
+            continue
+        given = arguments(text, position)
+        where = f"{label}:{line}"
+        against = text[:position].endswith("_against")
+        wanted = 6 if against else 4
+        if given is None or len(given) != wanted:
+            complaints.append(
+                f"{where}: start is not given {wanted} arguments this script can read."
+            )
+            continue
+        fourth = FOURTH.match(without_comments(given[3]))
+        if not fourth:
+            complaints.append(
+                f"{where}: the fourth argument of start is not written as CodeSelectors::Kept "
+                "or CodeSelectors::Checked(&[...]) at the call."
+            )
+            continue
+        if fourth.group(1) == "Kept":
+            if "//" not in given[3] and not in_test_code(label, text, position):
+                complaints.append(
+                    f"{where}: CodeSelectors::Kept has no comment saying why the program may "
+                    "run what the environment names (SANDBOX-30)."
+                )
+        elif fourth.group(2).strip() != "[]" and selectors(text) is None:
+            complaints.append(
+                f"{where}: Checked(&{fourth.group(2)}) is used in a file with no "
+                "const CODE_SELECTORS list."
+            )
+    return complaints
+
+
+def verdict(files, required=None):
+    """Every complaint over `files`, a mapping of label to text.
+
+    `required` is the labels that must be among the files and hold a list.
+    """
+    required = [PROGRAMS, *SOURCES] if required is None else required
+    complaints = []
+    for label in required:
+        if label not in files:
+            complaints.append(
+                f"{label} is not among the files read. If it moved, teach check-code-selectors.py."
+            )
+    for label, text in files.items():
+        if label in required or selectors(text) is not None:
+            complaints += list_complaints(text, label)
+        if label == PROGRAMS:
+            for const in shared_mismatches(text):
+                complaints.append(
+                    f"{const} in {label} holds another variable's name, so a list naming "
+                    f"selectors::{const} would be tested under the wrong name."
+                )
+        else:
+            complaints += call_complaints(label, text)
+    return complaints
+
+
 COVERED = """\
-const CODE_SELECTORS: [(&str, Names); 3] = [
+const CODE_SELECTORS: &[(&str, Names)] = &[
     ("A_PROGRAM", Names::Program),
     ("A_DIRECTORY", Names::Directory),
     ("A_FILE", Names::File),
+    ("A_OPTIONS", Names::Options),
 ];
 #[cfg(all(test, unix))]
 #[allow(clippy::unwrap_used, reason = "test helpers unwrap")]
@@ -144,6 +284,7 @@ mod tests {
         ));
         assert!(withheld("A_FILE", &planted, &session));
         assert!(!withheld("A_FILE", &genuine, &session));
+        assert!(checked("A_OPTIONS", &planted, &session));
     }
 }
 """
@@ -176,12 +317,60 @@ mod tests {
 }
 """
 
+# A list whose tests loop over the whole table, as the generic list's do.
+LOOPED = """\
+const CODE_SELECTORS: &[(&str, Names)] = &[
+    ("A_PROGRAM", Names::Program),
+    ("AN_OPTION", Names::Options),
+];
+#[cfg(test)]
+mod tests {
+    fn t() {
+        for (name, _) in CODE_SELECTORS {
+            assert!(checked(name, &planted, &session));
+        }
+        for (name, names) in CODE_SELECTORS {
+            if *names == Names::Options {
+                continue;
+            }
+            assert!(!checked(name, &genuine, &session));
+        }
+    }
+}
+"""
+
+CALLER = """\
+fn command() -> Command {
+    bravebot_sandbox::programs::start(
+        &program,
+        Inherits::All,
+        SearchPath::Inherited,
+        // The person's own choice (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+    )
+}
+"""
+
+CALLER_AGAINST = """\
+fn command() -> Command {
+    bravebot_sandbox::programs::start_against(
+        &program,
+        Inherits::All,
+        SearchPath::Inherited,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
+        held,
+        &judge,
+    )
+}
+"""
+
 
 def selftest():
     """Prove the parse and the verdict on inputs whose answer is known.
 
-    A gate that is quietly wrong is worse than none, and this one's claim is that a listed name
-    cannot lose its tests unnoticed. Each case is one way the claim could fail to hold.
+    A gate that is quietly wrong is worse than none, and this one's claim is that a classification
+    cannot be left out or a listed name lose its tests unnoticed. Each case is one way the claim
+    could fail to hold.
     """
     checks = []
 
@@ -189,7 +378,11 @@ def selftest():
         checks.append((claim, held, got))
 
     got = selectors(COVERED)
-    case("parse: all names are read", got == ["A_PROGRAM", "A_DIRECTORY", "A_FILE"], got)
+    case(
+        "parse: all names are read",
+        got == ["A_PROGRAM", "A_DIRECTORY", "A_FILE", "A_OPTIONS"],
+        got,
+    )
     got = selectors(SHARED_LIST)
     case(
         "parse: a shared entry is read as its constant's name",
@@ -209,29 +402,53 @@ def selftest():
     )
     case(
         "verdict: an options name needs only the removal assertion",
-        verdict(OPTIONS_LIST) == [],
-        verdict(OPTIONS_LIST),
+        list_complaints(OPTIONS_LIST) == [],
+        list_complaints(OPTIONS_LIST),
     )
+    stripped = OPTIONS_LIST.replace('assert!(withheld("AN_OPTION"', 'let _ = ("AN_OPTION"')
     case(
         "verdict: an options name with no removal assertion fails once",
-        len(verdict(OPTIONS_LIST.replace('assert!(withheld("AN_OPTION"', 'let _ = ("AN_OPTION"'))) == 1,
-        verdict(OPTIONS_LIST.replace('assert!(withheld("AN_OPTION"', 'let _ = ("AN_OPTION"')),
+        len(list_complaints(stripped)) == 1,
+        list_complaints(stripped),
     )
+    as_file = OPTIONS_LIST.replace("Names::Options", "Names::File")
     case(
         "verdict: a path name is not excused for lacking a keep assertion",
-        len(verdict(OPTIONS_LIST.replace("Names::Options", "Names::File"))) == 1,
-        verdict(OPTIONS_LIST.replace("Names::Options", "Names::File")),
+        len(list_complaints(as_file)) == 1,
+        list_complaints(as_file),
     )
     case("parse: a file with no list is not an empty list", selectors("fn main() {}") is None, None)
-    case("verdict: a covered list passes", verdict(COVERED) == [], verdict(COVERED))
+    case(
+        "verdict: a file with no list is reported",
+        len(list_complaints("fn main() {}")) == 1,
+        list_complaints("fn main() {}"),
+    )
+    case("verdict: a covered list passes", list_complaints(COVERED) == [], list_complaints(COVERED))
     case(
         "verdict: a covered list under a plain cfg(test) passes",
-        verdict(COVERED_PLAIN) == [],
-        verdict(COVERED_PLAIN),
+        list_complaints(COVERED_PLAIN) == [],
+        list_complaints(COVERED_PLAIN),
+    )
+    case(
+        "verdict: loops over the whole table cover a name, an options name needs no keep",
+        list_complaints(LOOPED) == [],
+        list_complaints(LOOPED),
+    )
+    unlooped = LOOPED.replace("assert!(!checked(name", "let _ = (name")
+    case(
+        "verdict: a loop with no keep assertion fails once, for the program name",
+        len(list_complaints(unlooped)) == 1,
+        list_complaints(unlooped),
     )
 
     new_one = '("A_DIRECTORY", Names::Directory),\n    ("A_NEW_ONE", Names::Program),'
-    cases = [
+    new_options = '("A_OPTIONS", Names::Options),\n    ("A_NEW", Names::Options),'
+    list_cases = [
+        (
+            "a name asserted only as removed fails once",
+            COVERED.replace('assert!(!withheld("A_PROGRAM"', 'assert!(withheld("A_PROGRAM"'),
+            1,
+        ),
         (
             "a name asserted only as kept fails once",
             COVERED.replace('assert!(withheld("A_PROGRAM"', 'assert!(!withheld("A_PROGRAM"'),
@@ -248,6 +465,11 @@ def selftest():
             2,
         ),
         (
+            "an options name added with no test fails once, for its removal",
+            COVERED.replace('("A_OPTIONS", Names::Options),', new_options),
+            1,
+        ),
+        (
             "a test mentioning the name outside an assertion does not count",
             COVERED.replace(
                 "    fn t() {",
@@ -255,24 +477,136 @@ def selftest():
             ).replace('("A_DIRECTORY", Names::Directory),', new_one),
             2,
         ),
-        (
-            "a list with no test module fails",
-            COVERED.split("#[cfg(all(test")[0],
-            1,
-        ),
+        ("a list with no test module fails", COVERED.split("#[cfg(all(test")[0], 1),
         (
             "an empty list fails",
             COVERED.replace(
                 '    ("A_PROGRAM", Names::Program),\n    ("A_DIRECTORY", Names::Directory),\n'
-                '    ("A_FILE", Names::File),\n',
+                '    ("A_FILE", Names::File),\n    ("A_OPTIONS", Names::Options),\n',
                 "",
             ),
             1,
         ),
     ]
-    for claim, text, expected in cases:
-        got = verdict(text)
-        case(f"verdict: {claim}", len(got) == expected, got)
+    programs = {PROGRAMS: COVERED}
+
+    def complaints(text, caller=CALLER, label="crates/agent/src/x.rs"):
+        return verdict({PROGRAMS: text, label: caller}, required=[PROGRAMS])
+
+    case(
+        "verdict: a covered list and a classified call pass",
+        complaints(COVERED) == [],
+        complaints(COVERED),
+    )
+    for claim, text, expected in list_cases:
+        got = complaints(text)
+        case(f"list: {claim}", len(got) == expected, got)
+
+    other_list = verdict(
+        {**programs, "crates/agent/src/gcloud.rs": COVERED.replace("A_PROGRAM", "B_PROGRAM")},
+        required=[PROGRAMS, "crates/agent/src/gcloud.rs"],
+    )
+    case("list: a required second file's list is read too", other_list == [], other_list)
+    untested = verdict(
+        {
+            **programs,
+            "crates/agent/src/gcloud.rs": COVERED.replace("A_PROGRAM", "B_PROGRAM").replace(
+                'assert!(!withheld("B_PROGRAM"', 'assert!(withheld("B_PROGRAM"'
+            ),
+        },
+        required=[PROGRAMS, "crates/agent/src/gcloud.rs"],
+    )
+    case("list: a second file's missing keep test is found", len(untested) == 1, untested)
+    unrequired = verdict(
+        {**programs, "crates/agent/src/other.rs": COVERED.replace("A_PROGRAM", "B_PROGRAM")},
+        required=[PROGRAMS],
+    )
+    case("list: a list in any file is read", unrequired == [], unrequired)
+    no_list = verdict({PROGRAMS: COVERED, "crates/agent/src/gcloud.rs": "fn main() {}"},
+                      required=[PROGRAMS, "crates/agent/src/gcloud.rs"])
+    case("list: a required file with no list fails", len(no_list) == 1, no_list)
+    mismatch = verdict(
+        {PROGRAMS: COVERED + 'pub const A_SHARED: (&str, Names) = ("OTHER", Names::File);\n'},
+        required=[PROGRAMS],
+    )
+    case("shared: a mismatched constant fails the verdict", len(mismatch) == 1, mismatch)
+
+    call_cases = [
+        (
+            "a fourth argument held in a variable fails",
+            CALLER.replace("bravebot_sandbox::programs::CodeSelectors::Kept", "selectors"),
+            1,
+        ),
+        (
+            "a Kept call with no comment fails",
+            CALLER.replace("        // The person's own choice (SANDBOX-30).\n", ""),
+            1,
+        ),
+        (
+            "a Kept call in a test module needs no comment",
+            "#[cfg(test)]\nmod tests {\n"
+            + CALLER.replace("        // The person's own choice (SANDBOX-30).\n", "")
+            + "}\n",
+            0,
+        ),
+        (
+            "a Checked call with an empty own list passes",
+            CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&[])"),
+            0,
+        ),
+        (
+            "a Checked call naming a list the file lacks fails",
+            CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&CODE_SELECTORS)"),
+            1,
+        ),
+        ("a call with three arguments fails", CALLER.replace("        SearchPath::Inherited,\n", ""), 1),
+        ("a start_against call with six arguments passes", CALLER_AGAINST, 0),
+        (
+            "a start_against call with its classification in a variable fails",
+            CALLER_AGAINST.replace("bravebot_sandbox::programs::CodeSelectors::Checked(&[])", "s"),
+            1,
+        ),
+        (
+            "a start_against call with four arguments fails",
+            CALLER_AGAINST.replace("        held,\n        &judge,\n", ""),
+            1,
+        ),
+        (
+            "a call in a doc comment is not a call",
+            "/// bravebot_sandbox::programs::start(&p, a, b);\nfn x() {}\n",
+            0,
+        ),
+        (
+            "a bare start in a file that imports it is read",
+            "use bravebot_sandbox::programs::{Inherits, start};\n"
+            "fn c() { start(&p, Inherits::All, SearchPath::Inherited, CodeSelectors::Kept) }\n",
+            1,
+        ),
+        (
+            "a bare start_against in a file that imports it is read",
+            "use bravebot_sandbox::programs::start_against;\n"
+            "fn c() { start_against(&p, a, b, s, h, j) }\n",
+            1,
+        ),
+        (
+            "a bare start in a file that does not import it is not read",
+            "fn c() { server.start(); start(1); }\n",
+            0,
+        ),
+    ]
+    for claim, text, expected in call_cases:
+        got = complaints(COVERED, caller=text)
+        case(f"call: {claim}", len(got) == expected, got)
+
+    named = complaints(
+        COVERED,
+        caller=CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&CODE_SELECTORS)")
+        + "\n"
+        + COVERED,
+    )
+    case("call: a Checked call naming the file's own list passes", named == [], named)
+    missing = verdict({"crates/agent/src/x.rs": CALLER}, required=[PROGRAMS])
+    case("verdict: a tree without programs.rs fails", len(missing) == 1, missing)
 
     broke = [(claim, got) for claim, held, got in checks if not held]
     for claim, got in broke:
@@ -287,32 +621,24 @@ def selftest():
 def main():
     if "--selftest" in sys.argv[1:]:
         return selftest()
-    complaints = []
-    total = 0
-    shared = ROOT / SHARED_FILE
-    if shared.exists():
-        for const in shared_mismatches(shared.read_text(encoding="utf-8")):
-            complaints.append(
-                f"{const} in {SHARED_FILE} holds another variable's name, so a list naming "
-                f"selectors::{const} would be tested under the wrong name."
-            )
-    else:
-        complaints.append(f"{shared} is not there")
-    for relative in SOURCES:
-        source = ROOT / relative
-        if not source.exists():
-            complaints.append(f"{source} is not there")
-            continue
-        text = source.read_text(encoding="utf-8")
-        complaints += verdict(text, relative)
-        total += len(selectors(text) or [])
+    if not (ROOT / PROGRAMS).exists():
+        print(f"{ROOT / PROGRAMS} is not there", file=sys.stderr)
+        return 1
+    files = {
+        str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
+        for path in sorted(CRATES.rglob("*.rs"))
+    }
+    complaints = verdict(files)
     for complaint in complaints:
         print(complaint, file=sys.stderr)
     if complaints:
         return 1
+    lists = [(label, selectors(text)) for label, text in files.items() if selectors(text)]
+    names = sum(len(found) for _, found in lists)
+    calls = sum(len(CALL.findall(text)) for label, text in files.items() if label != PROGRAMS)
     print(
-        f"check-code-selectors: {total} names in {len(SOURCES)} files, "
-        "each with a keep and a remove test"
+        f"check-code-selectors: {calls} start calls classified, {names} names in {len(lists)} "
+        "lists, each with the tests it needs"
     )
     return 0
 

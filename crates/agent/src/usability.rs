@@ -508,6 +508,9 @@ fn start(
         &bravebot_sandbox::programs::Resolved::found_earlier(&started_as),
         inherits,
         unconfined_path(confinement),
+        // The tool the check re-runs unconfined is one bravebot found, so its code-selecting
+        // variables are checked. #3797 adds the names `make`, `git` and `xcrun` read.
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     );
     command.args(&args).current_dir(&places.session);
     for name in HOST_VARIABLES {
@@ -656,6 +659,8 @@ fn ask_for_the_login(
         &bravebot_sandbox::programs::Resolved::found_earlier(gh),
         inherits,
         unconfined_path(confinement),
+        // The stored-login `gh` is a program bravebot found. #3797 adds the loader names it reads.
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     );
     command.args(&args).current_dir(session).env("HOME", home);
     for name in LOGIN_VARIABLES {
