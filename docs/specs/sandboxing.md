@@ -3642,22 +3642,33 @@ file. A new spawn that looks a name up through
   | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, and every `GIT_CONFIG_` name | options or configuration (`Names::Options`), which can name code whatever they hold |
 
   A value is kept when `may_be_run` accepts it for what the variable names, as the last bullet of
-  this list states. A variable in no list is left as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG`
-  reach the program. Every checked start is given the generic table, which
-  `programs::withhold_code_selectors_with` applies together with the program's own list: gcloud's
-  is in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in
-  `crates/bedrock/src/credentials.rs`, `doctor --push-identity`'s in
-  `crates/cli/src/push_identity.rs` and the sandbox usability suite's in
-  `crates/agent/src/usability.rs`. The names another program reads are added to its start when
-  that program is audited. The usability suite's list adds the names `git`, `make`, `cargo`, `go`
-  and `xcrun` read to choose code, and its stored-login `gh` removes every `DYLD_` and `LD_` name
-  ([SANDBOX-21](#SANDBOX-21)). The suite also removes `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`,
-  `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT` whatever they hold, and records the
-  names it examined and left (`TOOLCHAINS`, `SDKROOT`, `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`,
-  `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and `LD_` prefixes are a list in
-  `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES` applies to every checked start and
-  would remove `LD_DEBUG` from gcloud and the browser opener; `make check-code-selectors` does not
-  read that prefix list. `make check-code-selectors` runs
+  this list states. A list of commands, which `BROWSER` is (`Names::Commands`), is accepted when it
+  is not empty and every entry, split as `PATH` is, is one program (accepted as a program is) alone
+  or followed by ` %s`, with no whitespace, control character or shell character in it, so a value
+  with arguments, a second command or a shell line is removed whole. A variable in no list is left
+  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program. Every checked start is given
+  the generic table, which `programs::withhold_code_selectors_with` applies together with the
+  program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
+  ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
+  `doctor --push-identity`'s in `crates/cli/src/push_identity.rs`, the browser opener's in
+  `crates/tui/src/opener.rs` and the sandbox usability suite's in `crates/agent/src/usability.rs`.
+  The browser opener adds `BROWSER` and the four `XDG_` directories that `xdg-open` reads to choose
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table). The AWS CLI, the gcloud
+  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list the same names,
+  since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
+  Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
+  helper that git's configuration names can do the same. The desktop application deletes the same
+  five names from its own environment before it asks Electron to open an address or a file, since
+  it starts the opener through Electron and not through this start. The names another program
+  reads are added to its start when that program is audited. The usability suite's list adds the
+  names `git`, `make`, `cargo`, `go` and `xcrun` read to choose code, and its stored-login `gh`
+  removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite also removes
+  `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT`
+  whatever they hold, and records the names it examined and left (`TOOLCHAINS`, `SDKROOT`,
+  `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`, `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and
+  `LD_` prefixes are a list in `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES`
+  applies to every checked start and would remove `LD_DEBUG` from gcloud and the browser opener;
+  `make check-code-selectors` does not read that prefix list. `make check-code-selectors` runs
   `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
   whose fourth argument is not written at the call as `CodeSelectors::Kept` or
   `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
@@ -3953,6 +3964,24 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
+`verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_tui::opener::a_browser_value_is_kept_only_when_every_command_in_it_is_one_program_alone_or_with_a_placeholder`
+`verified-by: bravebot_tui::opener::the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names`
+`verified-by: bravebot_tui::opener::an_xdg_directory_is_judged_by_where_it_leads_on_the_disk`
+`verified-by: bravebot_tui::opener::a_browser_entry_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
+`verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
+`verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`
+`verified-by: bravebot_bedrock::credentials::an_aws_browser_entry_that_is_not_text_is_removed`
+`verified-by: bravebot_agent::gcloud::a_browser_or_xdg_directory_a_stage_may_write_is_not_the_one_the_gcloud_login_is_told_to_use`
+`verified-by: bravebot_agent::gcloud::a_gcloud_browser_entry_that_is_not_text_is_removed`
+`verified-by: bravebot_agent::gcloud::the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads`
+`verified-by: bravebot_cli::push_identity::a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here`
+`verified-by: bravebot_cli::push_identity::the_variables_the_programs_started_here_are_run_to_read_are_kept`
+`verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`

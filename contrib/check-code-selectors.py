@@ -46,8 +46,10 @@ PROGRAMS = "crates/sandbox/src/programs.rs"
 # file.
 SOURCES = [
     "crates/agent/src/gcloud.rs",
+    "crates/agent/src/usability.rs",
     "crates/bedrock/src/credentials.rs",
     "crates/cli/src/push_identity.rs",
+    "crates/tui/src/opener.rs",
 ]
 
 LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
@@ -109,14 +111,15 @@ def tests_of(text):
 
 
 def asserts(tests, name, kept):
-    """Whether a test asserts `withheld("name", ...)` or `checked("name", ...)`, negated if `kept`."""
+    """Whether a test asserts `withheld("name", ...)`, `withheld_value("name", ...)` or
+    `checked("name", ...)`, negated if `kept`."""
     bang = r"!\s*" if kept else ""
-    pattern = r"assert!\(\s*" + bang + r'(?:withheld|checked)\(\s*"' + re.escape(name) + r'"'
+    pattern = r"assert!\(\s*" + bang + r'(?:withheld_value|withheld|checked)\(\s*"' + re.escape(name) + r'"'
     if re.search(pattern, tests):
         return True
     # A loop over the whole list covers every name in it, including one added later.
     loop = r"for\s*\(\s*name\s*,\s*\w+\s*\)\s*in\s*(?:&?)CODE_SELECTORS\s*\{(.*?)\n        \}"
-    inside = r"assert!\(\s*" + bang + r"(?:withheld|checked)\("
+    inside = r"assert!\(\s*" + bang + r"(?:withheld_value|withheld|checked)\("
     return any(re.search(inside, body) for body in re.findall(loop, tests, re.DOTALL))
 
 
@@ -365,6 +368,12 @@ fn command() -> Command {
 """
 
 
+START_AGAINST = (
+    CALLER.replace("programs::start(", "programs::start_against(")
+    .replace("    )\n}", "        held,\n        &outside,\n    )\n}")
+)
+
+
 def selftest():
     """Prove the parse and the verdict on inputs whose answer is known.
 
@@ -559,6 +568,26 @@ def selftest():
             CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&CODE_SELECTORS)"),
             1,
         ),
+        (
+            "a start_against call with a variable as its fourth argument fails",
+            START_AGAINST.replace("bravebot_sandbox::programs::CodeSelectors::Kept", "selectors"),
+            1,
+        ),
+        (
+            "a start_against call with Checked and its own list passes",
+            START_AGAINST.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&[])"),
+            0,
+        ),
+        (
+            "a start_against call with Kept and no comment fails",
+            START_AGAINST.replace("        // The person's own choice (SANDBOX-30).\n", ""),
+            1,
+        ),
+        (
+            "a start_against call with five arguments fails",
+            START_AGAINST.replace("        &outside,\n", ""),
+            1,
+        ),
         ("a call with three arguments fails", CALLER.replace("        SearchPath::Inherited,\n", ""), 1),
         ("a start_against call with six arguments passes", CALLER_AGAINST, 0),
         (
@@ -607,6 +636,24 @@ def selftest():
     case("call: a Checked call naming the file's own list passes", named == [], named)
     missing = verdict({"crates/agent/src/x.rs": CALLER}, required=[PROGRAMS])
     case("verdict: a tree without programs.rs fails", len(missing) == 1, missing)
+    required = verdict({**programs, "crates/tui/src/opener.rs": CALLER}, [PROGRAMS, "crates/tui/src/opener.rs"])
+    case("verdict: a required file with no list fails", any("CODE_SELECTORS is not in" in c for c in required), required)
+    required = verdict(programs, [PROGRAMS, "crates/tui/src/opener.rs"])
+    case("verdict: a required file that is not read fails", len(required) == 1, required)
+    required = verdict({**programs, "crates/tui/src/opener.rs": COVERED}, [PROGRAMS, "crates/tui/src/opener.rs"])
+    case("verdict: a required file with a covered list passes", required == [], required)
+    opener_removed = verdict(
+        {**programs, "crates/tui/src/opener.rs": COVERED.replace("A_PROGRAM", "B_PROGRAM")},
+        [PROGRAMS, "crates/tui/src/opener.rs"],
+    )
+    case("verdict: the opener's list is read as the other required lists are", opener_removed == [], opener_removed)
+    default_sources = verdict({PROGRAMS: COVERED})
+    case(
+        "verdict: by default the opener and the usability suite's lists are required",
+        any("crates/tui/src/opener.rs is not among" in c for c in default_sources)
+        and any("crates/agent/src/usability.rs is not among" in c for c in default_sources),
+        default_sources,
+    )
 
     broke = [(claim, got) for claim, held, got in checks if not held]
     for claim, got in broke:

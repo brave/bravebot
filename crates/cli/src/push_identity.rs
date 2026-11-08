@@ -10,7 +10,7 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_sandbox::programs::Names;
+use bravebot_sandbox::programs::{Names, selectors};
 use bravebot_sandbox::scope::Address;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -245,14 +245,25 @@ pub(crate) fn keep_out_where_this_ran() {
 ///   ([`Names::Options`] never passes).
 /// - `DEVELOPER_DIR` is where the macOS `/usr/bin/git` shim finds the toolchain it runs, so one
 ///   outside every directory a stage may write is kept.
+/// - `BROWSER` and the four `XDG_` directories are what `xdg-open` and Python's `webbrowser` read to
+///   choose the program that opens a page. None of the three commands opens one itself, but `git`
+///   reads the configuration under `XDG_CONFIG_HOME`, and a `credential.helper` or `core.sshCommand`
+///   it names can be a login flow that does. The names and kinds are those of the browser opener
+///   (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list and is repeated here
+///   so this list reads as complete.
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
-const CODE_SELECTORS: [(&str, Names); 5] = [
+const CODE_SELECTORS: [(&str, Names); 10] = [
     ("SSH_ASKPASS", Names::Options),
     ("SSH_ASKPASS_REQUIRE", Names::Options),
     ("SSH_SK_PROVIDER", Names::Options),
     ("SSH_SK_HELPER", Names::Options),
     ("DEVELOPER_DIR", Names::Directory),
+    selectors::BROWSER,
+    ("XDG_DATA_HOME", Names::Directory),
+    ("XDG_DATA_DIRS", Names::Directories),
+    ("XDG_CONFIG_HOME", Names::Directory),
+    ("XDG_CONFIG_DIRS", Names::Directories),
 ];
 
 /// The shell `ssh` runs a `ProxyCommand` or a `LocalCommand` with when `SHELL` names one.
@@ -615,6 +626,80 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// Whether the start takes `name` off, when the person's environment holds `name` set to `value`
+    /// and only a path under `/safe` is outside the directories a stage may write.
+    fn withheld_value(name: &str, value: &str) -> bool {
+        let command = started_with(
+            Path::new("/usr/bin/git"),
+            [(
+                std::ffi::OsString::from(name),
+                std::ffi::OsString::from(value),
+            )],
+            &|path: &Path| path.starts_with("/safe"),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. `git` reads `XDG_CONFIG_HOME` and the helper its configuration names, which may
+    /// open a browser with `xdg-open` or Python's `webbrowser`. The regression it rejects: the start
+    /// left as `Checked(&[])`, so a value naming a file a stage wrote reaches `git`, `ssh` and
+    /// `ssh-keygen` as the person set it.
+    #[test]
+    fn a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here() {
+        assert!(withheld_value("BROWSER", "/stage/browser.sh %s"));
+        assert!(withheld_value(
+            "BROWSER",
+            "/safe/bin/firefox:/stage/browser.sh"
+        ));
+        assert!(withheld_value("BROWSER", "firefox --new-window %s"));
+        assert!(!withheld_value("BROWSER", "firefox"));
+        assert!(!withheld_value("BROWSER", "/safe/bin/firefox %s"));
+
+        assert!(withheld_value("XDG_DATA_HOME", "/stage/share"));
+        assert!(!withheld_value("XDG_DATA_HOME", "/safe/share"));
+        assert!(withheld_value("XDG_DATA_DIRS", "/safe/share:/stage/share"));
+        assert!(!withheld_value("XDG_DATA_DIRS", "/safe/share"));
+        assert!(withheld_value("XDG_CONFIG_HOME", "/stage/config"));
+        assert!(!withheld_value("XDG_CONFIG_HOME", "/safe/config"));
+        assert!(withheld_value("XDG_CONFIG_DIRS", "/safe/etc:/stage/etc"));
+        assert!(!withheld_value("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+    }
+
+    /// Variables the three programs are run to read stay as the person set them. Rejects a start
+    /// that removes the whole `XDG_` family or `HOME`, which would move `git` off the person's
+    /// configuration.
+    #[test]
+    fn the_variables_the_programs_started_here_are_run_to_read_are_kept() {
+        for name in ["HOME", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "DISPLAY"] {
+            assert!(
+                !withheld_value(name, "/stage/anything"),
+                "{name} was removed"
+            );
+        }
+    }
+
+    /// A `BROWSER` entry that is not text is judged as the bytes it is: a lossy rendering would
+    /// read `fire\u{FFFD}ox` as a bare program name and keep it.
+    #[cfg(unix)]
+    #[test]
+    fn a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here() {
+        use std::os::unix::ffi::OsStrExt;
+        let removed = |value: &std::ffi::OsStr| {
+            started_with(
+                Path::new("/usr/bin/git"),
+                [(std::ffi::OsString::from("BROWSER"), value.to_os_string())],
+                &|path: &Path| path.starts_with("/safe"),
+            )
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new("BROWSER") && now.is_none())
+        };
+
+        assert!(removed(std::ffi::OsStr::from_bytes(b"fire\xffox")));
+        assert!(!removed(std::ffi::OsStr::new("fire\u{FFFD}ox")));
     }
 
     /// Every program this command starts is built by [`started`], so the one place that removes this

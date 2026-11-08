@@ -807,6 +807,99 @@ fn each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_look
     }
 }
 
+/// A value of `BROWSER` or an `XDG_` directory variable that leads into a directory a stage may
+/// write is removed under every name the volume opens that directory by (SANDBOX-30). The rows that
+/// spell a directory another way are asked: the directory spelled as the name is recorded, and the
+/// value is the file spelled as the alias, alone as a path, as an entry of a list, and as a command
+/// with and without ` %s`. A file in a directory beside it that is not recorded is kept in each of
+/// those forms, so a judgment that removes every value fails the row rather than passing it. A row
+/// that is not removed lists the issue that tracks it. The rows with a drive letter, a short name or
+/// a stream are Windows spellings that a path on this host cannot hold (TRUST-2). The scratch
+/// directory is below `target`, since the system temporary directory is left out whatever is
+/// recorded and would pass every row.
+#[cfg(unix)]
+#[test]
+fn each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap()
+ {
+    use bravebot_sandbox::programs::{Names, may_be_run, outside_stage_writable_with};
+
+    /// Removes the directory when a row fails as well as when it passes.
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let directory = |spelling: &str| {
+            std::path::Path::new(spelling)
+                .parent()
+                .expect("a name is in a directory")
+                .to_path_buf()
+        };
+        let (recorded, spelled) = (directory(row.name), directory(row.alias));
+        if recorded == spelled {
+            continue;
+        }
+        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("bravebot-alias-selector-{index}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let _removed = Removed(root.clone());
+        if aliases::prepare(&root, row) {
+            let writable = [root.join(&recorded)];
+            let outside =
+                |file: &std::path::Path| outside_stage_writable_with(file, &writable, &[]);
+            let aliased = root.join(row.alias);
+            let installed = root.join("installed");
+            std::fs::create_dir_all(&installed).expect("directory");
+            let genuine = installed.join("opener");
+            std::fs::write(&genuine, "").expect("installed file");
+
+            let join = |first: &std::path::Path, second: &std::path::Path| {
+                std::env::join_paths([first, second]).expect("a list")
+            };
+            // Each form of value for a file: a path, a list of paths, and a list of commands, bare and
+            // followed by ` %s`.
+            let forms = |file: &std::path::Path| {
+                let text = file.to_str().expect("a scratch path is text");
+                [
+                    (Names::Directory, file.as_os_str().to_os_string()),
+                    (Names::Directories, join(&genuine, file)),
+                    (Names::Commands, std::ffi::OsString::from(text)),
+                    (
+                        Names::Commands,
+                        std::ffi::OsString::from(format!("{text} %s")),
+                    ),
+                    (Names::Commands, join(&genuine, file)),
+                ]
+            };
+            let kept = [
+                (Names::Directory, genuine.as_os_str().to_os_string()),
+                (Names::Directories, join(&genuine, &genuine)),
+                (Names::Commands, genuine.as_os_str().to_os_string()),
+                (
+                    Names::Commands,
+                    std::ffi::OsString::from(format!("{} %s", genuine.display())),
+                ),
+                (Names::Commands, join(&genuine, &genuine)),
+            ];
+            for (names, value) in &kept {
+                assert!(
+                    may_be_run(*names, std::path::Path::new(value), &outside),
+                    "{}: the installed file is removed as {names:?} {value:?}",
+                    row.kind
+                );
+            }
+            let removed = forms(&aliased)
+                .iter()
+                .all(|(names, value)| !may_be_run(*names, std::path::Path::new(value), &outside));
+            aliases::expect(row, aliases::Consumer::CodeSelectorValue, removed);
+        }
+    }
+}
+
 /// One file in two Unicode forms of its name: `cafe` followed by a combining acute accent, and
 /// `caf` followed by the precomposed letter. APFS stores a name as it was created and opens it
 /// under any canonically equivalent form, and so does a Linux directory with `casefold` set.

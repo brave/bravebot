@@ -464,6 +464,11 @@ pub enum Names {
     /// entry must be one [`Names::Directory`] accepts, so an empty entry, which is read as the
     /// current directory, is not.
     Directories,
+    /// A list of commands separated as `PATH` is, which a launcher evaluates as shell text, as
+    /// `xdg-open` does the entries of `BROWSER`. Each entry is one program, accepted as
+    /// [`Names::Program`] is, alone or followed by ` %s`. An entry with another word, a quote or a
+    /// character a shell reads fails the list, since it can run what a file name alone could not.
+    Commands,
     /// Options for the program or its interpreter, such as `CLOUDSDK_PYTHON_ARGS`. They name no path
     /// to check: `-c <code>` and `-m <module>` run code whatever directory they are in.
     ///
@@ -496,6 +501,29 @@ pub fn may_be_run(
             entries.peek().is_some()
                 && entries.all(|entry| may_be_run(Names::Directory, &entry, outside_stage_writable))
         }
+        Names::Commands => {
+            let Some(value) = value.to_str() else {
+                // Text only: an entry that is not UTF-8 is not judged by a lossy rendering.
+                return false;
+            };
+            !value.is_empty()
+                && std::env::split_paths(value).all(|entry| {
+                    let Some(entry) = entry.to_str() else {
+                        return false;
+                    };
+                    let program = entry.strip_suffix(" %s").unwrap_or(entry);
+                    let plain = program.chars().all(|character| {
+                        !(character.is_whitespace()
+                            || character.is_control()
+                            || "\"'\\`$;&|<>(){}*?[]!#~%^".contains(character))
+                    });
+                    plain
+                        && program != "."
+                        && program != ".."
+                        && (Path::new(program).is_absolute() || !program.contains('/'))
+                        && may_be_run(Names::Program, Path::new(program), outside_stage_writable)
+                })
+        }
         Names::Options => false,
     }
 }
@@ -509,8 +537,9 @@ pub fn may_be_run(
 pub mod selectors {
     use super::Names;
 
-    /// The command a program opens a page with, which Python's `webbrowser` runs.
-    pub const BROWSER: (&str, Names) = ("BROWSER", Names::Program);
+    /// The commands a program opens a page with, which Python's `webbrowser` and `xdg-open` run,
+    /// the latter as shell text, so it is judged as [`Names::Commands`].
+    pub const BROWSER: (&str, Names) = ("BROWSER", Names::Commands);
     /// A configuration file of the OpenSSL a program loads, which can load a provider module.
     pub const OPENSSL_CONF: (&str, Names) = ("OPENSSL_CONF", Names::File);
     /// Directories Python imports from, including `sitecustomize.py`.
@@ -2583,5 +2612,71 @@ mod tests {
         assert!(may_be_run(Names::Program, Path::new("python3"), &|_| {
             false
         }));
+    }
+
+    /// SANDBOX-30. The regression it rejects: a `BROWSER` judged as one program name, so
+    /// `firefox %s` or `a:b` is refused, or judged only by its first entry or its first word, so
+    /// `firefox:/stage/x`, `firefox --new-window`, `sh -c x` or `$(x)` is kept and `xdg-open` runs
+    /// it as shell text.
+    #[test]
+    fn a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder() {
+        let outside = |path: &Path| path.starts_with("/safe");
+        let judged = |value: &str| may_be_run(Names::Commands, Path::new(value), &outside);
+
+        assert!(judged("firefox"));
+        assert!(judged("firefox %s"));
+        assert!(judged("firefox:chromium %s:/safe/bin/w3m"));
+        assert!(judged("/safe/bin/firefox %s"));
+
+        assert!(!judged(""));
+        assert!(!judged("firefox:/stage/firefox"));
+        assert!(!judged("/stage/firefox %s"));
+        assert!(!judged("firefox:"));
+        assert!(!judged("firefox --new-window %s"));
+        assert!(!judged("firefox %s %s"));
+        assert!(!judged("sh -c x"));
+        assert!(!judged("firefox;x %s"));
+        assert!(!judged("firefox&x"));
+        assert!(!judged("$(x) %s"));
+        assert!(!judged("`x`"));
+        assert!(!judged("fire'fox'"));
+        assert!(!judged("firefox\n"));
+        assert!(!judged("%s"));
+        assert!(!judged("./firefox"));
+
+        // Each character a shell reads, alone in an entry that is otherwise a bare name: before,
+        // after and before the placeholder. Dropping one from the rejected set keeps the entry,
+        // because a bare name has only to avoid a separator.
+        for character in "\"'\\`$;&|<>(){}*?[]!#~%^".chars() {
+            for value in [
+                format!("fire{character}fox"),
+                format!("firefox{character}"),
+                format!("firefox{character} %s"),
+            ] {
+                assert!(!judged(&value), "{value:?} was kept");
+            }
+        }
+        for character in ['\t', '\n', '\r', '\u{0}', '\u{1b}', '\u{7f}', ' ', '\u{a0}'] {
+            let value = format!("fire{character}fox");
+            assert!(!judged(&value), "{value:?} was kept");
+        }
+        // An entry that is not text is not judged by its lossy rendering, which is a name that
+        // would be kept. The same text with the replacement character written out is a name.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            for value in [&b"fire\xffox"[..], &b"/safe/bin/fire\xffox %s"[..]] {
+                assert!(
+                    !may_be_run(
+                        Names::Commands,
+                        Path::new(OsStr::from_bytes(value)),
+                        &outside
+                    ),
+                    "{value:?} was kept"
+                );
+            }
+            assert!(judged("fire\u{fffd}ox"));
+            assert!(judged("/safe/bin/fire\u{fffd}ox %s"));
+        }
     }
 }
