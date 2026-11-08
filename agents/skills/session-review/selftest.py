@@ -476,6 +476,272 @@ class Notes(unittest.TestCase):
         self.assertNotIn(words, verifier)
 
 
+def call(cid, name, **arguments):
+    return {"id": cid, "function": {"name": name, "arguments": json.dumps(arguments, sort_keys=True)}}
+
+
+def asks(*calls):
+    return {"role": "assistant", "content": "", "tool_calls": list(calls)}
+
+
+def answers(cid, text="ok"):
+    return {"role": "tool", "tool_call_id": cid, "content": text}
+
+
+def turn_of(number, start, end, **extra):
+    return dict({"number": number, "start": start, "end": end, "prompt": "p", "outcome": {"kind": "completed"}}, **extra)
+
+
+def rounds(*names, **arguments):
+    """One assistant message and its result per name, each a call with the same arguments."""
+    out = []
+    for position, name in enumerate(names):
+        out += [asks(call(f"c{position}", name, **arguments)), answers(f"c{position}")]
+    return out
+
+
+def audit_line(turn, kind, **event):
+    return {"at": 1, "turn": turn, "event": dict({"kind": kind, "refusal": kind == "gate_blocked"}, **event)}
+
+
+class Digest(unittest.TestCase):
+    """The figures code counts from a record and its trail, so a model is not asked to."""
+
+    def rows(self, record, events=None, from_turn=0):
+        return {r["turn"]: r for r in sr.digest.build(record, events, from_turn)["rows"]}
+
+    def test_a_turn_owns_the_calls_in_its_range_of_the_archive_followed_by_the_live_messages(self):
+        """A reader of `messages` alone puts every call one turn too early once something is archived."""
+        record = {
+            "conversation": {
+                "archive": rounds("read_file") + rounds("search"),
+                "messages": [{"role": "user", "content": "q"}] + rounds("run", "run"),
+            },
+            "history": [turn_of(1, 0, 2), turn_of(2, 2, 4), turn_of(3, 4, 9)],
+        }
+        rows = self.rows(record)
+        self.assertEqual([rows[n]["calls"] for n in (1, 2, 3)], [{"read_file": 1}, {"search": 1}, {"run": 2}])
+        self.assertEqual([rows[n]["requests"] for n in (1, 2, 3)], [1, 1, 2])
+
+    def test_a_read_repeated_with_nothing_changed_between_is_counted_and_a_changed_file_clears_it(self):
+        for between, repeated in (([], 1), (["edit_file"], 0), (["write_file"], 0), (["run"], 0), (["list_files"], 1)):
+            names = ["read_file"] + between + ["read_file"]
+            record = {"conversation": {"messages": rounds(*names, path="a")}, "history": [turn_of(1, 0, 2 * len(names))]}
+            self.assertEqual(self.rows(record)[1]["repeated_reads"], repeated, between)
+
+    def test_a_read_of_other_arguments_is_not_a_repeat(self):
+        messages = [asks(call("a", "read_file", path="x")), answers("a"), asks(call("b", "read_file", path="y")), answers("b")]
+        record = {"conversation": {"messages": messages}, "history": [turn_of(1, 0, 4)]}
+        self.assertEqual(self.rows(record)[1]["repeated_reads"], 0)
+
+    def test_a_command_run_again_counts_unless_a_file_changed_and_another_command_does_not_clear_it(self):
+        def rerun(between):
+            names = ["run"] + between + ["run"]
+            messages = []
+            for position, name in enumerate(names):
+                line = "make test" if name == "run" and position in (0, len(names) - 1) else f"other {position}"
+                messages += [asks(call(f"c{position}", name, line=line, path="p")), answers(f"c{position}")]
+            return self.rows({"conversation": {"messages": messages}, "history": [turn_of(1, 0, 2 * len(names))]})[1]["repeated_runs"]
+
+        self.assertEqual(rerun([]), 1)
+        self.assertEqual(rerun(["run"]), 1)
+        self.assertEqual(rerun(["edit_file"]), 0)
+
+    def test_a_read_after_the_first_was_archived_is_counted_as_reread_after_compaction(self):
+        first, second = rounds("read_file", path="a"), rounds("read_file", path="a")
+        archived = {"conversation": {"archive": first, "messages": second}, "history": [turn_of(1, 0, 4)]}
+        kept = {"conversation": {"messages": first + second}, "history": [turn_of(1, 0, 4)]}
+        self.assertEqual([self.rows(archived)[1][k] for k in ("repeated_reads", "reread_after_compaction")], [1, 1])
+        self.assertEqual([self.rows(kept)[1][k] for k in ("repeated_reads", "reread_after_compaction")], [1, 0])
+
+    def test_rounds_of_one_read_in_a_row_are_serial_and_calls_made_together_are_not(self):
+        def serial(*shapes):
+            messages = []
+            for position, names in enumerate(shapes):
+                calls = [call(f"c{position}{n}", name, path=str(position)) for n, name in enumerate(names)]
+                messages += [asks(*calls)] + [answers(c["id"]) for c in calls]
+            return self.rows({"conversation": {"messages": messages}, "history": [turn_of(1, 0, len(messages))]})[1]["serial_read_rounds"]
+
+        self.assertEqual(serial(["read_file"], ["search"], ["read_file"]), 3)
+        self.assertEqual(serial(["read_file"], ["search"]), 0)
+        self.assertEqual(serial(["read_file", "search", "read_file"]), 0)
+        self.assertEqual(serial(["read_file"], ["search"], ["run"], ["read_file"]), 0)
+
+    def test_the_digest_holds_no_argument_prompt_or_server_tool_name(self):
+        record = {
+            "conversation": {"messages": [asks(call("a", "mcp__private-server__secret_tool", path="/SECRET/PATH")), answers("a", "RESULT TEXT")]},
+            "history": [turn_of(1, 0, 2, prompt="PROMPT WORDS"), turn_of(2, 2, 2, prompt="PROMPT WORDS AGAIN")],
+        }
+        digest = sr.digest.build(record, [audit_line(1, "gate_blocked", gate="confine", reason="read_file.path: '/SECRET/PATH'")], 0)
+        text = json.dumps(digest)
+        for word in ("SECRET", "PROMPT WORDS", "RESULT TEXT", "private-server"):
+            self.assertNotIn(word, text)
+        self.assertEqual(digest["rows"][0]["calls"], {"mcp": 1})
+        self.assertEqual(digest["rows"][0]["result_chars"], len("RESULT TEXT"))
+
+    def test_the_trail_gives_each_turn_its_mode_approvals_and_refusals_and_a_change_of_mode(self):
+        events = [
+            audit_line(1, "gate_passed", gate="permission_mode", detail="the turn began in ask mode"),
+            audit_line(1, "gate_passed", gate="approval", detail="no mode answered, left to the confirmer"),
+            audit_line(1, "gate_passed", gate="render", detail="x"),
+            audit_line(1, "gate_blocked", gate="sandbox", reason="run.scopes: the request was refused"),
+            audit_line(1, "gate_blocked", gate="sandbox", reason="run.scopes: the request was refused"),
+            audit_line(1, "gate_blocked", gate="approval", reason="run: the line was not approved"),
+            audit_line(2, "gate_passed", gate="permission_mode", detail="the turn began in bypass mode"),
+            audit_line(2, "gate_passed", gate="approval", detail="answered by bypass mode, nobody was asked"),
+        ]
+        record = {"history": [turn_of(1, 0, 0), turn_of(2, 0, 0)]}
+        digest = sr.digest.build(record, events, 0)
+        first, second = digest["rows"]
+        self.assertEqual((first["mode"], second["mode"]), ("ask", "bypass"))
+        self.assertEqual(first["approvals"], {"asked": 1, "refused": 1})
+        self.assertEqual(first["refusals"], {"approval": 1, "sandbox": 2})
+        self.assertEqual(first["most_repeated_refusal"], 2)
+        self.assertEqual(second["approvals"], {"bypass": 1})
+        self.assertEqual(digest["mode_changes"], [{"turn": 2, "from": "ask", "to": "bypass"}])
+        self.assertEqual(digest["audit_events"], {"gate_blocked": 3, "gate_passed": 5})
+
+    def test_a_session_with_no_trail_says_so_and_has_no_mode(self):
+        digest = sr.digest.build({"history": [turn_of(1, 0, 0)]}, None, 0)
+        self.assertIn("audit trail", digest["absent"])
+        self.assertNotIn("mode", digest["rows"][0])
+
+    def test_the_cached_share_is_stated_only_where_the_record_states_a_cache_figure(self):
+        record = {"history": [turn_of(1, 0, 0)], "split": {"read": 100, "written": 5}}
+        digest = sr.digest.build(record, [], 0)
+        self.assertIsNone(digest["cached_share"])
+        self.assertTrue(any(a.startswith("split.cache") for a in digest["absent"]))
+        record["split"]["cache"] = {"read_tokens": 60, "written_tokens": 10}
+        digest = sr.digest.build(record, [], 0)
+        self.assertEqual(digest["cached_share"], 0.6)
+        self.assertFalse(any(a.startswith("split.cache") for a in digest["absent"]))
+
+    def test_a_turns_recorded_counts_are_copied_with_its_own_cached_share(self):
+        counts = {"requests": 3, "written_tokens": 100, "cache_read_tokens": 450, "cache_written_tokens": 0, "compactions": 1}
+        record = {
+            "history": [turn_of(n, 0, 0) for n in (1, 2, 3, 4)],
+            "spend": {"1": 1000, "2": 500, "3": 100, "4": 100},
+            "timing": {
+                "1": {"wall_ms": 5, "activity": counts},
+                "2": {"wall_ms": 5, "activity": dict(counts, cache_read_tokens=0, cache_written_tokens=0)},
+                "3": {"wall_ms": 5, "activity": dict(counts, written_tokens=10, cache_read_tokens=200)},
+            },
+        }
+        digest = sr.digest.build(record, [], 0)
+        rows = {r["turn"]: r for r in digest["rows"]}
+        self.assertEqual({k: v for k, v in rows[1]["activity"].items() if k != "cached_share"}, counts)
+        self.assertEqual(rows[1]["activity"]["cached_share"], 0.5, "450 of the 900 tokens the model read")
+        self.assertIsNone(rows[2]["activity"]["cached_share"], "a service that stated no cache figure has no share")
+        self.assertEqual(rows[3]["activity"]["cached_share"], 1.0, "a share past the whole is held at the whole")
+        self.assertNotIn("activity", rows[4])
+        self.assertFalse(any(a.startswith("activity") for a in digest["absent"]))
+
+    def test_a_record_with_no_counts_for_any_turn_says_so(self):
+        digest = sr.digest.build({"history": [turn_of(1, 0, 0)], "timing": {"1": {"wall_ms": 5}}}, [], 0)
+        self.assertTrue(any(a.startswith("activity") for a in digest["absent"]), digest["absent"])
+        self.assertNotIn("activity", digest["rows"][0])
+
+    def test_a_turn_is_compared_with_the_median_turn_and_the_turns_to_review_are_marked(self):
+        record = {"history": [turn_of(n, 0, 0) for n in (1, 2, 3)], "spend": {"1": 10, "2": 10, "3": 100}}
+        rows = self.rows(record, from_turn=2)
+        self.assertEqual([rows[n]["times_median"] for n in (1, 2, 3)], [1.0, 1.0, 10.0])
+        self.assertEqual([rows[n]["new"] for n in (1, 2, 3)], [False, False, True])
+
+    def test_turns_before_a_context_reset_have_no_counts_because_their_messages_are_gone(self):
+        record = {
+            "conversation": {"messages": rounds("run")},
+            "history": [turn_of(1, 0, 2), turn_of(2, 0, 2, reset_context=True)],
+        }
+        digest = sr.digest.build(record, [], 0)
+        first, second = digest["rows"]
+        self.assertNotIn("calls", first)
+        self.assertEqual(second["calls"], {"run": 1})
+        self.assertIn("messages of the turns before a context reset", digest["absent"])
+
+    def test_how_alike_a_prompt_is_to_the_one_before_is_a_number_and_not_its_words(self):
+        record = {"history": [turn_of(1, 0, 0, prompt="fix the failing test"), turn_of(2, 0, 0, prompt="fix the failing test"), turn_of(3, 0, 0, prompt="now write the docs"), turn_of(4, 0, 0, prompt=None)]}
+        rows = self.rows(record)
+        self.assertEqual([rows[n]["prompt_similarity_to_previous"] for n in (1, 2, 4)], [None, 1.0, None])
+        self.assertLess(rows[3]["prompt_similarity_to_previous"], 0.6)
+
+    def test_an_unfinished_task_in_the_last_list_and_the_work_state_are_stated(self):
+        record = {
+            "history": [turn_of(1, 0, 0)],
+            "todos": {"1": [{"content": "A", "status": "completed"}, {"content": "B", "status": "pending"}]},
+            "work": {"writes": 2, "commands": 3, "ran_after_last_write": False, "last_command_failed": True},
+        }
+        digest = sr.digest.build(record, [], 0)
+        self.assertEqual(digest["tasks_in_last_list"], {"completed": 1, "pending": 1})
+        self.assertEqual(digest["rows"][0]["tasks"], {"completed": 1, "pending": 1})
+        self.assertTrue(digest["work"]["last_command_failed"])
+        self.assertNotIn("A", json.dumps(digest["rows"][0]["tasks"]))
+
+    def test_a_damaged_audit_line_is_skipped_and_a_missing_file_is_no_trail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "t.audit.jsonl"
+            path.write_text("not json\n" + json.dumps(audit_line(1, "gate_blocked", gate="sandbox", reason="r")) + "\n{}\n")
+            self.assertEqual(len(sr.digest.read_audit(path)), 1)
+            self.assertEqual(sr.digest.read_audit(Path(temp) / "none"), [])
+
+
+class Digests(unittest.TestCase):
+    """`pending` writes a digest for each chosen session and names it in both prompts."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.temp = Path(temp.name)
+        self.store = self.temp / "store" / "-w-project"
+        self.store.mkdir(parents=True)
+        record = {
+            "id": "s1", "updated": NOW - 3600, "turns": 1, "directory": "/w/project", "build": "1.0",
+            "conversation": {"messages": rounds("read_file", "read_file", path="a")},
+            "history": [turn_of(1, 0, 4)],
+        }
+        (self.store / "s1.json").write_text(json.dumps(record))
+        (self.store / "s1.audit.jsonl").write_text(json.dumps(audit_line(1, "gate_passed", gate="permission_mode", detail="the turn began in auto mode")) + "\n")
+
+    def pending(self):
+        args = argparse.Namespace(root=str(self.temp), sessions_root=str(self.temp / "store"), workspace=None, ids=["s1"], max=8, idle=30)
+        saved = (sr.pa.checked_commit, sr.pa.tracker)
+        sr.pa.checked_commit = lambda *a, **k: ("upstream/main", "0123456789abcdef")
+        sr.pa.tracker = lambda path: Path(path).write_text("") or 0
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                sr.pending(args, now=NOW)
+        finally:
+            sr.pa.checked_commit, sr.pa.tracker = saved
+        work = Path(json.loads(out.getvalue())["work_dir"])
+        self.addCleanup(shutil.rmtree, work, True)
+        return work, err.getvalue()
+
+    def test_the_digest_is_written_beside_the_record_copy_and_both_prompts_name_it(self):
+        work, _ = self.pending()
+        digest_file = work / "sessions" / "s1.digest.json"
+        digest = json.loads(digest_file.read_text())
+        self.assertEqual((digest["rows"][0]["repeated_reads"], digest["rows"][0]["mode"]), (1, "auto"))
+        self.assertIn(str(digest_file), (work / "analyze" / "s1.md").read_text())
+        (work / "analyze" / "s1.json").write_text(json.dumps({"session": "s1", "summary": "s", "problems": [PROBLEM]}))
+        quiet(sr.verify, argparse.Namespace(work_dir=str(work), dry_run=False))
+        self.assertIn(str(digest_file), (work / "verify" / "s1-p1.md").read_text())
+
+    def test_a_digest_that_cannot_be_made_does_not_stop_the_review(self):
+        saved = sr.digest.build
+
+        def broken(*args, **kwargs):
+            raise TypeError("shape")
+
+        sr.digest.build = broken
+        try:
+            work, err = self.pending()
+        finally:
+            sr.digest.build = saved
+        self.assertFalse((work / "sessions" / "s1.digest.json").exists())
+        self.assertIn("no digest for s1", err)
+        self.assertIn(sr.NO_DIGEST, (work / "analyze" / "s1.md").read_text())
+
+
 class mock_home:
     """Make `Path.home()` answer a fixed directory for the length of a block."""
 
@@ -493,16 +759,58 @@ class mock_home:
 class Prompts(unittest.TestCase):
     def test_the_prompt_templates_name_only_values_the_script_supplies(self):
         for name, supplied in (
-            ("analyze.md", {"session_id", "build", "turns", "from_turn", "max_problems", "notes", "from_note", "notes_file", "record_file", "audit_file", "tracker", "root", "commit", "ref", "results_file"}),
-            ("verify.md", {"session_id", "problem_id", "build", "claim", "record_file", "audit_file", "notes_file", "root", "commit", "results_file"}),
+            ("analyze.md", {"session_id", "build", "turns", "from_turn", "max_problems", "notes", "from_note", "notes_file", "record_file", "audit_file", "digest_file", "tracker", "root", "commit", "ref", "results_file"}),
+            ("verify.md", {"session_id", "problem_id", "build", "claim", "record_file", "audit_file", "digest_file", "notes_file", "root", "commit", "results_file"}),
         ):
             used = set(re.findall(r"\{\{(\w+)\}\}", (HERE / name).read_text()))
             self.assertLessEqual(used, supplied, name)
             self.assertIn("results_file", used, name)
 
     def test_neither_template_nor_the_skill_contains_an_em_dash(self):
-        for name in ("analyze.md", "verify.md", "SKILL.md", "session-review.py"):
+        for name in ("analyze.md", "verify.md", "SKILL.md", "session-review.py", "digest.py"):
             self.assertNotIn("\u2014", (HERE / name).read_text(), name)
+
+    def test_neither_prompt_calls_the_audit_trail_a_log_of_tool_calls(self):
+        """The trail has no event for a `run`, `spawn_agent`, `fetch_url` or MCP call, so a count from it is wrong."""
+        for name in ("analyze.md", "verify.md"):
+            text = (HERE / name).read_text()
+            self.assertNotIn("audit trail holds every tool call", text, name)
+            self.assertIn("not a log of tool calls", text, name)
+            self.assertIn("`run`, `spawn_agent`, `fetch_url` or MCP call", text, name)
+
+    def test_the_analyzer_is_told_a_bypass_turn_shows_no_approval_answered_and_the_verifier_kills_such_a_claim(self):
+        self.assertIn("cannot show an approval answered over and over", (HERE / "analyze.md").read_text())
+        self.assertIn("in a turn that began in bypass mode", (HERE / "verify.md").read_text())
+
+    def test_every_digest_field_the_prompts_name_is_one_the_digest_writes(self):
+        record = {
+            "id": "s",
+            "tokens": 10,
+            "split": {"read": 8, "written": 2, "cache": {"read_tokens": 4, "written_tokens": 1}},
+            "spend": {"1": 5, "2": 5},
+            "timing": {"1": {"wall_ms": 1, "activity": {"requests": 2, "written_tokens": 1, "cache_read_tokens": 3, "cache_written_tokens": 1, "compactions": 0}}, "2": {"wall_ms": 1}},
+            "todos": {"2": [{"content": "x", "status": "pending"}]},
+            "work": {"writes": 1, "commands": 1, "ran_after_last_write": False, "last_command_failed": True},
+            "conversation": {"messages": rounds("read_file", "read_file", path="a")},
+            "history": [turn_of(1, 0, 4, outcome={"kind": "cancelled", "reason": "r"}), turn_of(2, 4, 4)],
+        }
+        events = [
+            audit_line(1, "gate_passed", gate="permission_mode", detail="the turn began in ask mode"),
+            audit_line(2, "gate_passed", gate="permission_mode", detail="the turn began in bypass mode"),
+            audit_line(2, "gate_blocked", gate="sandbox", reason="r"),
+        ]
+        digest = sr.digest.build(record, events, 0)
+        written = set(digest) | set(digest["work"]) | {k for row in digest["rows"] for k in row}
+        written |= {k for row in digest["rows"] for k in row.get("activity", {})}
+        prompts = (HERE / "analyze.md").read_text() + (HERE / "verify.md").read_text()
+        for field in (
+            "repeated_reads", "repeated_runs", "reread_after_compaction", "serial_read_rounds", "times_median", "requests",
+            "calls", "prompt_similarity_to_previous", "most_repeated_refusal", "mode_changes", "tasks_in_last_list", "tasks",
+            "absent", "mode", "outcome", "last_command_failed", "ran_after_last_write", "writes", "work",
+            "activity", "cached_share", "compactions",
+        ):
+            self.assertIn(f"`{field}`", prompts, field)
+            self.assertIn(field, written, field)
 
     def test_the_skill_names_the_issue_poster_definition(self):
         self.assertIn("issue-poster", (HERE / "SKILL.md").read_text())

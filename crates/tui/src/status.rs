@@ -3970,6 +3970,7 @@ mod tests {
             tools_ms: 5_000,
             stalled_ms: 0,
             file_wait_ms: 0,
+            ..Default::default()
         };
 
         let lines = report(&mixed).lines;
@@ -4025,6 +4026,7 @@ mod tests {
             tools_ms: 60_000,
             stalled_ms: 400_000,
             file_wait_ms: 0,
+            ..Default::default()
         };
 
         let shown = rendered(&report(&spent));
@@ -4055,6 +4057,7 @@ mod tests {
             tools_ms: 10_000,
             stalled_ms: 0,
             file_wait_ms: 70_000,
+            ..Default::default()
         };
 
         let shown = rendered(&report(&waited));
@@ -4096,6 +4099,7 @@ mod tests {
             tools_ms: 0,
             stalled_ms: 0,
             file_wait_ms: 0,
+            ..Default::default()
         };
 
         let shown = rendered(&report(&quiet));

@@ -69,13 +69,16 @@ struct Delegated {
 
 impl Totals {
     /// The turn's figures with what every delegate it has not yet reported has spent added. The
-    /// context reading and the timing are the turn's alone: a delegate's context is another
-    /// conversation, and its requests overlap the turn's own clock.
+    /// context reading and the clock are the turn's alone: a delegate's context is another
+    /// conversation, and its requests overlap the turn's own clock. The counts beside the clock
+    /// are made again from the sum, since they were made from the turn's own account.
     fn reported(&self) -> crate::outcome::Spent {
         let mut total = self.turn;
         for delegate in self.delegates.values() {
             total.add_spent(&delegate.spent);
         }
+        total.timing.activity =
+            crate::timing::Activity::of(&total, total.timing.activity.compactions);
         total
     }
 }
@@ -943,6 +946,17 @@ mod tests {
                 cached: Cached {
                     read_tokens: 70,
                     written_tokens: 7,
+                },
+                // The counts beside the clock are made again from the sum, so they hold the
+                // delegate's tokens as well as the turn's.
+                timing: crate::timing::Timing {
+                    activity: crate::timing::Activity {
+                        written_tokens: 107,
+                        cache_read_tokens: 70,
+                        cache_written_tokens: 7,
+                        ..Default::default()
+                    },
+                    ..Default::default()
                 },
                 ..Default::default()
             }),

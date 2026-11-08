@@ -127,6 +127,14 @@ pub struct ChosenNumber {
     pub upto: u8,
 }
 
+impl Output {
+    /// Whether a model request completed for this call: it waited on the model and was not
+    /// stopped while it did (SESSION-40).
+    pub(crate) fn requested(&self) -> bool {
+        self.inference_interval.is_some() && self.cancelled.is_none() && !self.unanswered
+    }
+}
+
 /// What a dispatched call produced, ready to send back as a tool message.
 #[derive(Debug)]
 pub struct Output {
@@ -256,6 +264,8 @@ pub struct Output {
     /// The boundary rather than the duration, because a parent clips a delegate's requests to its
     /// own waits and cannot do that from a length. The duration is [`crate::timing::Interval::duration`].
     pub inference_interval: Option<crate::timing::Interval>,
+    /// Set where the call waited on a check that could not be made, so no request completed.
+    pub unanswered: bool,
     /// The command whose output this is and how it ended, where a run produced it.
     ///
     /// Recorded on the slot by the turn loop, since only a slot minted from a command may be
@@ -1511,6 +1521,8 @@ struct Produced {
     usage: Usage,
     /// Retained so a parent can clip delegate requests to its own waits.
     inference_interval: Option<crate::timing::Interval>,
+    /// Set where the check waited on could not be made, so no request completed.
+    unanswered: bool,
     /// The command whose output this is and how it ended, where a run produced it.
     ///
     /// Recorded on the slot by the turn loop, because only a slot minted from a command may be
@@ -1609,6 +1621,7 @@ impl Produced {
             content: false,
             usage: Usage::default(),
             inference_interval: None,
+            unanswered: false,
             printed_by: None,
             look: None,
             covered_by_record: false,
@@ -1870,6 +1883,12 @@ impl Produced {
     /// Say when the tool waited on the model for this.
     fn waiting(mut self, interval: Option<crate::timing::Interval>) -> Self {
         self.inference_interval = interval;
+        self
+    }
+
+    /// Say that the check waited on could not be made, so the wait is not a completed request.
+    fn unanswered(mut self, unanswered: bool) -> Self {
+        self.unanswered = unanswered;
         self
     }
 
@@ -3000,6 +3019,7 @@ fn output_of(
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
+        unanswered: produced.unanswered,
         printed_by: produced.printed_by,
         look: produced.look,
         covered_by_record: produced.covered_by_record,
@@ -3772,6 +3792,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // figure has to cover the requests the driver made on its own behalf as well as the planner's.
     let mut spent = Usage::default();
     let mut waited = None;
+    let mut unanswered = false;
 
     // Whether a yes was given and could not be spent, carried out of the block for the same
     // reason: the person answered, and what they are told back has to say that their answer did
@@ -3848,6 +3869,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             }
             Some((Ok(checked), elapsed)) => {
                 spent = checked.usage;
+                unanswered = !checked.completed;
                 waited = elapsed;
                 let said = released_reason(policy, checked.reason);
                 (checked.verdict, said)
@@ -3896,6 +3918,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         produced
             .costing(spent)
             .waiting(waited)
+            .unanswered(unanswered)
             .respelling(respelled)
     };
 
@@ -7675,6 +7698,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // reads. A verdict is still filled in, and it is the one that claims nothing.
     let mut spent = Usage::default();
     let mut waited = None;
+    let mut unanswered = false;
     let spec = match tools
         .permission_mode
         .get()
@@ -7702,6 +7726,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
                 Err(stopped) => return check_stopped(&slot, &stopped).waiting(waited),
             };
             spent = checked.usage;
+            unanswered = !checked.completed;
             let said = released_reason(policy, checked.reason);
             (checked.verdict, said)
         }
@@ -7732,8 +7757,12 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
             .of_content()
             .costing(spent)
             .waiting(waited)
+            .unanswered(unanswered)
         }
-        Err(refused) => (*refused).costing(spent).waiting(waited),
+        Err(refused) => (*refused)
+            .costing(spent)
+            .waiting(waited)
+            .unanswered(unanswered),
     }
 }
 
@@ -7971,6 +8000,9 @@ pub(crate) struct ReadInTheResult {
     /// Set where the person stopped the turn while the check ran. `text` is `None` then too, and
     /// the turn ends as stopped once the run's own result is recorded.
     pub stopped: Option<crate::outcome::Cancellation>,
+    /// Whether a model request completed for the check: false where none was made, where the
+    /// person stopped it, and where it could not be made (SESSION-40).
+    pub completed: bool,
 }
 
 /// What a read is told when the person stopped the turn while its check ran, with the cost of the
@@ -8047,6 +8079,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage: Usage::default(),
         waited: None,
         stopped: None,
+        completed: false,
     };
     if !mode.checks_before_promoting(auto_vetting) {
         return nothing(
@@ -8083,10 +8116,12 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
                 stopped: Some(crate::outcome::Cancellation {
                     attempts: stopped.attempts,
                 }),
+                completed: false,
             };
         }
     };
     let usage = checked.usage;
+    let completed = checked.completed;
     // Before `release_output`, which would put anything but `safe` to the person: nobody is
     // shown this output here.
     let text = if checked.verdict.is_safe() {
@@ -8117,6 +8152,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage,
         waited,
         stopped: None,
+        completed,
     }
 }
 
@@ -8444,6 +8480,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage: Usage::default(),
         waited: None,
         stopped: None,
+        completed: false,
     };
     let release = |policy: &mut Policy<'_, S>,
                    confirmer: &mut C,
@@ -8491,10 +8528,12 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
                 stopped: Some(crate::outcome::Cancellation {
                     attempts: stopped.attempts,
                 }),
+                completed: false,
             };
         }
     };
     let usage = checked.usage;
+    let completed = checked.completed;
     // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
     // shown this result here.
     let text = if checked.verdict.is_safe() {
@@ -8507,6 +8546,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage,
         waited,
         stopped: None,
+        completed,
     }
 }
 
@@ -8608,6 +8648,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
 
     let mut spent = Usage::default();
     let mut waited = None;
+    let mut unanswered = false;
     let mut said = None;
     let verdict = match &spec {
         None => Verdict::Inconclusive("the check was not made"),
@@ -8621,6 +8662,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 Err(stopped) => return check_stopped(&slot, &stopped).waiting(waited),
             };
             spent = checked.usage;
+            unanswered = !checked.completed;
             said = checked.reason;
             checked.verdict
         }
@@ -8645,8 +8687,12 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         ) {
             Ok((text, counted, endorsed)) => vetted_text(&slot, text, counted, endorsed)
                 .costing(spent)
-                .waiting(waited),
-            Err(refusal) => (*refusal).costing(spent).waiting(waited),
+                .waiting(waited)
+                .unanswered(unanswered),
+            Err(refusal) => (*refusal)
+                .costing(spent)
+                .waiting(waited)
+                .unanswered(unanswered),
         };
     };
 
@@ -8709,7 +8755,8 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                         detail,
                     )
                     .costing(spent)
-                    .waiting(waited);
+                    .waiting(waited)
+                    .unanswered(unanswered);
                 }
             }
         };
@@ -8767,7 +8814,8 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             );
             return kept_back(mode, tools.auto_vetting, text)
                 .costing(spent)
-                .waiting(waited);
+                .waiting(waited)
+                .unanswered(unanswered);
         }
     }
 
@@ -8795,6 +8843,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             .attaching(attached)
             .costing(spent)
             .waiting(waited)
+            .unanswered(unanswered)
         }
         Err(denial) => Produced::problem(format!("refused: {denial}")),
     }

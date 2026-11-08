@@ -107,7 +107,11 @@ python3 agents/skills/session-review/session-review.py pending [--max N] [--work
 Print its stderr: how many sessions exist, how many were reviewed before, and the commit they are
 reviewed against. It refuses a tree that differs from `upstream/main`, since a verdict about a
 branch is no verdict about main; the refusal names the worktree to run from instead. It copies each
-chosen record and trail into the work directory, so the agents read nothing under `~/.bravebot`.
+chosen record and trail into the work directory, so the agents read nothing under `~/.bravebot`. It
+also writes `<id>.digest.json` beside each copy ([digest.py](digest.py)): the figures that code can
+count from the record and the trail, so that the analyzer starts from counts and a verifier can
+recompute one. The digest holds numbers, tool names and fixed words, and no text from the session.
+A session whose digest cannot be made is reviewed without one, and the stderr says so.
 
 Stdout is `{"work_dir": ..., "analyze": [{"id": ..., "prompt_file": ...}]}`. Where `analyze` is
 empty, say there is nothing new to review and stop.

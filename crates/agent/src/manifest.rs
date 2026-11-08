@@ -689,7 +689,7 @@ struct Accounting {
 
 impl Accounting {
     fn publish(&mut self, reporter: &mut impl Reporter) {
-        self.spent.timing = self.elapsed.finish();
+        self.spent.timing = self.elapsed.finish(&self.spent);
         reporter.spent(self.spent);
     }
 }
@@ -1238,7 +1238,7 @@ fn ask<S: Sink, R: Reporter>(
         Err(error) => error.completed_usage(),
     };
     if let Some(usage) = usage {
-        accounting.spent.add_usage(usage);
+        accounting.spent.add_request(usage);
     }
     accounting.publish(reporter);
     let completion = completion?;
@@ -1541,7 +1541,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         // that armed one would be adding to a run whose steps were settled without it.
         watches: Vec::new(),
         links: Vec::new(),
-        timing: accounting.elapsed.finish(),
+        timing: accounting.elapsed.finish(&accounting.spent),
         display: shown,
         notices: Vec::new(),
     })
@@ -1776,7 +1776,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     Err(_) => None,
                 };
                 if let Some(usage) = usage {
-                    accounting.spent.add_usage(usage);
+                    accounting.spent.add_request(usage);
                 }
                 accounting.publish(reporter);
                 let mut processed = match processed {

@@ -13858,6 +13858,54 @@ fn a_turn_sums_what_its_rounds_read_out_of_the_cache() {
     assert_eq!(outcome.tokens, 460, "the total counts what was sent");
 }
 
+/// A session's totals cannot say which turn made the most requests or which one the service served
+/// from its cache, so the turn carries its own counts beside its time: every completed request,
+/// including the one that ends the turn, and what those wrote and read out of the cache.
+#[test]
+fn a_turn_counts_its_requests_and_what_they_wrote_and_read_out_of_the_cache() {
+    let scratch = Scratch::new("activity-rounds");
+    std::fs::write(scratch.path.join("a.txt"), "body\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_with_cache("read_file", r#"{"path":"a.txt"}"#, 100, 20, 90),
+        reply_with_cache("done", 300, 40, 280),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read a.txt"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.timing.activity,
+        bravebot_agent::timing::Activity {
+            requests: 2,
+            written_tokens: 60,
+            cache_read_tokens: 370,
+            cache_written_tokens: 0,
+            compactions: 0,
+        }
+    );
+    assert_eq!(
+        (
+            outcome.timing.activity.written_tokens,
+            outcome.timing.activity.cache_read_tokens
+        ),
+        (outcome.output_tokens, outcome.cached.read_tokens),
+        "the turn's counts and its totals are the same tokens"
+    );
+}
+
 /// A server reporting no cache figures leaves the split at zero, and must not be made to look as
 /// though it reported one: every backend but Bedrock is currently such a server.
 #[test]
@@ -40424,6 +40472,8 @@ struct StopsWhenACheckBegins {
     cancel: bravebot_core::cancel::Cancel,
     begun: usize,
     finished: usize,
+    /// The requests the last report counted.
+    requests: u64,
 }
 
 impl StopsWhenACheckBegins {
@@ -40432,12 +40482,17 @@ impl StopsWhenACheckBegins {
             cancel: cancel.clone(),
             begun: 0,
             finished: 0,
+            requests: 0,
         }
     }
 }
 
 impl bravebot_agent::report::Reporter for StopsWhenACheckBegins {
     fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        self.requests = spent.requests;
+    }
 
     fn check_started(&mut self, _checking: bravebot_core::vetting::Checking) {
         self.begun += 1;
@@ -40615,6 +40670,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
     let shown = confirmer.shown.clone();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
     turn::resume(
         &config,
@@ -40623,7 +40679,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
         &Task::new("find out").with_auto_vetting(true),
         &mut bravebot_agent::Conversation::new(),
         &mut confirmer,
-        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut reporter,
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::new(),
@@ -40636,6 +40692,11 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
     assert!(
         !shown.lock().unwrap().is_empty(),
         "a failed check did not fall back to the question"
+    );
+    assert_eq!(
+        reporter.spent.last().map(|spent| spent.requests),
+        Some(3),
+        "the three planner rounds completed and the check that could not be made did not (SESSION-40)"
     );
     let lines = vetting_lines(&sink);
     assert!(
@@ -40793,6 +40854,10 @@ fn a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped() {
         assert_eq!(
             reporter.finished, 1,
             "{mode:?}: the check never said it was over"
+        );
+        assert_eq!(
+            reporter.requests, 1,
+            "{mode:?}: the planner's round completed and the stopped check did not (SESSION-40)"
         );
         assert!(
             asked.lock().unwrap().is_empty(),
@@ -43248,6 +43313,135 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
     assert!(
         !planning.contains("port the parser to the new lexer"),
         "the summarised exchange was sent anyway: {planning}"
+    );
+}
+
+/// The summary that makes room is a request the turn paid for and a compaction it made, and a turn
+/// that makes none says so.
+#[test]
+fn a_summary_made_during_a_turn_is_counted_as_a_compaction_and_a_request() {
+    let scratch = Scratch::new("activity-compacts");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        reply_with("they are porting the parser and widened the error type"),
+        reply_with("done"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    let outcome = take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+    assert_eq!(outcome.timing.activity.compactions, 1);
+    assert_eq!(
+        outcome.timing.activity.requests, 2,
+        "the summary and the planner's reply"
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("done")]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let outcome = take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+    assert_eq!(outcome.timing.activity.compactions, 0);
+    assert_eq!(outcome.timing.activity.requests, 1);
+}
+
+/// A stop or a failure charges the latest report a turn made, so the counts in every report agree
+/// with the totals beside them, and not only the last one: whichever report an interface is holding
+/// when the turn ends is the one that is charged.
+#[test]
+fn every_report_a_turn_makes_counts_what_its_own_totals_say() {
+    let scratch = Scratch::new("activity-every-report");
+    std::fs::write(scratch.path.join("a.txt"), "body\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        reply_with_cache("they were porting the parser", 400, 60, 40),
+        tool_request_with_cache("read_file", r#"{"path":"a.txt"}"#, 100, 20, 90),
+        reply_with_cache("done", 300, 40, 280),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut conversation = a_long_conversation();
+
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("finish it"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert!(
+        reporter.spent.len() >= 3,
+        "too few reports to say anything about each: {}",
+        reporter.spent.len()
+    );
+    for (n, spent) in reporter.spent.iter().enumerate() {
+        let activity = spent.timing.activity;
+        assert_eq!(
+            (
+                activity.requests,
+                activity.written_tokens,
+                activity.cache_read_tokens,
+                activity.cache_written_tokens
+            ),
+            (
+                spent.requests,
+                spent.output_tokens,
+                spent.cached.read_tokens,
+                spent.cached.written_tokens
+            ),
+            "report {n} counts something other than its totals: {spent:?}"
+        );
+    }
+    let after_the_summary = reporter
+        .spent
+        .iter()
+        .find(|spent| spent.timing.activity.compactions == 1)
+        .expect("a report that holds the summary");
+    assert_eq!(
+        (
+            after_the_summary.timing.activity.requests,
+            after_the_summary.timing.activity.written_tokens,
+            after_the_summary.timing.activity.cache_read_tokens
+        ),
+        (1, 60, 40),
+        "the report that bills the summary"
+    );
+    assert_eq!(
+        outcome.timing.activity,
+        bravebot_agent::timing::Activity {
+            requests: 3,
+            written_tokens: 120,
+            cache_read_tokens: 410,
+            cache_written_tokens: 0,
+            compactions: 1,
+        }
     );
 }
 
@@ -46010,6 +46204,54 @@ fn a_turn_counts_what_its_delegates_read_out_of_the_cache() {
     assert_eq!(
         outcome.cached.read_tokens, 1100,
         "what the delegate read out of the cache was not counted in the turn"
+    );
+}
+
+/// The turn was charged for a delegate's requests, so it counts them with its own.
+#[test]
+fn a_turn_counts_the_requests_a_delegate_made() {
+    let scratch = Scratch::new("delegate-requests");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "SAY-SOMETHING-SHORT",
+            vec![reply_with_cache("REPORTED BACK", 1200, 30, 1100)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.timing.activity.requests, 4,
+        "three of the planner's and the delegate's one"
+    );
+    assert_eq!(outcome.timing.activity.cache_read_tokens, 1100);
+    assert_eq!(
+        outcome.timing.activity.written_tokens,
+        outcome.output_tokens
     );
 }
 
@@ -70682,6 +70924,22 @@ mod usage {
         );
     }
 
+    /// What the turn did so far, as the record keeps it per turn: requests, what the model wrote,
+    /// what the cache served and the summaries made.
+    fn assert_activity(spent: Spent, requests: u64, written: u64, cache_read: u64, summaries: u64) {
+        let activity = spent.timing.activity;
+        assert_eq!(
+            (
+                activity.requests,
+                activity.written_tokens,
+                activity.cache_read_tokens,
+                activity.compactions
+            ),
+            (requests, written, cache_read, summaries),
+            "{activity:?}"
+        );
+    }
+
     fn assert_ending(error: turn::TurnError, stopped: bool) {
         if stopped {
             assert!(matches!(
@@ -70734,6 +70992,14 @@ mod usage {
         assert_usage(after_processor, 142, 12, 37);
         assert_usage(run.progress(), 142, 12, 37);
         assert_eq!(run.progress().context_tokens, 20);
+        // The file read is checked by a model request of its own, which the mock answers without
+        // stating a usage, and the processor is a request of its own: so the count is the
+        // planner's replies together with those two, and the tokens are the planner's and the
+        // processor's.
+        assert_activity(after_read, 2, 2, 3, 0);
+        assert_activity(before_processor, 3, 5, 7, 0);
+        assert_activity(after_processor, 4, 12, 37, 0);
+        assert_activity(run.progress(), 4, 12, 37, 0);
     }
 
     /// Completed calls must remain visible while a later planner request fails.
@@ -70766,6 +71032,9 @@ mod usage {
         assert_ending(run.finish().unwrap_err(), stop);
         assert_usage(after_summary, 460, 60, 40);
         assert_usage(run.progress(), 460, 60, 40);
+        // The summary is a request, and the report that bills it also counts it as the summary.
+        assert_activity(after_summary, 1, 60, 40, 1);
+        assert_activity(run.progress(), 1, 60, 40, 1);
     }
 
     /// The report that bills a summary does not carry the size of the conversation the summary
@@ -71014,6 +71283,13 @@ mod usage {
             } else {
                 (74, 4, 11)
             };
+            // The requests that completed: the child's list_files, and its reply unless it was
+            // refused or stopped; the parent's spawn, and its two replies if it went on.
+            let child_requests = if child_fails || ending == "stopped" {
+                1
+            } else {
+                2
+            };
             if ending == "done" {
                 let last = run.request();
                 assert!(last.body.contains("PARENT-TASK"));
@@ -71023,11 +71299,16 @@ mod usage {
                     9 + child_output,
                     7 + child_cache,
                 );
+                assert_eq!(run.progress().timing.activity.requests, 2 + child_requests);
                 last.answer(&reply_with_cache("done", 50, 4, 8));
             }
             let result = run.finish();
             // The child's completed request is in the total while it still runs.
             assert_usage(while_child_works, 17 + 31, 7 + 1, 3 + 5);
+            assert_eq!(
+                while_child_works.timing.activity.requests, 2,
+                "the parent's spawn and the child's first request"
+            );
             let (parent_tokens, parent_output, parent_cache) = if ending == "done" {
                 (93, 13, 15)
             } else {
@@ -71039,12 +71320,22 @@ mod usage {
                 parent_output + child_output,
                 parent_cache + child_cache,
             );
+            let parent_requests = if ending == "done" { 3 } else { 1 };
+            assert_eq!(
+                run.progress().timing.activity.requests,
+                parent_requests + child_requests,
+                "a delegate's requests are counted once, whether it finished or was collected after the parent ended"
+            );
             assert_eq!(
                 run.reports.lock().unwrap().delegates,
                 vec![child_fails || ending == "stopped"]
             );
             if ending == "done" {
                 let outcome = result.unwrap();
+                assert_eq!(
+                    outcome.timing.activity.requests,
+                    parent_requests + child_requests
+                );
                 assert_eq!(outcome.tokens, parent_tokens + child_tokens);
                 assert_eq!(outcome.output_tokens, parent_output + child_output);
                 assert_eq!(outcome.cached.read_tokens, parent_cache + child_cache);
