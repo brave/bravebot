@@ -1823,12 +1823,9 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // A processor is a model call of its own, so what it spent belongs in the turn's
     // total. Left out, a turn that did most of its work in processors would report
     // having cost almost nothing.
-    // A request only where the call waited on the model, since every other tool's usage is empty.
-    if output.inference_interval.is_some() {
-        state.account.add_request(output.usage);
-    } else {
-        state.account.add_usage(output.usage);
-    }
+    // A request only where the call waited on the model and was not stopped; every other tool's
+    // usage is empty.
+    state.account.add_call(output.usage, output.requested());
     reporter.spent(crate::outcome::Spent {
         timing: state.spent.finish(&state.account),
         ..state.account

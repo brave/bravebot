@@ -331,6 +331,15 @@ impl Spent {
         self.requests += 1;
     }
 
+    /// Add a call's usage, counting a request where one completed for it.
+    pub fn add_call(&mut self, usage: Usage, completed: bool) {
+        if completed {
+            self.add_request(usage);
+        } else {
+            self.add_usage(usage);
+        }
+    }
+
     /// Add another run's cost, such as a delegate's, to this one: its total, what the model wrote,
     /// what the cache served and how many requests made it. The context reading is that run's own
     /// conversation and the timing overlaps this one's clock, so both are left as they are.

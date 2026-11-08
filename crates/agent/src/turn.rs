@@ -4523,11 +4523,7 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        if released.waited.is_some() {
-                            state.account.add_request(released.usage);
-                        } else {
-                            state.account.add_usage(released.usage);
-                        }
+                        state.account.add_call(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.

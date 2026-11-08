@@ -40472,6 +40472,8 @@ struct StopsWhenACheckBegins {
     cancel: bravebot_core::cancel::Cancel,
     begun: usize,
     finished: usize,
+    /// The requests the last report counted.
+    requests: u64,
 }
 
 impl StopsWhenACheckBegins {
@@ -40480,12 +40482,17 @@ impl StopsWhenACheckBegins {
             cancel: cancel.clone(),
             begun: 0,
             finished: 0,
+            requests: 0,
         }
     }
 }
 
 impl bravebot_agent::report::Reporter for StopsWhenACheckBegins {
     fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        self.requests = spent.requests;
+    }
 
     fn check_started(&mut self, _checking: bravebot_core::vetting::Checking) {
         self.begun += 1;
@@ -40841,6 +40848,10 @@ fn a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped() {
         assert_eq!(
             reporter.finished, 1,
             "{mode:?}: the check never said it was over"
+        );
+        assert_eq!(
+            reporter.requests, 1,
+            "{mode:?}: the planner's round completed and the stopped check did not (SESSION-40)"
         );
         assert!(
             asked.lock().unwrap().is_empty(),

@@ -127,6 +127,14 @@ pub struct ChosenNumber {
     pub upto: u8,
 }
 
+impl Output {
+    /// Whether a model request completed for this call: it waited on the model and was not
+    /// stopped while it did (SESSION-40).
+    pub(crate) fn requested(&self) -> bool {
+        self.inference_interval.is_some() && self.cancelled.is_none()
+    }
+}
+
 /// What a dispatched call produced, ready to send back as a tool message.
 #[derive(Debug)]
 pub struct Output {
@@ -7971,6 +7979,9 @@ pub(crate) struct ReadInTheResult {
     /// Set where the person stopped the turn while the check ran. `text` is `None` then too, and
     /// the turn ends as stopped once the run's own result is recorded.
     pub stopped: Option<crate::outcome::Cancellation>,
+    /// Whether a model request completed for the check: false where none was made, where the
+    /// person stopped it, and where it could not be made (SESSION-40).
+    pub completed: bool,
 }
 
 /// What a read is told when the person stopped the turn while its check ran, with the cost of the
@@ -8047,6 +8058,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage: Usage::default(),
         waited: None,
         stopped: None,
+        completed: false,
     };
     if !mode.checks_before_promoting(auto_vetting) {
         return nothing(
@@ -8083,10 +8095,12 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
                 stopped: Some(crate::outcome::Cancellation {
                     attempts: stopped.attempts,
                 }),
+                completed: false,
             };
         }
     };
     let usage = checked.usage;
+    let completed = checked.completed;
     // Before `release_output`, which would put anything but `safe` to the person: nobody is
     // shown this output here.
     let text = if checked.verdict.is_safe() {
@@ -8117,6 +8131,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage,
         waited,
         stopped: None,
+        completed,
     }
 }
 
@@ -8444,6 +8459,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage: Usage::default(),
         waited: None,
         stopped: None,
+        completed: false,
     };
     let release = |policy: &mut Policy<'_, S>,
                    confirmer: &mut C,
@@ -8491,10 +8507,12 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
                 stopped: Some(crate::outcome::Cancellation {
                     attempts: stopped.attempts,
                 }),
+                completed: false,
             };
         }
     };
     let usage = checked.usage;
+    let completed = checked.completed;
     // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
     // shown this result here.
     let text = if checked.verdict.is_safe() {
@@ -8507,6 +8525,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         usage,
         waited,
         stopped: None,
+        completed,
     }
 }
 
