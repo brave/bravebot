@@ -44,6 +44,7 @@
 
 use bravebot_agent::conversation::Snapshot;
 use bravebot_agent::workspace::Workspace;
+use bravebot_aichat::protocol::Cached;
 use bravebot_core::command::Spelling;
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
@@ -115,9 +116,10 @@ pub struct Aside {
     pub kept: bool,
 }
 
-/// How a session's tokens divide into those the model read and those it wrote.
+/// How a session's tokens divide into those the model read and those it wrote, and how many of
+/// those read the service answered out of its own cache or wrote into it.
 ///
-/// Kept as two running totals beside [`Record::tokens`] rather than as a second total, because
+/// Kept as running totals beside [`Record::tokens`] rather than as a second total, because
 /// a charge that reports no split still adds to the total. What the two figures leave out of the
 /// total is tokens whose split is not known, which is every token of a record written before the
 /// split was kept.
@@ -130,26 +132,61 @@ pub struct Split {
     /// Tokens the model wrote.
     #[serde(default)]
     pub written: u64,
+    /// Of [`Split::read`], the tokens the service served out of its prompt cache and the tokens it
+    /// wrote into the cache. The cache hit rate of the session is `cache.read_tokens / read`.
+    ///
+    /// Zero for a charge whose service stated no cache figure, which reads the same as a charge
+    /// whose cache missed ([`bravebot_aichat::protocol::Cached`]). Left out of the record while
+    /// both are zero, and zero for a record written before it was kept.
+    #[serde(default, skip_serializing_if = "no_cache_figure")]
+    pub cache: Cached,
+}
+
+fn no_cache_figure(cache: &Cached) -> bool {
+    !cache.any()
 }
 
 impl Split {
     /// The split of `tokens` of which the model wrote `written`. A figure past the total reads as
-    /// the whole of it written.
+    /// the whole of it written. Carries no cache figure; [`Split::with_cache`] adds one.
     pub fn of(tokens: u64, written: u64) -> Self {
         Self {
             read: tokens.saturating_sub(written),
             written,
+            cache: Cached::default(),
         }
         .within(tokens)
     }
 
+    /// This split with the cache figures the charge's requests reported.
+    pub fn with_cache(self, cache: Cached) -> Self {
+        Self { cache, ..self }
+    }
+
+    /// The split of what `spent` came to: its total, what the model wrote and what the cache served.
+    pub fn of_spent(spent: bravebot_agent::Spent) -> Self {
+        Self::of(spent.tokens, spent.output_tokens).with_cache(spent.cached)
+    }
+
+    /// The split of a finished turn's `outcome`.
+    pub fn of_outcome(outcome: &bravebot_agent::Outcome) -> Self {
+        Self::of(outcome.tokens, outcome.output_tokens).with_cache(outcome.cached)
+    }
+
+    /// The split of one request's `usage`, for the requests made beside the work.
+    pub fn of_usage(usage: bravebot_aichat::protocol::Usage) -> Self {
+        Self::of(usage.total(), usage.completion_tokens).with_cache(usage.cached)
+    }
+
     /// This split cut to fit inside `tokens`, so that the tokens it leaves out never wrap past zero.
-    /// Written is kept first and read takes what is left.
+    /// Written is kept first and read takes what is left. The cache figures are kept as they are:
+    /// they are read for information and no arithmetic is done on them.
     pub fn within(self, tokens: u64) -> Self {
         let written = self.written.min(tokens);
         Self {
             read: self.read.min(tokens - written),
             written,
+            cache: self.cache,
         }
     }
 
@@ -158,6 +195,7 @@ impl Split {
     pub fn add(&mut self, other: Split) {
         self.read = self.read.saturating_add(other.read);
         self.written = self.written.saturating_add(other.written);
+        self.cache.add(other.cache);
     }
 }
 
@@ -814,6 +852,7 @@ pub fn failure_reason_with_model(
         Category::Transport => t!(failure_transport).into(),
         Category::Incomplete => t!(failure_incomplete).into(),
         Category::Undecodable => t!(failure_undecodable).into(),
+        Category::Unrecognised => t!(failure_unrecognised).into(),
         // The one category that says a number. It is this program's own configured ceiling, not
         // anything the service reported, and without it the sentence names no remedy.
         // What the reply was writing is said as well, since a reply that spent the ceiling on one
@@ -885,7 +924,12 @@ pub fn failure_reason_with_model(
     if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
         said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
-    if diagnosis.category == Category::Refused {
+    // A failure this build cannot name has no remedy of its own, so it ends with the step a refused
+    // request does: another model, or the endpoint and the log location (BACKEND-37).
+    if matches!(
+        diagnosis.category,
+        Category::Refused | Category::Unrecognised
+    ) {
         said = t!(
             failure_with_next,
             what = said,
@@ -1592,6 +1636,7 @@ pub fn manifest_usage(
             output_tokens: done.output_tokens,
             context_tokens: done.context_tokens,
             cached: done.cached,
+            requests: done.timing.activity.requests,
             timing: done.timing,
         })
         .or(retained)
@@ -1645,7 +1690,7 @@ pub fn record_manifest_run(
     let programs = TrustedPrograms::new();
     let usage = manifest_usage(outcome, retained);
     let tokens = usage.map_or(0, |s| s.tokens);
-    let split = usage.map_or(Split::default(), |s| Split::of(s.tokens, s.output_tokens));
+    let split = usage.map_or(Split::default(), Split::of_spent);
     // One turn, so the breakdown and the total say the same thing. Written anyway, because a
     // reader comparing runs should not have to special-case where the figure came from.
     let spend = BTreeMap::from([(1, tokens)]);
@@ -2024,7 +2069,7 @@ pub fn charge_failed_turn(
         return false;
     }
     *tokens += spent.tokens;
-    split.add(Split::of(spent.tokens, spent.output_tokens));
+    split.add(Split::of_spent(spent));
     *spend.entry(turn).or_insert(0) += spent.tokens;
     let timing = timing.entry(turn).or_default();
     timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
@@ -4087,12 +4132,17 @@ mod tests {
         let spent = bravebot_agent::Spent {
             tokens: 107,
             output_tokens: 40,
+            cached: Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -4125,9 +4175,13 @@ mod tests {
             split,
             Split {
                 read: 67,
-                written: 40
+                written: 40,
+                cache: Cached {
+                    read_tokens: 60,
+                    written_tokens: 10,
+                },
             },
-            "the failed turn's split was not charged with its total"
+            "the failed turn's split was not charged with its total and its cache figures"
         );
         assert_eq!(spend.get(&1), Some(&107));
         assert_eq!(
@@ -4138,7 +4192,105 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             })
+        );
+    }
+
+    /// A failed or stopped turn keeps no messages of its own, so the counts of what it did before
+    /// it ended are in no other place. They are charged with its time, once, and are the same
+    /// tokens its split was charged with.
+    #[test]
+    fn a_failed_turn_keeps_the_counts_of_what_it_did_beside_its_time() {
+        use bravebot_agent::timing::{Activity, Timing};
+
+        let (mut tokens, mut split, mut spend, mut timing) = Default::default();
+        let activity = Activity {
+            requests: 3,
+            written_tokens: 40,
+            cache_read_tokens: 60,
+            cache_written_tokens: 10,
+            compactions: 1,
+        };
+        let spent = bravebot_agent::Spent {
+            tokens: 107,
+            output_tokens: 40,
+            cached: Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
+            requests: 3,
+            timing: Timing {
+                inference_ms: 11,
+                activity,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(charge_failed_turn(
+            &mut tokens,
+            &mut split,
+            &mut spend,
+            &mut timing,
+            2,
+            spent,
+            std::time::Duration::from_millis(500)
+        ));
+        let kept = timing
+            .get(&2)
+            .expect("the turn has a timing entry")
+            .activity;
+        assert_eq!(kept, activity, "the failed turn's counts were not kept");
+        assert_eq!(
+            (kept.written_tokens, kept.cache_read_tokens),
+            (split.written, split.cache.read_tokens),
+            "the counts and the split are the same tokens"
+        );
+
+        // A later charge to the same turn, such as a question asked during it, adds its counts
+        // to the turn's and does not replace them.
+        let mut again = timing[&2];
+        again.add_measured(spent.timing);
+        assert_eq!(again.activity.requests, 6);
+    }
+
+    /// A record from before the counts were kept has none for a turn, and a turn with none leaves
+    /// the key out of the file, so the file of a session that never counted is the file it was.
+    #[test]
+    fn a_record_keeps_a_turns_counts_and_a_turn_without_them_reads_as_none_counted() {
+        let body = serde_json::json!({
+            "id": "1-2",
+            "directory": "/tmp/x",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "turns": 2,
+            "tokens": 3_400,
+            "timing": {
+                "1": {"wall_ms": 10, "activity": {"requests": 4, "written_tokens": 9, "cache_read_tokens": 30, "cache_written_tokens": 2, "compactions": 1}},
+                "2": {"wall_ms": 5}
+            },
+            "conversation": {
+                "messages": [],
+                "context": "trusted",
+                "references": 0,
+                "archive": [],
+                "measured": 0,
+            },
+        });
+
+        let record: Record = serde_json::from_value(body).expect("parses");
+        assert_eq!(record.timing[&1].activity.requests, 4);
+        assert_eq!(record.timing[&1].activity.compactions, 1);
+        assert!(record.timing[&2].activity.is_empty());
+
+        let written = serde_json::to_value(&record).expect("serialises");
+        assert_eq!(written["timing"]["1"]["activity"]["cache_read_tokens"], 30);
+        assert!(
+            written["timing"]["2"].get("activity").is_none(),
+            "an empty count was written: {}",
+            written["timing"]["2"]
         );
     }
 
@@ -4688,6 +4840,28 @@ mod tests {
             }
             other => panic!("a failure was recorded as {other:?}"),
         }
+    }
+
+    /// BACKEND-37: a failure the service reported and this build cannot name is said in its own
+    /// sentence, that the service answered with a failure this build does not recognise, ends with
+    /// the step a refused request ends with, and is not the sentence for a reply that stopped.
+    ///
+    /// The regressions it rejects are the cut-off sentence kept for it, a sentence with no next
+    /// step, and one that said the model or the backend of a refused request.
+    #[test]
+    fn an_unrecognised_failure_is_said_in_its_own_sentence_with_the_refused_next_step() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let said = failure_reason(Diagnosis::of(Category::Unrecognised), None);
+        assert_eq!(
+            said,
+            "error: the service answered with a failure this build does not recognise. Choose \
+             another model with `/model`, or run `bravebot doctor` to see the endpoint and where \
+             the diagnostic log is kept"
+        );
+        let cut_off = failure_reason(Diagnosis::of(Category::Incomplete), None);
+        assert!(!said.contains("stopped before"), "{said}");
+        assert!(!cut_off.contains("recognise"), "{cut_off}");
     }
 
     /// BACKEND-37: a refused request names the model the turn ran on, the name the person
@@ -6103,6 +6277,7 @@ mod tests {
         record.split = Split {
             read: 600,
             written: 300,
+            ..Default::default()
         };
         let mut written = serde_json::to_value(record).expect("serialises");
         let fields = written.as_object_mut().expect("an object");
@@ -6127,7 +6302,7 @@ mod tests {
         save_a_turn_session(&mut handle);
         let trust = TrustStore::new(&root);
         let snapshot = a_record().conversation;
-        let mut carry_on = |tokens: u64, written: u64| {
+        let mut carry_on = |tokens: u64, written: u64, cached: Cached| {
             let record = load(&root, handle.id()).expect("written");
             assert!(handle.save_continuation(
                 record,
@@ -6135,7 +6310,7 @@ mod tests {
                     conversation: &snapshot,
                     prompt: "next",
                     tokens,
-                    split: Split::of(tokens, written),
+                    split: Split::of(tokens, written).with_cache(cached),
                     model: "m",
                     trust: &trust,
                     begins: 0,
@@ -6149,22 +6324,44 @@ mod tests {
             load(&root, handle.id()).expect("written")
         };
 
-        let first = carry_on(100, 30);
+        let first = carry_on(
+            100,
+            30,
+            Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
+        );
         assert_eq!(
             first.split,
             Split {
                 read: 70,
-                written: 30
+                written: 30,
+                cache: Cached {
+                    read_tokens: 60,
+                    written_tokens: 10
+                },
             }
         );
 
-        let second = carry_on(30, 20);
+        let second = carry_on(
+            30,
+            20,
+            Cached {
+                read_tokens: 25,
+                written_tokens: 5,
+            },
+        );
         assert_eq!(second.tokens, 130);
         assert_eq!(
             second.split,
             Split {
                 read: 80,
-                written: 50
+                written: 50,
+                cache: Cached {
+                    read_tokens: 85,
+                    written_tokens: 15
+                },
             },
             "the second turn's split did not add to the first's"
         );
@@ -6180,6 +6377,10 @@ mod tests {
         stored.split = Split {
             read: 60,
             written: 20,
+            cache: Cached {
+                read_tokens: 45,
+                written_tokens: 5,
+            },
         };
         let mut record = a_record();
         record.rewind = vec![stored];
@@ -6192,7 +6393,11 @@ mod tests {
             point.snapshot.split,
             Split {
                 read: 60,
-                written: 20
+                written: 20,
+                cache: Cached {
+                    read_tokens: 45,
+                    written_tokens: 5
+                },
             }
         );
         assert_eq!(
@@ -6212,6 +6417,7 @@ mod tests {
         stored.split = Split {
             read: 60,
             written: 20,
+            ..Default::default()
         };
         let mut written = serde_json::to_value(stored).expect("serialises");
         let fields = written.as_object_mut().expect("an object");
@@ -6238,6 +6444,10 @@ mod tests {
         let retained = Some(bravebot_agent::Spent {
             tokens: 90,
             output_tokens: 25,
+            cached: Cached {
+                read_tokens: 40,
+                written_tokens: 8,
+            },
             ..Default::default()
         });
 
@@ -6255,7 +6465,146 @@ mod tests {
             load(&root, &id).unwrap().split,
             Split {
                 read: 65,
-                written: 25
+                written: 25,
+                cache: Cached {
+                    read_tokens: 40,
+                    written_tokens: 8
+                },
+            }
+        );
+    }
+
+    /// The cache figures are written inside the split, and only when the split has some. A split
+    /// written with the key always would change every record whose service states no cache, and one
+    /// that never wrote it would lose the figures this field exists to keep. The names are what
+    /// somebody reading the file looks for.
+    #[test]
+    fn a_split_writes_its_cache_figures_only_when_it_has_some() {
+        let without = Split {
+            read: 600,
+            written: 300,
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(without).expect("serialises"),
+            serde_json::json!({"read": 600, "written": 300})
+        );
+
+        let with = without.with_cache(Cached {
+            read_tokens: 500,
+            written_tokens: 40,
+        });
+        let written = serde_json::to_value(with).expect("serialises");
+        assert_eq!(
+            written["cache"],
+            serde_json::json!({"read_tokens": 500, "written_tokens": 40})
+        );
+        assert_eq!(
+            serde_json::from_value::<Split>(written).expect("reads back"),
+            with
+        );
+    }
+
+    /// Every record written before the cache figures were kept has a split without them, and it
+    /// must still resume, with the figures read as not recorded rather than with an error that
+    /// loses the session. The read and written counts beside them are kept.
+    #[test]
+    fn a_record_from_before_the_cache_figures_reads_them_as_none_recorded() {
+        let mut record = a_record();
+        record.tokens = 900;
+        record.split = Split {
+            read: 600,
+            written: 300,
+            cache: Cached {
+                read_tokens: 500,
+                written_tokens: 40,
+            },
+        };
+        let mut written = serde_json::to_value(record).expect("serialises");
+        let split = written["split"].as_object_mut().expect("an object");
+        split
+            .remove("cache")
+            .expect("the cache figures are written");
+
+        let old: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert_eq!((old.split.read, old.split.written), (600, 300));
+        assert_eq!(old.split.cache, Cached::default());
+    }
+
+    /// A record edited by hand can state one of the two cache figures. It reads with the other at
+    /// zero, as a service that states one of them is read, and does not lose the session.
+    #[test]
+    fn a_cache_figure_stating_one_half_reads_the_other_as_zero() {
+        let split: Split = serde_json::from_value(
+            serde_json::json!({"read": 10, "written": 2, "cache": {"read_tokens": 7}}),
+        )
+        .expect("reads");
+
+        assert_eq!(
+            split.cache,
+            Cached {
+                read_tokens: 7,
+                written_tokens: 0
+            }
+        );
+    }
+
+    /// Splits are added as charges arrive, and a figure read back from a record can be any number.
+    /// Adding replaces neither the read and written counts nor the cache figures with the
+    /// latest charge's, and a largest-possible figure saturates instead of overflowing.
+    #[test]
+    fn adding_a_split_sums_its_cache_figures_and_saturates() {
+        let mut total = Split::of(100, 30).with_cache(Cached {
+            read_tokens: 40,
+            written_tokens: 5,
+        });
+        total.add(Split::of(50, 10).with_cache(Cached {
+            read_tokens: 25,
+            written_tokens: 0,
+        }));
+        assert_eq!((total.read, total.written), (110, 40));
+        assert_eq!(
+            total.cache,
+            Cached {
+                read_tokens: 65,
+                written_tokens: 5
+            }
+        );
+
+        total.add(Split::default().with_cache(Cached {
+            read_tokens: u64::MAX,
+            written_tokens: u64::MAX,
+        }));
+        assert_eq!(
+            total.cache,
+            Cached {
+                read_tokens: u64::MAX,
+                written_tokens: u64::MAX
+            }
+        );
+    }
+
+    /// `stats` cuts every split to its record's total, and the cache figures it counts beside the
+    /// read and written columns come from the cut split.
+    #[test]
+    fn cutting_a_split_to_its_total_keeps_the_cache_figures() {
+        let cut = Split {
+            read: 900,
+            written: 900,
+            cache: Cached {
+                read_tokens: 3,
+                written_tokens: 1,
+            },
+        }
+        .within(100);
+
+        assert_eq!((cut.read, cut.written), (0, 100));
+        assert_eq!(
+            cut.cache,
+            Cached {
+                read_tokens: 3,
+                written_tokens: 1
             }
         );
     }
@@ -7287,6 +7636,7 @@ mod tests {
                     tools_ms: 19,
                     stalled_ms: 11,
                     file_wait_ms: 0,
+                    ..Default::default()
                 },
                 ..Default::default()
             }),

@@ -75,6 +75,12 @@ A run that holds no writing, such as a reader or a checker delegate, is refused 
 read and before anybody is asked, whatever form the edit takes
 ([DELEGATE-31](../delegation.md#DELEGATE-31)).
 
+**What the planner is told.** The description says an edit inside a directory the user vouched for
+is applied without a prompt ([TRUST-4](../trust-map.md#TRUST-4)), and that elsewhere the user
+approves each edit as a diff unless a permission rule or mode answers for them. It does not say
+every edit is put to the user.
+
+`verified-by: bravebot_agent::tools::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
 `verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
 `verified-by: bravebot_agent::turn::edits_far_apart_in_a_long_file_are_approved_as_two_changes`

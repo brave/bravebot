@@ -7,7 +7,8 @@ import { Body, Button, Meta } from './components/primitives'
 import { ChatScreen } from './screens/ChatScreen'
 import { SessionController, describeError } from './session/controller'
 import { NoTargetScreen } from './screens/NoTargetScreen'
-import type { Target } from './targets'
+import type { Connect, Connection, Target } from './targets'
+import { displayString } from './text/displayText'
 import { workspaceName } from './workspaces'
 import { space, useTheme } from './theme'
 
@@ -217,10 +218,28 @@ function Shell({ target }: { target: Target }) {
   )
 }
 
-/** The app over the targets a build offers. With none, it shows a blank slate. */
-export default function App({ targets = [] }: { targets?: readonly Target[] }) {
-  const target = targets[0]
-  return <SafeAreaProvider>{target === undefined ? <NoTargetScreen /> : <Shell key={target.id} target={target} />}</SafeAreaProvider>
+/**
+ * The app over the targets a build offers. With none, it shows a blank slate, and a build that can
+ * `connect` to a target at run time offers that there. A connected target is used until it ends,
+ * and the slate then says why.
+ */
+export default function App({ targets = [], connect }: { targets?: readonly Target[]; connect?: Connect }) {
+  const [connection, setConnection] = useState<Connection | null>(null)
+  const [endedWith, setEndedWith] = useState<string | null>(null)
+  const connected = useCallback((made: Connection) => {
+    setEndedWith(null)
+    setConnection(made)
+    void made.ended.then((reason) => {
+      setConnection((now) => (now === made ? null : now))
+      setEndedWith(`The connection ended: ${displayString(reason)}.`)
+    })
+  }, [])
+  const target = targets[0] ?? connection?.target
+  return (
+    <SafeAreaProvider>
+      {target === undefined ? <NoTargetScreen connect={connect} onConnected={connected} ended={endedWith} /> : <Shell key={target.id} target={target} />}
+    </SafeAreaProvider>
+  )
 }
 
 const styles = StyleSheet.create({

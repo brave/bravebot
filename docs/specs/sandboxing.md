@@ -25,6 +25,7 @@ governs:
   - crates/agent/src/reach.rs
   - crates/sandbox/src/rules.rs
   - crates/sandbox/src/programs.rs
+  - crates/sandbox/src/openshell.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
 guards:
@@ -2002,7 +2003,29 @@ each toolchain, so a first run on an account that never ran the tool is not what
 ([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the withheld
 names removed from the process environment, and a host variable that
 moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARGO_HOME`) or names
-an agent socket removed.
+an agent socket removed. The suite starts its programs as a checked start
+([SANDBOX-30](#SANDBOX-30)), so the generic table applies to a stage, and the suite adds the
+variables the programs it starts read to choose code: `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`,
+`GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT` are removed whatever they hold; `GIT_SSH`,
+`GIT_EXTERNAL_DIFF`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and
+`CARGO_BUILD_RUSTC_WRAPPER` are kept only when they name a program outside every directory a stage
+may write; `GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`,
+`GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` and `GOFLAGS` are removed, as are
+`GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER` and
+`CARGO_TARGET_<triple>_RUNNER`.
+
+The variables below were examined for the programs the suite starts and are not removed, because
+planting a file under each and running the program as a stage runs it ran nothing. `xcrun` and the
+`/usr/bin` shims did not run a file planted under any value of `TOOLCHAINS`, `SDKROOT` or
+`XCODE_DEVELOPER_DIR_PATH` (`SDKROOT` makes `xcrun` fail to read a property list when it names a
+directory without one, and `TOOLCHAINS` and `XCODE_DEVELOPER_DIR_PATH` change nothing it finds), while
+the same planted file ran under `DEVELOPER_DIR`. `vim -es -u NONE`, which the editor workflow
+starts, did not run the command in `VIMINIT`, and `vim` without `-es` did, so a workflow that starts
+an interactive `vim` needs `VIMINIT` added. `python3 -c` and `python3 -m unittest` did not run the
+file in `PYTHONSTARTUP`, which only an interactive interpreter reads, and `sh -c` and a shell script
+did not run the file in `ENV`, which only an interactive `sh` reads. No workflow starts an
+interactive `python3` or `sh`, so none of the three is removed. `GOROOT` is removed, since
+`go vet` ran a `vet` planted under it.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
 `~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
@@ -2031,7 +2054,13 @@ exits zero. It passes when the run under the
 sandbox exits zero and fails otherwise, with a fix that names `sandbox.filesystem.allowRead`
 ([SANDBOX-25](#SANDBOX-25)) and `gh auth login --insecure-storage`. The CI suite does not run it,
 since it depends on the host's login. Token variables are removed from the environment of both
-runs, so the row measures the stored login.
+runs, so the row measures the stored login. The `gh` that reads the stored login is also a checked
+start with no names of its own, and every variable that begins `DYLD_` or `LD_` is removed from it
+whatever it holds, since a library the dynamic loader loads into it runs with the account's home.
+The two prefixes are a list in `crates/agent/src/usability.rs` and not in
+`CODE_SELECTOR_PREFIXES`, because the shared prefixes are applied to every checked start and a
+start that kept `LD_DEBUG` ([SANDBOX-30](#SANDBOX-30)) would lose it; `make check-code-selectors`
+covers only the shared lists, so a reviewer reads this one.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -2058,6 +2087,25 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_login_file_on_the_allow_read_list_passes`
 `verified-by: bravebot_agent::usability::no_login_outside_the_sandbox_gives_no_row`
 `verified-by: bravebot_agent::usability::the_login_probe_keeps_no_token`
+`verified-by: bravebot_agent::usability::the_variables_that_choose_the_code_a_stage_runs_are_removed_whatever_they_hold`
+`verified-by: bravebot_agent::usability::git_configuration_given_through_the_environment_is_removed_for_any_index`
+`verified-by: bravebot_agent::usability::a_variable_name_that_is_not_text_does_not_break_a_start`
+`verified-by: bravebot_agent::usability::a_program_or_option_variable_of_a_workflow_tool_is_removed`
+`verified-by: bravebot_agent::usability::the_program_cargo_runs_for_a_target_is_removed_and_its_target_directory_is_not`
+`verified-by: bravebot_agent::usability::the_loader_variables_are_removed_from_the_stored_login_gh_whatever_they_hold`
+`verified-by: bravebot_agent::usability::the_token_variables_are_removed_from_the_stored_login_gh`
+`verified-by: bravebot_agent::usability::the_twelve_host_variables_that_move_a_read_row_or_hand_over_a_socket_are_removed`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_template_directory`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_parameters`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_an_exec_path`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_common_directory`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makefiles`
+`verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
+`verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
+`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
+`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`
@@ -3474,14 +3522,16 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
 `clippy.toml` refuses every call the tree starts a program with, `std::process::Command::new` and
 `CreateProcessW`, whatever names the program: a string literal, a variable, an alias, or a helper
 that passes it on. A program is started with `bravebot_sandbox::programs::start(program, inherits,
-path)`. `program` is a `Resolved` and not a path or a string. Only the lookup (`Resolved::find`,
+path, selectors)`. `program` is a `Resolved` and not a path or a string. Only the lookup (`Resolved::find`,
 `Resolved::find_on`) and a named constructor build one, and each constructor says who chose the
 program: `own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`.
 `inherits` is `Inherits::All`, `Inherits::Without` the names
 [CRED-14](credential-protection.md#CRED-14) removes, or `Inherits::Only` the names it passes on, and
-`path` is `SearchPath::Reduced` or `SearchPath::Inherited`. Neither has a default and `start`
-applies both, so a new spawn picks a constructor, what the program inherits and which `PATH` it is
-given in the diff, and does not compile until it has. `start` holds the one `Command::new` the tree
+`path` is `SearchPath::Reduced` or `SearchPath::Inherited`, and `selectors` is
+`CodeSelectors::Kept` or `CodeSelectors::Checked` (below). None of the three has a default and
+`start` applies all of them, so a new spawn picks a constructor, what the program inherits, which
+`PATH` it is given and whether its code-selecting variables are checked in the diff, and does not
+compile until it has. `start` holds the one `Command::new` the tree
 has outside a build script and a test. `make check-security` fails a
 `#[allow(clippy::disallowed_methods, reason = "...")]` mark in a production file other than the three
 it lists (`start`, the one `CreateProcessW` and a build script) or a second mark in one of those, a
@@ -3575,6 +3625,63 @@ file. A new spawn that looks a name up through
   `NAME` back ([RUN-12](tools/run.md#RUN-12)). `start` cannot tell which argument of a program names
   a program for it to start, so that argument is still passed as an absolute path by the caller, as
   the inhibitor's `cat` is, and PATH-005 has a reviewer read it.
+- **A checked start has the variables that make a program run code taken off.** The fourth
+  argument of `start` is `CodeSelectors::Kept` or `CodeSelectors::Checked(names)`. Checked removes
+  from the environment each variable in `CODE_SELECTORS` in `crates/sandbox/src/programs.rs`, every
+  variable whose name begins `GIT_CONFIG_`, and each variable in `names`, unless its value is one
+  the program may be left to run. `names` is `&[]` for a program with no variables of its own in the
+  list. Windows matches a name without regard to case. A variable the `inherits` rule withheld stays
+  withheld, and one it passes on is judged. A start is checked or kept as the last bullet of this
+  list states. The generic table holds, by what each variable names:
+
+  | Variable | Names |
+  |---|---|
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH` | one directory (`Names::Directory`) |
+  | `BASH_ENV` | one file (`Names::File`) |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, and every `GIT_CONFIG_` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+
+  A value is kept when `may_be_run` accepts it for what the variable names, as the last bullet of
+  this list states. A list of commands, which `BROWSER` is (`Names::Commands`), is accepted when it
+  is not empty and every entry, split as `PATH` is, is one program (accepted as a program is) alone
+  or followed by ` %s`, with no whitespace, control character or shell character in it, so a value
+  with arguments, a second command or a shell line is removed whole. A variable in no list is left
+  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program. Every checked start is given
+  the generic table, which `programs::withhold_code_selectors_with` applies together with the
+  program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
+  ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
+  `doctor --push-identity`'s in `crates/cli/src/push_identity.rs`, the browser opener's in
+  `crates/tui/src/opener.rs` and the sandbox usability suite's in `crates/agent/src/usability.rs`.
+  The browser opener adds `BROWSER` and the four `XDG_` directories that `xdg-open` reads to choose
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table). The AWS CLI, the gcloud
+  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list the same names,
+  since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
+  Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
+  helper that git's configuration names can do the same. The desktop application deletes the same
+  five names from its own environment before it asks Electron to open an address or a file, since
+  it starts the opener through Electron and not through this start. The names another program
+  reads are added to its start when that program is audited. The usability suite's list adds the
+  names `git`, `make`, `cargo`, `go` and `xcrun` read to choose code, and its stored-login `gh`
+  removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite also removes
+  `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT`
+  whatever they hold, and records the names it examined and left (`TOOLCHAINS`, `SDKROOT`,
+  `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`, `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and
+  `LD_` prefixes are a list in `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES`
+  applies to every checked start and would remove `LD_DEBUG` from gcloud and the browser opener;
+  `make check-code-selectors` does not read that prefix list. `make check-code-selectors` runs
+  `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
+  whose fourth argument is not written at the call as `CodeSelectors::Kept` or
+  `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
+  reason, and a name in any `CODE_SELECTORS` list that lacks a test that keeps a safe value or a
+  test that removes a value a stage may write. A list of options needs only the second. The check
+  cannot tell that a list is complete, which [PATH-008](../best-practices/paths.md#PATH-008) leaves
+  to a reviewer.
+- **A kept start leaves the environment as it is.** The program is one the person chose, or it
+  runs what the planner chose or a project carries, so removing a variable would change what the
+  person asked for. The check covers the programs bravebot starts for its own purposes. It does not
+  change the environment of a program the person chose to run, and it does not protect this
+  process: a variable already in bravebot's environment applies when bravebot is launched, as
+  `LD_PRELOAD` does on Linux, before any start removes it from a child.
 - **What each start inherits is stated here.** The programs a `run` stage, a background job, a hook, a
   language server, the AWS CLI, the browser opener, `doctor --push-identity` and `doctor --sandbox-check`
   start get this process's environment without this agent's own credentials
@@ -3587,6 +3694,16 @@ file. A new spawn that looks a name up through
   it: each is the person's own program or holds no credential to hand on. `xcode-select`,
   `sandbox-exec` and the program a sandbox backend starts confined are started with all of it, and
   the environment a confined program has is the one its caller asks the backend for.
+- **Each start is checked or kept.** These are checked: the AWS CLI, the gcloud launcher, the
+  browser opener, the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, the clipboard
+  tools and `osascript`, the inhibitor `/caffeinate` starts, the `crontab`, `launchctl` and
+  `systemctl` of the scheduler, the tool a workflow is run again with in `doctor --sandbox-check`,
+  the stored-login `gh`, `xcode-select` and the OpenShell command line. These are kept: a line
+  typed at the `!` prompt, a hook, the editor, a language server, a `run` stage, a background job,
+  the program a sandbox backend confines, which a local MCP server is, and `sandbox-exec`, the
+  credential authority, the client the host starts, the delivery program of a scheduled entry, the
+  `sysctl` that reads a machine identifier with an empty environment, and this program started
+  again. A start added to either list is added here in the same change.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -3610,6 +3727,76 @@ file. A new spawn that looks a name up through
   A row that says unreduced is a known gap, not a decision, and it comes out of the table when the
   start is given `SearchPath::Reduced` and a test plants an interpreter in a directory left out and
   checks it is not run.
+- **The variables a started program reads to choose code are withheld unless they name something
+  outside every directory a stage may write.** `programs::withhold_code_selectors_with` takes each
+  variable of a program's `CODE_SELECTORS` list off the environment `start` built, unless its value
+  passes `programs::may_be_run`: an absolute path that exists outside every such directory, links
+  followed, and for a variable that names a file ([`Names::File`](#SANDBOX-30)) a regular file. A
+  variable that names a program ([`Names::Program`](#SANDBOX-30)) also keeps a bare name, since the
+  program's `PATH` leaves those directories out. A relative path, a path that does not exist and a
+  value inside such a directory are taken off. A variable that holds a list of directories
+  (`Names::Directories`, joined with the platform's path separator) is kept only when it has an
+  entry and every entry passes as a directory, so one empty, relative, missing or stage-writable
+  entry takes the whole variable off. A variable that holds options (`Names::Options`) names no
+  path to check and is always taken off, as is a variable that names a program the start has no
+  use for. A variable not listed is left as set. A variable that
+  more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
+  in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
+  `crates/bedrock/src/credentials.rs` and in `crates/cli/src/push_identity.rs`:
+
+  | `gcloud` variable | Names | Why it selects code |
+  |---|---|---|
+  | `CLOUDSDK_PYTHON` | a program | the interpreter the launcher executes |
+  | `CLOUDSDK_CONFIG` | a directory | the launcher sources `virtenv/bin/activate` from it when it has no interpreter of its own |
+  | `CLOUDSDK_PYTHON_ARGS` | options | placed before `gcloud.py` on the interpreter's command line, where `-c <code>` and `-m <module>` run |
+  | `PYTHONPATH` | a list of directories | the launcher passes neither `-E` nor `-I`, so the interpreter imports `sitecustomize.py` and any module it shadows from these |
+  | `PYTHONHOME` | a directory | where the interpreter loads its standard library from |
+  | `PYTHONUSERBASE` | a directory | the user site directory, whose `usercustomize.py` and `.pth` files run |
+  | `PYTHONPYCACHEPREFIX` | a directory | where the interpreter reads compiled modules from without checking them against the source |
+  | `GOOGLE_APPLICATION_CREDENTIALS` | a file | an `external_account` credential in it names a command to run, or a file to read and send to a host it names |
+  | `CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH`, `CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH` | a file | name a binary or a certificate provider command the CLI runs when client certificates are in use |
+  | `BROWSER` | a program | the command `gcloud auth login` opens the sign-in page with |
+  | `OPENSSL_CONF` | a file | configuration of the OpenSSL Python loads, which can load a provider module |
+
+  The AWS CLI's list is:
+
+  | AWS CLI variable | Names | Why it selects code |
+  |---|---|---|
+  | `AWS_CONFIG_FILE` | a file | replaces `~/.aws/config`, whose profile can carry a `credential_process` command, and whose `[plugins]` section loads a Python module |
+  | `AWS_SHARED_CREDENTIALS_FILE` | a file | replaces `~/.aws/credentials`, whose profile can carry a `credential_process` command |
+  | `BROWSER` | a program | the command `aws sso login` opens the sign-in page with |
+  | `OPENSSL_CONF` | a file | configuration of the OpenSSL the CLI bundles, which can load an engine or a provider module |
+  | `OPENSSL_CONF_INCLUDE` | a directory | where that configuration's `.include` lines are read from |
+  | `OPENSSL_ENGINES`, `OPENSSL_MODULES` | a directory | where the bundled OpenSSL loads engines and provider modules from |
+
+  `PYTHONPATH`, `PYTHONSTARTUP` and the other `PYTHON*` variables are not listed: the installed CLI is a
+  frozen executable, and a probe of version 2.37.12 with `PYTHONPATH` and `PYTHONSTARTUP` naming a
+  `sitecustomize.py` did not run it. `AWS_PAGER` and `PAGER` name a program the CLI runs to page
+  output, but every `aws` this program starts has both output streams piped, and a probe with
+  `AWS_PAGER` naming a script, run piped and under a pseudo-terminal, did not run it. The
+  rest of the variables the CLI documents (`AWS_PROFILE`, `AWS_CA_BUNDLE`,
+  `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_DATA_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`) name data the CLI
+  parses and does not run. This list was read from the CLI's own topic pages and the strings of the
+  executable and its bundled `libcrypto`, and cannot show that no other variable selects code
+  ([PATH-008](../best-practices/paths.md#PATH-008)). `gcloud` is a Python program started without
+  `-E` or `-I`, which is why its list holds the `PYTHON*` variables and the AWS CLI's does not.
+
+  The `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` starts are all built by `started`
+  in `crates/cli/src/push_identity.rs`, so one list covers the three:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `SSH_ASKPASS` | options | the program `ssh` runs to ask for a passphrase. This command asks for none from the environment |
+  | `SSH_ASKPASS_REQUIRE` | options | `force` makes `ssh` run `SSH_ASKPASS` even with a terminal |
+  | `SSH_SK_PROVIDER` | options | the library `ssh` and `ssh-keygen` load for a hardware key |
+  | `SSH_SK_HELPER` | options | the program `ssh` runs for a hardware key |
+  | `DEVELOPER_DIR` | a directory | where the macOS `/usr/bin/git` shim finds the toolchain it runs, such as `usr/bin/xcrun` |
+
+  `started` also sets `SHELL` to `/bin/sh` whatever the person's is, because `ssh` runs a
+  `ProxyCommand` or a `LocalCommand` with `$SHELL -c`. `SHELL` is set and not checked, since the
+  person's shell has no use here. The tests in `crates/cli/src/push_identity.rs` hand `started` an
+  environment and read the one it gives the program, so they start no real `ssh`. The other
+  programs bravebot starts for itself have no list yet.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3645,6 +3832,30 @@ server's own program by name ([SERVERS-5](mcp-servers.md#SERVERS-5)) reads the s
 program named by a bare name that lies in a directory a started server may write is found by the
 launch that records the directory and not by a later resolution in the same process, such as a
 reconnect. A program named by an absolute path is not judged by any lookup and starts as before.
+
+**What a checked start does not cover.** A checked start removes the generic names and the names its
+caller lists, and a name nobody listed reaches the program. The lists were read from the programs'
+documentation and launchers, and these were not shown by running the program:
+
+- The Windows `powershell` starts of the clipboard tool (`crates/tui/src/clipboard.rs`) and of the
+  inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table. `PSModulePath`,
+  `COR_ENABLE_PROFILING` and `COR_PROFILER` are candidates for names and are not in it, and
+  `gcloud.cmd` and `APPDATA` have not been checked on Windows. It is tracked by #3808.
+- The dynamic-loader names (`LD_*`, `GCONV_PATH`) are read from ld.so(8) and not shown by running a
+  loader. It is tracked by #3810.
+- `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
+  and no names of their own, and have not been run on Linux. It is tracked by #3810.
+- A Homebrew or pip `aws` script, an asdf or pyenv shim and `gio open` and `kde-open` start an
+  interpreter or another program by variables of their own, which are not listed. It is tracked by
+  #3809.
+- `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
+  tracked by #3809.
+- The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
+  are given the generic table. The names `make`, `git` and `xcrun` read are added by #3797. Running
+  each of the others with a name planted is tracked by #3811.
+- `tput` is started by bare name by crossterm 0.29.0 (`src/terminal/sys/unix.rs`, line 273) when a
+  terminal-size query fails. The dependency makes that start and it does not go through
+  `programs::start`, so it has no `CodeSelectors` argument. It is tracked by #3802.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
@@ -3687,10 +3898,39 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_bedrock::credentials::an_aws_config_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read`
+`verified-by: bravebot_bedrock::credentials::an_aws_credentials_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read`
+`verified-by: bravebot_bedrock::credentials::an_openssl_configuration_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read`
+`verified-by: bravebot_bedrock::credentials::an_openssl_directory_a_stage_may_write_is_not_the_one_the_cli_is_told_to_load_from`
+`verified-by: bravebot_bedrock::credentials::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
+`verified-by: bravebot_bedrock::credentials::an_aws_value_that_selects_no_code_is_left_as_set`
+`verified-by: bravebot_bedrock::credentials::the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one`
+`verified-by: bravebot_sandbox::programs::a_file_that_names_code_must_exist_as_a_file_outside_every_directory_a_stage_may_write`
+`verified-by: bravebot_sandbox::programs::a_code_selector_is_taken_off_unless_its_value_passes`
+`verified-by: bravebot_sandbox::programs::a_list_of_directories_passes_only_when_every_entry_does_and_options_never_do`
+`verified-by: bravebot_agent::gcloud::a_python_path_with_an_entry_a_stage_may_write_is_not_the_one_gcloud_imports_from`
+`verified-by: bravebot_agent::gcloud::a_python_path_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_python_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_load_from`
+`verified-by: bravebot_agent::gcloud::a_python_directory_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
+`verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_cli::push_identity::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_cli::push_identity::the_ssh_keygen_ssh_and_git_starts_all_go_through_started`
+`verified-by: bravebot_cli::push_identity::an_askpass_program_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::the_switch_that_forces_the_askpass_program_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::a_security_key_provider_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::a_security_key_helper_is_never_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::the_start_is_given_bin_sh_for_shell_whatever_the_person_has`
+`verified-by: bravebot_cli::push_identity::a_developer_directory_a_stage_may_write_is_not_handed_to_the_start`
+`verified-by: bravebot_cli::push_identity::a_developer_directory_outside_every_directory_a_stage_may_write_still_reaches_the_start`
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
@@ -3709,6 +3949,39 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 `verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_tui::opener::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
 `verified-by: bravebot_tui::opener::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_sandbox::programs::a_checked_start_removes_each_generic_name_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_sandbox::programs::a_checked_start_keeps_each_generic_name_that_names_a_file_outside_every_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_kept_start_leaves_every_generic_name_set`
+`verified-by: bravebot_sandbox::programs::a_value_that_links_into_a_directory_a_stage_may_write_is_removed`
+`verified-by: bravebot_sandbox::programs::a_relative_or_missing_value_is_removed_and_a_bare_program_name_is_kept`
+`verified-by: bravebot_sandbox::programs::an_absolute_path_that_exists_outside_every_writable_directory_is_kept`
+`verified-by: bravebot_sandbox::programs::a_value_that_is_not_text_is_judged_as_the_bytes_it_is`
+`verified-by: bravebot_sandbox::programs::a_list_is_removed_when_any_entry_fails_or_is_empty_and_kept_when_every_entry_is_safe`
+`verified-by: bravebot_sandbox::programs::an_option_variable_is_removed_whatever_it_holds`
+`verified-by: bravebot_sandbox::programs::a_variable_that_selects_no_code_is_left_as_set`
+`verified-by: bravebot_sandbox::programs::a_callers_own_names_are_judged_on_top_of_the_generic_ones`
+`verified-by: bravebot_sandbox::programs::a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup`
+`verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
+`verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
+`verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
+`verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_tui::opener::a_browser_value_is_kept_only_when_every_command_in_it_is_one_program_alone_or_with_a_placeholder`
+`verified-by: bravebot_tui::opener::the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names`
+`verified-by: bravebot_tui::opener::an_xdg_directory_is_judged_by_where_it_leads_on_the_disk`
+`verified-by: bravebot_tui::opener::a_browser_entry_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
+`verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
+`verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`
+`verified-by: bravebot_bedrock::credentials::an_aws_browser_entry_that_is_not_text_is_removed`
+`verified-by: bravebot_agent::gcloud::a_browser_or_xdg_directory_a_stage_may_write_is_not_the_one_the_gcloud_login_is_told_to_use`
+`verified-by: bravebot_agent::gcloud::a_gcloud_browser_entry_that_is_not_text_is_removed`
+`verified-by: bravebot_agent::gcloud::the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads`
+`verified-by: bravebot_cli::push_identity::a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here`
+`verified-by: bravebot_cli::push_identity::the_variables_the_programs_started_here_are_run_to_read_are_kept`
+`verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
@@ -3772,6 +4045,54 @@ fetch on macOS.
 `verified-by: bravebot_sandbox::macos::the_profile_allows_a_lookup_of_named_services_and_not_of_every_service`
 `verified-by: bravebot_sandbox::macos::the_trust_services_are_looked_up_only_where_the_network_is_allowed`
 `verified-by: bravebot_sandbox::macos::a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person`
+
+<a id="SANDBOX-33"></a>
+### SANDBOX-33: an OpenShell sandbox is created with no network, given its host rules once it exists, and refused where they cannot be confirmed
+
+The `openshell` backend starts one program inside an NVIDIA OpenShell sandbox through the `openshell`
+program, found as every program this one starts is found ([SANDBOX-30](#SANDBOX-30)), with only `HOME`
+from this process's environment. A sandbox's name is up to 19 lower-case letters, digits and `-`,
+starting with a letter, and its image a reference with no whitespace or control character. It is set
+up in this order, and the program is started only at the end:
+
+1. The sandbox is created with the filesystem OpenShell gives every sandbox, read-only system
+   directories with `/tmp` writable, Landlock as a hard requirement so a kernel that cannot enforce
+   it refuses the sandbox rather than running it unconfined, and no network rule.
+2. It is used only once it reports `Ready`, within 60 seconds.
+3. Where the program may reach hosts, its real path inside the image is read with `readlink -f`, and
+   one enforced network rule per allowed host, port 443 only, for that path, is applied with
+   `policy set --wait`. The rule cannot be written earlier, since the path exists only inside a
+   sandbox that does. A path that is not UTF-8 cannot be named in the rule, which is text, and is
+   refused rather than converted. With no host the program reaches nothing.
+4. The program is started once OpenShell reports the rule loaded. Any step that fails
+refuses the start, and a sandbox already created is deleted. A variable the caller would pass other
+than `PATH` and `HOME` is refused before anything is created, since nothing of this machine's
+environment goes into the sandbox. The program's standard streams are carried by `openshell sandbox
+exec`, so a long-lived MCP connection runs over them as it does over a local child's pipes.
+
+OpenShell inspects the TLS of what the program sends, through a certificate authority the sandbox
+trusts by `SSL_CERT_FILE` and the variables like it. That is how its rules see the host of an HTTPS
+request. It differs from the proxy of [SANDBOX-24](#SANDBOX-24), which never decrypts, and a program
+that pins certificates or ignores those variables fails to connect.
+
+**Why.** A policy loaded after the program starts leaves it running under a policy that is not yet
+the one approved, and OpenShell applies a live change about a second later. A rule naming a symlink
+such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the binary that runs.
+
+`verified-by: bravebot_sandbox::openshell::a_policy_with_no_hosts_reaches_nothing_and_requires_landlock`
+`verified-by: bravebot_sandbox::openshell::each_host_is_granted_to_the_one_binary_and_enforced`
+`verified-by: bravebot_sandbox::openshell::a_quote_or_backslash_cannot_end_a_scalar_early`
+`verified-by: bravebot_sandbox::openshell::a_host_that_is_not_a_name_or_a_domain_is_refused`
+`verified-by: bravebot_sandbox::openshell::a_name_or_image_a_command_line_could_misread_is_refused`
+`verified-by: bravebot_sandbox::openshell::a_path_from_the_image_must_be_absolute_and_plain`
+`verified-by: bravebot_sandbox::openshell::the_phase_is_read_from_its_own_line`
+`verified-by: bravebot_sandbox::openshell::a_variable_other_than_path_or_home_is_refused_before_anything_is_created`
+`verified-by: bravebot_sandbox::openshell::a_start_whose_sandbox_or_policy_cannot_be_confirmed_is_refused_and_the_sandbox_deleted`
+`verified-by: bravebot_sandbox::openshell::a_program_name_that_is_not_utf8_reaches_sandbox_exec_as_its_bytes`
+`verified-by: bravebot_sandbox::openshell::a_real_path_that_is_not_utf8_is_refused_before_any_rule_is_set`
+`verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`
+`verified-by: bravebot_mcp::openshell::a_program_missing_from_the_image_is_refused_and_the_sandbox_removed`
+`verified-by: bravebot_mcp::openshell::a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply`
 
 ## Programs a person asked for
 

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 12
 title: Choosing how hard to think
-description: Pick an effort level with /effort, which models read it, and where the choice is kept.
+description: Choose reasoning effort with /effort, understand model support and service-specific limits, and keep the choice across sessions.
 ---
 
 # Choosing how hard to think

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Brave's premium service
-description: Store a premium key with bravebot auth login brave so requests for Brave's models go to Brave's premium service.
+description: Brave premium sign-in and key storage, request destinations, actual model tiers, service limits, account checks and migration from older credential files.
 ---
 
 # Brave's premium service

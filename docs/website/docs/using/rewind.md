@@ -1,7 +1,7 @@
 ---
 sidebar_position: 11
 title: Taking turns back
-description: Put the session back to before a turn with /undo, read a rewind before running it with /rewind, and put back one hunk with /hunks.
+description: Undo turns with /undo, preview and choose rewinds with /rewind, restore individual hunks with /hunks, and understand rollback limits, discarded points and resume support.
 ---
 
 # Taking turns back

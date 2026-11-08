@@ -1,7 +1,7 @@
 ---
 sidebar_position: 11
 title: Choosing a model
-description: Pick the model that answers with /model, what the picker lists, and where the choice is kept.
+description: Choose a model with /model, understand the offered model roster and keep the selected model across sessions.
 ---
 
 # Choosing a model

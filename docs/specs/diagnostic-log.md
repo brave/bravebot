@@ -129,7 +129,12 @@ decision, whatever the log was meant for.
 A request that failed names its host, the kind of failure, the status where there was one and how
 long it took, counted from when the request began. A reply that fails while it is still being read,
 by a reset, a cut stream or a deadline passing, is a request that failed, whichever way the reply
-is read, and names the status it began with. A decision to send a request again names which attempt it is and the wait before it.
+is read, and names the status it began with. A failure event inside a reply answered 200, whose code
+or type is not on the list this build holds, is written once when the request ends, naming the kind
+of event that carried it (`failed` or `error`), that the code was unlisted, how long the request
+took and how many requests were sent. The kind of event is set by the arm of the stream decoder that
+routed the event and is not read from the event's `type` afterwards. Those are words and figures this program chose: the code, the
+message and every other byte of the event are left out, and so is a failure whose code is on the list. A decision to send a request again names which attempt it is and the wait before it.
 Starting a language server or an MCP server, and an MCP handshake over either transport, are
 recorded as having worked or as the kind of failure, and a language server's exit as an orderly one
 or a kill. At the default level only failures are written, and a request a person stopped is not
@@ -155,6 +160,8 @@ status that is the failure.
 `verified-by: bravebot_net::egress::a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_aichat::client::a_reply_cut_off_part_way_is_written_to_the_diagnostic_log_as_well_as_its_retries`
 `verified-by: bravebot_aichat::client::a_retry_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
+`verified-by: bravebot_aichat::responses::protocol::the_kind_of_event_that_carried_a_failure_is_set_by_the_arm_that_read_it`
 `verified-by: bravebot_bedrock::lib::a_retry_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::stdio::a_launch_that_failed_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::stdio::a_handshake_is_written_to_the_diagnostic_log`

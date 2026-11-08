@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: CLI reference
-description: Every command, flag and key bravebot takes.
+description: CLI commands and flags, models, authentication, sessions, schedules, triggers, skill evaluation, shell integration, editor protocol, interactive keys, exit codes, streams and limits.
 ---
 
 # CLI reference
@@ -1121,7 +1121,7 @@ Studio and llama-server on this machine what each serves, shows what it would ad
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--openshell <image>] [--stdio] -- <program> [args...]
 bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--bearer-env <name>] [--header-env <header>=<name>...] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list

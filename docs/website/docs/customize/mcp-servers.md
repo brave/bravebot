@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: MCP servers
-description: Declare a Model Context Protocol server, approve it, have a checkout ask for it, and see what a session started.
+description: Declare and approve MCP servers, filter tools, configure credentials and confinement, run server prompts, handle calls and failures, inspect connections, and reconnect, disable or remove servers.
 ---
 
 # MCP servers
@@ -107,6 +107,36 @@ still apply. The list is part of what your approval binds to, so adding, changin
 again, and the question shows it as `may reach only:` followed by the hosts, or `may reach no host`
 for an empty list in `mcp.json`. A platform that cannot hold a program to the proxy does not start
 the server, and the note names `allowed_hosts`.
+
+### Running a server in an OpenShell sandbox
+
+`--openshell <image>` runs a local server inside an [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
+sandbox made from a container image, so the server's filesystem is the image and nothing of your
+machine. Its tools are offered to [plan-first runs](../using/manifest-mode.md) only: a turn neither
+asks about its tools nor offers them.
+
+```sh
+bravebot mcp add fetcher --openshell python:3.13-slim --allowed-hosts example.com -- python3 -u server.py
+```
+
+The program is looked for inside the image. `add` asks the image's registry for the image the tag
+names now and writes it with its digest, as `python:3.13-slim@sha256:…`, so your approval covers that
+exact image and not whatever the tag names later. A private image, or a registry that cannot be
+reached, stops the add: give the image with its digest yourself. Nothing of your machine is passed
+in yet, so `--env`, a stored value and `--dir` are refused beside it, and so is `--http`. In
+`mcp.json` the keys are `"backend": "openshell"` and `"image"`, and a session starts the server only
+where the image carries its digest, so one written by hand with a tag is refused until it is added
+again with `mcp add`.
+
+The sandbox is made when a session starts the server, reaches only the hosts `--allowed-hosts` names
+(within the session's own list), and is deleted when the session ends. One left by a session that was
+killed is deleted by the next one. `/status` shows the sandbox, its image and its hosts, and `bravebot
+doctor` checks that OpenShell 0.1.7 or later is installed and its gateway is connected.
+
+OpenShell decrypts the HTTPS a sandboxed program sends, through a certificate authority the sandbox
+trusts, which is how its rules see each request's host. A program that pins certificates fails to
+connect. On macOS with Docker Desktop, the gateway's `supervisor_network_mode` has to be `"bridge"`,
+or creating a sandbox fails with "failed to connect to OpenShell server".
 
 ### Headers for a service
 

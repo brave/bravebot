@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Sessions
-description: What is kept between runs, how to pick a session back up, and what a resume restores.
+description: Resume, fork, search, name, note, import and delete sessions; costs and stats, info panel, files view (/diff) with arrow navigation and exit keys, background sessions, history and compaction.
 ---
 
 # Sessions

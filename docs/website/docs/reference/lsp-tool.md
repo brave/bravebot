@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: The lsp tool
-description: Which language server answers, what starting one costs, how a file is checked, and how every answer is labelled.
+description: Language-server symbol queries and diagnostics, server selection and custom declarations, approval costs, answer labels, empty results and index caching.
 ---
 
 # The lsp tool

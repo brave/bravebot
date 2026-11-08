@@ -211,6 +211,8 @@ FUNCTION = re.compile(r"\bfn\s+([A-Za-z0-9_]+)")
 # function holding it to be a way into a gate rather than a function that takes a callback.
 CLOSURE_BOUND = re.compile(r"\b([A-Za-z0-9_]+)\s*:\s*[^,;()]*\bFn(?:Once|Mut)?\s*\(")
 STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
+# A raw string such as r#"{"a":1}"#, whose quotes and braces are not the item's.
+RAW_STRING_LITERAL = re.compile(r'\br(#*)".*?"\1')
 # How far a call may run before this stops reading. A call written over more lines than this is
 # not one of these, and reading to the end of the file would balance on an unrelated parenthesis.
 CALL_LINES = 40
@@ -307,6 +309,7 @@ LANES = (
     "checkout-controls",
     "output-sinks",
     "tooling",
+    "inherited-environment",
 )
 
 # The calls that turn a name into a thing, or ask what a name is: the places a decision made on a
@@ -325,6 +328,19 @@ CONFINEMENT_ROWS = re.compile(
     r"\b(?:allow_read|allow_write|allow_write_listed|allow_loopback)\(|\.grant\("
     r"|\b(?:egress_through|socket_path)\b"
 )
+
+# Every start of a program, which is where the environment bravebot inherited is handed on. A start is
+# written `programs::start(` under any prefix, or as a bare `start(` in a file that imports it from
+# `programs`. The selectors argument is the one of the two names the start passes, read from the lines
+# of the call.
+PROGRAMS_FILE = Path("crates/sandbox/src/programs.rs")
+START_QUALIFIED = re.compile(r"\bprograms::start(?:_against)?\(")
+START_BARE = re.compile(r"(?<![\w:.])(?<!fn )start\(")
+START_IMPORT = re.compile(r"\buse\b[^;]*\bprograms::(?:start\b|\{[^}]*\bstart\b)")
+START_SELECTORS = re.compile(r"\bCodeSelectors::(Kept|Checked)\b")
+START_CALL_LINES = 12
+SELECTOR_CLAUSES = ("SANDBOX-30",)
+SELECTOR_DOCS = ("docs/specs/sandboxing.md", "docs/best-practices/paths.md")
 
 # What a checkout's own files can reach, which is the settings layers and the clauses that say which
 # layers answer for which name.
@@ -2762,7 +2778,7 @@ def _test_lines(lines):
         for end in range(item, len(lines)):
             text = lines[end]
             # Braces in a string or a character literal are not the item's.
-            code = CHAR_LITERAL.sub("", STRING_LITERAL.sub("", text))
+            code = CHAR_LITERAL.sub("", STRING_LITERAL.sub("", RAW_STRING_LITERAL.sub("", text)))
             depth += code.count("{") - code.count("}")
             opened = opened or "{" in code
             stripped = text.rstrip()
@@ -2839,6 +2855,52 @@ def layered_sites(sources):
             ):
                 found.append(site_at(path, lines, number, raw))
     return found
+
+
+def program_starts(sources):
+    """Every start of a program outside the tests, with the selectors argument the start passes.
+
+    A start is `programs::start(` under any prefix, or a bare `start(` in a file that imports it from
+    `programs`. `selectors` is `Kept`, `Checked` or `(not found)` for the first `CodeSelectors::`
+    within the lines of the call. The definition in `programs.rs` is not a start.
+    """
+    found = []
+    for path, lines in sources.items():
+        if is_test_path(path):
+            continue
+        stripped = mechanics.strip_comments(lines)
+        imports = bool(START_IMPORT.search("\n".join(stripped)))
+        for number, raw in code_lines(lines):
+            if not (START_QUALIFIED.search(raw) or (imports and START_BARE.search(raw))):
+                continue
+            call = "\n".join(stripped[number - 1 : number - 1 + START_CALL_LINES])
+            chosen = START_SELECTORS.search(call)
+            found.append(
+                site_at(path, lines, number, raw, selectors=chosen.group(1) if chosen else "(not found)")
+            )
+    return found
+
+
+def as_starts(sites, limit=90):
+    """Starts as one line each, with the selectors argument each passes."""
+    lines = [
+        f"- `{site['path']}:{site['line']}` in `{site['function']}`: `{site['selectors']}`"
+        for site in sites[:limit]
+    ]
+    if len(sites) > limit:
+        lines.append(f"- ... and {len(sites) - limit} more; `surface.json` lists every start")
+    return "\n".join(lines) or "- (none)"
+
+
+def selector_lines():
+    """Where the selector table and its prefixes are declared."""
+    text = PROGRAMS_FILE.read_text(encoding="utf-8").split("\n") if PROGRAMS_FILE.is_file() else []
+    return [
+        f"{PROGRAMS_FILE}:{number} {name}"
+        for name in ("CODE_SELECTORS", "CODE_SELECTOR_PREFIXES")
+        for number, raw in enumerate(text, start=1)
+        if re.match(rf"pub const {name}\b", raw)
+    ]
 
 
 def settings_fields(sources):
@@ -3209,6 +3271,9 @@ def surface(sources, specs):
         "tool_definitions": tool_definitions(),
         "process_starts": process_starts(tools),
         "make_recipes": make_recipes(),
+        "program_starts": program_starts(sources),
+        "selector_lines": selector_lines(),
+        "selector_clauses": clause_lines(specs, SELECTOR_CLAUSES),
     }
 
 
@@ -3327,6 +3392,11 @@ def build_lane(name, found, specs, results_file, surface_file=None, tracker_file
         "tool_definitions": as_paths(found["tool_definitions"]),
         "process_starts": as_files(found["process_starts"]),
         "make_recipes": as_list(found["make_recipes"]),
+        "start_count": len(found["program_starts"]),
+        "start_sites": as_starts(found["program_starts"]),
+        "selector_sites": "\n".join(f"- `{one}`" for one in found["selector_lines"]) or "- (none)",
+        "selector_clauses": "\n".join(f"- `{one}`" for one in found["selector_clauses"]) or "- (none)",
+        "selector_docs": "\n".join(f"- `{one}`" for one in SELECTOR_DOCS if Path(one).is_file()) or "- (none)",
     }
     return read_prompt(name).format(**filling)
 
@@ -3374,6 +3444,11 @@ def changed_lanes(base, specs, found=None):
         lanes.add("output-sinks")
     if any(one.startswith(("agents/", "contrib/", ".githooks/")) or one == "Makefile" for one in touched):
         lanes.add("tooling")
+    starts = {str(PROGRAMS_FILE), *SELECTOR_DOCS}
+    if found is not None:
+        starts.update(site["path"] for site in found.get("program_starts", []))
+    if touched & starts or (found is None and rust):
+        lanes.add("inherited-environment")
     return sorted(lanes) or list(LANES)
 
 

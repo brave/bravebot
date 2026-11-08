@@ -216,6 +216,8 @@ fn run_client(
         &bravebot_sandbox::programs::Resolved::named_by_person(&client[0]),
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // The client the person named, started with the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.args(&client[1..]);
     let mut linked = match bravebot_ui_bridge::control_link::launch(command) {

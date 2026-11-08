@@ -672,6 +672,13 @@ fn the_planner_is_shown_a_vouched_lists_names_and_none_of_its_words() {
         assert!(!request.contains(DESCRIPTION), "{request}");
     }
     assert!(vouched.chat[1].contains("SERVER_CALL"));
+    // The planner is told what a call shows, so it plans a task that asks only to see a tool's
+    // answer as the call, and never refuses it as having no way to show the answer.
+    assert!(
+        vouched.chat[1].contains("What it returns is shown to the person as the call answers"),
+        "{}",
+        vouched.chat[1]
+    );
 
     // The person declines the list a run puts to them, which is what a run with nobody to ask does
     // too. The first request is the check over that list; the planner's two come after it.
@@ -1195,6 +1202,52 @@ fn a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody() {
         );
         assert!(walked.called.is_empty(), "{mode:?}: {:?}", walked.called);
     }
+}
+
+/// A server only a manifest run calls, such as one in an OpenShell sandbox, has its list put to the
+/// person before the plan as any other server's is, and a plan may call its tools.
+#[test]
+fn a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls() {
+    let scratch = Scratch::new("manifest-only");
+    let (url, mcp) = serve_browser();
+    let session = session_of(
+        reach(&url, false).in_a_sandbox_for_manifest_runs(
+            Box::new(()),
+            bravebot_agent::mcp::Sandboxed {
+                name: "bb-1-0".into(),
+                image: "python:3.13-slim".into(),
+                hosts: Vec::new(),
+            },
+        ),
+        &scratch,
+        false,
+    );
+    let ran = walk(Walk {
+        session,
+        mode: PermissionMode::Ask,
+        task: Task::new("open the page and read it"),
+        replies: vec![
+            safe(),
+            shape(),
+            plan(vec![call(
+                "open_tab",
+                json!({"url": "https://example.com"}),
+            )]),
+        ],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()])
+            .answering_lists(Decision::Approve),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.asked.order, ["list", "plan", "call"]);
+    assert_eq!(
+        ran.called,
+        [(
+            "open_tab".to_string(),
+            json!({"url": "https://example.com"})
+        )]
+    );
 }
 
 /// A plan started in a session whose lists nobody has been asked about puts them to the person

@@ -16,7 +16,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON } from './drive-support.mjs'
 
 /** A line of the page the website serves, which is to reach no planner and no unmarked row. */
 const SENTINEL = 'SENTINEL-FETCHED-BYTES'
@@ -73,7 +73,7 @@ try {
   await first.waitFor()
   assert.equal((await first.locator('.confirm-head .path').innerText()).trim(), url, 'the address as the planner wrote it')
   assert.equal((await first.locator('.fetch-host code').innerText()).trim(), '127.0.0.1', 'the host, on a line of its own')
-  assert.deepEqual(await first.locator('.confirm-actions button').allInnerTexts(), ['Don’t fetch', 'Fetch once'])
+  assert.deepEqual(await first.locator(CONFIRM_BUTTON).allInnerTexts(), ['Don’t fetch', 'Fetch once'])
   assert.equal(await first.locator('a').count(), 0, 'the address is text, and no link')
   assert.equal(await first.getByText('Redirected from').count(), 0, 'a fetch nothing redirected is not said to have been')
   assert.deepEqual(reached, [], 'nothing went out before anybody answered')
@@ -136,7 +136,7 @@ try {
     /Redirected from\s+127\.0\.0\.1,/,
     'and the host it was approved for, as the one it was reached from',
   )
-  assert.deepEqual(await hop.locator('.confirm-actions button').allInnerTexts(), ['Don’t fetch', 'Fetch once'])
+  assert.deepEqual(await hop.locator(CONFIRM_BUTTON).allInnerTexts(), ['Don’t fetch', 'Fetch once'])
   await page.screenshot({ path: join(output, 'fetch-redirected.png') })
 
   await hop.getByRole('button', { name: 'Fetch once', exact: true }).click()

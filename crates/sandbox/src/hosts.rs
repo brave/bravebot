@@ -177,6 +177,22 @@ impl HostList {
         })
     }
 
+    /// Whether a denied entry covers any name `rule` covers, for a list that can only allow, such as
+    /// an OpenShell policy: there a rule that a denied entry overlaps at all has to be left out.
+    pub fn denies_any_name_of(&self, rule: &HostRule) -> bool {
+        self.denied
+            .iter()
+            .any(|denied| match (rule.wildcard, denied.wildcard) {
+                (false, _) => denied.covers(&rule.name),
+                (true, false) => rule.covers(&denied.name),
+                (true, true) => {
+                    denied.name == rule.name
+                        || denied.covers(&rule.name)
+                        || rule.covers(&denied.name)
+                }
+            })
+    }
+
     /// Whether an exact entry of the allowed list is `address` and no denied entry covers it. An
     /// IPv4-mapped address is compared as its IPv4 address. A wildcard names no address, so
     /// `*.0.0.1` does not let a tunnel reach `127.0.0.1`, and no entry can spell an IPv6 address.
@@ -395,5 +411,29 @@ mod tests {
         }
         assert!(!cargo.decide("registry.npmjs.org").is_allowed());
         assert!(registry_hosts(Toolchain::Maven).is_empty());
+    }
+    #[test]
+    fn a_denied_entry_overlapping_a_rule_at_all_denies_some_name_of_it() {
+        let (list, invalid) = HostList::parse(
+            [],
+            ["bad.example.com", "*.private.example.org", "*.corp.example"],
+        );
+        assert!(invalid.is_empty());
+        let denies = |entry: &str| list.denies_any_name_of(&HostRule::parse(entry).unwrap());
+        assert!(denies("bad.example.com"));
+        assert!(denies("*.example.com"), "a wildcard over a denied name");
+        assert!(denies("x.private.example.org"));
+        assert!(denies("*.private.example.org"));
+        assert!(
+            denies("*.a.private.example.org"),
+            "a wildcard below a denied one"
+        );
+        assert!(denies("*.example.org"), "a wildcard above a denied one");
+        assert!(!denies("good.example.com"));
+        assert!(
+            !denies("private.example.org"),
+            "a wildcard covers names below it only"
+        );
+        assert!(!denies("api.example.net"));
     }
 }

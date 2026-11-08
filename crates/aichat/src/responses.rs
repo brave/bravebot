@@ -35,7 +35,27 @@ use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request};
 use protocol::{Decoded, Ending, Event, WireUsage};
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Writes the end of a request by a failure the service reported and this build cannot name.
+///
+/// Every field is this program's own: the kind of event that carried it (a closed pair), that the
+/// code was not on the list, the time the request took and the requests sent. Nothing the service
+/// wrote is in it ([DIAG-7](../../../docs/specs/diagnostic-log.md#DIAG-7)).
+fn log_unlisted(carrier: protocol::Carrier, started: Instant, attempts: u32) {
+    bravebot_diag::error(
+        "aichat.stream_failure",
+        &[
+            ("event", bravebot_diag::Field::word(carrier.as_str())),
+            ("code", bravebot_diag::Field::word("unlisted")),
+            (
+                "elapsed_ms",
+                bravebot_diag::Field::num(started.elapsed().as_millis()),
+            ),
+            ("attempts", bravebot_diag::Field::num(attempts)),
+        ],
+    );
+}
 
 /// `body` as one zstd frame, the form the account's serving host takes a body in.
 ///
@@ -532,6 +552,7 @@ impl<'a> ResponsesClient<'a> {
         };
         let http = self.build(body, token.as_ref());
         self.spent.sent();
+        let started = Instant::now();
         let stream = match self.egress.fetch_streaming(
             policy,
             http,
@@ -598,13 +619,16 @@ impl<'a> ResponsesClient<'a> {
                     // Reported rather than read past. A reply the service abandoned ends the same
                     // way a dead connection does, so without this the cause is replaced by "the
                     // reply was cut off" and a request nothing can fix is asked for twice more.
-                    Decoded::Event(Event::Failed(failure)) => {
+                    Decoded::Event(Event::Failed(failure, carrier)) => {
+                        if failure == Failure::Unknown {
+                            log_unlisted(carrier, started, self.spent.attempts);
+                        }
                         return Err(ChatError::Reported { failure });
                     }
                     // The account's own words for a refusal, told as a refusal that came with a status
                     // is. Any other service has no such words, and a code it writes that is one of them is
                     // a failure it did not name.
-                    Decoded::Event(Event::Refused(refusal)) => {
+                    Decoded::Event(Event::Refused(refusal, carrier)) => {
                         return Err(if self.account.is_some() {
                             ChatError::Account(crate::AccountFailure::Named {
                                 refusal,
@@ -614,6 +638,7 @@ impl<'a> ResponsesClient<'a> {
                                 retry_after: None,
                             })
                         } else {
+                            log_unlisted(carrier, started, self.spent.attempts);
                             ChatError::Reported {
                                 failure: Failure::Unknown,
                             }
@@ -805,7 +830,7 @@ impl Reply {
             Event::Declined => self.withheld = true,
             // A failure and a refusal end the stream where they arrive, in `stream_once`, before a
             // reply is built from anything after them.
-            Event::Failed(_) | Event::Refused(_) => {}
+            Event::Failed(..) | Event::Refused(..) => {}
         }
     }
 

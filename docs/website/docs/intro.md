@@ -2,7 +2,7 @@
 sidebar_position: 1
 slug: /overview
 title: Overview
-description: What Brave Bot is, what makes it different, and where to start.
+description: Brave Bot's capabilities, structural prompt-injection protection, current status and starting points for installation and first use.
 ---
 
 # Brave Bot

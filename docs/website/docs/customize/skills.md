@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Skills
-description: Package a repeatable piece of know-how as a SKILL.md the planner loads when the task calls for it.
+description: Create SKILL.md files, describe and load skills, invoke them with slash commands, keep a skill applied, choose its model, include sibling files, evaluate skills and control trust.
 ---
 
 # Skills
@@ -181,6 +181,40 @@ never a path: a name holding `../` or an absolute path matches nothing and the c
 there is no lookup for it to reach. A name merely close to a real one is refused too rather than
 guessed at, because guessing would load instructions nobody asked for.
 
+## Built-in help sections
+
+`bravebot-help` carries the documentation of the running version. Loading it returns an index with
+one line per page: its exact name, title, topics and size. Sizes count Unicode scalar values in the
+whole page body, including whitespace and Markdown but excluding frontmatter and the tool-result
+wrapper. They are not byte or token counts; a combined visible character may contain more than one
+scalar value. For a page of more than 12000 characters the size is more than its bare name loads,
+and the index also gives the number of its sections.
+
+There are two routes to part of a page. The bare page name decides the first. A page of 12000
+characters or fewer loads whole. A longer page loads as an outline: its opening text and one line
+per section with the section's size and its name, `<page>#<section>`. The section name is the
+heading lowercased, with each run of characters other than letters and digits written as one
+hyphen and `-2`, `-3` added to a heading that repeats, as in
+`bravebot-help/reference/commands#request`. A section is a `##` heading, or a `###` heading where
+the page has no `##` heading, with everything under it up to the next one. Loading that name
+returns the section alone. A section is not split further, so one of more than 12000 characters
+loads whole.
+
+The second route works for any page. The planner loads a page's headings, for example
+`bravebot-help/using/sessions::headings`, then copies an exact section name from the result into
+`load_skill`. Section names have the form `<page>::section:<number>:<heading>`. The number is the
+heading's one-based position in the whole page, so headings with the same text have different
+names. The number and heading must both match, including case and inline Markdown; a near match
+is refused. Heading lists omit fenced examples and indented code. This route reaches headings at
+any level, including those nested inside a section of the outline.
+
+A section keeps its literal Markdown, its nested headings and examples, and ends before the next
+heading at the same or higher level. These selectors
+work only for published built-in help pages, not skills you write or the spec pages: load
+`bravebot-help/specs` and a listed spec page for clause headings, without clause bodies. Replacing
+`bravebot-help` with a skill of your own removes all the built-in page and section routes too.
+Loading built-in help grants no access to files or directories.
+
 ## Files beside the skill
 
 A skill is a directory, so it can keep a `reference.md` or a `scripts/` folder next to its
@@ -285,9 +319,10 @@ no directory behind them. They are the least specific source, so a skill of your
 name shadows one. The skill that tells a
 [`/loop`](../reference/commands.md#loop-interval-prompt) tick how to pace itself is one,
 and `bravebot-help` is another: it carries these documentation pages, so asking how to use bravebot
-is answered from the version you are running. Its pages are loaded one at a time, only the ones the
-question needs. It also carries the heading of every clause of the specifications, one page for each
-spec, for a question about exactly what bravebot does.
+is answered from the version you are running. Its index describes each page's topics and size;
+the planner loads headings and then only the sections the question needs. It also carries the
+heading of every clause of the specifications, one page for each spec, for a question about exactly
+what bravebot does.
 [`/help <question>`](../reference/commands.md#help-question) asks for it by name.
 
 :::caution

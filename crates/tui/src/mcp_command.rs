@@ -178,11 +178,17 @@ fn list(session: &mut Session, settings: &Settings) {
         return;
     }
     if !running.is_empty() {
+        let manifest_only = session
+            .servers
+            .session
+            .as_ref()
+            .map(crate::status::manifest_only)
+            .unwrap_or_default();
         session.note(t!(mcp_command_running));
         for server in running {
             session.note(format!(
                 "  {}",
-                crate::status::offering(std::slice::from_ref(&server))
+                crate::status::offering(std::slice::from_ref(&server), &manifest_only)
             ));
         }
     }
@@ -342,6 +348,8 @@ fn through_the_program(root: &Path, args: &[&str]) -> Ran {
             &me,
             bravebot_sandbox::programs::Inherits::All,
             bravebot_sandbox::programs::SearchPath::Inherited,
+            // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         )
         .args(args)
         .current_dir(root)

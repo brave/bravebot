@@ -98,7 +98,11 @@ delegate that starts closed is not offered `spawn_processor`, and its prompt doe
 hand files to processors. A reference made in such a
 context is described without the move that names a processor, and the tool's description says that
 `spawn_processor` is refused once the context holds private content and that those tools keep
-working.
+working. The same holds inside one round: a call later in the round can show private content, and
+the results of the round's earlier calls were composed before it, so once the round's calls have run
+and the context is private, each of those results is reworded without the processor move. The
+choice depends on the context's label alone, never on what a call printed. A round that leaves the
+context public keeps its results as composed.
 
 **Why.** A planner told to give a reference to a processor, and refused for the rest of the
 conversation when it does, reads the whole of a long output with `read_output` instead, which is
@@ -115,6 +119,8 @@ the content the processor was the way to avoid reading.
 `verified-by: bravebot_agent::tools::the_processor_is_described_as_refused_once_private_content_has_been_shown`
 `verified-by: bravebot_agent::turn::a_planner_that_cannot_start_a_processor_is_not_pointed_at_one`
 `verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_context`
+`verified-by: bravebot_agent::turn::a_reference_made_before_a_later_call_in_the_round_closes_processors_names_none`
+`verified-by: bravebot_agent::turn::a_capped_visible_result_made_before_a_later_call_closes_processors_names_none`
 
 <a id="PROC-5"></a>
 ### PROC-5: the output is never shown to the planner

@@ -110,14 +110,25 @@ whose answer is known, and reads no catalog; `make check-locales` runs it first,
 
 ## check-code-selectors.py
 
-Fails while a variable in `CODE_SELECTORS` in `crates/agent/src/gcloud.rs` lacks a test.
+Fails while a call of `programs::start` or `programs::start_against` does not state
+`CodeSelectors`, or a variable in a `CODE_SELECTORS` list, in `crates/sandbox/src/programs.rs`,
+`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs` or
+`crates/cli/src/push_identity.rs`, lacks a test.
 
-`gcloud` is started with the person's environment, and its launcher reads `CLOUDSDK_PYTHON` and
-`CLOUDSDK_CONFIG` to choose code to run. `command_for` takes such a variable off when its value
-names a path a stage may write. For each name in the list, this requires an
-`assert!(withheld("NAME", ...))` and an `assert!(!withheld("NAME", ...))` in the test module of the
-same file. A loop that keeps every value fails the first, and one that removes every value fails the
-second.
+A program bravebot starts for itself is started with the person's environment, and the programs
+can read variables that choose code to run, such as `CLOUDSDK_PYTHON` and `AWS_CONFIG_FILE`.
+`start` takes `CodeSelectors::Kept`, which leaves the environment as set, or
+`CodeSelectors::Checked(&NAME)`, which takes off each variable in the generic `CODE_SELECTORS`
+table in `crates/sandbox/src/programs.rs`, each `GIT_CONFIG_` variable and the names in `NAME`
+when the value names a path a stage may write. This requires every call of `start` and
+`start_against` in `crates/**/*.rs` to write one of the two at the call, and a `//` comment with
+every `Kept` outside a test. For each name in a list, it requires an
+`assert!(withheld("NAME", ...))` (or `checked`) and an `assert!(!withheld("NAME", ...))` in the test
+module of the same file. A loop over the whole table counts for every name in it. A loop that
+keeps every value fails the first, and one that removes every value fails the second. A name of
+the `Options` kind has no value to keep and needs only the first. A list may take an entry from
+`selectors::` in `crates/sandbox/src/programs.rs`, which this script reads as the variable the
+constant is named for.
 
 ```sh
 make check-code-selectors   # or contrib/check-code-selectors.py

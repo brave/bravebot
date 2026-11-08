@@ -124,6 +124,8 @@ pub struct Checked {
     pub reason: Option<Labelled<String>>,
     /// What the check cost, so a turn can report the whole of what it spent.
     pub usage: Usage,
+    /// Whether a reply arrived. False where the check could not be made, so no request completed.
+    pub completed: bool,
 }
 
 /// A check the person stopped before it finished.
@@ -222,6 +224,7 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
                 verdict: policy.vetting_did_not_complete(spec, "the check could not be made"),
                 reason: None,
                 usage: Usage::default(),
+                completed: false,
             });
         }
     };
@@ -231,6 +234,7 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
         verdict,
         reason,
         usage: completion.usage,
+        completed: true,
     })
 }
 

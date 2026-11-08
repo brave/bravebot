@@ -414,6 +414,8 @@ impl Authority {
             &bravebot_sandbox::programs::Resolved::named_by_person(&self.program),
             bravebot_sandbox::programs::Inherits::Only(&PASSED),
             bravebot_sandbox::programs::SearchPath::Reduced,
+            // The authority is a program the person named, started with only `PASSED`.
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         );
         command
             .arg("connector")
@@ -706,6 +708,7 @@ mod tests {
             &own,
             bravebot_sandbox::programs::Inherits::All,
             bravebot_sandbox::programs::SearchPath::Inherited,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         )
         .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
         .env(SESSION, &session)

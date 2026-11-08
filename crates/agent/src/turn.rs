@@ -1394,6 +1394,34 @@ fn attach_vetted_pictures<S: Sink>(
     }
 }
 
+/// A presentation as the planner is told of it once no processor can be started.
+fn for_context_closed(presented: &Presentation) -> String {
+    match presented {
+        Presentation::Quarantined(reference) => reference.clone().closed_to_processors().describe(),
+        Presentation::Visible(text) => text.clone(),
+    }
+}
+
+/// Reword the results of a round that pointed at a processor, once its calls have run and the
+/// context holds private content (PROC-4).
+///
+/// A result is composed while its call runs, and a later call of the same round can release
+/// output, which closes every processor. The planner reads the results together, so one that
+/// still named a processor would send it to a call that is refused. Decided by the policy's
+/// label state alone; the wording on both sides is the driver's.
+fn reword_for_closed_processors<S: Sink>(
+    policy: &Policy<'_, S>,
+    conversation: &mut Conversation,
+    rewordable: &mut Vec<(usize, String)>,
+) {
+    let closed = policy.processors_closed();
+    for (at, body) in rewordable.drain(..) {
+        if closed {
+            conversation.reword_result(at, body);
+        }
+    }
+}
+
 /// Put anything the person typed while the round ran in front of the next one.
 ///
 /// Called at a round boundary, once everything the round produced has gone into the conversation
@@ -1657,6 +1685,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
                 account.add_usage(delegated.usage);
+                account.requests += delegated.requests;
 
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
@@ -3076,6 +3105,13 @@ where
         said.push_str("\n\n");
         said.push_str(text);
     }
+    // Nothing was typed, attached or pasted: a provider that requires content in every user
+    // message would refuse the request this would otherwise add an empty one to, and the turn
+    // already has something to say from the piped input or the context files above. A command
+    // line that gave none of those and no prompt either is refused before the turn starts
+    // (CLI-2), so this is never the only message the turn would hold.
+    let nothing_was_typed =
+        said.is_empty() && task.attachments.is_empty() && task.images.is_empty();
     let submitted = if task.attachments.is_empty() && task.images.is_empty() {
         Message::user(said)
     } else {
@@ -3161,6 +3197,7 @@ where
             submitted,
             Provenance::TypedWithSessions(task.prompt.clone()),
         ),
+        None if nothing_was_typed => {}
         None => conversation.push_from(submitted, Provenance::Typed),
     }
     // A delegate's task is the whole of what it was told, so a compaction sends it again
@@ -3309,7 +3346,7 @@ where
     // here. The condition is a duration and whether a list was held, never a server's bytes.
     if !settled_wait.is_zero() || mcp.is_some() {
         reporter.spent(crate::outcome::Spent {
-            timing: spent.finish(),
+            timing: spent.finish(&account),
             ..account
         });
     }
@@ -3548,7 +3585,7 @@ where
         wakeup: state.wakeup,
         watches: state.watches,
         links: state.links,
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         clean: false,
         standing_refusals: Vec::new(),
         worked_around: 0,
@@ -3770,7 +3807,7 @@ where
         if let Err(error) = &completion
             && let Some(usage) = error.completed_usage()
         {
-            state.account.add_usage(usage);
+            state.account.add_request(usage);
             if let Some(measured) = error.context_tokens() {
                 state.account.context_tokens = measured;
                 conversation.measured(state.account.context_tokens);
@@ -3907,6 +3944,9 @@ where
         // Held until every call in the round has its result, since a picture goes in a
         // message of its own after them and never between a call and its answer.
         let mut attached = Vec::new();
+        // The results of this round that name a processor, by position in the conversation, each
+        // with the words it has once none can be started (PROC-4).
+        let mut rewordable: Vec<(usize, String)> = Vec::new();
         // Reads that already ran beside each other, by the call they answer (TURN-10).
         let mut ahead: Vec<Option<tools::Ahead>> = completion.calls.iter().map(|_| None).collect();
         let mut examined = 0;
@@ -3929,6 +3969,7 @@ where
             // Checked per call, because a tool may write. Stopping here means the remaining
             // calls in this round never run.
             if cancel.is_cancelled() {
+                reword_for_closed_processors(policy, conversation, &mut rewordable);
                 attach_vetted_pictures(policy, conversation, &mut attached);
                 return Err(TurnError::Cancelled { attempts: Some(0) });
             }
@@ -4006,6 +4047,7 @@ where
                         crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
                     )),
                     crate::repeated_call::Held::Stop => {
+                        reword_for_closed_processors(policy, conversation, &mut rewordable);
                         attach_vetted_pictures(policy, conversation, &mut attached);
                         return Err(TurnError::Cancelled { attempts: Some(0) });
                     }
@@ -4129,6 +4171,11 @@ where
             // Set where a skill's text was shown, so the result is tagged with it.
             let mut skill_shown: Option<String> = None;
             let mut message_sent: Option<Composed> = None;
+            // What a result that points at a processor says once none can be started, set in the
+            // arms below that make a reference while one still can. A later call of the round can
+            // release output, which makes the context private and closes every processor, and the
+            // result is then reworded (PROC-4).
+            let mut when_closed: Option<String> = None;
             // Set in each arm below, where the presentation that decides it is in scope.
             let result_from: Provenance;
             let body = if let Some(entries) = &output.entries {
@@ -4210,12 +4257,30 @@ where
                 };
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
-                format!(
-                    "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}\n\n{described}",
-                    output.tool,
-                    references.len(),
-                )
+                // The pattern's own sentence, which the tool wrote from the pattern the planner
+                // typed: the body that would carry it reaches nobody here.
+                let unmatched = output
+                    .unmatched
+                    .as_deref()
+                    .map(|note| format!(" {note}"))
+                    .unwrap_or_default();
+                let listed = |described: &str| {
+                    format!(
+                        "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
+             quarantined, one reference each.{capped}{linked}{unmatched}\n\n{described}",
+                        output.tool,
+                        references.len(),
+                    )
+                };
+                when_closed = (!policy.processors_closed()).then(|| {
+                    let closed: Vec<_> = references
+                        .iter()
+                        .cloned()
+                        .map(bravebot_core::reference::Reference::closed_to_processors)
+                        .collect();
+                    listed(&bravebot_core::reference::describe_listing(&closed))
+                });
+                listed(&described)
             } else if !output.pictures.is_empty() {
                 // A server's answer that carried pictures: its text and each picture get a
                 // reference of their own, the text first and the pictures in the order the server
@@ -4224,6 +4289,7 @@ where
                 // given it as a picture.
                 let mut ids = Vec::new();
                 let mut described = Vec::new();
+                let mut described_closed = Vec::new();
                 let text = policy
                     .present(
                         "tool_result",
@@ -4245,6 +4311,7 @@ where
                     ids.push(reference.slot.to_string());
                 }
                 described.push(text.for_context());
+                described_closed.push(for_context_closed(&text));
                 for picture in &output.pictures {
                     let kept = policy
                         .present_a_picture(
@@ -4281,17 +4348,23 @@ where
                         ids.push(reference.slot.to_string());
                     }
                     described.push(kept.for_context());
+                    described_closed.push(for_context_closed(&kept));
                 }
                 reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 result_from = Provenance::Reference(ids.join(", "));
                 let left_out = sentences::left_out_note(output.left_out);
-                format!(
-                    "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its text and its {} are \
+                let with_pictures = |described: &[String]| {
+                    format!(
+                        "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its text and its {} are \
                      quarantined, one reference each.{left_out}\n\n{}",
-                    output.tool,
-                    tools::tally(output.pictures.len(), "picture", "pictures"),
-                    described.join("\n")
-                )
+                        output.tool,
+                        tools::tally(output.pictures.len(), "picture", "pictures"),
+                        described.join("\n")
+                    )
+                };
+                when_closed =
+                    (!policy.processors_closed()).then(|| with_pictures(&described_closed));
+                with_pictures(&described)
             } else {
                 // Reserved here rather than before the branch above, which reserves one per
                 // entry and would otherwise leave this one hanging: a name handed out and
@@ -4450,7 +4523,7 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_usage(released.usage);
+                        state.account.add_call(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.
@@ -4458,7 +4531,7 @@ where
                             cancellation = released.stopped;
                         }
                         reporter.spent(crate::outcome::Spent {
-                            timing: state.spent.finish(),
+                            timing: state.spent.finish(&state.account),
                             ..state.account
                         });
                         released
@@ -4622,18 +4695,30 @@ where
                         // After the sample rather than in the middle of it, where the
                         // notice naming what went is: what wrote that notice dropped the
                         // bytes and does not know the slot they were kept in.
-                        let rest = match (&whole, &read_from) {
-                            (Some(reference), _) => format!(
-                                "\n\nThe whole of this output, middle included, is a \
+                        let rest_with =
+                            |describe: fn(&bravebot_core::reference::Reference) -> String| match (
+                                &whole, &read_from,
+                            ) {
+                                (Some(reference), _) => format!(
+                                    "\n\nThe whole of this output, middle included, is a \
                              reference:\n{}",
-                                reference.describe()
-                            ),
-                            (None, Some(slot)) => format!(
-                                "\n\nThe same output is {slot}, to name wherever a tool \
+                                    describe(reference)
+                                ),
+                                (None, Some(slot)) => format!(
+                                    "\n\nThe same output is {slot}, to name wherever a tool \
                                  takes a reference."
-                            ),
-                            (None, None) => String::new(),
-                        };
+                                ),
+                                (None, None) => String::new(),
+                            };
+                        let rest = rest_with(bravebot_core::reference::Reference::describe);
+                        // The same sentence for a context that holds private content by the end of
+                        // the round, where the reference names no processor (PROC-4). Only a
+                        // result with a reference of its own can differ.
+                        let rest_closed = whole.is_some().then(|| {
+                            rest_with(|reference| {
+                                reference.clone().closed_to_processors().describe()
+                            })
+                        });
                         // Workspace content only, as with the landing above: the driver's
                         // own sentence about a call is already its note.
                         if output.content {
@@ -4668,10 +4753,16 @@ where
                             _ => String::new(),
                         };
                         let respelled = sentences::respelled_note(output.respelled);
-                        format!(
-                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
-                            output.tool
-                        )
+                        let composed = |rest: &str| {
+                            format!(
+                                "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
+                                output.tool
+                            )
+                        };
+                        when_closed = rest_closed
+                            .filter(|_| !policy.processors_closed())
+                            .map(|closed| composed(&closed));
+                        composed(&rest)
                     }
                     // Told a mkdir's empty output was quarantined, with the ways to
                     // process, vet or read it, a planner went looking for something to
@@ -4773,16 +4864,19 @@ where
                         let linked = sentences::links_note(&output.tool, output.links);
                         // How to see this one and how to stop being asked, for a run and only for a run:
                         // the reasoning is on `sentences::run_advice`.
-                        let advice = sentences::run_advice(
-                            output.printed_by.is_some(),
-                            output.covered_by_record,
-                            read_output_is(),
-                            plan.beside,
-                            &output.tool,
-                            output.read_asked,
-                            reference.bytes,
-                            output_cap,
-                        );
+                        let advice_beside = |beside: tools::Beside| {
+                            sentences::run_advice(
+                                output.printed_by.is_some(),
+                                output.covered_by_record,
+                                read_output_is(),
+                                beside,
+                                &output.tool,
+                                output.read_asked,
+                                reference.bytes,
+                                output_cap,
+                            )
+                        };
+                        let advice = advice_beside(plan.beside);
                         // `read: true` asked of `fetch_url` or a server's tool that still came
                         // back as a reference: said once, so it does not read as an unexplained
                         // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
@@ -4818,11 +4912,19 @@ where
                             }
                             _ => String::new(),
                         };
-                        format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
-                            output.tool,
-                            reference.describe()
-                        )
+                        let composed = |described: &str, advice: &str| {
+                            format!(
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
+                                output.tool,
+                            )
+                        };
+                        when_closed = (!policy.processors_closed()).then(|| {
+                            composed(
+                                &reference.clone().closed_to_processors().describe(),
+                                &advice_beside(plan.beside.without(tools::Named::SpawnProcessor)),
+                            )
+                        });
+                        composed(&reference.describe(), &advice)
                     }
                 }
             };
@@ -4830,7 +4932,7 @@ where
             // What the person typed beside their answer to the question this call asked, after the
             // result and in their own words (PROMPT-12). Trusted, so it is shown whatever the
             // result was: a result held back as a reference is still followed by the note.
-            let body = match &output.told {
+            let note = match &output.told {
                 Some(told) => match policy.present(
                     "tool_result",
                     bravebot_core::SlotId::new("note"),
@@ -4839,12 +4941,20 @@ where
                     conversation.quarantine(),
                 ) {
                     Ok(presented) if presented.is_visible() => {
-                        format!("{body}\n\n{}", presented.for_context())
+                        Some(format!("\n\n{}", presented.for_context()))
                     }
-                    _ => body,
+                    _ => None,
                 },
-                None => body,
+                None => None,
             };
+            let (body, when_closed) = match note {
+                Some(note) => (
+                    format!("{body}{note}"),
+                    when_closed.map(|closed| format!("{closed}{note}")),
+                ),
+                None => (body, when_closed),
+            };
+            let at = conversation.len();
 
             // A result answers the call it belongs to by id where the round replayed calls at
             // all. Where it did not, the result is a plain message, as everything here was
@@ -4875,6 +4985,9 @@ where
                     result_from,
                 ),
             }
+            if let Some(closed) = when_closed {
+                rewordable.push((at, closed));
+            }
             // How many tasks the list leaves open, whichever way the result went into the
             // conversation. Kept only where the planner was shown the list: a list it was not shown
             // is still the panel's, and the count of the one before it no longer describes that.
@@ -4884,12 +4997,14 @@ where
                 conversation.open_tasks_counted(shown_window.then_some(open), in_answer);
             }
             if let Some(cancelled) = cancellation {
+                reword_for_closed_processors(policy, conversation, &mut rewordable);
                 attach_vetted_pictures(policy, conversation, &mut attached);
                 return Err(TurnError::Cancelled {
                     attempts: cancelled.attempts,
                 });
             }
         }
+        reword_for_closed_processors(policy, conversation, &mut rewordable);
         // Sent even where the turn stops here. The result told the planner the file is
         // attached, and a conversation holding that sentence without the file would be
         // read by the next turn as a picture it was shown and cannot find.
@@ -5541,6 +5656,7 @@ mod tests {
                         report,
                         kind: "one-round".to_string(),
                         usage: Default::default(),
+                        requests: 0,
                     }),
                 };
                 (
@@ -5755,6 +5871,7 @@ mod tests {
                             report,
                             kind: "one-round".to_string(),
                             usage: Default::default(),
+                            requests: 0,
                         }),
                         vouched: handed,
                         notices: Vec::new(),
@@ -5850,6 +5967,7 @@ mod tests {
                                 completion_tokens: 200,
                                 cached: Default::default(),
                             },
+                            requests: 1,
                         }),
                         vouched: handed,
                         notices: Vec::new(),
@@ -5948,6 +6066,7 @@ mod tests {
                                     report,
                                     kind: "one-round".to_string(),
                                     usage: Default::default(),
+                                    requests: 0,
                                 }),
                                 vouched: handed,
                                 notices: Vec::new(),
@@ -6065,6 +6184,7 @@ mod tests {
                                         report,
                                         kind: "one-round".to_string(),
                                         usage: Default::default(),
+                                        requests: 0,
                                     }),
                                     vouched: handed,
                                     notices: Vec::new(),
@@ -6248,6 +6368,7 @@ mod tests {
                                     completion_tokens: 100,
                                     ..Default::default()
                                 },
+                                requests: 1,
                             }),
                             vouched: handed,
                             notices: Vec::new(),

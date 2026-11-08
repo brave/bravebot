@@ -1479,7 +1479,12 @@ fn manifest_step_asks(message: &crate::remote_confirm::ToMain) -> bool {
     use crate::remote_confirm::ToMain;
     matches!(
         message,
-        ToMain::Write(_) | ToMain::Fetch(_) | ToMain::Vouch(_) | ToMain::Exposure(_)
+        ToMain::Write(_)
+            | ToMain::Fetch(_)
+            | ToMain::Vouch(_)
+            | ToMain::Exposure(_)
+            | ToMain::ToolList(_)
+            | ToMain::McpCall(_)
     )
 }
 
@@ -18951,8 +18956,8 @@ mod tests {
         );
     }
 
-    /// A manifest run's steps put writes, fetches, vouches and credential exposures to the person,
-    /// and each of those has to turn the title to waiting. Questions the mode refuses undrawn and
+    /// A manifest run's steps put writes, fetches, vouches, credential exposures, a server's list and
+    /// a server's calls to the person, and each of those has to turn the title to waiting. Questions the mode refuses undrawn and
     /// messages that ask nothing must not.
     #[test]
     fn every_approval_a_manifest_step_draws_turns_the_title_to_waiting() {
@@ -18975,6 +18980,28 @@ mod tests {
             bravebot_agent::confirm::ExposureRequest {
                 path: "notes.md".into(),
                 credentials: Vec::new(),
+            }
+        )));
+        assert!(manifest_step_asks(&ToMain::ToolList(
+            bravebot_agent::confirm::ToolListRequest {
+                alias: "weather".into(),
+                tools: Vec::new(),
+                refused: 0,
+                withheld: 0,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+            }
+        )));
+        assert!(manifest_step_asks(&ToMain::McpCall(
+            bravebot_agent::confirm::McpCallRequest {
+                alias: "weather".into(),
+                tool: "get_forecast".into(),
+                arguments: Vec::new(),
+                also: Vec::new(),
+                description: None,
+                may_stand: false,
+                asked_every_call: false,
+                asked_for_private_arguments: false,
             }
         )));
         assert!(!manifest_step_asks(&ToMain::Streaming("text".into())));
@@ -20020,6 +20047,26 @@ mod tests {
         let mut helped = Session::new("none");
         enter_line(&mut helped, "/help how do I stop a background job?");
         assert!(!will_look_again(&helped, Wrote::ThePerson));
+    }
+
+    /// CMD-24: only the question contributes a person's file names. The driver-written flag
+    /// suppresses later looks without suppressing those names at the submission boundary.
+    #[test]
+    fn a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers() {
+        let mut session = Session::new("none");
+        let Action::Submit(prompt) = enter_line(
+            &mut session,
+            "/help explain file mentions using @crates/core/src/policy.rs",
+        ) else {
+            panic!("the question did not start a turn");
+        };
+        assert_eq!(
+            files_named_in(&prompt, Wrote::ThePerson, std::path::Path::new("."), &[]),
+            vec!["crates/core/src/policy.rs".to_string()]
+        );
+        assert!(!will_look_again(&session, Wrote::ThePerson));
+        assert!(session.take_driver_prompt());
+        assert!(!crate::help_command::prompt("").contains('@'));
     }
 
     /// CMD-24: asked nothing, `/help` says what it takes and starts no turn, so no request is made
@@ -34411,15 +34458,19 @@ mod tests {
         );
     }
 
-    /// Each request made beside the work reports what it read and wrote, and the session's split
-    /// has to hold both, whichever command made it: a caller that charged the total alone would
-    /// leave those tokens in neither column of `stats`.
+    /// Each request made beside the work reports what it read and wrote and what the cache served,
+    /// and the session's split has to hold all of it, whichever command made it: a caller that
+    /// charged the total alone would leave those tokens in neither column of `stats`, and one that
+    /// left the cache figures out would record a session that used its cache as one that did not.
     #[test]
     fn every_request_beside_the_work_is_charged_with_what_it_read_and_wrote() {
         let usage = bravebot_aichat::protocol::Usage {
             prompt_tokens: 70,
             completion_tokens: 30,
-            ..Default::default()
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 50,
+                written_tokens: 10,
+            },
         };
         let charged = |session: &Session| (session.tokens, session.split());
         let expected = (
@@ -34427,6 +34478,10 @@ mod tests {
             bravebot_session::sessions::Split {
                 read: 70,
                 written: 30,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 50,
+                    written_tokens: 10,
+                },
             },
         );
 
@@ -34496,7 +34551,9 @@ mod tests {
     fn a_finished_turn_is_charged_with_what_it_read_and_wrote() {
         let mut session = Session::new("none");
 
-        for (prompt, tokens, written) in [("first", 100, 30), ("second", 250, 40)] {
+        for (prompt, tokens, written, cached) in
+            [("first", 100, 30, (60, 10)), ("second", 250, 40, (100, 0))]
+        {
             type_line(&mut session, prompt);
             handle_key(&mut session, key(KeyCode::Enter));
             complete_turn(
@@ -34505,6 +34562,10 @@ mod tests {
                 Vec::new(),
                 tokens,
                 written,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: cached.0,
+                    written_tokens: cached.1,
+                },
                 None,
             );
         }
@@ -34514,7 +34575,11 @@ mod tests {
             session.split(),
             bravebot_session::sessions::Split {
                 read: 280,
-                written: 70
+                written: 70,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 160,
+                    written_tokens: 10,
+                },
             },
             "a finished turn was not charged with how its tokens divide"
         );
@@ -34530,7 +34595,10 @@ mod tests {
         session.end_aside_of(bravebot_aichat::protocol::Usage {
             prompt_tokens: 70,
             completion_tokens: 30,
-            ..Default::default()
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 50,
+                written_tokens: 10,
+            },
         });
 
         let standing = with_standing(
@@ -34548,7 +34616,11 @@ mod tests {
                 100,
                 bravebot_session::sessions::Split {
                     read: 70,
-                    written: 30
+                    written: 30,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 50,
+                        written_tokens: 10,
+                    },
                 }
             )
         );
@@ -43337,7 +43409,11 @@ mod tests {
                 session.split(),
                 bravebot_session::sessions::Split {
                     read: 25,
-                    written: 12
+                    written: 12,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 5,
+                        written_tokens: 0,
+                    },
                 },
                 "the split was charged more than once, or not at all"
             );
@@ -43479,7 +43555,11 @@ mod tests {
             session.split(),
             bravebot_session::sessions::Split {
                 read: 33,
-                written: 10
+                written: 10,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 7,
+                    written_tokens: 0,
+                },
             },
             "a failed turn's split was not the latest report's"
         );
@@ -43809,7 +43889,10 @@ mod tests {
         session.charge_suggestion(bravebot_aichat::protocol::Usage {
             prompt_tokens: 90,
             completion_tokens: 30,
-            ..Default::default()
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 60,
+                written_tokens: 0,
+            },
         });
         assert_eq!(session.tokens, 120);
         assert_eq!(session.spend_by_turn().get(&0).copied(), Some(120));
@@ -43817,7 +43900,11 @@ mod tests {
             session.split(),
             bravebot_session::sessions::Split {
                 read: 90,
-                written: 30
+                written: 30,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 60,
+                    written_tokens: 0,
+                },
             },
             "a suggestion's request was charged without how it divided"
         );

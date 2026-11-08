@@ -19,10 +19,77 @@
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-/// How a turn's wall clock divided up.
+/// What a turn did, as counts, kept beside where its time went.
 ///
-/// Nothing in here is content, a path, or a label. It is five counts of milliseconds, so it may be
-/// written down and shown without any release: see [`crate::turn::Outcome::timing`].
+/// A session's totals cannot say which turn made forty requests, which one wrote the most, or which
+/// one the service served from its cache, and none of those can be recovered from the conversation
+/// afterwards: a turn that failed or was stopped keeps no messages of its own, and the service's
+/// cache figures are in no message. Nothing in here is content, a path, or a label. It is five
+/// counts, so it may be written down and shown without any release.
+///
+/// Delegates' requests and tokens are in it, as they are in the turn's total, since the turn
+/// was charged for them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Activity {
+    /// Model requests that completed: the turn's own, a processor's, a summary's and a delegate's.
+    #[serde(default)]
+    pub requests: u64,
+    /// Tokens the model wrote, which is [`crate::outcome::Spent::output_tokens`] for the turn.
+    #[serde(default)]
+    pub written_tokens: u64,
+    /// Of the tokens the model read, those the service answered out of its prompt cache.
+    ///
+    /// Zero for a service that states no cache figure, which reads the same as a cache that
+    /// missed ([`bravebot_aichat::protocol::Cached`]).
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// The tokens the service wrote into its prompt cache.
+    #[serde(default)]
+    pub cache_written_tokens: u64,
+    /// Summaries the turn asked for to make room, which each cost a request.
+    #[serde(default)]
+    pub compactions: u64,
+}
+
+impl Activity {
+    /// The counts an account holds, with the `compactions` the clock has made.
+    ///
+    /// One place that reads an account for these, so that a report summed after its timing was
+    /// built (a turn's with its delegates') can have them made again from the sum.
+    pub fn of(account: &crate::outcome::Spent, compactions: u64) -> Self {
+        Self {
+            requests: account.requests,
+            written_tokens: account.output_tokens,
+            cache_read_tokens: account.cached.read_tokens,
+            cache_written_tokens: account.cached.written_tokens,
+            compactions,
+        }
+    }
+
+    /// Whether nothing was counted, which is what a record written before this was kept reads as.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Add another turn's counts, saturating so that a total over a session cannot wrap.
+    pub fn add(&mut self, other: Activity) {
+        self.requests = self.requests.saturating_add(other.requests);
+        self.written_tokens = self.written_tokens.saturating_add(other.written_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(other.cache_read_tokens);
+        self.cache_written_tokens = self
+            .cache_written_tokens
+            .saturating_add(other.cache_written_tokens);
+        self.compactions = self.compactions.saturating_add(other.compactions);
+    }
+}
+
+/// How a turn's wall clock divided up, and what it did in that time.
+///
+/// Nothing in here is content, a path, or a label. It is five counts of milliseconds and the
+/// [`Activity`] counts, so it may be written down and shown without any release: see
+/// [`crate::turn::Outcome::timing`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timing {
     /// The whole turn, end to end, as the turn loop saw it.
@@ -58,6 +125,10 @@ pub struct Timing {
     /// A record written before this figure existed reads as zero.
     #[serde(default)]
     pub file_wait_ms: u64,
+    /// What the turn did while the clock ran. Left out of a record while nothing was counted, and
+    /// read as nothing counted from a record written before it was kept.
+    #[serde(default, skip_serializing_if = "Activity::is_empty")]
+    pub activity: Activity,
 }
 
 impl Timing {
@@ -86,9 +157,11 @@ impl Timing {
         self.tools_ms += other.tools_ms;
         self.stalled_ms += other.stalled_ms;
         self.file_wait_ms += other.file_wait_ms;
+        self.activity.add(other.activity);
     }
 
-    /// Add another turn's inference, tool, stalled and file-wait figures, leaving `wall_ms` alone.
+    /// Add another turn's inference, tool, stalled and file-wait figures and its activity, leaving
+    /// `wall_ms` alone.
     ///
     /// For a caller that keeps its own wall clock, which is better than the worker's.
     pub fn add_measured(&mut self, other: Timing) {
@@ -96,6 +169,7 @@ impl Timing {
         self.tools_ms += other.tools_ms;
         self.stalled_ms += other.stalled_ms;
         self.file_wait_ms += other.file_wait_ms;
+        self.activity.add(other.activity);
     }
 }
 
@@ -113,16 +187,23 @@ pub struct Elapsed {
     pub stalled: Duration,
     /// Time blocked entering the file-authority boundary, see [`Timing::file_wait_ms`].
     pub file_wait: Duration,
+    /// Summaries the turn has made, see [`Activity::compactions`].
+    pub compactions: u64,
 }
 
 impl Elapsed {
-    pub fn finish(self) -> Timing {
+    /// The figures so far, with the requests and tokens `account` has counted.
+    ///
+    /// Takes the account rather than leaving the caller to copy from it, so that a report built
+    /// from the clock alone cannot be written down without the counts that belong with it.
+    pub fn finish(self, account: &crate::outcome::Spent) -> Timing {
         Timing {
             wall_ms: millis(self.wall),
             inference_ms: millis(self.inference),
             tools_ms: millis(self.tools),
             stalled_ms: millis(self.stalled),
             file_wait_ms: millis(self.file_wait),
+            activity: Activity::of(account, self.compactions),
         }
     }
 }
@@ -465,6 +546,7 @@ mod tests {
             tools_ms: 100,
             stalled_ms: 100,
             file_wait_ms: 300,
+            ..Default::default()
         };
         assert_eq!(timing.overhead_ms(), 400);
     }
@@ -503,6 +585,7 @@ mod tests {
             tools_ms: 1_500,
             stalled_ms: 2_000,
             file_wait_ms: 0,
+            ..Default::default()
         };
         assert_eq!(timing.overhead_ms(), 500);
     }
@@ -517,6 +600,7 @@ mod tests {
             tools_ms: 200,
             stalled_ms: 200,
             file_wait_ms: 0,
+            ..Default::default()
         };
         assert_eq!(timing.overhead_ms(), 0);
     }
@@ -530,6 +614,7 @@ mod tests {
             tools_ms: 10,
             stalled_ms: 20,
             file_wait_ms: 0,
+            ..Default::default()
         });
         total.add(Timing {
             wall_ms: 50,
@@ -537,6 +622,7 @@ mod tests {
             tools_ms: 5,
             stalled_ms: 5,
             file_wait_ms: 0,
+            ..Default::default()
         });
         assert_eq!(total.wall_ms, 150);
         assert_eq!(total.inference_ms, 90);
@@ -554,6 +640,7 @@ mod tests {
             tools_ms: 2,
             stalled_ms: 3,
             file_wait_ms: 0,
+            ..Default::default()
         };
         total.add_measured(Timing {
             wall_ms: 999_999,
@@ -561,6 +648,7 @@ mod tests {
             tools_ms: 20,
             stalled_ms: 30,
             file_wait_ms: 0,
+            ..Default::default()
         });
         assert_eq!(
             total,
@@ -570,6 +658,7 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             }
         );
     }
@@ -582,7 +671,109 @@ mod tests {
         for _ in 0..10 {
             elapsed.inference += Duration::from_micros(1_900);
         }
-        assert_eq!(elapsed.finish().inference_ms, 19);
+        assert_eq!(
+            elapsed
+                .finish(&crate::outcome::Spent::default())
+                .inference_ms,
+            19
+        );
+    }
+
+    /// The clock counts the summaries and the account counts the requests, so a report that takes
+    /// either from the wrong one writes down zero, or another turn's count.
+    #[test]
+    fn finishing_takes_the_requests_tokens_and_cache_from_the_account_and_compactions_from_the_clock()
+     {
+        let account = crate::outcome::Spent {
+            tokens: 9_000,
+            output_tokens: 40,
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens: 300,
+                written_tokens: 20,
+            },
+            requests: 5,
+            ..Default::default()
+        };
+        let elapsed = Elapsed {
+            compactions: 2,
+            ..Elapsed::default()
+        };
+        assert_eq!(
+            elapsed.finish(&account).activity,
+            Activity {
+                requests: 5,
+                written_tokens: 40,
+                cache_read_tokens: 300,
+                cache_written_tokens: 20,
+                compactions: 2,
+            }
+        );
+    }
+
+    /// A total over turns, and a failed turn charged beside the time it was measured with, both
+    /// add the counts as they add the milliseconds.
+    #[test]
+    fn activity_is_added_with_the_time_by_both_adders_and_saturates() {
+        let turn = |requests, compactions| Timing {
+            wall_ms: 10,
+            activity: Activity {
+                requests,
+                written_tokens: 7,
+                cache_read_tokens: 11,
+                cache_written_tokens: 13,
+                compactions,
+            },
+            ..Default::default()
+        };
+        let mut total = turn(3, 1);
+        total.add(turn(4, 0));
+        assert_eq!(total.activity.requests, 7);
+        assert_eq!(total.activity.written_tokens, 14);
+        assert_eq!(total.activity.cache_read_tokens, 22);
+        assert_eq!(total.activity.cache_written_tokens, 26);
+        assert_eq!(total.activity.compactions, 1);
+
+        let mut kept = turn(1, 0);
+        kept.add_measured(turn(2, 3));
+        assert_eq!(kept.wall_ms, 10, "the wall clock is the caller's");
+        assert_eq!((kept.activity.requests, kept.activity.compactions), (3, 3));
+
+        let mut full = turn(u64::MAX, 0);
+        full.add(turn(1, 0));
+        assert_eq!(full.activity.requests, u64::MAX);
+    }
+
+    /// An empty activity adds nothing to the record a turn is written in, a record from before
+    /// the counts reads as none counted, and counts survive being written.
+    #[test]
+    fn activity_is_left_out_while_empty_and_survives_a_round_trip() {
+        let none = serde_json::to_string(&Timing::default()).expect("serialises");
+        assert!(!none.contains("activity"), "{none}");
+        let old: Timing = serde_json::from_str(
+            r#"{"wall_ms":10,"inference_ms":4,"tools_ms":3,"stalled_ms":1,"file_wait_ms":0}"#,
+        )
+        .expect("parses");
+        assert!(old.activity.is_empty());
+
+        let counted = Timing {
+            activity: Activity {
+                requests: 6,
+                written_tokens: 70,
+                cache_read_tokens: 800,
+                cache_written_tokens: 90,
+                compactions: 1,
+            },
+            ..Default::default()
+        };
+        let body = serde_json::to_string(&counted).expect("serialises");
+        assert_eq!(
+            serde_json::from_str::<Timing>(&body).expect("parses"),
+            counted
+        );
+        let partial: Timing =
+            serde_json::from_str(r#"{"activity":{"requests":2}}"#).expect("parses");
+        assert_eq!(partial.activity.requests, 2);
+        assert_eq!(partial.activity.written_tokens, 0);
     }
 
     /// The figures are written into a session record, so they have to survive being one.
@@ -594,6 +785,7 @@ mod tests {
             tools_ms: 3,
             stalled_ms: 4,
             file_wait_ms: 0,
+            ..Default::default()
         };
         let body = serde_json::to_string(&timing).expect("serialises");
         assert_eq!(

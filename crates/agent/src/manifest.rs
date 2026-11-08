@@ -299,7 +299,8 @@ const REGISTRY: &[Advertised] = &[
         // The capability names the server, which only the step says, so the handler asks for it.
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for. The arguments are \
-                  written out in full here and fixed; the call is put to the person as it comes up",
+                  written out in full here and fixed; the call is put to the person as it comes up, \
+                  and what it returns is shown to them",
         args: "server* (an alias from the list below), tool*, arguments (a JSON object; nothing \
                a step read can be named in it)",
     },
@@ -688,7 +689,7 @@ struct Accounting {
 
 impl Accounting {
     fn publish(&mut self, reporter: &mut impl Reporter) {
-        self.spent.timing = self.elapsed.finish();
+        self.spent.timing = self.elapsed.finish(&self.spent);
         reporter.spent(self.spent);
     }
 }
@@ -1237,7 +1238,7 @@ fn ask<S: Sink, R: Reporter>(
         Err(error) => error.completed_usage(),
     };
     if let Some(usage) = usage {
-        accounting.spent.add_usage(usage);
+        accounting.spent.add_request(usage);
     }
     accounting.publish(reporter);
     let completion = completion?;
@@ -1540,7 +1541,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         // that armed one would be adding to a run whose steps were settled without it.
         watches: Vec::new(),
         links: Vec::new(),
-        timing: accounting.elapsed.finish(),
+        timing: accounting.elapsed.finish(&accounting.spent),
         display: shown,
         notices: Vec::new(),
     })
@@ -1775,7 +1776,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     Err(_) => None,
                 };
                 if let Some(usage) = usage {
-                    accounting.spent.add_usage(usage);
+                    accounting.spent.add_request(usage);
                 }
                 accounting.publish(reporter);
                 let mut processed = match processed {

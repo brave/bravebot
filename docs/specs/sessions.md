@@ -367,6 +367,17 @@ the total, and clearing the conversation resets it. A record written before the 
 neither figure, and a session continued from one holds the split of its later turns only, so the two
 can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
 
+The split also holds, under `cache`, how many of the tokens read the service answered out of its own
+cache (`read_tokens`) and how many it wrote into the cache (`written_tokens`). They are two more
+running totals that each charge adds to with the rest of its split, and they are undone, cleared,
+restored and carried by a resume with it. The session's cache hit rate is `read_tokens` over the
+tokens read. They are totals for the session and not for each turn. They are left out of the record
+while both are zero, which a service that states no cache figure reports as much as a charge that
+missed ([BACKEND-31](backends.md#BACKEND-31)), and a record written before they were kept has none.
+The status panel does not read them back. It reports the last turn run in this process, so a
+resumed session shows no cache until a turn has run in it
+([PANEL-8](info-panel.md#PANEL-8)).
+
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
 session, and `schedule history` reads the tokens it spent from the record.
@@ -413,6 +424,15 @@ than the one in force at the time.
 `verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
 `verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`
 `verified-by: bravebot_cli::plain::a_failed_turn_is_charged_what_its_completed_requests_cost`
+`verified-by: bravebot_session::sessions::a_split_writes_its_cache_figures_only_when_it_has_some`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_cache_figures_reads_them_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_cache_figure_stating_one_half_reads_the_other_as_zero`
+`verified-by: bravebot_session::sessions::adding_a_split_sums_its_cache_figures_and_saturates`
+`verified-by: bravebot_session::sessions::cutting_a_split_to_its_total_keeps_the_cache_figures`
+`verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_them`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them`
+`verified-by: bravebot_cli::running::a_background_session_adds_the_cache_figures_of_its_turn_to_the_record_it_resumed`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -1649,11 +1669,12 @@ stay behind because they were given for work that the brief describes only in wo
 - **The per-turn breakdown counts what a turn sent, which is not what it cost.** A cached prompt
   token is charged at a fraction of a fresh one, so two turns recorded at the same figure can differ
   about tenfold in money. How much of a prompt a service answered out of its own cache is a figure
-  [backends.md](backends.md) carries out of a reply that states one, and it is not kept here. What is
-  written stays comparable across turns and across sessions, which is what the record is read for,
-  and it cannot be read as a bill. Keeping the split would mean a resumed session reporting a cache
-  it never used; the figures are on the status panel for the turn that just ran, where they are a
-  measurement rather than a history.
+  [backends.md](backends.md) carries out of a reply that states one. The record keeps it as a total
+  for the session, in the split, and not for each turn, so the breakdown cannot say which turn missed
+  the cache and none of the figures can be read as a bill. A service that states no cache figure
+  reads the same as one that missed. The status panel does not read the totals back, because a
+  resumed session would then report a cache it never used here; it shows the turn that just ran,
+  where the figures are a measurement rather than a history.
 
 - **An imported session is read and not continued from.** Its words are drawn on a resume and are
   not in any request, so a prompt that refers back to the old session is answered by a model that
@@ -1829,3 +1850,57 @@ its own that a rewind, a delete or a fork would leave out of date.
 `verified-by: bravebot_ui_bridge::addressing::the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply`
 `verified-by: bravebot_tui::app::a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere`
 `verified-by: bravebot_agent::turn::the_record_keeps_which_definition_each_prompt_was_addressed_to`
+
+<a id="SESSION-40"></a>
+### SESSION-40: the record says what each turn did, beside where its time went
+
+A turn's entry under `timing` ([SESSION-12](sessions.md#SESSION-12)) also holds, under `activity`,
+five counts of what the turn did: `requests`, the model requests that completed;
+`written_tokens`, the tokens the model wrote; `cache_read_tokens` and `cache_written_tokens`, the
+tokens the service answered out of its prompt cache and the tokens it wrote into it; and
+`compactions`, the summaries the turn made to make room.
+
+A request is counted where it completed: a planner round, including one whose reply arrived and
+could not be used; a processor's call; a summary; the check on a file nobody had vouched for; and a
+delegate's requests, which the turn was charged for. A reply that stated no usage is a request, and
+a tool that made none is not counted. A request made beside the work (`/compact` outside a turn, a
+question, a commit message, a handoff) and the check on a server's tool list are not counted, though
+their tokens are in the turn's spend, so the counts can come to less than the spend does. A
+delegate's summaries are the delegate's own and are not added to the turn's.
+
+The counts are charged and kept exactly as the time beside them is. A failed or stopped turn is
+charged the counts of the requests it completed, once. A delegate still running when its parent
+ends is counted once, and the running report of a turn that has delegates holds their requests and
+tokens as well as the turn's. A rewind takes a turn's counts back with its entry, a resume and a
+fork carry them, and a turn run after a resume has its own. They are left out of the file while all
+five are zero, and a record written before they were kept reads as none counted, which is not the
+same as a turn that did nothing. They are numbers, so they need no release.
+
+**Why.** The session's totals ([SESSION-11](sessions.md#SESSION-11)) cannot say which turn made
+forty requests, which wrote the most, or which the service served from its cache, and none of it
+can be read back from the conversation: a turn that failed or was stopped keeps no messages of its
+own, and the service's cache figures are in no message. A turn that cost several times the others
+because it made many requests is a different fault from one that read a large result, and a cached
+share that is low for one turn is a different fault from one that is low for the whole session.
+
+`verified-by: bravebot_agent::timing::finishing_takes_the_requests_tokens_and_cache_from_the_account_and_compactions_from_the_clock`
+`verified-by: bravebot_agent::timing::activity_is_added_with_the_time_by_both_adders_and_saturates`
+`verified-by: bravebot_agent::timing::activity_is_left_out_while_empty_and_survives_a_round_trip`
+`verified-by: bravebot_agent::outcome::a_request_is_counted_when_it_completed_whatever_usage_it_stated`
+`verified-by: bravebot_agent::outcome::adding_usage_or_another_spent_sums_the_cost_and_leaves_context_and_timing`
+`verified-by: bravebot_agent::turn::a_turn_counts_its_requests_and_what_they_wrote_and_read_out_of_the_cache`
+`verified-by: bravebot_agent::turn::a_summary_made_during_a_turn_is_counted_as_a_compaction_and_a_request`
+`verified-by: bravebot_agent::turn::a_turn_counts_the_requests_a_delegate_made`
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_failure`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::successful_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::failed_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_session::sessions::a_failed_turn_keeps_the_counts_of_what_it_did_beside_its_time`
+`verified-by: bravebot_session::sessions::a_record_keeps_a_turns_counts_and_a_turn_without_them_reads_as_none_counted`
+`verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_them`
+`verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`

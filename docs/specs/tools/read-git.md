@@ -326,7 +326,10 @@ A log lists 20 commits, a list of tags 20 tags and a search 20 lines unless the 
 count, and never more than 200. An answer holds at most 2,000 lines and each line at most 2,000
 characters. A file past 1 MiB is described by its size, read from the object's header alone, and
 not searched. An answer stops at the search deadline. An answer cut
-by any of these says it was cut, and one that was not makes no such claim. The description of a file
+by any of these says it was cut, and one that was not makes no such claim. A status that stops at the
+deadline says it can be narrowed with a path and that `search.maxSeconds` sets the deadline, and names
+`git status` through `run` where the turn holds `run`. It does not suggest a range or a count, which a
+status does not take. The description of a file
 past the size cap names what can still read it from the tools the turn's list holds: `read_file`
 on the working copy, `run`, both, or neither ([TOOL-6](tool-surface.md#TOOL-6)).
 
@@ -337,6 +340,7 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::git::an_answer_past_its_lines_or_a_line_past_its_width_is_cut`
 `verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_described_by_its_size`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
+`verified-by: bravebot_agent::tools::a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
 `verified-by: bravebot_agent::turn::a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred`
 

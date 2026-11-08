@@ -3218,6 +3218,7 @@ failure-conceded-thinking = la réflexion affichée
 failure-transport = la requête n'est pas passée
 failure-incomplete = la réponse s'est arrêtée avant la fin
 failure-undecodable = la réponse n'a pas pu être lue
+failure-unrecognised = le service a répondu par un échec que cette version ne reconnaît pas
 failure-too-long = le modèle a atteint sa limite de sortie
 failure-too-long-at = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève
 failure-too-long-in-call = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève, au milieu d'un appel à { $tool }, qui n'a donc pas été fait

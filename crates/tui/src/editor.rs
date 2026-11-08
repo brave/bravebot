@@ -554,6 +554,8 @@ fn command_for(
         &bravebot_sandbox::programs::Resolved::named_by_person(program),
         inherits,
         bravebot_sandbox::programs::SearchPath::Reduced,
+        // The editor is the person's own choice (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.args(arguments).args(trailing);
     command

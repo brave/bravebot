@@ -459,7 +459,25 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
         let mut session = Session::new("test");
         let mut stored =
             sessions::Handle::begin(root, sessions::Front::Terminal, bravebot_stamp::BUILD);
-        for (index, (tokens, written)) in [(11, 4), (12, 7)].into_iter().enumerate() {
+        let turns = [
+            (
+                11,
+                4,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 6,
+                    written_tokens: 1,
+                },
+            ),
+            (
+                12,
+                7,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 8,
+                    written_tokens: 2,
+                },
+            ),
+        ];
+        for (index, (tokens, written, cached)) in turns.into_iter().enumerate() {
             let start = conversation.recounted().len();
             session.paste(&format!("turn {index}"));
             session.submit().unwrap();
@@ -470,7 +488,9 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
             conversation.push(Message::user(format!("turn {index}")));
             conversation.push(Message::assistant("done"));
             session.complete("done", vec![], tokens);
-            session.charged_split(tokens, written);
+            session.charged_split(
+                bravebot_session::sessions::Split::of(tokens, written).with_cache(cached),
+            );
             session.record_turn(start, &conversation);
         }
         save(&mut stored, &session, &conversation, &trust, &programs);
@@ -491,7 +511,11 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
             session.split(),
             sessions::Split {
                 read: 12,
-                written: 11
+                written: 11,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 14,
+                    written_tokens: 3,
+                },
             },
             "resumed: {resumed}, the split did not come back from the record with the tokens"
         );
@@ -510,7 +534,10 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
         assert_eq!(session.tokens, 11);
         assert_eq!(
             session.split(),
-            sessions::Split::of(11, 4),
+            sessions::Split::of(11, 4).with_cache(bravebot_aichat::protocol::Cached {
+                read_tokens: 6,
+                written_tokens: 1,
+            }),
             "resumed: {resumed}, the undone turn's split stayed in the session"
         );
         std::fs::remove_dir_all(root).unwrap();

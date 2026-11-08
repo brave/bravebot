@@ -25,9 +25,10 @@
  * browser, and there is no user gesture behind anything that happens in here.
  */
 
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import type { ExportDocument } from '../shared/export'
+import { rendererUrl } from './renderer-url'
 
 /** How long a document gets to draw itself before the export gives up. */
 const PATIENCE = 30_000
@@ -94,8 +95,9 @@ async function render(document: ExportDocument, at: number): Promise<Buffer> {
       contents.send('bravebot:export:document', document, at)
     })
 
-    if (process.env.ELECTRON_RENDERER_URL) {
-      await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/export.html`)
+    const devServer = rendererUrl(app)
+    if (devServer) {
+      await window.loadURL(`${devServer}/export.html`)
     } else {
       await window.loadFile(join(__dirname, '../renderer/export.html'))
     }

@@ -121,6 +121,18 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'
 
+      # Ubuntu's default ptrace_scope of 1 refuses pidfd_getfd against any process that is not the caller's
+      # descendant, so in the Test step the control-channel attacker copies nothing from its control
+      # process either and the run cannot show that the bridge and the host refuse it. At 0 the
+      # attacker a hook starts has to copy from the control process, and the bridge's and the host's
+      # non-dumpable mark is what stops it. The attacker an approved command starts is confined, and
+      # the confinement refuses pidfd_getfd against every process.
+      - name: Run the control-channel attack where the kernel allows same-user ptrace
+        run: |
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+          cargo nextest run -p bravebot-ui-bridge --test control_boundary --locked --no-fail-fast
+          sudo sysctl -w kernel.yama.ptrace_scope=1
+
       # nextest does not run doctests.
       - name: Doctests
         run: cargo test --workspace --doc --locked
@@ -435,9 +447,9 @@ jobs:
       - name: Check that every file stating the version agrees
         run: make check-versions
 
-  # Whether each variable gcloud's launcher reads to choose code to run has a test that keeps a safe
-  # value and a test that removes one a stage may write. Standard library Python, so it needs no
-  # toolchain.
+  # Whether every call of programs::start and programs::start_against states CodeSelectors, and
+  # each variable in a CODE_SELECTORS list has a test that keeps a safe value and a test that
+  # removes one a stage may write. Standard library Python, so it needs no toolchain.
   code-selectors:
     name: Code selectors
     runs-on: ubuntu-latest

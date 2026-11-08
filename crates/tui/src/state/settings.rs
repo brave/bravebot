@@ -1032,7 +1032,7 @@ impl Session {
     /// figures and still in the session's total, as an aside is.
     pub fn charge_suggestion(&mut self, usage: bravebot_aichat::protocol::Usage) {
         self.charge(usage.total());
-        self.charged_split(usage.total(), usage.completion_tokens);
+        self.charged_split(bravebot_session::sessions::Split::of_usage(usage));
     }
 }
 

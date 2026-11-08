@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: Plan first, then execute
-description: Have the planner write the whole plan before anything is read, approve it once, and have a driver walk it with no model in the control path.
+description: Plan a whole run before reads, approve the manifest once, execute without model decisions, call MCP tools, inspect results and understand non-resumable manifest records.
 ---
 
 # Plan first, then execute

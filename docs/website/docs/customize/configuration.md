@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Configuration
-description: What is baked into the binary, what lives in ~/.bravebot and beside your work, and the environment variables that override either.
+description: Configuration sources, settings.json keys, environment overrides, state directories, models, context and reply budgets, keybindings, permissions, notifications and source-build defaults.
 ---
 
 # Configuration

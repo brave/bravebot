@@ -66,7 +66,7 @@ impl Run {
         let usage = sessions::manifest_usage(outcome, self.retained);
         session.end_run(usage.map_or(0, |s| s.tokens), usage.map(|s| s.timing));
         if let Some(spent) = usage {
-            session.charged_split(spent.tokens, spent.output_tokens);
+            session.charged_split(bravebot_session::sessions::Split::of_spent(spent));
         }
         if outcome.is_err() && cancel.is_cancelled() {
             None
@@ -104,12 +104,16 @@ mod tests {
     fn a_stopped_run_is_charged_with_the_split_of_its_latest_report() {
         let mut session = Session::new("none");
         let mut run = Run::default();
-        for (tokens, written) in [(40, 5), (90, 25)] {
+        for (tokens, written, cached) in [(40, 5, 10), (90, 25, 30)] {
             let held = run.progress(
                 &mut session,
                 ToMain::Spent(Spent {
                     tokens,
                     output_tokens: written,
+                    cached: bravebot_aichat::protocol::Cached {
+                        read_tokens: cached,
+                        written_tokens: 0,
+                    },
                     ..Default::default()
                 }),
             );
@@ -132,7 +136,11 @@ mod tests {
             session.split(),
             sessions::Split {
                 read: 65,
-                written: 25
+                written: 25,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 30,
+                    written_tokens: 0,
+                },
             },
             "the split was not the latest report's"
         );

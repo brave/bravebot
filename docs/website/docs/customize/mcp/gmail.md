@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Connecting Gmail
-description: Read Gmail from a session through Google's Workspace MCP server, with every other Google service switched off.
+description: Connect Gmail through Google's Workspace MCP server with other Google services disabled, or use Google's remote Gmail server.
 ---
 
 # Connecting Gmail

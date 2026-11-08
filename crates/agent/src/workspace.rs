@@ -686,10 +686,14 @@ impl Workspace {
     /// For a file the driver looks for itself rather than one a call named, which is left out
     /// rather than failed, as a walk leaves out an entry a rule covers.
     pub(crate) fn rule_denies_reading<S: Sink>(&self, policy: &Policy<'_, S>, named: &str) -> bool {
-        policy.read_is_denied(named)
-            || self
-                .landing(named)
-                .is_some_and(|landed| policy.read_is_denied(&landed))
+        // Only a `deny` rule about reading can answer yes, so with none in force the landing,
+        // which asks the file system, cannot change the answer. A status asks this of every
+        // tracked path.
+        policy.any_read_is_denied()
+            && (policy.read_is_denied(named)
+                || self
+                    .landing(named)
+                    .is_some_and(|landed| policy.read_is_denied(&landed)))
     }
 
     /// Whether a rule covers reading any of `names`, the other names a file has. Where they could

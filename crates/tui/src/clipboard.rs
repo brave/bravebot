@@ -64,6 +64,7 @@ fn start_tool(program: PathBuf) -> Command {
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Reduced,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     )
 }
 

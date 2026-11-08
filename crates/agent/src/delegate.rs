@@ -527,6 +527,8 @@ pub struct Delegated {
     pub kind: String,
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
+    /// How many model requests made that cost, so the turn counts them with its own.
+    pub requests: u64,
 }
 
 /// Everything about a delegate that was settled before it existed.
@@ -894,6 +896,7 @@ pub fn run(
                 // turn whose cache never hit.
                 cached: outcome.cached,
             },
+            requests: outcome.timing.activity.requests,
         }),
         vouched,
         notices,

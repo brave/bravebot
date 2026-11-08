@@ -12409,6 +12409,32 @@ fn the_record_after_the_second_turn(home: &Path, id: &str) -> serde_json::Value 
     }
 }
 
+/// SESSION-11 over the process: a turn a background session takes adds the cache figures its
+/// service reported to the split of the record it resumed from, so the record names the cache use of
+/// the whole session and not of the turn the process took.
+///
+/// The fault this rejects: a host that saves its turn's split without the cache figures, which
+/// leaves the first turn's 6 read and 2 written where the second turn should have made them 12 and 4.
+#[cfg(unix)]
+#[test]
+fn a_background_session_adds_the_cache_figures_of_its_turn_to_the_record_it_resumed() {
+    let gateway = a_gateway_reporting_its_cache("reviewed");
+    let (home, mut host, id) = a_host_resumed_from_a_record_naming_a_definition(&gateway, true);
+
+    let _ = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the resumed turn reached the gateway");
+    let record = the_record_after_the_second_turn(&home.0, &id);
+    let _ = host.kill();
+    let _ = host.wait();
+    assert_eq!(
+        record["split"]["cache"],
+        serde_json::json!({"read_tokens": 12, "written_tokens": 4}),
+        "{record}"
+    );
+}
+
 /// ADDRESS-3 over the process: a background session's process is started with the session's id and
 /// nothing else, so a resume of a record naming a definition has only the record to learn it from.
 /// The turn's request is addressed to the definition and withholds its writes only if the turn
@@ -16743,6 +16769,66 @@ fn a_writing_run(scratch: &Scratch, project: &Path, arguments: &[&str]) -> Strin
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     session_of(&stdout).unwrap_or_else(|| panic!("no session in {stdout}"))
+}
+
+/// A gateway that answers `reply` to every request and says, with each, that 6 of its 10 prompt
+/// tokens were served from its cache and 2 were written into it.
+fn a_gateway_reporting_its_cache(reply: &'static str) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |_| {
+        let frame = serde_json::json!({"model":"reasons-only","choices":[{
+            "index":0,"delta":{"role":"assistant","content":reply},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":10,"completion_tokens":1,
+                     "prompt_tokens_details":{"cached_tokens":6,"cache_write_tokens":2}}});
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// SESSION-11: a one-shot run records how much of its prompt the service answered out of its cache
+/// and how much it wrote there, inside the split, and a run that continues the session adds to them.
+///
+/// The faults this rejects: saving the split without the cache figures, in the first run or in the
+/// continued one, and a continued run that replaces the figures with its own. The service says 6 of
+/// each request's 10 prompt tokens came from its cache and 2 were written to it.
+#[test]
+fn a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them() {
+    let gateway = a_gateway_reporting_its_cache("done");
+    let scratch = Scratch::new("cli-running-cache-split").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let first = the_record(&scratch, &id);
+    assert_eq!(
+        first["split"],
+        serde_json::json!({"read": 10, "written": 1,
+                           "cache": {"read_tokens": 6, "written_tokens": 2}}),
+        "{first}"
+    );
+
+    assert_eq!(
+        a_writing_run(&scratch, &project, &["-p", "SECOND-QUESTION", "--continue"]),
+        id
+    );
+    let second = the_record(&scratch, &id);
+    assert_eq!(
+        second["split"],
+        serde_json::json!({"read": 20, "written": 2,
+                           "cache": {"read_tokens": 12, "written_tokens": 4}}),
+        "{second}"
+    );
+
+    // The same figures are kept for each turn on its own, beside its time: the continued run adds
+    // a second turn's and leaves the first's as it was, where the split above is the session's.
+    let one_request = serde_json::json!({"requests": 1, "written_tokens": 1,
+                                         "cache_read_tokens": 6, "cache_written_tokens": 2,
+                             "compactions": 0});
+    assert_eq!(first["timing"]["1"]["activity"], one_request, "{first}");
+    assert_eq!(second["timing"]["1"]["activity"], one_request, "{second}");
+    assert_eq!(second["timing"]["2"]["activity"], one_request, "{second}");
 }
 
 /// CLI-25 and SESSION-19: a continued task leaves a point to rewind it to, behind the points the

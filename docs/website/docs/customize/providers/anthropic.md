@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Anthropic
-description: Reach Claude with an Anthropic API key through its Messages API, and what the block, the roster, the reply ceiling and prompt caching do.
+description: Configure Anthropic API access to Claude, request destinations, model rosters, reply limits, prompt caching, gateway naming, unsupported features and imported settings.
 ---
 
 # Reaching Claude with an Anthropic API key

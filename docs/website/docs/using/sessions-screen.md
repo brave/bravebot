@@ -1,7 +1,7 @@
 ---
 sidebar_position: 12
 title: The Sessions screen
-description: One list of every session on the machine, with what each is doing, and the keys to open, copy, begin, stop, rename, archive and delete one.
+description: Browse sessions by status, grouping, search and pins; open, copy, start, stop, rename, archive or delete sessions with keys or mouse, and customize the screen's keys.
 ---
 
 # The Sessions screen
