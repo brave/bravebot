@@ -2811,10 +2811,11 @@ fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
 
 /// A step whose tools are all marked still puts its list where one tool is not marked, where bypass
 /// mode and not a person approved the plan, where an `ask` rule names one of its tools, and in plan
-/// mode.
+/// mode, and its plan line does not say it runs without asking.
 ///
 /// Rejects an implementation that runs a step unattended on a mark it does not wholly have, on a
-/// plan nobody read, past a rule somebody wrote, or in a mode that asks at the step.
+/// plan nobody read, past a rule somebody wrote, or in a mode that asks at the step, and one whose
+/// plan line promises what the step does not do.
 #[test]
 fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks() {
     let scratch = Scratch::new("unattended-asks");
@@ -2864,7 +2865,50 @@ fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rul
         });
         assert!(ran.outcome.is_ok(), "{case}: {:?}", ran.outcome.err());
         assert_eq!(ran.asked.applies.len(), 1, "{case}: the list was not put");
+        // The line the person approved says what the step then does.
+        for plan in &ran.asked.plans {
+            assert!(
+                !plan.steps[1].contains("run without asking you"),
+                "{case}: {}",
+                plan.steps[1]
+            );
+        }
     }
+}
+
+/// A marked step whose values hold a character the plan's line draws as nothing puts its list, where
+/// the question writes each one out, and its line does not say it runs without asking.
+///
+/// Rejects an implementation that runs unasked on a line the person could not read in full.
+#[test]
+fn a_marked_step_holding_a_hidden_character_puts_its_list() {
+    let scratch = Scratch::new("unattended-hidden");
+    let (url, mcp) = serve_marks();
+    let mut steps = organise();
+    steps[1]["args"]["arguments"]["make_folder"]["parent"] =
+        json!({"literal": "Org\u{202E}anised"});
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(steps), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(!line.contains("run without asking you"), "{line}");
+    assert!(
+        !line.contains('\u{202E}'),
+        "the line drew the character raw: {line}"
+    );
 }
 
 /// An argument the declaration names with two kinds takes whichever a row gives: a bookmark may
