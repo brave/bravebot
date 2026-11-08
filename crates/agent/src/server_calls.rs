@@ -830,7 +830,20 @@ impl Servers {
                 policy.record_plan_covered_call(alias, &shown.calls[at].name);
             }
             match called {
-                crate::mcp::Called::Answered(_) => applying.made(at),
+                // What a made call returned is drawn as a failure's is, so a reply that says what
+                // the call replaced, such as the folder a bookmark left, lets the person undo it.
+                crate::mcp::Called::Answered(output) => {
+                    applying.made(at);
+                    let name = format!("{alias}:{}", shown.calls[at].name);
+                    let preview = crate::turn::preview_for(policy, manifest::APPLY, &output.text);
+                    reporter.quarantined(Shown {
+                        origin: crate::mcp::origin_of_reply(&name, false),
+                        reach: Reach::NoModel,
+                        label: output.text.label().to_string(),
+                        lines: preview.lines,
+                        preview: preview.preview,
+                    });
+                }
                 crate::mcp::Called::Failed(text) => {
                     applying.failed(at);
                     let name = format!("{alias}:{}", shown.calls[at].name);

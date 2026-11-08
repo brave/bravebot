@@ -2806,9 +2806,32 @@ fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
         tools.contains(&"make_folder") && tools.contains(&"move_mark"),
         "{tools:?}"
     );
+    // What each call that was made returned is drawn for the person, behind the margin and to no
+    // model, so a reply that says what a call replaced lets them put it back.
+    let replies = ran
+        .reporter
+        .shown
+        .iter()
+        .filter(|shown| shown.origin == "what brave:move_mark returned with no failure reported")
+        .count();
+    assert!(replies >= 1, "{:?}", ran.reporter.shown);
+    assert!(
+        ran.reporter
+            .shown
+            .iter()
+            .all(|shown| shown.reach == bravebot_agent::report::Reach::NoModel)
+    );
     let line = &ran.asked.plans[0].steps[1];
     assert!(line.contains("run without asking you"), "{line}");
     assert!(line.contains("marks (read from brave)"), "{line}");
+    // The planner is told to let a later call reuse a thing the list already names rather than
+    // make it twice, which is what keeps a duplicate folder from being proposed.
+    assert!(
+        ran.chat
+            .iter()
+            .any(|body| body.contains("so an existing one is used rather than made twice")),
+        "no planning request held the guidance"
+    );
     assert!(ran.events.iter().any(|event| matches!(
         event,
         bravebot_core::event::Event::GatePassed { gate: "approval", detail }
