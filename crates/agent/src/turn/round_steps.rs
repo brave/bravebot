@@ -304,7 +304,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     );
 
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
 
         ..state.account
     });
@@ -449,11 +449,11 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
     if completion.cut_off.is_some() {
         completion.calls.clear();
     }
-    state.account.add_usage(completion.usage);
+    state.account.add_request(completion.usage);
     state.account.context_tokens = completion.context_tokens;
     conversation.measured(state.account.context_tokens);
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         ..state.account
     });
 
@@ -1409,7 +1409,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     {
         account.context_tokens = conversation.last_request_tokens();
         reporter.spent(crate::outcome::Spent {
-            timing: spent.finish(),
+            timing: spent.finish(&*account),
             ..*account
         });
     }
@@ -1430,20 +1430,21 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
         if let Err(error) = &summary
             && let Some(usage) = error.completed_usage()
         {
-            account.add_usage(usage);
+            account.add_request(usage);
             reporter.spent(crate::outcome::Spent {
-                timing: spent.finish(),
+                timing: spent.finish(&*account),
                 ..*account
             });
         }
         match summary {
             Ok(Some(done)) => {
                 shortened = true;
-                account.add_usage(done.usage);
+                account.add_request(done.usage);
+                spent.compactions += 1;
                 // The figure measured the conversation the summary replaced.
                 reporter.spent(crate::outcome::Spent {
                     context_tokens: 0,
-                    timing: spent.finish(),
+                    timing: spent.finish(&*account),
                     ..*account
                 });
                 reporter.narration(format!(
@@ -1525,7 +1526,7 @@ pub(super) fn close_the_rounds<S: Sink, R: Reporter>(
     crate::xai::say_an_unsaved_renewal(reporter);
     state.spent.wall = began.elapsed();
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         ..state.account
     });
 
@@ -1822,9 +1823,14 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // A processor is a model call of its own, so what it spent belongs in the turn's
     // total. Left out, a turn that did most of its work in processors would report
     // having cost almost nothing.
-    state.account.add_usage(output.usage);
+    // A request only where the call waited on the model, since every other tool's usage is empty.
+    if output.inference_interval.is_some() {
+        state.account.add_request(output.usage);
+    } else {
+        state.account.add_usage(output.usage);
+    }
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         ..state.account
     });
     // Kept as the turn goes rather than read off the last round, and overwritten by each

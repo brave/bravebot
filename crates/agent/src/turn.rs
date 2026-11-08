@@ -1685,6 +1685,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
                 account.add_usage(delegated.usage);
+                account.requests += delegated.requests;
 
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
@@ -3345,7 +3346,7 @@ where
     // here. The condition is a duration and whether a list was held, never a server's bytes.
     if !settled_wait.is_zero() || mcp.is_some() {
         reporter.spent(crate::outcome::Spent {
-            timing: spent.finish(),
+            timing: spent.finish(&account),
             ..account
         });
     }
@@ -3584,7 +3585,7 @@ where
         wakeup: state.wakeup,
         watches: state.watches,
         links: state.links,
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         clean: false,
         standing_refusals: Vec::new(),
         worked_around: 0,
@@ -3806,7 +3807,7 @@ where
         if let Err(error) = &completion
             && let Some(usage) = error.completed_usage()
         {
-            state.account.add_usage(usage);
+            state.account.add_request(usage);
             if let Some(measured) = error.context_tokens() {
                 state.account.context_tokens = measured;
                 conversation.measured(state.account.context_tokens);
@@ -4522,7 +4523,11 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_usage(released.usage);
+                        if released.waited.is_some() {
+                            state.account.add_request(released.usage);
+                        } else {
+                            state.account.add_usage(released.usage);
+                        }
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.
@@ -4530,7 +4535,7 @@ where
                             cancellation = released.stopped;
                         }
                         reporter.spent(crate::outcome::Spent {
-                            timing: state.spent.finish(),
+                            timing: state.spent.finish(&state.account),
                             ..state.account
                         });
                         released
@@ -5655,6 +5660,7 @@ mod tests {
                         report,
                         kind: "one-round".to_string(),
                         usage: Default::default(),
+                        requests: 0,
                     }),
                 };
                 (
@@ -5869,6 +5875,7 @@ mod tests {
                             report,
                             kind: "one-round".to_string(),
                             usage: Default::default(),
+                            requests: 0,
                         }),
                         vouched: handed,
                         notices: Vec::new(),
@@ -5964,6 +5971,7 @@ mod tests {
                                 completion_tokens: 200,
                                 cached: Default::default(),
                             },
+                            requests: 1,
                         }),
                         vouched: handed,
                         notices: Vec::new(),
@@ -6062,6 +6070,7 @@ mod tests {
                                     report,
                                     kind: "one-round".to_string(),
                                     usage: Default::default(),
+                                    requests: 0,
                                 }),
                                 vouched: handed,
                                 notices: Vec::new(),
@@ -6179,6 +6188,7 @@ mod tests {
                                         report,
                                         kind: "one-round".to_string(),
                                         usage: Default::default(),
+                                        requests: 0,
                                     }),
                                     vouched: handed,
                                     notices: Vec::new(),
@@ -6362,6 +6372,7 @@ mod tests {
                                     completion_tokens: 100,
                                     ..Default::default()
                                 },
+                                requests: 1,
                             }),
                             vouched: handed,
                             notices: Vec::new(),

@@ -1636,6 +1636,7 @@ pub fn manifest_usage(
             output_tokens: done.output_tokens,
             context_tokens: done.context_tokens,
             cached: done.cached,
+            requests: done.timing.activity.requests,
             timing: done.timing,
         })
         .or(retained)
@@ -4141,6 +4142,7 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -4190,7 +4192,105 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             })
+        );
+    }
+
+    /// A failed or stopped turn keeps no messages of its own, so the counts of what it did before
+    /// it ended are in no other place. They are charged with its time, once, and are the same
+    /// tokens its split was charged with.
+    #[test]
+    fn a_failed_turn_keeps_the_counts_of_what_it_did_beside_its_time() {
+        use bravebot_agent::timing::{Activity, Timing};
+
+        let (mut tokens, mut split, mut spend, mut timing) = Default::default();
+        let activity = Activity {
+            requests: 3,
+            written_tokens: 40,
+            cache_read_tokens: 60,
+            cache_written_tokens: 10,
+            compactions: 1,
+        };
+        let spent = bravebot_agent::Spent {
+            tokens: 107,
+            output_tokens: 40,
+            cached: Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
+            requests: 3,
+            timing: Timing {
+                inference_ms: 11,
+                activity,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(charge_failed_turn(
+            &mut tokens,
+            &mut split,
+            &mut spend,
+            &mut timing,
+            2,
+            spent,
+            std::time::Duration::from_millis(500)
+        ));
+        let kept = timing
+            .get(&2)
+            .expect("the turn has a timing entry")
+            .activity;
+        assert_eq!(kept, activity, "the failed turn's counts were not kept");
+        assert_eq!(
+            (kept.written_tokens, kept.cache_read_tokens),
+            (split.written, split.cache.read_tokens),
+            "the counts and the split are the same tokens"
+        );
+
+        // A later charge to the same turn, such as a question asked during it, adds its counts
+        // to the turn's and does not replace them.
+        let mut again = timing[&2];
+        again.add_measured(spent.timing);
+        assert_eq!(again.activity.requests, 6);
+    }
+
+    /// A record from before the counts were kept has none for a turn, and a turn with none leaves
+    /// the key out of the file, so the file of a session that never counted is the file it was.
+    #[test]
+    fn a_record_keeps_a_turns_counts_and_a_turn_without_them_reads_as_none_counted() {
+        let body = serde_json::json!({
+            "id": "1-2",
+            "directory": "/tmp/x",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "turns": 2,
+            "tokens": 3_400,
+            "timing": {
+                "1": {"wall_ms": 10, "activity": {"requests": 4, "written_tokens": 9, "cache_read_tokens": 30, "cache_written_tokens": 2, "compactions": 1}},
+                "2": {"wall_ms": 5}
+            },
+            "conversation": {
+                "messages": [],
+                "context": "trusted",
+                "references": 0,
+                "archive": [],
+                "measured": 0,
+            },
+        });
+
+        let record: Record = serde_json::from_value(body).expect("parses");
+        assert_eq!(record.timing[&1].activity.requests, 4);
+        assert_eq!(record.timing[&1].activity.compactions, 1);
+        assert!(record.timing[&2].activity.is_empty());
+
+        let written = serde_json::to_value(&record).expect("serialises");
+        assert_eq!(written["timing"]["1"]["activity"]["cache_read_tokens"], 30);
+        assert!(
+            written["timing"]["2"].get("activity").is_none(),
+            "an empty count was written: {}",
+            written["timing"]["2"]
         );
     }
 
@@ -7536,6 +7636,7 @@ mod tests {
                     tools_ms: 19,
                     stalled_ms: 11,
                     file_wait_ms: 0,
+                    ..Default::default()
                 },
                 ..Default::default()
             }),
