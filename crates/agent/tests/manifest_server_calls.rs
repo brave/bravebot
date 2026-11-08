@@ -368,6 +368,8 @@ struct Calls {
     stopping: Option<bravebot_core::cancel::Cancel>,
     /// The lists of calls an apply step put, and which calls to keep: every one where `None`.
     applies: Vec<ApplyRequest>,
+    /// A mode the person moves the run into once they have answered its plan, where a test says.
+    then_mode: Option<(bravebot_agent::LiveMode, PermissionMode)>,
     apply_keeps: Option<Vec<usize>>,
     /// Whether the list is answered as by a client that cannot put it.
     apply_unasked: bool,
@@ -386,6 +388,7 @@ impl Calls {
             order: Vec::new(),
             stopping: None,
             applies: Vec::new(),
+            then_mode: None,
             apply_keeps: None,
             apply_unasked: false,
         }
@@ -431,6 +434,9 @@ impl Confirmer for Calls {
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
         self.order.push("plan");
         self.plans.push(request.clone());
+        if let Some((live, mode)) = &self.then_mode {
+            live.set(*mode);
+        }
         match self.approve_plan {
             true => Decision::Approve,
             false => Decision::Reject,
@@ -2227,6 +2233,7 @@ fn marks_answered(body: &str) -> String {
                         {"title": "Brave", "url": "https://brave.com/"},
                         {"title": STEERING, "url": "https://example.com/a"},
                         {"title": "bravebot", "url": "https://github.com/brave/bravebot"},
+                        {"title": "Hidden", "url": "https://hidden.example/\u{200B}"},
                     ])
                     .to_string(),
                 ),
@@ -2915,6 +2922,69 @@ fn a_deny_rule_about_a_marked_tool_puts_the_steps_list() {
         bravebot_core::event::Event::GatePassed { gate: "approval", detail }
             if detail.starts_with("approving the plan covered brave:move_mark")
     )));
+}
+
+/// A switch into plan mode after the person approved the plan puts a marked step's list back: a
+/// change of mode can add a question, never take one away.
+///
+/// Rejects an implementation that reads the mode only when the plan is written, which would run a
+/// step unasked in a mode that asks at each step.
+#[test]
+fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
+    let scratch = Scratch::new("unattended-switch");
+    let (url, mcp) = serve_marks();
+    let task = Task::new("organise my bookmarks into folders");
+    let live = task.permission_mode.clone();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.then_mode = Some((live, PermissionMode::Plan));
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task,
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    let line = &ran.asked.plans[0].steps[1];
+    assert!(line.contains("run without asking you"), "{line}");
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+}
+
+/// A marked step a row of which would send an entry's value holding a character a line draws as
+/// nothing puts its list, where the question writes the character out, though its plan line, written
+/// before anything was read, said it would run unasked.
+///
+/// Rejects an implementation that checks only the plan's literals, which leaves what a list returned
+/// unchecked.
+#[test]
+fn a_marked_step_sending_an_entry_holding_a_hidden_character_puts_its_list() {
+    let scratch = Scratch::new("unattended-hidden-entry");
+    let (url, mcp) = serve_marks();
+    let rows =
+        "new 1 = \"Work\"\nrow 1: tool 1 title=new:1\nrow 2: tool 2 url=entry:4 folder=row:1\n";
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(rows)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
 }
 
 /// A marked step whose values hold a character the plan's line draws as nothing puts its list, where

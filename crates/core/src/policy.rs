@@ -5899,7 +5899,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The grant the person's answer minted for this call is consumed. The arguments are not
     /// refused for being untrusted or private, as [`Policy::before_mcp_call`] would refuse them:
     /// each value is one the person was shown resolved, with where it came from, and approved for
-    /// this call and this server. That approval is the trusted selector. The trail line holds the
+    /// this call and this server, or one of a step whose tools they marked unattended, within the
+    /// bound the plan they approved stated. That approval is the trusted selector, the second under
+    /// LABEL-5's named exception. The trail line holds the
     /// alias, the tool, the call's place and the label, and no value.
     pub fn carry_applied_call(
         &mut self,

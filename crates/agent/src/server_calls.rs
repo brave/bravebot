@@ -968,12 +968,13 @@ fn hides_a_character(value: &str) -> bool {
 fn read_from(plan: &Manifest, index: usize, list: &str) -> String {
     plan.steps()[..index]
         .iter()
+        .enumerate()
         .rev()
-        .find(|earlier| earlier.out_slot().is_some_and(|slot| slot.as_str() == list))
+        .find(|(_, earlier)| earlier.out_slot().is_some_and(|slot| slot.as_str() == list))
         .map_or_else(
             || "a read".to_string(),
-            |earlier| match earlier.text("server") {
-                "" => format!("a {} step", earlier.tool()),
+            |(at, earlier)| match earlier.text("server") {
+                "" => format!("step {} ({})", at + 1, earlier.tool()),
                 server => server.to_string(),
             },
         )

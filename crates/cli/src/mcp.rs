@@ -3650,6 +3650,74 @@ mod tests {
         );
     }
 
+    /// SERVERS-26. `--unattended`, in both its forms, marks a tool with apply arguments: the
+    /// question and `get` say which, and the file keeps it. A mark on a tool with no apply
+    /// arguments and one on a remote server are refused before anything is written.
+    #[test]
+    fn add_writes_the_unattended_marks_and_the_question_and_get_say_them() {
+        let directory = scratch("cli-mcp-unattended");
+        let said = t!(
+            mcp_declaration_unattended_tools,
+            named = "make_folder, move_mark"
+        )
+        .to_string();
+        let args = [
+            "add",
+            "marks",
+            "--apply",
+            "make_folder:title=new",
+            "--apply=move_mark:url=entry",
+            "--unattended",
+            "make_folder",
+            "--unattended=move_mark",
+            "--",
+            "/opt/srv",
+        ];
+        let (outcome, screen) = typing(&directory, &args, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            screen.lines().any(|line| line.trim() == said),
+            "the question did not say it: {screen}"
+        );
+        let written = std::fs::read_to_string(mcp::declarations_file(&directory)).unwrap();
+        let marks = Declarations::parse(&written)
+            .unwrap()
+            .get("marks")
+            .unwrap()
+            .declaration
+            .clone()
+            .unwrap();
+        assert_eq!(
+            marks.unattended_tools(),
+            &["make_folder", "move_mark"]
+                .iter()
+                .map(|tool| (*tool).to_string())
+                .collect::<UnattendedTools>(),
+            "{written}"
+        );
+        let (outcome, got) = typing(&directory, &["get", "marks"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(got.lines().any(|line| line.trim() == said), "{got}");
+
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None);
+        assert!(
+            declared_by(&["--unattended", "pin_tab", "--", "/opt/srv"]).is_err(),
+            "a mark on a tool with no apply arguments was taken"
+        );
+        assert!(
+            matches!(
+                declared_by(&[
+                    "--unattended",
+                    "pin_tab",
+                    "--http",
+                    "https://example.com/mcp"
+                ]),
+                Err(Refusal::Problem(Problem::Remote("unattended_tools")))
+            ),
+            "a mark on a remote server was taken"
+        );
+    }
+
     /// SERVERS-22: `add` writes the pairs, the question that approves the server says which
     /// arguments take a choice and `get` says it again in the same words, and a server that names
     /// none draws no such line. Naming a pair on a server that is not asked every call, and on a
