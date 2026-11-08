@@ -60,11 +60,12 @@ reference is the only field that decides anything, and you are shown the bytes b
 you approve is the field the call turns on.
 
 That sentence is drawn on the prompt so you can see why the planner wants this, and it is sent to the
-check so a page can be judged against what it was supposed to be. It must not be private: your own data
-must not become another model's prompt. Where the content came from is said in Brave Bot's words, as a
+check so a page can be judged against what it was supposed to be. It may be private. The check is a
+request to the model the session runs on, and that model is shown the page whole, so the sentence adds
+nothing to what it is sent. Where the content came from is said in Brave Bot's words, as a
 path, a URL or a command, because a reference name means something to the planner and nothing to you.
 
-It refuses a reference to nothing, a private sentence, and a call from a delegate. A reference to a file
+It refuses a reference to nothing and a call from a delegate. A reference to a file
 nothing has read yet is opened rather than refused, since naming one is the ordinary way for the planner
 to ask about a file it may not read.
 
