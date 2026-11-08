@@ -28,8 +28,8 @@ says happened.
 
 `{{root}}`, at `{{commit}}`. Read and run, edit nothing. Open every file and line the claim cites:
 a citation that does not say what the claim says it does kills the claim. Read the spec governing
-the code, including its `## Known costs`, and `docs/development/reviewing-for-the-rule.md` where
-the claim is about labels or trust.
+the code, including the **Why** of each clause the claim rests on and its `## Known costs`, and
+`docs/development/reviewing-for-the-rule.md` where the claim is about labels or trust.
 
 Some claims are not a defect with a failing event. They report that the person was frustrated, or
 that the session spent context, cost or time it did not need to. Judge those by the same questions,
@@ -49,7 +49,18 @@ with these additions:
    action. A fix that only says the model should have chosen differently does not count, and the
    claim is then the model's error.
 3. **Is it already fixed?** The session was written by an older build. Check the tree at `{{commit}}`, and the history if the code changed, for a fix. Verdict `fixed`.
-4. **Is it accepted?** A spec's `## Known costs`, or behaviour a spec requires. Verdict `known`.
+4. **Is it accepted?** A spec's `## Known costs`. Verdict `known`.
+   Behaviour a spec requires is not accepted because the spec requires it. Read the clause and its
+   **Why**, and ask what the rule is for.
+   - Where the clause or its Why ties the rule to keeping untrusted content out of the planner or the
+     driver (labels, routing, the trust map, permissions, processors and the vetting check, as
+     `docs/development/reviewing-for-the-rule.md` describes), the claim asks to loosen a rule that
+     holds the guarantee. Verdict `known`, and name the clause in `reason`. Such a claim is not filed.
+   - Otherwise judge the rule on its merits. It stands where its Why already accounts for the cost
+     the claim shows, or where the change the claim asks for costs more than it saves. Where the Why
+     does not account for the cost, and amending the clause would remove it without touching the
+     guarantee, the verdict is `confirmed` even though the code follows the spec. Name the clause to
+     amend in `reason`, and say that the fix is a change to the spec.
 5. **Is it on the tracker?** Search open and closed issues for the same defect. Where one holds it, give its number as `existing_issue` and use the verdict `known`.
 6. **Does it reproduce?** Prefer an existing test you ran, or the steps in the claim run from a scratch directory outside the tree, over an argument from reading. A reproduction that needs the person's project does not count against it, but say so.
 7. **Is the text safe to publish?** The claim becomes a public issue. If it quotes the session, names a person, host or project, or holds anything key-like, say so in `reason` and verdict `not-a-defect` is wrong; instead leave out the file (see below).

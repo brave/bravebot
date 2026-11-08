@@ -829,6 +829,18 @@ class Prompts(unittest.TestCase):
         self.assertIn("A note is never passed over.", skill)
         self.assertIn("for every session with a new note, one line per note", skill)
 
+    def test_a_rule_a_spec_requires_is_weighed_unless_it_keeps_untrusted_content_out(self):
+        text = {name: " ".join((HERE / name).read_text().split()) for name in ("analyze.md", "verify.md", "SKILL.md")}
+        for name, phrase in (
+            ("analyze.md", "keeps untrusted content out of the planner or the driver"),
+            ("SKILL.md", "keeps untrusted content out of the planner or the driver"),
+            ("verify.md", "keeping untrusted content out of the planner or the driver"),
+            ("verify.md", "is not accepted because the spec requires it"),
+            ("verify.md", "the verdict is `confirmed` even though the code follows the spec"),
+        ):
+            self.assertTrue(phrase in text[name], f"{name} lacks: {phrase}")
+        self.assertFalse("or behaviour a spec requires. Verdict `known`" in text["verify.md"], "verify.md calls a required behaviour known")
+
 
 if __name__ == "__main__":
     unittest.main()
