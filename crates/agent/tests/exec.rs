@@ -3450,7 +3450,10 @@ fn a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source
         &scratch.path,
         vec![printing(
             &print,
-            vec![substitution("emit-exact", expanding(&exact, &[], Vec::new()))],
+            vec![substitution(
+                "emit-exact",
+                expanding(&exact, &[], Vec::new()),
+            )],
         )],
     );
     let ran = run_expanding(&plan).expect("a substitution at the limit runs");
