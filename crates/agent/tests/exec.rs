@@ -3401,6 +3401,62 @@ fn a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not
     }
 }
 
+/// CMDLINE-17: a substitution that prints more than 64 KiB is refused naming its source and the
+/// byte limit, and the step that would have used the value never starts. One that prints exactly
+/// the limit is accepted, so the bound is not off by one.
+#[cfg(unix)]
+#[test]
+fn a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit() {
+    let scratch = Scratch::new("expand-substitution-size");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let over = script(
+        &scratch.path,
+        "over.sh",
+        "#!/bin/sh\nhead -c 65537 /dev/zero | tr '\\000' a\n",
+    );
+    let exact = script(
+        &scratch.path,
+        "exact.sh",
+        "#!/bin/sh\nhead -c 65536 /dev/zero | tr '\\000' a\n",
+    );
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit-big", expanding(&over, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a substitution over the limit was accepted");
+    assert!(
+        matches!(&error, ExecError::Substitution { source, detail }
+            if source == "emit-big" && detail.contains("65536")),
+        "{error}"
+    );
+    let shown = error.to_string();
+    assert!(
+        shown.contains("emit-big") && shown.contains("65536"),
+        "{shown}"
+    );
+    assert!(!shown.contains("aaaa"), "{shown}");
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(
+            &print,
+            vec![substitution("emit-exact", expanding(&exact, &[], Vec::new()))],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("a substitution at the limit runs");
+    assert_eq!(ran.stdout.len(), 65536);
+}
+
 /// Set `name` to `bytes` for the life of the guard `with_env` returned for it.
 #[cfg(unix)]
 fn set_raw(name: &str, bytes: &[u8]) {

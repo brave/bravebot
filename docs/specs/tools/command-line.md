@@ -992,10 +992,11 @@ reaches the program unchanged.
 
 **A failure says what ran and how it ended, not what it printed.** A substitution that fails to
 start, is stopped, exits non-zero or prints bytes that are not valid Unicode fails the line before
-the stage that uses it, naming the source text and the exit status. Neither its standard output nor
-its standard error is in the message. What it printed is judged as the bytes the pipe delivered, so
-a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text holding a NUL
-byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
+the stage that uses it, naming the source text and the exit status. A substitution that prints more
+than 65536 bytes (64 KiB) fails the line the same way, naming the source and that limit. Neither its
+standard output nor its standard error is in the message. What it printed is judged as the bytes the
+pipe delivered, so a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text
+holding a NUL byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
 start, and that error names the program and the operating system's words, never the value.
 
 **Nothing remembered covers such a line.** A line carrying an expansion is treated as a line with an
@@ -1025,6 +1026,7 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not`
 `verified-by: bravebot_agent::exec::a_background_start_is_cancelled_while_its_substitution_runs`
 `verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
 `verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
 `verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
