@@ -243,7 +243,7 @@ the point of refusal, and a turn offered no processor cannot use one. The
 refusal of `read_file` with `output_of` for a notebook the driver may not examine says the outputs
 are closed to `read_file`, prints the label the driver assigned, and names the routes the turn is
 offered: a plain read of the file for a reference to give to `spawn_processor`, said only where the
-turn is offered a processor and holds no private content ([PROC-4](../processors.md#PROC-4)), and `run`,
+turn is offered a processor, and `run`,
 said only where the turn is offered it. The refusal of `read_git` for an answer the driver may not
 examine says the answer is closed to `read_git`, prints the label, and names `run` only where the
 turn is offered it. Both name the person vouching for the path or the repository on every turn, a
@@ -316,7 +316,6 @@ tool as the control.
 `verified-by: bravebot_core::policy::a_reference_to_kept_output_names_read_output_exactly_when_the_run_is_offered_it`
 `verified-by: bravebot_core::policy::the_policy_says_what_a_reference_may_be_given_to`
 `verified-by: bravebot_core::policy::a_branch_makes_references_for_the_run_the_policy_was_told_about`
-`verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::turn::sentences::a_list_holding_every_tool_reads_the_text_it_always_did`
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_pointed_at_it_in_any_arm`
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_keeps_what_names_no_missing_tool`
@@ -352,7 +351,6 @@ tool as the control.
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::the_notes_of_a_kept_job_name_job_output_only_where_the_turn_is_offered_it`
 `verified-by: bravebot_agent::turn::the_note_of_a_moved_line_names_job_output_only_where_the_turn_is_offered_it`
-`verified-by: bravebot_agent::turn::the_refusal_of_a_processor_names_only_the_tools_the_turn_was_offered`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 `verified-by: bravebot_agent::turn::a_processor_given_nothing_names_write_file_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::the_files_beside_a_named_skill_name_read_file_only_where_the_turn_was_offered_it`

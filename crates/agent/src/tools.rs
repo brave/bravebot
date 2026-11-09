@@ -3971,10 +3971,9 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // nothing to hand back but another name for the same thing, which reads as the read having
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
     if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
-        // No processor can be started once the context holds private content, so the move that
-        // names one is left out rather than offered and refused, as it is where the run is not
-        // offered `spawn_processor`. The result goes back to the file as `path_ref`, which a run
-        // that cannot write is not told of.
+        // The move that names a processor is left out where the run is not offered
+        // `spawn_processor`, rather than offered and refused. The result goes back to the file as
+        // `path_ref`, which a run that cannot write is not told of.
         let work_on_it = match (policy.processors_offered(), policy.writing_is_offered()) {
             (true, true) => format!(
                 " Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
@@ -12596,7 +12595,7 @@ fn spawn_processor<S: Sink>(
     };
 
     // The planner's words, at the label of the context it wrote them in, so an instruction
-    // written after private content was let out for the planner is private and refused.
+    // written after private content was let out for the planner is private, and so is the answer.
     let instruction = match policy.adopt_model_output("spawn_processor", instruction) {
         Ok(instruction) => instruction,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
@@ -16756,14 +16755,7 @@ mod tests {
              directory and run the program that sends it with the file's path as an argument, so \
              it reads the body from the file. The recipient and the subject are yours and only \
              the body comes from the processor. Your final message says what was sent and to \
-             whom. Call the text a summary in your final message only if a processor wrote one. \
-             Once your context \
-             holds private content, as it does after read_output or vet_content shows you some, \
-             after a delegate reports some, in a conversation resumed with some, and in a \
-             delegate started while its parent's context held some, every later \
-             spawn_processor call is refused for the rest of the conversation: what you write is \
-             private from then on, and a processor takes no private instruction. run, \
-             read_output and the file tools keep working."
+             whom. Call the text a summary in your final message only if a processor wrote one."
         );
         assert_eq!(
             description_of(&everything, "read_output"),
@@ -16772,8 +16764,7 @@ mod tests {
              run's output is quarantined by default, so `which`, `find`, `uname` and the like \
              tell you nothing until you ask for the result. Ask for the errors too when a run \
              fails, or you will not know why it failed and must not claim it succeeded. Only for \
-             output from run; a quarantined file is not readable this way. Being shown output \
-             closes spawn_processor for you and for every delegate you start afterwards. For \
+             output from run; a quarantined file is not readable this way. For \
              anything else you \
              are holding a reference to, vet_content is the question to ask. Output you were \
              shown the beginning and end of, because the whole was too long for one result, is \
@@ -16804,12 +16795,11 @@ mod tests {
     }
 
     /// A run is not told in the description of `spawn_processor` to use a tool it is not offered:
-    /// `write_file` is not on a reader's list, `vet_content` is on no delegate's, and a definition's
-    /// tools line can leave out `run` and `read_output`. Each is taken off alone, and the
-    /// description keeps naming the ones that remain.
+    /// `write_file` is not on a reader's list, and a definition's tools line can leave out `run`.
+    /// Each is taken off alone, and the description keeps naming the one that remains.
     #[test]
     fn the_processor_description_names_only_the_tools_the_list_holds() {
-        let all = ["write_file", "vet_content", "read_output", "run"];
+        let all = ["write_file", "run"];
         for gone in all {
             let described = description_of(&the_table_without(&[gone]), "spawn_processor");
             assert!(
@@ -16822,12 +16812,6 @@ mod tests {
                     "taking {gone} off took {kept} out of the description too: {described}"
                 );
             }
-            assert!(
-                described.contains("every later spawn_processor call is refused")
-                    && described.contains("a processor takes no private instruction")
-                    && described.contains("the file tools keep working"),
-                "taking {gone} off took the rule about private content out: {described}"
-            );
         }
 
         // Everything taken off at once leaves a sentence that still reads, naming none of them.
@@ -16835,16 +16819,6 @@ mod tests {
         for gone in all {
             assert!(!names_the_tool(&bare, gone), "{gone} remains: {bare}");
         }
-        assert!(
-            bare.contains(
-                "as it does after a delegate reports some, in a conversation resumed with some, \
-                 and in a delegate started while its parent's context held some, every later \
-                 spawn_processor call is refused"
-            ) && bare.ends_with(
-                "a processor takes no private instruction. The file tools keep working."
-            ),
-            "{bare}"
-        );
         // Nothing is written, so the description does not say what is written.
         assert!(
             !bare.contains("before it is written") && !bare.contains("contents_ref"),
@@ -16852,8 +16826,8 @@ mod tests {
         );
     }
 
-    /// A planner writes a delegate's task, so the description of `spawn_agent` tells it, beside the
-    /// sentence about processors, that a delegate cannot call `vet_content`, `ask_user`, `fetch_url`
+    /// A planner writes a delegate's task, so the description of `spawn_agent` tells it, after the
+    /// sentence on approvals, that a delegate cannot call `vet_content`, `ask_user`, `fetch_url`
     /// or `download_url` and that work needing one is the planner's own to do before delegating or
     /// instead. Each of the four is named only where the turn's list holds it (TOOL-6), and a
     /// delegate's own list, which holds none, is told nothing of it.
@@ -16865,11 +16839,11 @@ mod tests {
     fn the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch() {
         use bravebot_core::delegate::{Definition, Definitions, Kind};
 
-        // What follows the sentence about processors, up to the sentence on cost.
+        // What follows the sentence on approvals, up to the sentence on cost.
         fn lacks(description: &str) -> String {
             let (_, after) = description
-                .split_once("or leave it to the person.")
-                .expect("the processors sentence is in the description");
+                .split_once("so this saves you context and never an approval.")
+                .expect("the approvals sentence is in the description");
             let (lacks, _) = after
                 .split_once(" Do not use it for something one read would answer")
                 .expect("the sentence on cost is in the description");
@@ -16944,30 +16918,30 @@ mod tests {
         assert_eq!(lacks(&delegate), "");
     }
 
-    /// A planner is told before it starts a delegate that one started after private content was
-    /// shown cannot run processors, that being shown output is what closes them for it and for
-    /// its delegates, and that a task needing a picture or a file looked at goes first or to the
-    /// person. A reader's kind text does not promise processors without condition.
+    /// Being shown private content does not close the processor, so no description tells the
+    /// planner it does: not the tools that show output, not `spawn_agent`, and not the kind text
+    /// that says what a reader does.
     ///
-    /// Rejects: a `spawn_agent` or `read_output` description that is silent about the closure,
-    /// and a kind text that says a reader runs processors with no condition.
+    /// Rejects: a description that sends the planner round a closure the policy no longer makes,
+    /// so that it plans around a tool that is open.
     #[test]
-    fn the_planner_is_told_a_delegate_started_after_private_content_has_no_processors() {
+    fn no_description_says_that_private_content_closes_processors() {
         let everything = the_table_without(&[]);
-        let spawn = description_of(&everything, "spawn_agent");
-        assert!(
-            spawn.contains("cannot run processors")
-                && spawn.contains("looked at before then, or leave it to the person"),
-            "{spawn}"
-        );
-        let read_output = description_of(&everything, "read_output");
-        assert!(
-            read_output.contains("closes spawn_processor for you and for every delegate you start"),
-            "{read_output}"
-        );
-        // Not told of a tool it is not offered.
-        let without = description_of(&the_table_without(&["spawn_processor"]), "read_output");
-        assert!(!without.contains("spawn_processor"), "{without}");
+        for tool in &everything {
+            let described = description_of(&everything, &tool.function.name);
+            for stale in [
+                "closes spawn_processor",
+                "cannot run processors",
+                "a processor takes no private instruction",
+                "spawn_processor call is refused",
+            ] {
+                assert!(
+                    !described.contains(stale),
+                    "{} says {stale:?}: {described}",
+                    tool.function.name
+                );
+            }
+        }
 
         let kind = everything
             .iter()
@@ -16979,11 +16953,10 @@ mod tests {
             .expect("a kind description")
             .to_string();
         assert!(
-            kind.contains(
-                "while the context that started it holds nothing private, runs processors"
-            ),
+            kind.contains("lists, searches and runs processors: use it to find something out"),
             "{kind}"
         );
+        assert!(!kind.contains("holds nothing private"), "{kind}");
     }
 
     /// SPAWN-6. A processor's answer about a reference that is no file is written to a new file with
@@ -17746,51 +17719,6 @@ mod tests {
         }
     }
 
-    /// A conversation shown private content refuses every later processor call for the rest of it,
-    /// and the tool's description is where a planner learns that before it earns the refusal. The
-    /// description names the one tool that is refused and the tools that keep working, because a
-    /// sentence that names none reads as a cost of calling `read_output` and a planner that reads
-    /// it that way stops instead of reading a command's output. Each way a context comes to hold
-    /// private content is named, so a planner can tell it is in one.
-    #[test]
-    fn the_processor_is_described_as_refused_once_private_content_has_been_shown() {
-        let offered = available(
-            Scheduling::ArrangingALook,
-            crate::watch::Arming::Unavailable,
-            Deadlines::BUILT_IN,
-            Running::Offered,
-        );
-        let processor = offered
-            .iter()
-            .find(|t| t.function.name == "spawn_processor")
-            .expect("the turn is offered a processor");
-        let description = &processor.function.description;
-        assert!(
-            description.contains(
-                "every later spawn_processor call is refused for the rest of the conversation"
-            ),
-            "{description}"
-        );
-        assert!(
-            !description.contains("every call is refused"),
-            "{description}"
-        );
-        assert!(
-            description.contains("run, read_output and the file tools keep working"),
-            "{description}"
-        );
-        assert!(
-            description.contains("a processor takes no private instruction"),
-            "{description}"
-        );
-        assert!(
-            ["read_output", "vet_content", "delegate", "resumed"]
-                .iter()
-                .all(|way| description.contains(way)),
-            "{description}"
-        );
-    }
-
     /// The processor's description as the turn it is read in is offered it.
     fn processor_description(running: Running) -> String {
         available(
@@ -17854,18 +17782,11 @@ mod tests {
                 "the description still tells the planner '{gone}': {description}"
             );
         }
-        // PROC-4 pins the closing sentence, and the paragraph above is not the last thing said.
-        assert!(
-            description.ends_with("run, read_output and the file tools keep working."),
-            "the description no longer closes on the refusal after private content: {description}"
-        );
     }
 
     /// TOOL-6. The same description is read by a turn that holds no `run`: a reader delegate, and a
     /// turn addressed to a definition that dropped it. It is told who writes derived text and what
-    /// to call the result, and is not sent to a program that sends it. The one `run` the sentence
-    /// about private content has always named is the gap `tool-surface.md` records, and is taken
-    /// out first so the rest is checked.
+    /// to call the result, and is not sent to a program that sends it.
     #[test]
     fn the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one() {
         let withheld = processor_description(Running::Withheld);
@@ -17880,7 +17801,6 @@ mod tests {
                 "a turn without run is not told '{stated}': {withheld}"
             );
         }
-        let rest = withheld.replace("run, read_output and the file tools keep working", "");
         let offered = processor_description(Running::Offered);
         for run_only in ["run", "script", "stdin_ref", "sends it"] {
             assert!(
@@ -17889,7 +17809,7 @@ mod tests {
                  nothing: {offered}"
             );
             assert!(
-                !rest.contains(run_only),
+                !withheld.contains(run_only),
                 "a turn without run is sent to '{run_only}': {withheld}"
             );
         }
@@ -25287,7 +25207,7 @@ mod tests {
         use super::*;
         use bravebot_core::capability::{Capability, CapabilitySet};
         use bravebot_core::event::RecordingSink;
-        use bravebot_core::label::{Confidentiality, Label};
+        use bravebot_core::label::Label;
         use bravebot_core::policy::{ReleasePlan, Routing};
 
         const NOTEBOOK: &str = "refused: the outputs of this notebook are closed to read_file, \
@@ -25313,19 +25233,17 @@ mod tests {
         /// one out of a turn that has it.
         #[test]
         fn the_notebook_refusal_names_only_the_routes_the_turn_holds() {
-            let cases: [(&str, bool, bool, bool, &str); 5] = [
+            let cases: [(&str, bool, bool, &str); 4] = [
                 (
                     "everything offered",
                     true,
                     true,
-                    false,
                     "Read the file with read_file and no output_of for a reference to give to \
                      spawn_processor, read it through run, or ask the person to vouch for the path",
                 ),
                 (
                     "no run",
                     true,
-                    false,
                     false,
                     "Read the file with read_file and no output_of for a reference to give to \
                      spawn_processor, or ask the person to vouch for the path",
@@ -25334,25 +25252,16 @@ mod tests {
                     "no spawn_processor",
                     false,
                     true,
-                    false,
                     "Read it through run, or ask the person to vouch for the path",
                 ),
                 (
                     "neither",
                     false,
                     false,
-                    false,
                     "Only the person can open it, by vouching for the path",
                 ),
-                (
-                    "spawn_processor offered, context private",
-                    true,
-                    true,
-                    true,
-                    "Read it through run, or ask the person to vouch for the path",
-                ),
             ];
-            for (what, spawning, running, private, routes) in cases {
+            for (what, spawning, running, routes) in cases {
                 let mut sink = RecordingSink::new();
                 let mut policy = policy(&mut sink);
                 if !spawning {
@@ -25360,9 +25269,6 @@ mod tests {
                 }
                 if !running {
                     policy.without_running();
-                }
-                if private {
-                    policy = policy.holding(Confidentiality::Private);
                 }
                 assert_eq!(
                     closed_to_reading_outputs(&policy, Label::untrusted_public()),

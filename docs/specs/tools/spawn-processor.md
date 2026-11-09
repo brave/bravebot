@@ -38,16 +38,17 @@ name nothing holds.
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 
 <a id="SPAWN-2"></a>
-### SPAWN-2: the instruction comes from the planner and may not be private
+### SPAWN-2: the instruction comes from the planner and from a context that has met nothing untrusted
 
 It is the only thing steering the call, and it comes from a context holding nothing an attacker
-wrote. A context that holds private content cannot start a processor, and that includes a delegate
-started while its parent's context held some ([PROC-4](../processors.md#PROC-4)); such a delegate is
-not offered `spawn_processor`.
+wrote. A context that holds private content can start a processor, and so can a delegate started
+while its parent's context held some ([PROC-4](../processors.md#PROC-4)). The instruction's label is
+part of the answer's, so the answer is private where the instruction is
+([PROC-3](../processors.md#PROC-3)).
 
-`verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
+`verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_answer_over_a_public_page`
 `verified-by: bravebot_agent::tools::a_processor_cannot_be_started_from_a_context_that_met_untrusted_content`
-`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 
 <a id="SPAWN-3"></a>
 ### SPAWN-3: the result is a reference, never text

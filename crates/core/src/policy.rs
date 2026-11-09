@@ -632,11 +632,6 @@ pub struct Policy<'sink, S: Sink> {
     /// that started it did not hold them (DELEGATE-33). Taken from the spec and never from a word
     /// a delegate or a file wrote.
     started_without: Vec<Capability>,
-    /// Whether this run is a delegate whose parent's context held private content when it was
-    /// started (DELEGATE-8). Taken from the spec, which the kernel built from the parent's own
-    /// label state. It only words the refusal of a processor call, so a delegate is told why it
-    /// holds private content it was never shown.
-    started_private: bool,
     /// Whether the run is offered `vet_content`, which a reference it is handed says to use.
     vetting_offered: bool,
     /// Whether the run is offered `spawn_processor`, which a reference it is handed says to use.
@@ -826,7 +821,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             at: None,
             named_out_delegating: false,
             started_without: Vec::new(),
-            started_private: false,
             vetting_offered: true,
             spawning_offered: true,
             writing_offered: true,
@@ -1726,7 +1720,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             at: self.at,
             named_out_delegating: self.named_out_delegating,
             started_without: self.started_without.clone(),
-            started_private: self.started_private,
             vetting_offered: self.vetting_offered,
             spawning_offered: self.spawning_offered,
             writing_offered: self.writing_offered,
@@ -2074,7 +2067,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
         self.started_without = spec.without().to_vec();
-        self.started_private = spec.holds() != Confidentiality::Public;
         self.spawns = spec.spawns().map(<[String]>::to_vec);
         self.write_limits = spec.write_limits().to_vec();
         self.tree = spec.tree().clone();
@@ -2376,14 +2368,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Label::new(self.context, self.holds)
     }
 
-    /// Whether every processor call is refused from here on: once the context holds private
-    /// content, the instruction the planner writes carries the context's label, which is private,
-    /// and PROC-4 refuses a private one. Text that would send the planner to a processor reads
-    /// this and leaves the move out.
-    pub fn processors_closed(&self) -> bool {
-        !self.context_label().is_public()
-    }
-
     /// Say that the run is not offered `vet_content`, so a reference made from here on does not
     /// send it there.
     ///
@@ -2424,10 +2408,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Whether a reference the run holds can be given to a processor: the run is offered
-    /// `spawn_processor` and its context holds nothing private (PROC-4). Text that tells the
-    /// planner what to do with a reference reads this where it is written by hand.
+    /// `spawn_processor`. Text that tells the planner what to do with a reference reads this where
+    /// it is written by hand.
     pub fn processors_offered(&self) -> bool {
-        self.spawning_offered && !self.processors_closed()
+        self.spawning_offered
     }
 
     /// Whether the run is offered `write_file`, where a reference goes as `contents_ref` or
@@ -2441,9 +2425,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.running_offered
     }
 
-    /// A reference made now, marked as closed to processors where none can be started and as
-    /// sending nobody to a tool the run is not offered: `vet_content`, `spawn_processor`,
-    /// `write_file` or `read_output`.
+    /// A reference made now, marked as sending nobody to a tool the run is not offered:
+    /// `vet_content`, `spawn_processor`, `write_file` or `read_output`.
     fn made_here(&self, reference: crate::reference::Reference) -> crate::reference::Reference {
         let reference = if self.vetting_offered {
             reference
@@ -2460,15 +2443,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         } else {
             reference.without_writing()
         };
-        let reference = if self.reading_offered {
+        if self.reading_offered {
             reference
         } else {
             reference.without_reading()
-        };
-        if self.processors_closed() {
-            reference.closed_to_processors()
-        } else {
-            reference
         }
     }
 
@@ -4238,23 +4216,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// written in.
     ///
     /// The advisor is given the planner's own request and nothing else, so what reaches it is
-    /// what the planner already holds. The question is the planner's words, read here for the
-    /// reason a processor's instruction is: the call changes nothing outside the answer that
-    /// comes back, and what it can reach was fixed by the session's configuration rather than
-    /// by the value. It must be public, so a question cannot carry private content the
-    /// planner's context does not already hold.
+    /// what the planner already holds, and a question that quotes what the planner was shown adds
+    /// nothing to it. The question is the planner's words, read here for the reason a
+    /// processor's instruction is: the call changes nothing outside the answer that comes back,
+    /// and what it can reach was fixed by the session's configuration rather than by the value.
+    /// The answer is labelled from the context the advisor was shown ([`Policy::adopt_model_output`]),
+    /// which is private where the question is.
     pub fn before_advice(&mut self, question: &Labelled<String>) -> Gated<String> {
-        let label = question.label();
-        if !label.is_public() {
-            return Err(self.deny(
-                "advice",
-                Principle::Confinement,
-                format!(
-                    "the question for the advisor is {label} and private content must not become \
-                     one; say what to ask rather than pasting what was read"
-                ),
-            ));
-        }
         let proof = Declassification::authorise("the question the planner put to its advisor");
         Ok(question.clone().declassify(&proof))
     }
@@ -4362,15 +4330,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`ProcessorSpec`] names the slots, the instruction, and the label the output will carry,
     /// and offers no way to add any of them afterwards.
     ///
-    /// The output label is computed now, from the inputs, by [`crate::label::taint_all`]. Doing
-    /// it before the run is what keeps the processor out of the decision: nothing it writes has
-    /// any bearing on how what it writes is labelled.
+    /// The output label is computed now, from the inputs and the instruction, by
+    /// [`crate::label::taint_all`]. Doing it before the run is what keeps the processor out of the
+    /// decision: nothing it writes has any bearing on how what it writes is labelled.
     ///
-    /// The instruction is the planner's own words and must be public. `spawn_processor` labels it
-    /// from the context with [`Policy::adopt_model_output`], so once the planner has been shown
-    /// private content no instruction it writes passes. It is not routing, since
-    /// a processor has nowhere to route anything to: no tool, no path, no address, and one
-    /// output slot chosen by the driver. It is nonetheless read here rather than carried,
+    /// The instruction is the planner's own words. `spawn_processor` labels it from the context
+    /// with [`Policy::adopt_model_output`], so once the planner has been shown private content
+    /// every instruction it writes is private, and the output label below joins it in. It is not
+    /// routing, since a processor has nowhere to route anything to: no tool, no path, no address,
+    /// and one output slot chosen by the driver. It is nonetheless read here rather than carried,
     /// which is the same relaxation [`Policy::promote_confined_read`] makes and rests on the
     /// same two facts: the operation changes nothing outside a slot, and the set of things it
     /// can reach was fixed by this call rather than by the value.
@@ -4488,54 +4456,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(spec)
     }
 
-    /// What the refusal of a processor call says once the context holds private content, which no
-    /// wording of the instruction changes.
-    ///
-    /// Names a way on only where the run is offered the tools it takes: a filter run on a
-    /// reference needs `run` and `read_output`, and reading a reference whole needs `vet_content`,
-    /// which no delegate is offered. A delegate started holding its parent's private content is
-    /// told that, since it was shown none itself, and to say in its answer what it could not have
-    /// looked at. Built from the policy's own record of what the context holds and what the run is
-    /// offered, never from the instruction or a reference.
-    fn closed_to_processors(&self) -> String {
-        let (why, place) = match self.started_private {
-            true => (
-                "you were started holding the private content your parent's context held, so \
-                 what you write is private",
-                "this run",
-            ),
-            false => (
-                "what you write has been private since you were shown private content",
-                "this conversation",
-            ),
-        };
-        let mut then = Vec::new();
-        if self.running_offered && self.reading_offered {
-            let whole = match self.vetting_offered {
-                true => ", and vet_content is the question to ask to read a reference whole",
-                false => "",
-            };
-            then.push(format!(
-                "to narrow a reference that holds text, run a filter such as grep or tail with \
-                 stdin_ref set to it and call read_output on what that prints{whole}"
-            ));
-        } else if self.vetting_offered {
-            then.push("vet_content is the question to ask to read a reference whole".to_string());
-        }
-        if self.started_private {
-            then.push(
-                "say in your answer that you started holding your parent's private content and \
-                 so could not have a processor look at it, so whoever asked can have it looked \
-                 at"
-                .to_string(),
-            );
-        }
-        let then: String = then.iter().map(|clause| format!("; {clause}")).collect();
-        format!(
-            "{why}, so no rewording changes that and no processor can be started in {place}{then}"
-        )
-    }
-
     /// The label a processor's output will carry and the instruction it will be sent, once the
     /// slots it reads and the instruction pass the checks every processor passes.
     ///
@@ -4555,25 +4475,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 Principle::Confinement,
                 "a processor that names no references to read has nothing quarantined to work on"
                     .to_string(),
-            ));
-        }
-
-        let label = instruction.label();
-        if !label.is_public() {
-            // An instruction labelled from a context holding private content is private however
-            // it is worded, so advice to reword would only send the planner round again.
-            let instead = if self.processors_closed() {
-                self.closed_to_processors()
-            } else {
-                "say what to do rather than pasting what was read".to_string()
-            };
-            return Err(self.deny(
-                "processor",
-                Principle::Confinement,
-                format!(
-                    "{id}: the instruction is {label} and private content must not become one; \
-                     {instead}"
-                ),
             ));
         }
 
@@ -4599,9 +4500,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         }
 
+        // The instruction is part of what the answer is made from: the planner may have quoted
+        // what it was shown into it, so the answer carries the instruction's label as well as the
+        // slots'. A private instruction over a public page gives a private answer.
+        labels.push(instruction.label());
         let out_label = crate::label::taint_all(labels);
-        // Read, not carried: see the note above on why an instruction is not routing. Public
-        // was checked before this point, so nothing private is being opened.
+        // Read, not carried: see the note above on why an instruction is not routing. What it
+        // holds is in the answer's label, so nothing private is released by reading it here.
         let proof = Declassification::authorise("a processor instruction the planner wrote");
         let instruction = instruction.clone().declassify(&proof);
         Ok((out_label, instruction))
@@ -5845,8 +5750,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The `expects` string is the planner's word about what the slot is supposed to contain. It
     /// is read here rather than carried, on the footing a processor's instruction sits on: it is
     /// not content anybody read, it is the sentence the driver is about to send, and a driver
-    /// that could not hold it could not send it. Private is refused for the same reason it is
-    /// refused there, since the user's own data must not become another model's prompt.
+    /// that could not hold it could not send it. A private sentence is sent like a public one,
+    /// since the check is a request to the session's own model and the slot it is shown is the
+    /// private content.
     ///
     /// A picture is checked as a picture: the spec carries the media type the slot was marked with
     /// where it was minted, and the check is given the file in a part of its own
@@ -5876,20 +5782,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let expects = match expects {
             Some(expects) => {
-                let label = expects.label();
-                if !label.is_public() {
-                    return Err(self.deny(
-                        "vetting",
-                        Principle::Confinement,
-                        format!(
-                            "{slot}: what the content is expected to be is {label}, and private \
-                             content must not become a prompt; say what you expect rather than \
-                             pasting what was read"
-                        ),
-                    ));
-                }
-                // Read, not carried, for the reason given above. Public was checked already, so
-                // nothing private is being opened here.
+                // Read, not carried, for the reason given above. The check runs on the session's
+                // model, which was shown what the context holds and is given the slot itself, so
+                // a private sentence adds nothing to what it is sent. What the check says goes to
+                // the person's screen and is read for one word.
                 let proof = Declassification::authorise("what the planner expects a slot to hold");
                 Some(expects.clone().declassify(&proof))
             }
@@ -9405,23 +9301,20 @@ mod tests {
         assert!(!policy.finish(), "the refusal was not recorded");
     }
 
-    /// The advisor is sent the planner's question as a request body, so a question carrying private
-    /// content would be that content leaving. Nothing upstream labels one so; this refuses it.
+    /// The advisor is sent the planner's own request with the question after it, so what a
+    /// question quotes of what the planner was shown reaches it either way. A private question is
+    /// put to it unchanged, and the answer is labelled from the context it was shown.
     #[test]
-    fn a_private_question_is_not_put_to_the_advisor() {
+    fn a_private_question_is_put_to_the_advisor() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
 
         let private = Labelled::new("the user's key".to_string(), Label::untrusted_private());
-        let denial = policy
-            .before_advice(&private)
-            .expect_err("a private question must not reach the advisor");
-        assert_eq!(denial.principle, Principle::Confinement);
-        assert!(
-            denial
-                .message
-                .contains("say what to ask rather than pasting what was read"),
-            "the planner was not told what to do instead: {denial}"
+        assert_eq!(
+            policy
+                .before_advice(&private)
+                .expect("a private question is put to the advisor"),
+            "the user's key"
         );
 
         let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
@@ -9765,12 +9658,12 @@ mod tests {
         ]
     }
 
-    /// PROC-4 refuses every processor call once the context holds private content, and a reference
-    /// is where the planner is told what to do with quarantined content. Each way the policy makes
-    /// one is asked, and the context is varied on both axes: one that has met untrusted data and
-    /// holds nothing private can still start a processor, so only what it holds decides.
+    /// A reference is where the planner is told what to do with quarantined content, and a
+    /// processor can be started whatever the context holds (PROC-4). Each way the policy makes one
+    /// is asked, and the context is varied on both axes: what it holds and what it has met do not
+    /// change the move.
     #[test]
-    fn a_reference_names_no_processor_exactly_when_the_context_holds_private_content() {
+    fn a_reference_names_a_processor_whatever_the_context_holds() {
         for (held, integrity) in [
             (Confidentiality::Public, Integrity::Trusted),
             (Confidentiality::Public, Integrity::Untrusted),
@@ -9781,11 +9674,9 @@ mod tests {
             let mut slots = SlotStore::new();
             let mut policy = open_policy(&mut sink).resuming(integrity).holding(held);
 
-            let closed = held == Confidentiality::Private;
             for (made, reference) in a_reference_of_each_kind(&mut policy, &mut slots) {
-                assert_eq!(
+                assert!(
                     reference.describe().contains("spawn_processor"),
-                    !closed,
                     "{made} in a context holding {held:?} at {integrity:?}: {}",
                     reference.describe()
                 );
@@ -9924,9 +9815,9 @@ mod tests {
     }
 
     /// Text written by hand about a reference asks the policy what the reference may be given to:
-    /// a processor only where the run is offered one and its context holds nothing private, and a
-    /// file only where it is offered `write_file`. A policy that withdrew `run` reports it, and one
-    /// that never did still reports it offered.
+    /// a processor only where the run is offered one, whatever its context holds, and a file only
+    /// where it is offered `write_file`. A policy that withdrew `run` reports it, and one that never
+    /// did still reports it offered.
     #[test]
     fn the_policy_says_what_a_reference_may_be_given_to() {
         for (spawning, writing, held) in [
@@ -9948,7 +9839,7 @@ mod tests {
             }
             assert_eq!(
                 policy.processors_offered(),
-                spawning && held == Confidentiality::Public,
+                spawning,
                 "spawn_processor {spawning}, holding {held:?}"
             );
             assert_eq!(
@@ -15807,20 +15698,18 @@ five
         assert_eq!(composed.label(), Label::untrusted_private());
     }
 
-    /// A private sentence must not become another model's prompt, for the reason a processor's
-    /// instruction must not.
+    /// A check is a request to the session's own model about a slot it is shown whole, so a
+    /// private sentence about the slot is sent as a public one is.
     #[test]
-    fn a_private_expectation_cannot_direct_a_check() {
+    fn a_private_expectation_is_put_to_the_check() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
         let (slots, slot) = fetched("a page");
         let private = Labelled::new("what the file said".to_string(), Label::untrusted_private());
 
         assert!(
-            policy
-                .before_vetting(&slot, Some(&private), &slots)
-                .is_err(),
-            "private content became a check's prompt"
+            policy.before_vetting(&slot, Some(&private), &slots).is_ok(),
+            "a private expectation was refused"
         );
     }
 
@@ -19686,11 +19575,10 @@ five
         }
 
         /// A processor asked to choose is held to what every processor is: it reads something that
-        /// exists, once each, and is told only words that are public.
+        /// exists, once each.
         #[test]
         fn a_chooser_is_refused_for_the_reasons_a_processor_is() {
             let (store, public, _) = quarantine();
-            let secret = Labelled::new("hunter2".to_string(), Label::untrusted_private());
 
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
@@ -19718,10 +19606,25 @@ five
                     .is_err(),
                 "a chooser that names a reference twice was built"
             );
-            let err = policy
-                .before_chooser("p", &[public], &secret, 9, &store)
-                .expect_err("a private instruction directed a chooser");
-            assert_eq!(err.principle, Principle::Confinement);
+        }
+
+        /// A private instruction is let through to a chooser, and the choice it makes is as
+        /// private as the instruction, over a slot that was public.
+        #[test]
+        fn a_private_instruction_gives_a_private_choice() {
+            let (store, public, _) = quarantine();
+            let secret = Labelled::new("hunter2".to_string(), Label::untrusted_private());
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+
+            let spec = policy
+                .before_chooser("p", std::slice::from_ref(&public), &secret, 9, &store)
+                .expect("a private instruction is let through");
+            assert_eq!(spec.out_label(), Label::untrusted_private());
+            let plain = policy
+                .before_chooser("p", &[public], &instruction(), 9, &store)
+                .expect("a public instruction is let through");
+            assert_eq!(plain.out_label(), Label::untrusted_public());
         }
 
         /// A number a processor chose is quarantined whatever label it carries, as a picture is,
@@ -20044,10 +19947,11 @@ five
             );
         }
 
-        /// An instruction is read, so it must not be the user's private data wearing the
-        /// shape of a request.
+        /// The instruction is part of what the answer is made from, because the planner may have
+        /// quoted what it was shown into it. A private instruction over a public page therefore
+        /// gives a private answer, and a public one leaves the page's label as it was.
         #[test]
-        fn a_private_instruction_cannot_direct_a_processor() {
+        fn a_private_instruction_gives_a_private_answer_over_a_public_page() {
             let (store, public, _) = quarantine();
             let mut sink = RecordingSink::new();
             let mut policy = Policy::begin(
@@ -20059,18 +19963,23 @@ five
             .unwrap();
 
             let secret = Labelled::new("hunter2".to_string(), Label::untrusted_private());
-            let err = policy
-                .before_processor("p", &[public], &secret, None, &store)
-                .expect_err("a private instruction must be refused");
-            assert_eq!(err.principle, Principle::Confinement);
+            let spec = policy
+                .before_processor("p", std::slice::from_ref(&public), &secret, None, &store)
+                .expect("a private instruction is let through");
+            assert_eq!(spec.out_label(), Label::untrusted_private());
+
+            let plain = policy
+                .before_processor("p", &[public], &instruction(), None, &store)
+                .expect("a public instruction is let through");
+            assert_eq!(plain.out_label(), Label::untrusted_public());
         }
 
-        /// No wording makes an instruction public once the context holds private content, so the
-        /// refusal says what still reaches a quarantined reference instead of sending the planner
-        /// to a person who cannot help, and does not tell it to reword, which would not change
-        /// anything. The instruction is written from the context, as a turn writes it.
+        /// A planner shown private content writes private words, so the instruction it gives a
+        /// processor is private whatever it says. The call goes ahead, and the answer is private
+        /// although the page it was made from was public. The instruction is written from the
+        /// context, as a turn writes it.
         #[test]
-        fn the_refusal_of_a_processor_in_a_private_context_names_what_still_works() {
+        fn a_planner_that_holds_private_content_can_instruct_a_processor() {
             let (store, public, _) = quarantine();
             let mut sink = RecordingSink::new();
             let mut policy = Policy::begin(
@@ -20084,201 +19993,13 @@ five
 
             let written =
                 policy.label_model_output("spawn_processor", "list the failures".to_string());
-            let err = policy
+            let spec = policy
                 .before_processor("p", &[public], &written, None, &store)
-                .expect_err("a private context cannot instruct a processor");
-
+                .expect("a planner holding private content can start a processor");
             assert!(
-                err.message
-                    .contains("no processor can be started in this conversation"),
-                "{}",
-                err.message
+                !spec.out_label().is_public(),
+                "the answer lost the instruction's confidentiality"
             );
-            assert!(
-                err.message.contains("stdin_ref")
-                    && err.message.contains("read_output")
-                    && err.message.contains("vet_content"),
-                "the refusal names no route that still works: {}",
-                err.message
-            );
-            assert!(
-                !err.message.contains("asks the user"),
-                "the refusal says who answers vet_content, which depends on the session: {}",
-                err.message
-            );
-            assert!(
-                !err.message.contains("tell the user")
-                    && !err.message.contains("rather than pasting"),
-                "{}",
-                err.message
-            );
-        }
-
-        /// A delegate started while its parent's context held private content is closed to
-        /// processors from its first call, and it was shown none of that content itself, so the
-        /// refusal says it inherited the state and does not send it to `vet_content`, which no
-        /// delegate is offered. Where the run holds no `run`, it is not sent to a filter either.
-        #[test]
-        fn the_refusal_to_a_delegate_started_private_says_so_and_names_only_what_it_is_offered() {
-            let (store, public, _) = quarantine();
-            let mut sink = RecordingSink::new();
-            let mut spec_policy = Policy::begin(
-                routing_with("task", "check the notes"),
-                ReleasePlan::new(),
-                all_capabilities(),
-                &mut sink,
-            )
-            .unwrap()
-            .holding(crate::label::Confidentiality::Private);
-            let spec = spec_policy
-                .before_delegate(
-                    &super::delegates::argument("reader"),
-                    &super::delegates::argument("summarise the notes"),
-                    None,
-                )
-                .expect("a reader may be started");
-            drop(spec_policy);
-
-            let mut inner = RecordingSink::new();
-            let mut delegate = open_policy(&mut inner).within(&spec);
-            delegate.without_vetting();
-            delegate.without_running();
-            let written =
-                delegate.label_model_output("spawn_processor", "list the failures".to_string());
-            let err = delegate
-                .before_processor("p", &[public], &written, None, &store)
-                .expect_err("a delegate started private cannot instruct a processor");
-
-            assert!(
-                err.message.contains("started holding the private content")
-                    && err
-                        .message
-                        .contains("no processor can be started in this run"),
-                "the refusal does not say the delegate inherited the state: {}",
-                err.message
-            );
-            assert!(
-                err.message.contains("say in your answer"),
-                "the refusal does not tell the delegate to report what it could not look at: {}",
-                err.message
-            );
-            assert!(
-                !err.message.contains("vet_content") && !err.message.contains("stdin_ref"),
-                "the refusal names a route the delegate is not offered: {}",
-                err.message
-            );
-            assert!(
-                !err.message.contains("since you were shown private content"),
-                "a delegate that was shown nothing was told it had been shown something: {}",
-                err.message
-            );
-        }
-
-        /// A turn that was not offered `vet_content`, such as one whose definition names its
-        /// tools, is not sent to it by a refusal, and one that holds a filter and `read_output`
-        /// is told so.
-        #[test]
-        fn the_refusal_in_a_private_context_names_only_the_routes_the_run_is_offered() {
-            let (store, public, _) = quarantine();
-            let mut sink = RecordingSink::new();
-            let mut policy = Policy::begin(
-                routing_with("task", "pull out the failing tests"),
-                ReleasePlan::new(),
-                all_capabilities(),
-                &mut sink,
-            )
-            .unwrap()
-            .holding(crate::label::Confidentiality::Private);
-            policy.without_vetting();
-
-            let written =
-                policy.label_model_output("spawn_processor", "list the failures".to_string());
-            let err = policy
-                .before_processor("p", &[public], &written, None, &store)
-                .expect_err("a private context cannot instruct a processor");
-
-            assert!(
-                err.message.contains("stdin_ref") && err.message.contains("read_output"),
-                "{}",
-                err.message
-            );
-            assert!(
-                !err.message.contains("vet_content"),
-                "the refusal names a tool the run is not offered: {}",
-                err.message
-            );
-        }
-
-        /// TOOL-6. The refusal names `run`, `read_output` and `vet_content` as what still works
-        /// only where the turn's list holds them: the filter route needs `run` and `read_output`,
-        /// the whole read needs `vet_content`, and a turn with neither is told only that no
-        /// processor can be started. The control is a policy told of nothing, whose text is the one
-        /// written before the list was consulted. The regression it rejects is a refusal that
-        /// names the three tools whatever the turn was offered.
-        #[test]
-        fn the_refusal_of_a_processor_in_a_private_context_names_only_the_tools_the_turn_holds() {
-            let refusal = |tell: &dyn Fn(&mut Policy<'_, RecordingSink>)| {
-                let (store, public, _) = quarantine();
-                let mut sink = RecordingSink::new();
-                let mut policy = Policy::begin(
-                    routing_with("task", "pull out the failing tests"),
-                    ReleasePlan::new(),
-                    all_capabilities(),
-                    &mut sink,
-                )
-                .unwrap()
-                .holding(crate::label::Confidentiality::Private);
-                tell(&mut policy);
-                let written =
-                    policy.label_model_output("spawn_processor", "list the failures".to_string());
-                policy
-                    .before_processor("p", &[public], &written, None, &store)
-                    .expect_err("a private context cannot instruct a processor")
-                    .message
-            };
-            let start = "what you write has been private since you were shown private content, so \
-                         no rewording changes that and no processor can be started in this \
-                         conversation";
-            let filter = "to narrow a reference that holds text, run a filter such as grep or tail \
-                          with stdin_ref set to it and call read_output on what that prints";
-            let whole = "vet_content is the question to ask to read a reference whole";
-
-            let full = refusal(&|_| {});
-            assert!(
-                full.contains(&format!("{start}; {filter}, and {whole}")),
-                "{full}"
-            );
-
-            let no_vetting = refusal(&|policy| policy.without_vetting());
-            assert!(
-                no_vetting.contains(&format!("{start}; {filter}")),
-                "{no_vetting}"
-            );
-            assert!(!no_vetting.contains("vet_content"), "{no_vetting}");
-
-            for (what, told) in [
-                ("run", refusal(&|policy| policy.without_running())),
-                ("read_output", refusal(&|policy| policy.without_reading())),
-            ] {
-                assert!(
-                    told.contains(&format!("{start}; {whole}")),
-                    "without {what}: {told}"
-                );
-                assert!(
-                    !told.contains("stdin_ref") && !told.contains("read_output"),
-                    "without {what}: {told}"
-                );
-            }
-
-            let neither = refusal(&|policy| {
-                policy.without_vetting();
-                policy.without_running();
-            });
-            assert!(neither.contains(start), "{neither}");
-            for name in ["vet_content", "read_output", "stdin_ref", "grep"] {
-                assert!(!neither.contains(name), "{name} in {neither}");
-            }
-            assert!(!neither.contains("conversation;"), "{neither}");
         }
 
         /// The audit trail must be able to show what a processor was allowed to see, without

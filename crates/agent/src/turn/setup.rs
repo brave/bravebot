@@ -185,11 +185,6 @@ pub(super) fn offered_tools<S: Sink>(
     if workspace.checkout().is_some() {
         offered.retain(|tool| tool.function.name != "lsp");
     }
-    // A delegate started holding private content has every processor call refused (PROC-4,
-    // DELEGATE-8), so it is not offered the tool. Read from the policy's own label state.
-    if policy.processors_closed() {
-        offered.retain(|tool| tool.function.name != "spawn_processor");
-    }
     Ok((None, offered))
 }
 

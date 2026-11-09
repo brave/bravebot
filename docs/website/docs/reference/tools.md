@@ -597,10 +597,9 @@ wrote are on the screen beside the bytes. The check runs before the question rat
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
 planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
 
-**Being shown output closes processors.** Output you let through is private content, so once the
-planner has been shown some, [`spawn_processor`](#spawn_processor) is refused for it and for every
-delegate it starts afterwards. The tool's description says so where `spawn_processor` is offered, and
-leaves it out where it is not.
+**Being shown output makes what the planner writes private.** Output you let through is private
+content, so once the planner has been shown some, what it writes is private too. A
+[`spawn_processor`](#spawn_processor) call is still started, and its answer is private.
 
 **Output the planner may already read is not asked about.** Where a command's output was one the
 planner may read and too long for one result, it saw the beginning and the end, and `read_output`
@@ -651,7 +650,7 @@ A picture or a PDF is vetted the same way, except that the check is given the fi
 copy of it to open. If you let it through, it is attached to the planner's next request and is not
 returned as text. See [A picture or a PDF](../security/vetting.md#a-picture-or-a-pdf).
 
-Refused for a reference to nothing, for a private `expects`, and for a call from a delegate. A
+Refused for a reference to nothing and for a call from a delegate. A
 picture is also refused where the model in use takes no pictures, or where there is nowhere to put a
 copy of it for you to open. A reference to a file nothing has read
 yet is opened rather than refused, since naming one is the ordinary way to ask about a file the planner
@@ -899,15 +898,12 @@ argument of a tool that a server was declared to take it
 (`bravebot mcp add --choice <tool>:<argument>`), and you are shown the number and the reference it
 came from when you are asked about that call.
 
-**Refused once the model has been shown private content.** After [`read_output`](#read_output) or
-[`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
-private, what it writes is private too, and a processor takes no private instruction, so every
-`spawn_processor` call is refused for the rest of the conversation. This includes every delegate it
-starts afterwards, which begins holding the same private content, is not offered `spawn_processor`
-and is told so. `run`, `read_output` and the file tools keep working. Quarantined results made from
-then on do not suggest a processor, and the refusal names what still works, only where the run is
-offered it: a filter such as `grep` or `tail` run with `stdin_ref` set to the reference, then
-`read_output` on what it printed, or `vet_content` for a reference that holds no text.
+**Private content does not stop a processor.** After [`read_output`](#read_output) or
+[`vet_content`](#vet_content) has shown the model something private, or a delegate has reported
+something private, what it writes is private too, and the instruction it gives a processor is private
+with it. The processor runs all the same, on the model the turn runs on or the one `processorModel`
+names, and is given the references it reads whole. Its answer is private where the instruction is,
+even when the reference it read was not. This holds in every delegate the model starts afterwards.
 
 Everything before the document marker in a processor's reply is a remark for you: it reaches your
 screen and stops there, is part of no file, and cannot be another processor's input. An answer with no
@@ -951,9 +947,8 @@ A name that is neither a kind nor a definition is refused, and the refusal lists
 have worked.
 
 A delegate started after the planner has been shown private content (by `read_output` or
-`vet_content`, or in a delegate's report) starts holding it too, so it cannot run a processor and is
-not offered `spawn_processor`. Start a task that needs a picture or a file looked at before then, or
-leave it to the person. A delegate that is told it cannot say so in its report.
+`vet_content`, or in a delegate's report) starts holding it too, so what it writes is private. It is
+offered `spawn_processor` as any delegate is.
 
 A delegate is never offered `vet_content`, `ask_user`, `fetch_url` or `download_url`, and the
 description of `spawn_agent` tells the planner so. Work that needs one of them, such as reading a
@@ -1307,7 +1302,8 @@ Puts a question to a second model that is shown the conversation. The result is 
 | `question` | what the planner wants the advisor's view on |
 
 The advisor is sent the same request the planner was sent on that round, followed by the question, and
-is offered no tools. It can only advise. The planner does not choose the model: the session does, with
+is offered no tools. It can only advise. A question that quotes what the planner was shown is sent
+like any other, since the request already holds it. The planner does not choose the model: the session does, with
 [`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
 setting or [`/advisor`](commands.md#advisor-model--off).
 

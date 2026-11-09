@@ -1396,34 +1396,6 @@ fn attach_vetted_pictures<S: Sink>(
     }
 }
 
-/// A presentation as the planner is told of it once no processor can be started.
-fn for_context_closed(presented: &Presentation) -> String {
-    match presented {
-        Presentation::Quarantined(reference) => reference.clone().closed_to_processors().describe(),
-        Presentation::Visible(text) => text.clone(),
-    }
-}
-
-/// Reword the results of a round that pointed at a processor, once its calls have run and the
-/// context holds private content (PROC-4).
-///
-/// A result is composed while its call runs, and a later call of the same round can release
-/// output, which closes every processor. The planner reads the results together, so one that
-/// still named a processor would send it to a call that is refused. Decided by the policy's
-/// label state alone; the wording on both sides is the driver's.
-fn reword_for_closed_processors<S: Sink>(
-    policy: &Policy<'_, S>,
-    conversation: &mut Conversation,
-    rewordable: &mut Vec<(usize, String)>,
-) {
-    let closed = policy.processors_closed();
-    for (at, body) in rewordable.drain(..) {
-        if closed {
-            conversation.reword_result(at, body);
-        }
-    }
-}
-
 /// Put anything the person typed while the round ran in front of the next one.
 ///
 /// Called at a round boundary, once everything the round produced has gone into the conversation
@@ -2913,10 +2885,7 @@ where
     // `read_output` only where the list holds them, and so do the descriptions of the tools that
     // name others. A delegate is never offered the first and a reader the third, and a
     // definition's tools line or the command line can leave any of them out of a turn's.
-    let processors = crate::delegate::Processors::of(
-        policy.processors_closed(),
-        offered_names(&offered, "spawn_processor"),
-    );
+    let processors = crate::delegate::Processors::of(offered_names(&offered, "spawn_processor"));
     if !offers_vet_content {
         policy.without_vetting();
     }
@@ -3950,9 +3919,6 @@ where
         // Held until every call in the round has its result, since a picture goes in a
         // message of its own after them and never between a call and its answer.
         let mut attached = Vec::new();
-        // The results of this round that name a processor, by position in the conversation, each
-        // with the words it has once none can be started (PROC-4).
-        let mut rewordable: Vec<(usize, String)> = Vec::new();
         // Reads that already ran beside each other, by the call they answer (TURN-10).
         let mut ahead: Vec<Option<tools::Ahead>> = completion.calls.iter().map(|_| None).collect();
         let mut examined = 0;
@@ -3975,7 +3941,6 @@ where
             // Checked per call, because a tool may write. Stopping here means the remaining
             // calls in this round never run.
             if cancel.is_cancelled() {
-                reword_for_closed_processors(policy, conversation, &mut rewordable);
                 attach_vetted_pictures(policy, conversation, &mut attached);
                 return Err(TurnError::Cancelled { attempts: Some(0) });
             }
@@ -4053,7 +4018,6 @@ where
                         crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
                     )),
                     crate::repeated_call::Held::Stop => {
-                        reword_for_closed_processors(policy, conversation, &mut rewordable);
                         attach_vetted_pictures(policy, conversation, &mut attached);
                         return Err(TurnError::Cancelled { attempts: Some(0) });
                     }
@@ -4177,11 +4141,6 @@ where
             // Set where a skill's text was shown, so the result is tagged with it.
             let mut skill_shown: Option<String> = None;
             let mut message_sent: Option<Composed> = None;
-            // What a result that points at a processor says once none can be started, set in the
-            // arms below that make a reference while one still can. A later call of the round can
-            // release output, which makes the context private and closes every processor, and the
-            // result is then reworded (PROC-4).
-            let mut when_closed: Option<String> = None;
             // Set in each arm below, where the presentation that decides it is in scope.
             let result_from: Provenance;
             let body = if let Some(entries) = &output.entries {
@@ -4278,14 +4237,6 @@ where
                         references.len(),
                     )
                 };
-                when_closed = (!policy.processors_closed()).then(|| {
-                    let closed: Vec<_> = references
-                        .iter()
-                        .cloned()
-                        .map(bravebot_core::reference::Reference::closed_to_processors)
-                        .collect();
-                    listed(&bravebot_core::reference::describe_listing(&closed))
-                });
                 listed(&described)
             } else if !output.pictures.is_empty() {
                 // A server's answer that carried pictures: its text and each picture get a
@@ -4295,7 +4246,6 @@ where
                 // given it as a picture.
                 let mut ids = Vec::new();
                 let mut described = Vec::new();
-                let mut described_closed = Vec::new();
                 let text = policy
                     .present(
                         "tool_result",
@@ -4317,7 +4267,6 @@ where
                     ids.push(reference.slot.to_string());
                 }
                 described.push(text.for_context());
-                described_closed.push(for_context_closed(&text));
                 for picture in &output.pictures {
                     let kept = policy
                         .present_a_picture(
@@ -4354,7 +4303,6 @@ where
                         ids.push(reference.slot.to_string());
                     }
                     described.push(kept.for_context());
-                    described_closed.push(for_context_closed(&kept));
                 }
                 reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 result_from = Provenance::Reference(ids.join(", "));
@@ -4368,8 +4316,6 @@ where
                         described.join("\n")
                     )
                 };
-                when_closed =
-                    (!policy.processors_closed()).then(|| with_pictures(&described_closed));
                 with_pictures(&described)
             } else {
                 // Reserved here rather than before the branch above, which reserves one per
@@ -4719,14 +4665,6 @@ where
                                 (None, None) => String::new(),
                             };
                         let rest = rest_with(bravebot_core::reference::Reference::describe);
-                        // The same sentence for a context that holds private content by the end of
-                        // the round, where the reference names no processor (PROC-4). Only a
-                        // result with a reference of its own can differ.
-                        let rest_closed = whole.is_some().then(|| {
-                            rest_with(|reference| {
-                                reference.clone().closed_to_processors().describe()
-                            })
-                        });
                         // Workspace content only, as with the landing above: the driver's
                         // own sentence about a call is already its note.
                         if output.content {
@@ -4767,9 +4705,6 @@ where
                                 output.tool
                             )
                         };
-                        when_closed = rest_closed
-                            .filter(|_| !policy.processors_closed())
-                            .map(|closed| composed(&closed));
                         composed(&rest)
                     }
                     // Told a mkdir's empty output was quarantined, with the ways to
@@ -4926,12 +4861,6 @@ where
                                 output.tool,
                             )
                         };
-                        when_closed = (!policy.processors_closed()).then(|| {
-                            composed(
-                                &reference.clone().closed_to_processors().describe(),
-                                &advice_beside(plan.beside.without(tools::Named::SpawnProcessor)),
-                            )
-                        });
                         composed(&reference.describe(), &advice)
                     }
                 }
@@ -4955,14 +4884,10 @@ where
                 },
                 None => None,
             };
-            let (body, when_closed) = match note {
-                Some(note) => (
-                    format!("{body}{note}"),
-                    when_closed.map(|closed| format!("{closed}{note}")),
-                ),
-                None => (body, when_closed),
+            let body = match note {
+                Some(note) => format!("{body}{note}"),
+                None => body,
             };
-            let at = conversation.len();
 
             // A result answers the call it belongs to by id where the round replayed calls at
             // all. Where it did not, the result is a plain message, as everything here was
@@ -4993,9 +4918,6 @@ where
                     result_from,
                 ),
             }
-            if let Some(closed) = when_closed {
-                rewordable.push((at, closed));
-            }
             // How many tasks the list leaves open, whichever way the result went into the
             // conversation. Kept only where the planner was shown the list: a list it was not shown
             // is still the panel's, and the count of the one before it no longer describes that.
@@ -5005,14 +4927,12 @@ where
                 conversation.open_tasks_counted(shown_window.then_some(open), in_answer);
             }
             if let Some(cancelled) = cancellation {
-                reword_for_closed_processors(policy, conversation, &mut rewordable);
                 attach_vetted_pictures(policy, conversation, &mut attached);
                 return Err(TurnError::Cancelled {
                     attempts: cancelled.attempts,
                 });
             }
         }
-        reword_for_closed_processors(policy, conversation, &mut rewordable);
         // Sent even where the turn stops here. The result told the planner the file is
         // attached, and a conversation holding that sentence without the file would be
         // read by the next turn as a picture it was shown and cannot find.

@@ -47,12 +47,14 @@ destination it chose. A tool for the advisor would make it a second planner.
 `verified-by: bravebot_agent::turn::the_advisor_is_sent_the_whole_request_the_planner_was_sent_that_round`
 
 <a id="ADVISOR-3"></a>
-### ADVISOR-3: a private question is not sent
+### ADVISOR-3: a private question is sent like any other
 
-The question is sent to a model as the body of a request. One labelled private is refused, with a
-sentence that says to describe what to ask rather than paste what was read.
+The question follows the request the planner was sent on that round ([ADVISOR-2](#ADVISOR-2)),
+which holds whatever the planner was shown, so a question that quotes it adds nothing to what the
+advisor receives. A question labelled private is put to the advisor, and the reply is labelled from
+the context the advisor was shown ([ADVISOR-4](#ADVISOR-4)).
 
-`verified-by: bravebot_core::policy::a_private_question_is_not_put_to_the_advisor`
+`verified-by: bravebot_core::policy::a_private_question_is_put_to_the_advisor`
 
 <a id="ADVISOR-4"></a>
 ### ADVISOR-4: the reply is labelled by the context the advisor was shown

@@ -2550,13 +2550,12 @@ fn an_item_held_out_is_given_to_a_processor_as_text_and_never_to_the_planner() {
     }
 }
 
-/// VET-4, PERM-9, PROC-4, BROWSER-39. The planner reads what was held out only when a person has
-/// read the exact text and said yes. The call before the vet is the control: an allow rule answers
-/// it. After the vet the text is in the planner's context, what it writes is private, so the next
-/// fetch is put to the person though the rule covers it, and no processor can be started. The
-/// regressions it rejects are a text that never reaches the planner after a yes, a rule that
-/// answers for words written after private content was let through, and a processor started in a
-/// context that holds private content.
+/// VET-4, PERM-9, BROWSER-39. The planner reads what was held out only when a person has read the
+/// exact text and said yes. The call before the vet is the control: an allow rule answers it. After
+/// the vet the text is in the planner's context and what it writes is private, so the next fetch
+/// is put to the person though the rule covers it. The regressions it rejects are a text that
+/// never reaches the planner after a yes, and a rule that answers for words written after private
+/// content was let through.
 #[test]
 fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every_call_after_is_put_to_the_person()
  {
@@ -2572,10 +2571,6 @@ fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every
                 r#"{"ref":"ref:1","expects":"the text I selected on the news page"}"#,
             ),
             tool_request(&wire("held", "take_held"), "{}"),
-            tool_request(
-                "spawn_processor",
-                r#"{"reads":["ref:5"],"instruction":"say what it is about"}"#,
-            ),
             reply_with("done"),
         ],
     )]);
@@ -2610,11 +2605,6 @@ fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every
         sent[2].contains(PAYLOAD),
         "the text did not reach the planner after the person agreed: {}",
         sent[2]
-    );
-    let last = sent.last().expect("the turn asked");
-    assert!(
-        last.contains("no processor can be started in this conversation"),
-        "a processor was not refused once private content had been let through: {last}"
     );
 }
 

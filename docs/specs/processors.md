@@ -69,58 +69,49 @@ The driver builds the spec, in one place, and nothing widens one afterwards.
 <a id="PROC-3"></a>
 ### PROC-3: the output label is computed before the processor runs
 
-By taint over the inputs. Nothing the processor writes has any say in how what it writes is
-labelled.
+By taint over the inputs and the instruction. Nothing the processor writes has any say in how
+what it writes is labelled. The instruction is the planner's words, labelled from its context
+([LABEL-8](labels.md#LABEL-8)), and the planner may have quoted what it was shown into it, so a
+private instruction gives a private output however public the slots it reads are.
 
 `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs`
+`verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_answer_over_a_public_page`
+`verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_choice`
 
 <a id="PROC-4"></a>
 ### PROC-4: the input is assembled by the policy layer
 
 The policy layer, the part of `bravebot-core` that owns the gates, concatenates the slots. The driver carries the result wrapped and hands it to the call
-without seeing it. The `instruction` comes from the planner and must not
-be private.
+without seeing it. The `instruction` comes from the planner.
 
 What the planner writes is private once its context holds private content, which
 [LABEL-8](labels.md#LABEL-8) lists the ways of reaching: a slot `vet_content` let through, output
 `read_output` read to it, a delegate's report, a resumed conversation that already held some, or, for
 a delegate, the private content its parent's context held when it was started
-([DELEGATE-8](delegation.md#DELEGATE-8)).
-From then on every `spawn_processor` call is refused. The refusal does not ask for a rewording, since none helps, and
-names what still reaches a quarantined reference: a filter such as `grep` or `tail` run with
-`stdin_ref` set to it, whose printed result `read_output` shows, and `vet_content` for a reference
-that holds no text. `run`, `read_output` and the file tools keep working. The refusal names a route
-only where the run is offered it: the filter where `run` and `read_output` are offered, and
-`vet_content` where it is. A delegate that was shown none of the content is told it was started
-holding what its parent's context held, that no processor can be started in the run, and to say in
-its answer that it could not have a processor look at the content, so whoever asked can. A
-delegate that starts closed is not offered `spawn_processor`, and its prompt does not say it may
-hand files to processors. A reference made in such a
-context is described without the move that names a processor, and the tool's description says that
-`spawn_processor` is refused once the context holds private content and that those tools keep
-working. The same holds inside one round: a call later in the round can show private content, and
-the results of the round's earlier calls were composed before it, so once the round's calls have run
-and the context is private, each of those results is reworded without the processor move. The
-choice depends on the context's label alone, never on what a call printed. A round that leaves the
-context public keeps its results as composed.
+([DELEGATE-8](delegation.md#DELEGATE-8)). A processor is started all the same, in a delegate as in
+the session. The instruction goes to the model the turn runs on, or to the one the person named in
+`processorModel` ([PROC-13](#PROC-13)), together with the slots it reads whole. The turn's own model
+is sent nothing by a private instruction that it was not already given. A model `processorModel`
+names was not necessarily shown what the planner was, and the instruction may quote it, so a person
+who names one has chosen to send that model what the planner writes into an instruction. The
+instruction's label is part of the output's ([PROC-3](#PROC-3)), which keeps an instruction that
+quotes private content from making a public-looking answer. A reference made in a context that holds private content is
+described as any other is, and the tool's description says nothing of the context.
 
-**Why.** A planner told to give a reference to a processor, and refused for the rest of the
-conversation when it does, reads the whole of a long output with `read_output` instead, which is
-the content the processor was the way to avoid reading.
+**Why.** A processor is the way to work on a long output without reading it. A planner refused one
+for the rest of a conversation, as it is after nearly any command's output has been read to it,
+reads the whole output with `read_output` instead, or runs a filter on it, which a person is asked
+about every time ([RUN-6](tools/run.md#RUN-6)).
 
-`verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
-`verified-by: bravebot_agent::turn::a_planner_shown_private_content_cannot_instruct_a_processor`
-`verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`
-`verified-by: bravebot_core::policy::the_refusal_in_a_private_context_names_only_the_routes_the_run_is_offered`
-`verified-by: bravebot_core::policy::the_refusal_to_a_delegate_started_private_says_so_and_names_only_what_it_is_offered`
-`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
-`verified-by: bravebot_core::policy::a_reference_names_no_processor_exactly_when_the_context_holds_private_content`
-`verified-by: bravebot_core::reference::a_reference_closed_to_processors_names_none_and_keeps_the_other_moves`
-`verified-by: bravebot_agent::tools::the_processor_is_described_as_refused_once_private_content_has_been_shown`
-`verified-by: bravebot_agent::turn::a_planner_that_cannot_start_a_processor_is_not_pointed_at_one`
-`verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_context`
-`verified-by: bravebot_agent::turn::a_reference_made_before_a_later_call_in_the_round_closes_processors_names_none`
-`verified-by: bravebot_agent::turn::a_capped_visible_result_made_before_a_later_call_closes_processors_names_none`
+`verified-by: bravebot_agent::turn::a_planner_shown_private_content_can_instruct_a_processor`
+`verified-by: bravebot_agent::turn::a_private_instruction_is_sent_to_the_model_processor_model_names`
+`verified-by: bravebot_core::policy::a_planner_that_holds_private_content_can_instruct_a_processor`
+`verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_answer_over_a_public_page`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
+`verified-by: bravebot_core::policy::a_reference_names_a_processor_whatever_the_context_holds`
+`verified-by: bravebot_agent::tools::no_description_says_that_private_content_closes_processors`
+`verified-by: bravebot_agent::turn::a_planner_that_holds_private_content_is_pointed_at_a_processor_and_gets_one`
+`verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_a_processor_whatever_the_context_holds`
 
 <a id="PROC-5"></a>
 ### PROC-5: the output is never shown to the planner
@@ -317,8 +308,11 @@ The name is configuration, not content. It is read from the person's own setting
 file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
 a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
 file content chooses it, so the destination of a processor's input stays the one the person
-configured. `--processor-model` ([CLI-34](cli.md#CLI-34)) names it for one run from the person's own
-command line and outranks the file.
+configured. A private instruction is sent to that model as any other is ([PROC-4](#PROC-4)): the
+model may not have been shown what the planner was and the instruction may quote it, so naming a
+model other than the turn's is choosing to send it that text. `--processor-model`
+([CLI-34](cli.md#CLI-34)) names it for one run from the person's own command line and outranks the
+file.
 
 A model that needs a sign-in this machine has not made, that the managed layer refuses
 ([BACKEND-48](backends.md#BACKEND-48)), or that no configured service answers for is not swapped
@@ -348,6 +342,7 @@ bytes ([PROC-12](#PROC-12)).
 `verified-by: bravebot_agent::turn::a_processor_with_no_configured_model_runs_on_the_turns_own`
 `verified-by: bravebot_agent::turn::a_processor_model_needing_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::a_processor_answered_by_another_model_than_the_configured_one_says_so`
+`verified-by: bravebot_agent::turn::a_private_instruction_is_sent_to_the_model_processor_model_names`
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed`
 
 <a id="PROC-14"></a>
@@ -388,11 +383,9 @@ thing it is. A processor given one answers as it does for any input: one documen
 labelled by taint over its inputs ([PROC-3](#PROC-3)), and the planner is given a reference to it
 and never the text ([PROC-5](#PROC-5)).
 
-Looking at a picture through a processor comes before `vet_content` lets it through. A picture
-`vet_content` lets through makes the context private ([PROC-4](#PROC-4)), and from then on a
-processor is refused. A delegate started after the planner's context became private starts closed,
-so it cannot look at a picture through a processor either, and a task that needs one looked at is
-started before then or left to the person.
+Looking at a picture through a processor and letting it through with `vet_content` are separate
+moves. A processor can be asked about a picture after `vet_content` has let one through, and in a
+delegate started then ([PROC-4](#PROC-4)).
 
 **Why.** A picture carries whatever words are in it, so a planner that could look at one could be
 instructed by it, and a model told to read a data URI reads it as characters. A processor holds no
@@ -401,7 +394,7 @@ picture or its answer entering the planner's context.
 
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::mcp::a_processor_is_given_a_servers_picture_as_a_picture`
-`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 
 <a id="PROC-16"></a>
 ### PROC-16: a processor may be asked for one number, and a crate outside the driver reads it from the answer
