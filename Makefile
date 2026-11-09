@@ -84,7 +84,7 @@ help:
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
-	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer, longest waiting first; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
 	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [NOTES=\"<instructions for the run>\"] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
@@ -549,8 +549,9 @@ docs-updated-to-sha:
 # how many are read. GitHub reports mergeable as UNKNOWN for every open pull request after main
 # moves, until each has been read, so contrib/review-ready.py reads the list again every few seconds
 # while an approved, passing, non-draft pull request is UNKNOWN, for WAIT seconds in total, and
-# names on stderr any still UNKNOWN at the end. Each ready pull request is printed as soon as it is
-# seen.
+# names on stderr any still UNKNOWN at the end. The ready pull requests are printed after the last
+# read, the one that has waited longest first and the most recent last. A pull request waits from the
+# reviewer's latest approval, or from when it was opened if that has no time.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
