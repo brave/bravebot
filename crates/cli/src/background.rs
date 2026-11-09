@@ -213,8 +213,7 @@ fn launch(roster: &Roster, prompt: &str) -> ExitCode {
     let id = bravebot_session::jobs::new_id();
     match start_host(roster, &id, prompt, None, Mode::Ask) {
         Ok(()) => {
-            let shown: String = id.chars().take(ID_SHOWN).collect();
-            println!("{}", t!(bg_started, id = shown));
+            println!("{}", t!(bg_started, id = short_id(&id)));
             ExitCode::SUCCESS
         }
         Err(code) => code,
@@ -397,8 +396,7 @@ pub(crate) fn hand_over(
         return Err(fail(Ending::Failed, t!(sessions_no_home)));
     };
     start_host(&roster, &left.id, "", Some(&left.directory), mode)?;
-    let shown: String = left.id.chars().take(ID_SHOWN).collect();
-    println!("{}", t!(bg_handed_over, id = shown));
+    println!("{}", t!(bg_handed_over, id = short_id(&left.id)));
     Ok(())
 }
 
@@ -463,12 +461,15 @@ fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode
                 std::path::Path::new(&seen.job.directory),
                 &seen.job.id,
             ) {
+                // Drawn: the id is read from the roster file (LAYER-3).
                 return Err(fail(
                     Ending::Failed,
-                    bravebot_session::sessions::Held::Open {
-                        id: seen.job.id.clone(),
-                    }
-                    .refusal(),
+                    crate::progress::printable_lines(
+                        &bravebot_session::sessions::Held::Open {
+                            id: seen.job.id.clone(),
+                        }
+                        .refusal(),
+                    ),
                 ));
             }
             let name = shown(&seen.job.name);
@@ -707,10 +708,10 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
         }
         Some("working") => fail(Ending::Failed, t!(reply_working, name = name)),
         Some("stopping") => fail(Ending::Failed, t!(reply_stopping, name = name)),
-        Some("needs-input") => {
-            let id: String = seen.job.id.chars().take(ID_SHOWN).collect();
-            fail(Ending::Failed, t!(reply_needs_input, name = name, id = id))
-        }
+        Some("needs-input") => fail(
+            Ending::Failed,
+            t!(reply_needs_input, name = name, id = short_id(&seen.job.id)),
+        ),
         _ => fail(Ending::Failed, t!(reply_not_sent, name = name)),
     }
 }
@@ -726,6 +727,11 @@ fn shown(typed: &str) -> String {
     crate::progress::printable(typed).replace('\t', " ")
 }
 
+/// The start of `id` a line shows, drawn: an id is read from the roster or a record's file name.
+fn short_id(id: &str) -> String {
+    shown(&id.chars().take(ID_SHOWN).collect::<String>())
+}
+
 /// One row for each session: the start of its id, its name, its state, where it works, how long
 /// since it was last written, and the last prompt the person typed.
 ///
@@ -737,7 +743,7 @@ fn rows_of(tasks: &[Task]) -> Vec<Row> {
         .iter()
         .map(|task| Row {
             id: task.id.clone(),
-            short: task.id.chars().take(ID_SHOWN).collect(),
+            short: short_id(&task.id),
             name: shown(task.title.lines().next().unwrap_or("")),
             state: task.status.process_state().unwrap_or(State::Stopped),
             state_words: bravebot_tui::sessions_screen::status_in_words(task.status, task.held),
@@ -1057,6 +1063,57 @@ mod tests {
         assert!(
             row.name.contains('\u{241b}') && row.directory.contains('\u{241b}'),
             "{row:?}"
+        );
+    }
+
+    /// BG-5, BG-16, LAYER-3: a bidirectional control or a zero-width character in a name a session
+    /// chose is written out as its code point, since it is not a control character and would
+    /// otherwise reorder or hide the text around it on the terminal.
+    #[test]
+    fn a_bidirectional_control_in_a_session_name_or_directory_is_written_out() {
+        let mut one = seen("fix", State::Idle, None, true);
+        one.job.name = "inv\u{202e}oice\u{200b}".to_string();
+        one.job.directory = "/work/\u{2066}pro\u{2069}ject".to_string();
+        let row = &rows_of(&[one])[0];
+        for field in [&row.name, &row.directory] {
+            assert!(
+                !field
+                    .chars()
+                    .any(|c| matches!(c, '\u{202e}' | '\u{200b}' | '\u{2066}' | '\u{2069}')),
+                "{field:?}"
+            );
+        }
+        assert!(row.name.contains("U+202E"), "{:?}", row.name);
+        assert!(row.directory.contains("U+2066"), "{:?}", row.directory);
+        assert!(
+            super::shown("a\u{202e}b").contains("U+202E"),
+            "the helper every message site uses leaves a bidirectional control raw"
+        );
+    }
+
+    /// LAYER-3: the start of an id a line shows (`bg_started`, `bg_handed_over`,
+    /// `reply_needs_input`, a list row) is drawn, since the id of a roster entry or a record is read
+    /// from a file. The fault this rejects is taking the first characters of the id as they are.
+    #[test]
+    fn the_start_of_an_id_a_line_shows_is_drawn() {
+        let shown = short_id("ab\u{1b}[2J\u{202e}cdef");
+        assert!(
+            !shown.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "{shown:?}"
+        );
+        assert!(shown.starts_with("ab\u{241b}[2J"), "{shown:?}");
+        assert_eq!(short_id("11111111-1111-4111"), "11111111");
+        let mut one = seen("fix", State::Idle, None, true);
+        one.job.id = "\u{1b}[2Jab\u{202e}cdefgh".to_string();
+        let row = &rows_of(&[one])[0];
+        assert!(
+            !row.short.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "{:?}",
+            row.short
+        );
+        assert_eq!(
+            row.id, "\u{1b}[2Jab\u{202e}cdefgh",
+            "the id attach looks up stays as it is"
         );
     }
 

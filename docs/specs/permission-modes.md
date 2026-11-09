@@ -468,12 +468,18 @@ reaches after that, and the planner is told when the change matters to it: a cha
 repeats the plan-mode instruction, and a change out of it says the refusal has ended. A change
 between the other modes says nothing, as MODE-1 says nothing of them. The system prompt of a turn
 says nothing for a mode other than plan, and a notice stays in the conversation after the turn that
-pushed it. So the conversation records whether its last notice said plan mode is on, and the first
-request of a later turn is compared against that: a turn that starts outside plan mode says the
-refusal has ended, and a turn that starts in plan mode says nothing more, since its system prompt
-says it. The record is kept with a stored session, so a resumed session is told the same. An answer
-is credited in the trail to the mode the question was put in, so a mode chosen over a prompt already
-on screen does not take credit for the answer given to it.
+pushed it. The driver tags each such notice with whether it says plan mode is on, and the
+conversation reads whether plan mode was last told from the newest tagged notice still in its
+request, never from the words of a message. The first request of a later turn is compared against
+that: a turn that starts outside plan mode says the refusal has ended, and a turn that starts in
+plan mode says nothing more, since its system prompt says it. A notice that leaves the request takes
+what it said with it, so a compaction that moves it to the archive, a rewind to before it and a fork
+cut in front of it leave a turn with nothing to retract, and a cut that keeps a plan-on notice the
+parent later retracted leaves the child to retract it. The notices are part of the stored messages,
+so a resumed session is told the same; a record written before the tag existed has no tagged notice
+and carries the flag it stored. An answer is credited in the trail to the mode the question was put
+in, so a mode chosen over a prompt already on screen does not take credit for the answer given to
+it.
 
 **Why.** A person who presses the key while a turn runs is telling the session what they want from
 then on. A turn that kept the mode it began with would go on writing after the person pressed the
@@ -491,8 +497,20 @@ withdraw it.
 `verified-by: bravebot_agent::turn::plan_mode_ending_is_said_to_the_planner_once`
 `verified-by: bravebot_agent::turn::a_turn_started_in_plan_mode_after_a_notice_of_plan_mode_is_told_nothing_more`
 `verified-by: bravebot_agent::turn::a_turn_started_in_another_mode_than_the_last_one_outside_plan_mode_is_told_nothing`
+`verified-by: bravebot_agent::turn::a_turn_after_a_compaction_that_removed_the_plan_notice_is_not_told_it_ended`
+`verified-by: bravebot_agent::turn::a_turn_after_a_compaction_that_kept_the_plan_notice_is_told_it_ended`
 `verified-by: bravebot_ui_bridge::fork::a_cut_leaves_the_child_recording_that_its_last_plan_mode_notice_said_plan_mode_is_on`
+`verified-by: bravebot_ui_bridge::fork::a_cut_that_takes_the_plan_mode_notice_away_leaves_the_child_with_nothing_to_retract`
+`verified-by: bravebot_ui_bridge::fork::a_cut_that_keeps_a_plan_mode_notice_the_parent_later_retracted_leaves_the_child_to_retract_it`
+`verified-by: bravebot_ui_bridge::fork::a_cut_inside_the_archive_reads_the_notices_it_puts_back`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_that_its_last_notice_said_plan_mode_is_on`
+`verified-by: bravebot_agent::conversation::a_tagged_notice_outranks_the_flag_an_untagged_record_stored`
+`verified-by: bravebot_agent::conversation::compacting_away_the_plan_mode_notice_leaves_nothing_to_retract`
+`verified-by: bravebot_agent::conversation::compacting_around_the_plan_mode_notice_keeps_it_to_be_retracted`
+`verified-by: bravebot_agent::conversation::the_newest_mode_notice_decides_whether_plan_mode_is_on`
+`verified-by: bravebot_agent::conversation::restoring_an_earlier_snapshot_reports_what_its_messages_said`
+`verified-by: bravebot_agent::conversation::taking_a_turn_back_leaves_the_plan_mode_notice_and_what_it_said`
+`verified-by: bravebot_tui::undo_tests::undoing_a_turn_that_went_into_plan_mode_leaves_no_plan_mode_to_retract`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
 `verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`

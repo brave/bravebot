@@ -1798,6 +1798,36 @@ impl Drop for Wrote {
     }
 }
 
+/// A rewind replaces the conversation with the one captured at the point, so no plan mode remains
+/// to retract after it: a turn that went into plan mode and was undone leaves a conversation with
+/// no plan-mode notice (MODE-8).
+///
+/// This holds under any way of recording the notice, so it pins the outcome of a rewind and not a
+/// particular design.
+#[test]
+fn undoing_a_turn_that_went_into_plan_mode_leaves_no_plan_mode_to_retract() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_point_over("plan-notice", "before\n", "after\n");
+    wrote.conversation.push_composed(
+        bravebot_aichat::protocol::Message::user("plan mode is on"),
+        bravebot_agent::conversation::Composed::ModeNotice { plan: true },
+    );
+    assert!(
+        wrote.conversation.plan_mode_told(),
+        "the notice was not recorded, so this says nothing"
+    );
+
+    wrote.undo();
+
+    assert!(
+        !wrote.conversation.plan_mode_told(),
+        "the rewound conversation still records a plan-mode notice it no longer holds: {}",
+        wrote.said()
+    );
+}
+
 /// The list is what a number is read beside, so each row says which hunk it is, where it is in the
 /// file now, and shows the lines it replaced and the lines that replaced them.
 #[test]

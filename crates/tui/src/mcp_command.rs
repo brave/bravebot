@@ -383,7 +383,7 @@ pub(crate) mod tests {
 
     /// Nobody to ask: a command that puts a question here is a command that reached the road a start
     /// takes, which none of these may.
-    struct Never;
+    pub(crate) struct Never;
 
     impl Asker for Never {
         fn anybody_there(&self) -> bool {

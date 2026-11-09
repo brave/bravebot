@@ -1585,7 +1585,11 @@ there waits on the rows it shows, as above. A no
 writes nothing, and the question once answered offers nothing more.
 
 **Kept.** A yes writes the rule a yes writes, for this session, and appends one line to
-`~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The line names the
+`~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The key is the
+directory's path with every character outside letters, digits, `.` and `_` turned into `-`. A path
+whose key would be longer than 200 bytes is cut there and ends in `-` and 32 hex digits of a digest of
+the path's own bytes, so a key is at most 200 bytes, and two long directories that the turning into
+`-` would join have two files. A key of up to 200 bytes is unchanged. The line names the
 directory in full, which directory is at that path (when it was made and, where the platform has one,
 its number on the volume), the session and when. A desktop session is named on its first turn, so a
 line kept before one names no session; the name decides nothing. A line that cannot be written
@@ -1645,6 +1649,17 @@ grant elsewhere: this directory, this one of the directories that has had that n
 yes writes rather than everything the session went on to record.
 
 `verified-by: bravebot_agent::trusted::a_kept_answer_is_read_back_by_the_next_session_there`
+`verified-by: bravebot_agent::trusted::an_answer_about_a_directory_with_a_very_long_path_is_kept_read_back_and_forgotten`
+`verified-by: bravebot_agent::trusted::a_long_directory_is_not_answered_by_a_record_kept_for_another_long_directory`
+`verified-by: bravebot_agent::home::a_path_of_any_length_has_a_key_that_fits_a_file_name`
+`verified-by: bravebot_agent::home::a_path_whose_name_fits_keeps_it_and_the_next_byte_is_the_first_cut`
+`verified-by: bravebot_agent::home::a_long_path_has_the_same_key_each_time`
+`verified-by: bravebot_agent::home::the_key_of_a_long_path_is_a_fixed_string_the_session_review_script_also_pins`
+`verified-by: bravebot_agent::home::two_long_paths_that_differ_only_late_have_two_keys`
+`verified-by: bravebot_agent::home::long_paths_the_mangling_would_join_have_two_keys`
+`verified-by: bravebot_agent::home::a_long_name_that_is_not_text_and_its_lossy_lookalike_have_two_keys`
+`verified-by: bravebot_agent::home::the_key_of_a_long_path_can_name_a_file_and_a_directory`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_yes_about_a_directory_with_a_very_long_path_is_kept_and_forgotten`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::trusted::an_answer_kept_about_one_directory_answers_for_no_other`
 `verified-by: bravebot_agent::trusted::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
@@ -1703,7 +1718,7 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks that a record holding confined_lines is written only for a yes given after the sentence was on screen; make check-ui runs them)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks, for a directory of three 255-character components, that a record holding confined_lines is written only for a yes given after the sentence was on screen; make check-ui runs them)`
 
 <a id="TRUST-24"></a>
 ### TRUST-24: a kept answer is shown with the session's rules and taken back where they are
@@ -1894,6 +1909,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   the time is all there is, and it is one the owner can set and NTFS can carry over (tunnelling) to
   a name made again within seconds of being removed, so a clone deleted and replaced that quickly
   there is taken for the one answered about.
+- **A directory whose key is longer than 200 bytes loses its earlier records.** A key longer
+  than 200 bytes is cut and ends in a digest ([TRUST-23](#TRUST-23)), including a key of up to 255
+  bytes that a file system took whole before. For such a directory the earlier kept answer, granted
+  rules, remembered command lines, findings, untrusted paths, checkout record and session directory
+  filed under the longer key are not found under the new name. Its startup question is asked again
+  and its earlier sessions are not listed there. Nothing migrates them.
 - **Withdrawing can lose an answer being kept at the same moment.** `/forget-trust` reads the record
   and writes back what is left, so a line another session appends to the same file in between goes
   with the lines withdrawn. That directory is asked about next time, which is the direction every

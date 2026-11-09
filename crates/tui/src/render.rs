@@ -9219,7 +9219,9 @@ mod tests {
     /// to the whole width, so the margin pushes a row past the edge; dropping or reordering
     /// words at a break; and one of a note's lines taking the margin of the others only when it
     /// fits. Every tone is covered, since the ink is the tone's and a wrapped row keeps it. A
-    /// note's words are drawn as they are, with no `printable` pass, like a refusal's.
+    /// note's words are laid out as they are here. `note_lines` in `render/transcript.rs` draws the
+    /// text of a note when the entry is rendered, so this test uses words with no control
+    /// character.
     #[test]
     fn a_note_that_wraps_continues_under_the_column_its_first_row_starts_in() {
         let _held = crate::theme::exclusive();

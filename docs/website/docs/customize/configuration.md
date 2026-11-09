@@ -110,6 +110,8 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
 
+In these paths `<directory>` is the directory's path with every character other than letters, digits, `.` and `_` replaced by `-`. A name of up to 200 bytes is used as it is. A path whose name would be longer is cut to 200 bytes and ends in `-` and 32 hex digits of a digest of the path. A directory whose name is longer than 200 bytes is asked about again, and its sessions kept under the earlier, longer name are not listed.
+
 A premium key stored with `bravebot auth login brave` is kept here too, in `brave-key.json`, a file only
 you can read. See [Brave's premium service](premium.md#storing-the-key).
 

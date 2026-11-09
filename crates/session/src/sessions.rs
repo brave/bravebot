@@ -5075,6 +5075,25 @@ mod tests {
         assert_eq!(key_for(Path::new("/")), "root");
     }
 
+    /// The session directory of a deep working directory has to be a name a file system takes, or
+    /// no session could be written for it. The path is rooted at `/`, so the test runs on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn a_working_directory_too_deep_for_a_file_name_still_has_a_session_directory() {
+        let deep = Path::new("/")
+            .join("a".repeat(255))
+            .join("b".repeat(255))
+            .join("c".repeat(255));
+        let key = key_for(&deep);
+        assert!(key.len() <= 200, "{} bytes", key.len());
+        assert_eq!(key, bravebot_agent::home::key_for(&deep));
+        let home = tempfile::tempdir().expect("a scratch directory");
+        let directory = home.path().join(&key);
+        std::fs::create_dir(&directory).expect("a directory named by the key is created");
+        std::fs::write(directory.join(format!("{}.jsonl", new_id())), "{}\n")
+            .expect("a record in it is written");
+    }
+
     #[test]
     fn a_title_is_the_first_line_of_the_prompt() {
         assert_eq!(

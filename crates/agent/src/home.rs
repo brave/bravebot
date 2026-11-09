@@ -193,6 +193,17 @@ fn platform_cache() -> Option<PathBuf> {
         .or_else(|| profile().map(|profile| profile.join(".cache")))
 }
 
+/// The most bytes a key from [`key_for`] has.
+///
+/// A key is one file name or one directory name, and a file system takes at most 255 bytes of a
+/// name. A caller adds `.jsonl` to it, and [`replace`] adds `.<process>.<write>.tmp` beside the file
+/// while it rewrites it, which together are at most 42 bytes, so a key of this length leaves a name
+/// with all of them under the limit.
+const MOST_KEY_BYTES: usize = 200;
+
+/// How many bytes of the path's digest a bounded key holds, written as twice as many hex digits.
+const KEY_DIGEST_BYTES: usize = 16;
+
 /// The single path segment standing for a working directory.
 ///
 /// Separators become dashes and anything that is not a plain path character goes the same way, so
@@ -200,10 +211,23 @@ fn platform_cache() -> Option<PathBuf> {
 /// reversible, which is why a record keyed this way has to hold the real path as well, and why two
 /// directories whose names reduce to the same segment are answered by one file.
 ///
+/// A path whose name that way is longer than [`MOST_KEY_BYTES`] is cut, and the cut name ends in a
+/// dash and a digest of the whole path. Without that, a path of about 250 bytes or more has no key
+/// that a file system takes as a name, and a record kept for its directory could not be written.
+/// A key of up to [`MOST_KEY_BYTES`] bytes is unchanged, so two such paths that reduce to the same
+/// name still share one key. A key longer than [`MOST_KEY_BYTES`] bytes that a file system took
+/// whole before is now cut, so a record or directory filed under that longer name is not found and
+/// nothing migrates it.
+/// The digest is of the path's own bytes and not of its name, so
+/// two long paths that reduce to the same name, such as `/a/b/…` and `/a-b/…`, or a name that is
+/// not text and the one its replacement characters spell, have two keys. Whichever form a key has,
+/// the record holds the real path, and what the record says is decided by that and not by the key.
+///
 /// One definition rather than one per subsystem: the session store and the record of command lines
 /// somebody asked to be remembered are both kept per working directory, and two spellings of the
 /// same key would put a session under one name and the answers given in it under another.
 pub fn key_for(project: &Path) -> String {
+    use sha2::{Digest as _, Sha256};
     let mangled: String = project
         .display()
         .to_string()
@@ -218,7 +242,18 @@ pub fn key_for(project: &Path) -> String {
     if mangled.trim_matches('-').is_empty() {
         return "root".to_string();
     }
-    mangled
+    if mangled.len() <= MOST_KEY_BYTES {
+        return mangled;
+    }
+    let digest: String = Sha256::digest(project.as_os_str().as_encoded_bytes())
+        .iter()
+        .take(KEY_DIGEST_BYTES)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    // The name is ASCII, so a count of characters is a count of bytes.
+    let kept = MOST_KEY_BYTES - 1 - digest.len();
+    let prefix: String = mangled.chars().take(kept).collect();
+    format!("{prefix}-{digest}")
 }
 
 /// Whether `path` is a directory by its own name, which a link to one is not.
@@ -663,6 +698,143 @@ mod tests {
 
     fn loosen(path: &Path, mode: u32) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("loosen");
+    }
+
+    /// The longest a file name beside a key can get: the key, `.jsonl`, and the temporary name
+    /// [`replace`] gives the file while it rewrites it, with the largest process number and write
+    /// count it can print.
+    fn longest_name_for(key: &str) -> String {
+        format!("{key}.jsonl.{}.{}.tmp", u32::MAX, u64::MAX)
+    }
+
+    /// TRUST-23: a directory three components of 255 bytes deep has a name no file system takes as
+    /// one file name, so the key stands for it in a bounded name. Nothing that is built from the key
+    /// can then be refused for its length, whichever record or directory it names.
+    #[test]
+    fn a_path_of_any_length_has_a_key_that_fits_a_file_name() {
+        let widest = format!(
+            "/{}/{}/{}",
+            "a".repeat(255),
+            "b".repeat(255),
+            "c".repeat(255)
+        );
+        for path in [
+            widest,
+            format!("/{}", "x".repeat(MOST_KEY_BYTES)),
+            format!("/{}", "x".repeat(10_000)),
+        ] {
+            let key = key_for(Path::new(&path));
+            assert!(key.len() <= MOST_KEY_BYTES, "{} bytes", key.len());
+            assert!(!key.contains('/') && !key.is_empty(), "{key}");
+            let name = longest_name_for(&key);
+            assert!(name.len() <= 255, "{} bytes in {name}", name.len());
+        }
+    }
+
+    /// A key of up to the bound is the path's name as it is, so every record and session directory a
+    /// path of that length already has is found under the name it was written to. One byte over the
+    /// bound is the first that is cut. A rule that cut sooner would orphan the records of paths that
+    /// were working.
+    #[test]
+    fn a_path_whose_name_fits_keeps_it_and_the_next_byte_is_the_first_cut() {
+        assert_eq!(
+            key_for(Path::new("/Users/me/my project/x_y.z")),
+            "-Users-me-my-project-x_y.z"
+        );
+        let fits = format!("/{}", "x".repeat(MOST_KEY_BYTES - 1));
+        assert_eq!(key_for(Path::new(&fits)), fits.replace('/', "-"));
+        let over = format!("/{}", "x".repeat(MOST_KEY_BYTES));
+        let key = key_for(Path::new(&over));
+        assert_ne!(key, over.replace('/', "-"));
+        assert!(key.starts_with("-xxxx"), "{key}");
+    }
+
+    /// The same path has the same key every time, since the record is looked for under it by a
+    /// later session.
+    #[test]
+    fn a_long_path_has_the_same_key_each_time() {
+        let path = format!("/{}", "x".repeat(600));
+        assert_eq!(key_for(Path::new(&path)), key_for(Path::new(&path)));
+    }
+
+    /// The key of `/` followed by 300 `x` is 166 `x`, a dash and the first 16 bytes of the SHA-256
+    /// of those 301 bytes in hex. The session-review script's selftest pins the same string, so the
+    /// two implementations of the key cannot drift apart.
+    #[test]
+    fn the_key_of_a_long_path_is_a_fixed_string_the_session_review_script_also_pins() {
+        let path = format!("/{}", "x".repeat(300));
+        assert_eq!(
+            key_for(Path::new(&path)),
+            format!("-{}-2f2e149caf438697dcb448f24724e955", "x".repeat(166))
+        );
+    }
+
+    /// PATH-007: the digest covers the whole path, so two long directories that differ only after
+    /// the part of the name that is kept have two keys. A key made of the cut name alone is one
+    /// record for both, which is a yes given in one answering for the other's session store.
+    #[test]
+    fn two_long_paths_that_differ_only_late_have_two_keys() {
+        let stem = "a".repeat(400);
+        let one = format!("/{stem}/one");
+        let two = format!("/{stem}/two");
+        assert_ne!(key_for(Path::new(&one)), key_for(Path::new(&two)));
+    }
+
+    /// PATH-007: a long path and its lookalike under the lossy mangling, which turns `/` and `-`
+    /// alike into a dash, are two paths a volume holds apart, so they have two keys. Short ones
+    /// still share one, as they did, and that is what the record's own path settles.
+    #[test]
+    fn long_paths_the_mangling_would_join_have_two_keys() {
+        let tail = "z".repeat(400);
+        let nested = format!("/a/b/{tail}");
+        let flat = format!("/a-b/{tail}");
+        assert_ne!(key_for(Path::new(&nested)), key_for(Path::new(&flat)));
+        assert_eq!(
+            key_for(Path::new("/a/b")),
+            key_for(Path::new("/a-b")),
+            "short names are joined as before"
+        );
+    }
+
+    /// PATH-003: a long name that is not UTF-8 and the long name its replacement character spells
+    /// have two keys. The digest is of the bytes, so a lossy rendering ahead of it would give both
+    /// the same one.
+    #[test]
+    fn a_long_name_that_is_not_text_and_its_lossy_lookalike_have_two_keys() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut invalid = b"/".to_vec();
+        invalid.extend(b"d".repeat(300));
+        invalid.push(0xff);
+        let lookalike = format!("/{}\u{FFFD}", "d".repeat(300));
+
+        let from_bytes = key_for(Path::new(OsStr::from_bytes(&invalid)));
+        let from_text = key_for(Path::new(&lookalike));
+        assert_ne!(from_bytes, from_text);
+        assert!(from_bytes.len() <= MOST_KEY_BYTES);
+    }
+
+    /// A key that has a digest in it is still one path segment, so it makes a file and a directory
+    /// of the name it gives, which is what the record and the session store do with it.
+    #[test]
+    fn the_key_of_a_long_path_can_name_a_file_and_a_directory() {
+        let scratch = Scratch::new("home-long-key");
+        let key = key_for(Path::new(&format!(
+            "/{}/{}/{}",
+            "a".repeat(255),
+            "b".repeat(255),
+            "c".repeat(255)
+        )));
+
+        let file = scratch.path.join(format!("{key}.jsonl"));
+        write_file(&file, b"{}\n").expect("a file named by the key");
+        replace(&file, "{}\n{}\n").expect("rewritten beside a temporary file of its own");
+        let directory = scratch.path.join(&key);
+        create_directory(&directory).expect("a directory named by the key");
+        append_to_file(&directory.join("an-id.audit.jsonl")).expect("a file inside it");
+
+        assert!(file.is_file() && directory.is_dir());
     }
 
     /// The prompt history is every path, branch name and pasted fragment somebody has typed. On a

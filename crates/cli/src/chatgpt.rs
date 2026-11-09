@@ -185,7 +185,7 @@ fn finish(
         t!(
             chatgpt_stored,
             expires = signed_in.expires.clone(),
-            path = signed_in.stored_in.display().to_string()
+            path = crate::progress::printable_path(&signed_in.stored_in)
         )
     )?;
     shown.flush()?;
@@ -699,6 +699,30 @@ mod tests {
         );
         let all = String::from_utf8(shown.0.borrow().clone()).expect("text");
         assert_eq!(all, format!("{stored}\n{}\n", t!(chatgpt_reaches_no_model)));
+    }
+
+    /// LAYER-3: the sign-in is stored where the state directory is, which the environment names, so
+    /// the path in the line that says so is drawn. The regression it rejects: the path printed as
+    /// it is, with the terminal acting on its escape and its bidirectional control.
+    #[test]
+    fn the_path_the_sign_in_is_stored_in_is_drawn() {
+        let shown = Shown::default();
+        let mut signed_in = signed_in();
+        signed_in.stored_in =
+            std::path::PathBuf::from("/state\u{1b}[2J\u{202e}/chatgpt-account.json");
+
+        finish(
+            &signed_in,
+            &mut shown.clone(),
+            || AccountModels::Absent,
+            false,
+        )
+        .expect("written");
+
+        let all = String::from_utf8(shown.0.borrow().clone()).expect("text");
+        assert!(!all.contains('\u{1b}'), "{all:?}");
+        assert!(!all.contains('\u{202e}'), "{all:?}");
+        assert!(all.contains("\u{2039}U+202E\u{203A}"), "{all:?}");
     }
 
     /// CHATGPT-8: each step that stops the sign-in has its own sentence, the sentences of the

@@ -31,7 +31,16 @@ pub(crate) use bravebot_approval::QUARANTINE_BAR;
 /// to make. Eighty is the width assumed of a terminal that has not said otherwise.
 const BLOCK_WIDTH: usize = 80;
 
-pub(crate) use bravebot_approval::printable;
+/// Text a checkout or an environment chose, as it can be shown: control characters pictured, and
+/// each character that draws as nothing (a bidirectional control, a zero-width character, a
+/// variation selector, a tag character) written out as `‹U+XXXX›`. A bidirectional control is not
+/// a control character, so a name holding one would otherwise reorder the text around it on the
+/// terminal (LAYER-3).
+///
+/// A map from characters to characters: no branch is taken on the text.
+pub(crate) fn printable(text: &str) -> String {
+    bravebot_core::invisible::spelled(bravebot_approval::printable(text)).text
+}
 
 /// The lines a session opened with `--dangerously-skip-permissions` says before its first prompt,
 /// each already wrapped as a notice.

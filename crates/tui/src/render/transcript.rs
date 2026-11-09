@@ -2330,6 +2330,37 @@ mod tests {
         );
     }
 
+    /// LAYER-3: a note that quotes an alias with an escape in it, as `/mcp disable` does, is drawn
+    /// with the escape made visible, so no rendered row holds a control character. Rejects a note
+    /// row that wraps the entry's text as it stands.
+    #[test]
+    fn a_mcp_note_quoting_an_alias_with_an_escape_is_drawn_with_the_escape_made_visible() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        let settings = bravebot_config::Settings::default();
+        crate::mcp_command::run(
+            &mut session,
+            &settings,
+            std::path::Path::new("."),
+            "disable a\u{1b}[2Jbc",
+            bravebot_agent::servers::Asking::Person,
+            &mut crate::mcp_command::tests::Never,
+        );
+        let rows: Vec<String> = transcript_lines(&session, 90, 40)
+            .iter()
+            .map(text)
+            .filter(|row| !row.trim().is_empty())
+            .collect();
+        assert!(!rows.is_empty(), "no note was drawn");
+        for row in &rows {
+            assert!(!row.chars().any(char::is_control), "{row:?}");
+        }
+        assert!(
+            rows.iter().any(|row| row.contains("a\u{241b}[2Jb")),
+            "{rows:?}"
+        );
+    }
+
     /// NAME-13: a failure line can quote a name the person typed or pasted, so an escape in it is
     /// drawn as its picture and the line holds no control character. The fault this rejects is
     /// wrapping the recorded text as it is, which leaves the escape in the row.

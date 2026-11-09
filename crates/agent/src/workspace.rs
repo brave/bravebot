@@ -6025,6 +6025,68 @@ mod tests {
         }
     }
 
+    /// RECALL-8: the home rules file is refused under any spelling of its name, so the refusal does
+    /// not depend on whether the volume folds case or on the file existing. Nothing exists under
+    /// the state directory here, so the name alone decides. The fault this rejects is a refusal
+    /// that only holds where the volume resolves `agents.md` to `AGENTS.md`.
+    #[test]
+    fn the_home_rules_file_is_refused_under_any_case_before_it_exists() {
+        let (home, _) = home_and_project("cased-rules-absent");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(&state).expect("state");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        for named in [".bravebot/agents.md", ".bravebot/Agents.MD"] {
+            assert!(workspace.resolve(named).is_err(), "{named}");
+        }
+    }
+
+    /// RECALL-8: a link spelled `agents.md` under the state directory is refused by its name, and
+    /// the file it leads to is refused only where the volume answers `AGENTS.md` with that link.
+    /// Where it does not, the preamble does not read the link as the person's rules and the file
+    /// is the workspace's to write.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_spelled_in_another_case_is_refused_by_name_and_by_landing_only_where_it_is_the_rules()
+    {
+        let (home, _) = home_and_project("cased-rules-link");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(&state).expect("state");
+        let elsewhere = home.join("dotfiles-rules.md");
+        std::fs::write(&elsewhere, "- the person's own\n").expect("target");
+        std::os::unix::fs::symlink(&elsewhere, state.join("agents.md")).expect("link");
+        let folds = state.join("AGENTS.md").exists();
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        assert!(workspace.resolve(".bravebot/agents.md").is_err());
+        assert_eq!(
+            workspace.resolve("dotfiles-rules.md").is_err(),
+            folds,
+            "the volume folding case ({folds}) changed the answer"
+        );
+    }
+
+    /// RECALL-8: a link spelled `agents.md` is refused by its name whatever it leads to. The stores
+    /// are taken before the link is made, so `AGENTS.md` names nothing in them, as on a volume that
+    /// tells the two spellings apart, and the answer is the same on a volume that folds case. The
+    /// fault this rejects is the refusal decided only by where the link lands, which lets the file
+    /// tools reach the person's rules through a link on a case-sensitive volume.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_spelled_agents_md_is_refused_by_name_whatever_it_leads_to() {
+        let (home, _) = home_and_project("cased-rules-link-name");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(&state).expect("state");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        let elsewhere = home.join("dotfiles-rules.md");
+        std::fs::write(&elsewhere, "- the person's own\n").expect("target");
+        std::os::unix::fs::symlink(&elsewhere, state.join("agents.md")).expect("link");
+        for named in [".bravebot/agents.md", ".bravebot/Agents.MD"] {
+            assert!(workspace.resolve(named).is_err(), "{named}");
+        }
+        workspace
+            .resolve("dotfiles-rules.md")
+            .expect("the file the link leads to is not the rules where the stores do not say so");
+    }
+
     /// A store name that is not UTF-8 and its lossy lookalike are two directories, so the
     /// refusal is decided on the bytes and a directory beside a store is not taken for it.
     #[cfg(unix)]
