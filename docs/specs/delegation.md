@@ -144,7 +144,9 @@ that cannot think.
 
 A delegate naming a tool that reaches the network anyway is answered the way any other unknown
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
-tool list is written out a second time as a refusal.
+tool list is written out a second time as a refusal. The planner is told in the `spawn_agent`
+description that a delegate cannot call `fetch_url` or `download_url`
+([AGENT-1](tools/spawn-agent.md#AGENT-1)).
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
@@ -154,6 +156,7 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 `verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
@@ -333,14 +336,25 @@ report.
 A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
 There is no report to sit beside, so the sentence says the limit was spent and that the same task
 will not get further; the person's note gains the bound the same way. What the failure was stays the
-fixed category and nothing more ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this
-driver holds, not a reason read off a service's answer.
+fixed category, said to the planner only for a limit or an outage as below
+([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this driver holds, not a reason
+read off a service's answer.
 
 **Why this case and not only the answering one.** It is the common way the bound is reached rather
 than a corner of it. A delegate held to a tight bound loses its tools and is asked to answer; where
 it asks for a tool instead, there is no answer to carry and the run ends as a failure. The planner
 is then told only that the delegate did not finish, which reads as bad luck, so it spawns the same
 delegate on the same task and the budget goes on repeats of a run that cannot end differently.
+
+**A limit or an outage is named, because a repeat meets it again.** A delegate that ended
+rate-limited or unavailable is told of with its category and with the sentence that starting the
+same delegate again meets the same limit, beside the bound sentence where the bound was also spent.
+A planner told only that the delegate did not finish takes it for bad luck and starts the same
+delegate again, which makes the same requests into the same limit. The sentence is written by this
+driver for each of the two categories from the closed name the trail records
+([TRACE-8](trace.md#TRACE-8)), so nothing the service answered is carried
+([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and a lost thread are still
+told as only that the delegate did not finish.
 
 **Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
 limiting round to say what stopped it, and that is model text: a delegate may spend its last round
@@ -356,6 +370,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
 
 <a id="DELEGATE-29"></a>
 ### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
@@ -682,6 +698,12 @@ a rule resting on the tool list alone rests on the model reading it.
 
 What it could not settle goes in the report, and the parent asks.
 
+The planner is told this when it writes the task: the `spawn_agent` description says a delegate
+cannot call `ask_user`, `vet_content`, `fetch_url` or `download_url`, and that work needing one is
+done by the planner before it delegates or instead of delegating
+([AGENT-1](tools/spawn-agent.md#AGENT-1)). Without it, a task that says to call one of them sends
+the delegate to a name it is never offered.
+
 It needs no way to ask for reach to a path where its parent's turn is in bypass: the mode it is
 lent reaches a path outside the workspace for its file tools, its redirections and its `run`
 directory ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), and its programs are given what a
@@ -692,6 +714,7 @@ ask for each path, a delegate's program that writes outside the session's direct
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
 <a id="DELEGATE-13"></a>
 ### DELEGATE-13: one trail records both runs

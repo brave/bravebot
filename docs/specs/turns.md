@@ -718,7 +718,8 @@ the driver adds one more after them, so the next prompt follows it. The note say
 failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
 gives the failure's category and, where it is known, the number of requests sent for the call that
 failed. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
-are for the person alone and are not in the note. A turn that answered, a turn that failed before it added anything to the conversation, and
+are for the person alone and are not in the note, and neither is the next step that ends a rate-limited
+or refused failure. A turn that answered, a turn that failed before it added anything to the conversation, and
 a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
 continues the turn ([TURN-3](#TURN-3)).
 

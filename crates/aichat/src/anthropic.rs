@@ -27,11 +27,11 @@ pub mod protocol;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, WAKE,
+    BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, WAKE, attempts_allowed,
     learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body, remember,
     remembered, reply_bound, worth_another_attempt,
 };
-use bravebot_config::provider::Provider;
+use bravebot_config::provider::{Patience, Provider};
 use bravebot_config::{CacheTtl, Config, Secret};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -53,13 +53,13 @@ use std::time::Duration;
 /// and not as anything wrong with the request.
 const OVERLOADED: u16 = 529;
 
-/// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
+/// Whether a failed attempt should be repeated, when `patience` states how many requests may be sent.
 ///
 /// What the other clients ask, a service that is overloaded besides, and a failure it reports part
 /// way through a reply that a second attempt could get past.
-fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
-    worth_another_attempt(allowed, attempt, error)
-        || (attempt < allowed
+fn worth_asking_again(patience: Patience, attempt: u32, error: &ChatError) -> bool {
+    worth_another_attempt(patience, attempt, error)
+        || (attempt < attempts_allowed(patience, false)
             && match error {
                 ChatError::Egress(EgressError::Status { status, .. }) => *status == OVERLOADED,
                 ChatError::Reported { failure } => failure.is_transient(),
@@ -146,7 +146,7 @@ impl Driven for AnthropicClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
-        worth_asking_again(self.attempts_allowed(), attempt, error)
+        worth_asking_again(self.provider.patience, attempt, error)
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
@@ -229,12 +229,6 @@ impl<'a> AnthropicClient<'a> {
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.pace.backoff = backoff;
         self
-    }
-
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the entry's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.provider.patience.attempts(ATTEMPTS)
     }
 
     /// What a refusal is remembered against: the service, and the name the model goes out under.

@@ -318,6 +318,36 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
     )
 }
 
+/// What `spawn_agent` says about the tools a delegate is never offered, naming each of `vet_content`,
+/// `ask_user`, `fetch_url` and `download_url` only where `beside` says it is on the list. It starts
+/// with a space, to sit after the sentence before it, and is empty where the list holds none of
+/// them, as a delegate's own list does.
+///
+/// The planner writes the task, so it is told here that work needing one of these is its own to do
+/// before it delegates or instead. The same tools are in
+/// [`NEVER_DELEGATED`](bravebot_core::delegate::NEVER_DELEGATED); the others there have no
+/// planner-facing reason to be said when a task is written.
+fn spawn_agent_lacks(beside: &dyn Fn(&str) -> bool) -> String {
+    let held: Vec<&str> = ["vet_content", "ask_user", "fetch_url", "download_url"]
+        .into_iter()
+        .filter(|name| beside(name))
+        .collect();
+    let (named, needs) = match held.as_slice() {
+        [] => return String::new(),
+        [only] => ((*only).to_string(), "it"),
+        [first @ .., last] => (format!("{} or {last}", first.join(", ")), "one of them"),
+    };
+    let whole = if beside("vet_content") {
+        " A reference that has to be read whole is read by you with vet_content."
+    } else {
+        ""
+    };
+    format!(
+        " A delegate cannot call {named}, so do work that needs {needs} yourself, before you \
+         delegate or instead of delegating.{whole}"
+    )
+}
+
 /// The description of `read_output`, naming only the tools `beside` says are on the list. See
 /// [`spawn_processor_description`].
 fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
@@ -670,47 +700,16 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
         match tool.function.name.as_str() {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
-            "fetch_url" => {
-                tool.function.description = fetch_url_description(&beside);
-                // `read` asks for the release `vet_content` makes, so a list without it has
-                // nothing for the argument to ask.
-                if !beside("vet_content")
-                    && let Some(properties) = tool
-                        .function
-                        .parameters
-                        .pointer_mut("/properties")
-                        .and_then(|properties| properties.as_object_mut())
-                {
-                    properties.remove("read");
-                }
-            }
+            "fetch_url" => state_fetch_url_beside(tool, &beside),
             "job_output" => tool.function.description = job_output_description(&beside),
-            "run" => {
+            "spawn_agent" => {
                 tool.function.description = tool.function.description.replacen(
-                    &(run_reference_moves(&|_| true) + &run_text_made_from_it(&|_| true)),
-                    &(run_reference_moves(&beside) + &run_text_made_from_it(&beside)),
+                    &spawn_agent_lacks(&|_| true),
+                    &spawn_agent_lacks(&beside),
                     1,
                 );
-                tool.function.description = tool.function.description.replacen(
-                    &run_watching(&|_| true),
-                    &run_watching(&beside),
-                    1,
-                );
-                if let Some(background) = tool
-                    .function
-                    .parameters
-                    .pointer_mut("/properties/background/description")
-                {
-                    *background = json!(run_background_description(&beside));
-                }
-                if let Some(read) = tool
-                    .function
-                    .parameters
-                    .pointer_mut("/properties/read/description")
-                {
-                    *read = json!(run_read_description(&beside));
-                }
             }
+            "run" => state_run_beside(tool, &beside),
             "read_file" => {
                 for (full, narrowed) in [
                     (read_file_pictures(&|_| true), read_file_pictures(&beside)),
@@ -760,6 +759,49 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             }
             _ => {}
         }
+    }
+}
+
+/// [`state_what_is_beside`] for `fetch_url`.
+fn state_fetch_url_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
+    tool.function.description = fetch_url_description(beside);
+    // `read` asks for the release `vet_content` makes, so a list without it has nothing for the
+    // argument to ask.
+    if !beside("vet_content")
+        && let Some(properties) = tool
+            .function
+            .parameters
+            .pointer_mut("/properties")
+            .and_then(|properties| properties.as_object_mut())
+    {
+        properties.remove("read");
+    }
+}
+
+/// [`state_what_is_beside`] for `run`.
+fn state_run_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
+    tool.function.description = tool.function.description.replacen(
+        &(run_reference_moves(&|_| true) + &run_text_made_from_it(&|_| true)),
+        &(run_reference_moves(beside) + &run_text_made_from_it(beside)),
+        1,
+    );
+    tool.function.description =
+        tool.function
+            .description
+            .replacen(&run_watching(&|_| true), &run_watching(beside), 1);
+    if let Some(background) = tool
+        .function
+        .parameters
+        .pointer_mut("/properties/background/description")
+    {
+        *background = json!(run_background_description(beside));
+    }
+    if let Some(read) = tool
+        .function
+        .parameters
+        .pointer_mut("/properties/read/description")
+    {
+        *read = json!(run_read_description(beside));
     }
 }
 
@@ -1892,22 +1934,25 @@ fn table(
             "spawn_agent",
             // No numbers for the depth or the ceiling, which delegates read here too: a model
             // told how many it has left spends them.
-            "Hand a whole sub-task to a second agent and get back one report. It has its own \
-             context, so everything it reads stays with it and only what it says at the end \
-             reaches you. That is what this is for: running a build reads the whole log, and \
-             asking a delegate to run the build tells you what failed. Use it when finding \
-             something out would cost you more context than the answer is worth, or when a \
-             sub-task is separable enough to describe in a paragraph. It cannot ask the user \
-             anything, so give it everything it needs in the task. It may hand parts of that \
-             task to delegates of its own, though not without end: the tree stops a few levels \
-             down, and one turn starts only so many however they are arranged. Its writes, its \
-             runs and its calls to an MCP server's tools are still shown to the user for \
-             approval, so this saves you context and never an approval. A delegate started after \
-             you have been shown output from read_output, content from vet_content or a \
-             delegate's report cannot run processors, so start a task that needs a picture or \
-             a file looked at before then, or leave it to the person. Do not use it for \
-             something one read would answer: it is a \
-             whole second agent and costs like one.",
+            format!(
+                "Hand a whole sub-task to a second agent and get back one report. It has its own \
+                 context, so everything it reads stays with it and only what it says at the end \
+                 reaches you. That is what this is for: running a build reads the whole log, and \
+                 asking a delegate to run the build tells you what failed. Use it when finding \
+                 something out would cost you more context than the answer is worth, or when a \
+                 sub-task is separable enough to describe in a paragraph. It cannot ask the user \
+                 anything, so give it everything it needs in the task. It may hand parts of that \
+                 task to delegates of its own, though not without end: the tree stops a few \
+                 levels down, and one turn starts only so many however they are arranged. Its \
+                 writes, its runs and its calls to an MCP server's tools are still shown to the \
+                 user for approval, so this saves you context and never an approval. A delegate \
+                 started after you have been shown output from read_output, content from \
+                 vet_content or a delegate's report cannot run processors, so start a task that \
+                 needs a picture or a file looked at before then, or leave it to the person.\
+                 {lacks} Do not use it for something one read would answer: it is a whole second \
+                 agent and costs like one.",
+                lacks = spawn_agent_lacks(&|_| true)
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -2246,6 +2291,10 @@ fn ask_why(tool: &mut Tool) {
 ///   request at a host of its own would be egress nobody approved for this sub-task, and the
 ///   person shown the host would be answering for a task they never set. The capability being
 ///   held is what makes this one a name and not a capability check: no gate would refuse it.
+///
+/// The planner writes a delegate's task, so the description of `spawn_agent` tells it that a
+/// delegate cannot call `vet_content`, `ask_user`, `fetch_url` or `download_url`
+/// ([`spawn_agent_lacks`]).
 ///
 /// `spawn_agent` is offered by where the delegate sits rather than by what it is: `delegating` is
 /// the kinds it may start, and `None` is a delegate already [`MAX_DEPTH`] below the turn. The

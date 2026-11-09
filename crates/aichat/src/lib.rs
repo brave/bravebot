@@ -33,6 +33,7 @@ mod local_servers;
 #[cfg(test)]
 mod stand_in;
 
+use bravebot_config::provider::Patience;
 use bravebot_config::{CacheTtl, Config, Secret};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -668,12 +669,12 @@ impl<'a> AichatClient<'a> {
         self
     }
 
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the gateway's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.gateway.as_ref().map_or(ATTEMPTS, |gateway| {
-            gateway.provider.patience.attempts(ATTEMPTS)
-        })
+    /// The retry count the gateway's block stated, which is none where it stated none.
+    fn patience(&self) -> Patience {
+        self.gateway
+            .as_ref()
+            .map(|gateway| gateway.provider.patience)
+            .unwrap_or_default()
     }
 
     /// Wait this long before the first retry instead of the default one-second wait. Later
@@ -1244,12 +1245,27 @@ impl Progress<'_> {
 /// How many times one request is sent before its failure is the caller's, where the provider's block
 /// states no retry count.
 ///
-/// Three because the failure this exists for is a connection that died while nobody was
-/// looking, and a machine coming back from sleep needs a moment before its network works.
-const ATTEMPTS: u32 = 3;
+/// Three because the failures this covers are a connection that died while nobody was looking and
+/// a service that answered with a status meaning not now, and a machine coming back from sleep
+/// needs a moment before its network works. A rate limit that carries no wait has
+/// [`RATE_LIMIT_ATTEMPTS`] instead.
+pub const ATTEMPTS: u32 = 3;
 
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
+
+/// How many times one request is sent before a rate limit that carries no wait is the caller's,
+/// where the provider's block states no retry count.
+///
+/// Six requests, so five waits. With [`BACKOFF`] as the base the waits are 8, 16, 32, 64 and 120
+/// seconds ([`rate_limit_backoff`]), 240 seconds in all, which outlasts a limit that lifts within
+/// a minute and stops short of holding a turn for longer than a person would wait unprompted.
+pub const RATE_LIMIT_ATTEMPTS: u32 = 6;
+
+/// How many times longer than the doubling from [`BACKOFF`] the first wait after a rate limit that
+/// carries no wait is. A limit is a count of requests per window, so sending again within a second
+/// or two is asking inside the window that refused the request.
+const RATE_LIMIT_FIRST_WAIT_FACTOR: u32 = 8;
 
 /// The longest pause taken on a service's say-so before sending a request again.
 ///
@@ -1389,7 +1405,7 @@ impl Driven for AichatClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
-        worth_another_attempt(self.attempts_allowed(), attempt, error)
+        worth_another_attempt(self.patience(), attempt, error)
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
@@ -1406,8 +1422,9 @@ impl Driven for AichatClient<'_> {
 /// Only transport failures qualify, and only from the layer that knows what happened to the
 /// connection. A reply that arrived and would not decode is not a connection problem, and
 /// asking for it again would produce the same thing.
-fn worth_another_attempt(allowed: u32, attempt: u32, error: &ChatError) -> bool {
-    if attempt >= allowed {
+fn worth_another_attempt(patience: Patience, attempt: u32, error: &ChatError) -> bool {
+    let rate_limited = matches!(error, ChatError::Egress(e) if rate_limit_without_wait(e));
+    if attempt >= attempts_allowed(patience, rate_limited) {
         return false;
     }
     match error {
@@ -1429,9 +1446,9 @@ fn backoff(base: Duration, failures: u32) -> Duration {
 ///
 /// What [`worth_another_attempt`] asks, and a reported failure that a second attempt could get
 /// past.
-fn worth_another_attempt_or_report(allowed: u32, attempt: u32, error: &ChatError) -> bool {
-    worth_another_attempt(allowed, attempt, error)
-        || (attempt < allowed
+fn worth_another_attempt_or_report(patience: Patience, attempt: u32, error: &ChatError) -> bool {
+    worth_another_attempt(patience, attempt, error)
+        || (attempt < attempts_allowed(patience, false)
             && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
 }
 
@@ -1458,11 +1475,46 @@ pub fn retryable_within_ceiling(error: &EgressError) -> bool {
     error.is_transient() && asked_wait(error) <= LONGEST_WAIT
 }
 
+/// Whether `error` is a rate limit that carries no wait: a 429 with no `Retry-After`, one that did
+/// not parse, or one that asked for none. Decided from the status and the parsed figure alone.
+pub fn rate_limit_without_wait(error: &EgressError) -> bool {
+    matches!(error, EgressError::Status { status: 429, .. }) && asked_wait(error).is_zero()
+}
+
+/// How many requests are sent for one call before a failure is the caller's.
+///
+/// What the block stated, plus the first request, where it stated a count. Otherwise
+/// [`RATE_LIMIT_ATTEMPTS`] where `rate_limited` says the failure is a rate limit that carries no
+/// wait ([`rate_limit_without_wait`]), and [`ATTEMPTS`] for every other failure. A stated count
+/// replaces either default, so `maxRetries: 0` sends once and the cap on the count holds for a rate
+/// limit as for any failure.
+pub fn attempts_allowed(patience: Patience, rate_limited: bool) -> u32 {
+    patience.attempts(if rate_limited {
+        RATE_LIMIT_ATTEMPTS
+    } else {
+        ATTEMPTS
+    })
+}
+
+/// The pause before sending again after `failures` rate limits that carried no wait: eight times
+/// the doubling from `base`, at most [`LONGEST_WAIT`].
+///
+/// The base is the one the client was given, so a test that shortens it shortens this schedule in
+/// proportion. Saturating, so a large count of failures stays at the ceiling.
+pub fn rate_limit_backoff(base: Duration, failures: u32) -> Duration {
+    base.saturating_mul(RATE_LIMIT_FIRST_WAIT_FACTOR)
+        .saturating_mul(2u32.saturating_pow(failures.saturating_sub(1)))
+        .min(LONGEST_WAIT)
+}
+
 /// The pause before sending again after `failures` failures of the transport: what the service
-/// asked for where it said, and the doubling otherwise. Never less than the doubling, so a
-/// `Retry-After: 0` sends the next request after the pause it would have had anyway rather than at
-/// once.
+/// asked for where it said, the rate limit schedule for a 429 that said nothing, and the doubling
+/// otherwise. Never less than the doubling, so a `Retry-After: 0` sends the next request after the
+/// pause it would have had anyway rather than at once.
 pub fn pause_after_failure(base: Duration, failures: u32, error: &EgressError) -> Duration {
+    if rate_limit_without_wait(error) {
+        return rate_limit_backoff(base, failures).max(backoff(base, failures));
+    }
     asked_wait(error).max(backoff(base, failures))
 }
 
@@ -2400,5 +2452,111 @@ mod tests {
         assert!(!retryable_within_ceiling(&EgressError::OutOfTime {
             url: "https://example.invalid/v1".to_string(),
         }));
+    }
+
+    fn rate_limit(retry_after: Option<Duration>) -> EgressError {
+        EgressError::Status {
+            url: "https://example.invalid/v1".to_string(),
+            status: 429,
+            retry_after,
+            body: None,
+        }
+    }
+
+    fn other_status(status: u16, retry_after: Option<Duration>) -> EgressError {
+        EgressError::Status {
+            url: "https://example.invalid/v1".to_string(),
+            status,
+            retry_after,
+            body: None,
+        }
+    }
+
+    /// BACKEND-54: only a 429 that carries no wait is on the rate limit schedule. A 429 that asked
+    /// for a wait, with any figure, and every other status are not, so a `Retry-After` on a 503
+    /// does not lengthen the count and a 429 that named its wait keeps the count it always had.
+    #[test]
+    fn only_a_429_that_carries_no_wait_is_on_the_rate_limit_schedule() {
+        assert!(rate_limit_without_wait(&rate_limit(None)));
+        assert!(rate_limit_without_wait(&rate_limit(Some(Duration::ZERO))));
+        assert!(!rate_limit_without_wait(&rate_limit(Some(
+            Duration::from_secs(1)
+        ))));
+        for status in [408, 500, 502, 503, 504] {
+            assert!(
+                !rate_limit_without_wait(&other_status(status, None)),
+                "{status}"
+            );
+        }
+        assert!(!rate_limit_without_wait(&EgressError::OutOfTime {
+            url: "https://example.invalid/v1".to_string(),
+        }));
+    }
+
+    /// BACKEND-55: a rate limit with no wait is sent again up to five times where the block states
+    /// no count, every other failure twice, and a stated count replaces either figure, with zero
+    /// sending once and the cap of seven holding for both.
+    #[test]
+    fn a_stated_count_replaces_the_default_for_a_rate_limit_as_for_any_failure() {
+        let stated = |retries: Option<u32>| Patience {
+            max_retries: retries,
+            idle_timeout: None,
+        };
+        assert_eq!(attempts_allowed(stated(None), true), 6);
+        assert_eq!(attempts_allowed(stated(None), false), 3);
+        for rate_limited in [true, false] {
+            assert_eq!(attempts_allowed(stated(Some(0)), rate_limited), 1);
+            assert_eq!(attempts_allowed(stated(Some(2)), rate_limited), 3);
+            assert_eq!(attempts_allowed(stated(Some(7)), rate_limited), 8);
+        }
+    }
+
+    /// BACKEND-54: the waits after a rate limit that carried none run 8, 16, 32 and 64 seconds and
+    /// then stay at the two minute ceiling, so five waits total 240 seconds and no count of
+    /// failures, however large, goes past the ceiling or overflows. The waits scale with the base
+    /// the client was given.
+    #[test]
+    fn the_rate_limit_schedule_doubles_from_eight_seconds_and_stops_at_the_ceiling() {
+        let second = Duration::from_secs(1);
+        let waits: Vec<_> = (1..=5).map(|n| rate_limit_backoff(second, n)).collect();
+        assert_eq!(
+            waits,
+            [8, 16, 32, 64, 120].map(Duration::from_secs),
+            "{waits:?}"
+        );
+        assert_eq!(waits.iter().sum::<Duration>(), Duration::from_secs(240));
+        assert_eq!(rate_limit_backoff(second, 7), LONGEST_WAIT);
+        assert_eq!(rate_limit_backoff(second, u32::MAX), LONGEST_WAIT);
+        assert_eq!(
+            rate_limit_backoff(Duration::from_millis(1), 2),
+            Duration::from_millis(16)
+        );
+    }
+
+    /// BACKEND-54: the pause after a 429 with no wait is the schedule, after a 429 that asked for
+    /// one is what it asked for, and after any other failure is the doubling from one second.
+    #[test]
+    fn the_pause_follows_the_failure_that_ended_the_attempt() {
+        let second = Duration::from_secs(1);
+        assert_eq!(
+            pause_after_failure(second, 1, &rate_limit(None)),
+            Duration::from_secs(8)
+        );
+        assert_eq!(
+            pause_after_failure(second, 3, &rate_limit(Some(Duration::ZERO))),
+            Duration::from_secs(32)
+        );
+        assert_eq!(
+            pause_after_failure(second, 1, &rate_limit(Some(Duration::from_secs(30)))),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            pause_after_failure(second, 1, &other_status(503, None)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            pause_after_failure(second, 2, &other_status(503, Some(Duration::from_secs(90)))),
+            Duration::from_secs(2)
+        );
     }
 }

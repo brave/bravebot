@@ -22,9 +22,9 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key,
-    log_retry, pause_before_retry, read_in_background, refuses_the_body, remember, remembered,
-    reply_bound, worth_another_attempt_or_report,
+    BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key, log_retry,
+    pause_before_retry, read_in_background, refuses_the_body, remember, remembered, reply_bound,
+    worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -112,7 +112,7 @@ impl Driven for GenerateContentClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
-        worth_another_attempt_or_report(self.attempts_allowed(), attempt, error)
+        worth_another_attempt_or_report(self.provider.patience, attempt, error)
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
@@ -192,12 +192,6 @@ impl<'a> GenerateContentClient<'a> {
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.pace.backoff = backoff;
         self
-    }
-
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the entry's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.provider.patience.attempts(ATTEMPTS)
     }
 
     /// What a refusal is remembered against: the service, and the name the model goes out under.

@@ -769,7 +769,10 @@ arrives at all.
     What it buys is the denial of one slot read the planner asked for, decided by the check's
     reply with no person in between, at no cost to the attacker. It promotes nothing, chooses no
     destination, changes no label and writes no trust rule, and none of their bytes reach the
-    planner on this path. The same refusal follows a check that could not complete.
+    planner on this path. The same refusal follows a check that could not complete. One forced
+    `unsafe` word lasts for the rest of the turn for that slot, since the driver remembers the slot
+    and not the reason, so the later `read_output` or `vet_content` on it uses the word and makes no
+    second check ([CHECK-12](vetting.md#CHECK-12)).
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
     inside a margin it cannot forge, no model is given it, and it is kept out of the audit trail.
     It can still *lie*, since nothing holds a reason against the content it describes and nothing

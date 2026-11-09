@@ -668,7 +668,8 @@ text and the backend's known status and request count. A refused request also na
 that sent it, the model the turn ran on and the request fields the retries left out, and ends
 with the next step ([BACKEND-37](backends.md#BACKEND-37)); those words are the program's own,
 except the model, which is the name the person configured and is written with control characters
-made visible. It remains visible with the audit expanded
+made visible. A rate-limited request also ends with the next step ([BACKEND-37](backends.md#BACKEND-37)), in the
+program's own words. It remains visible with the audit expanded
 or collapsed, after resizing, and while reading older scrollback. Long reasons wrap within the
 available space. Terminal control characters are not drawn.
 

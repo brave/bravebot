@@ -37,7 +37,7 @@ was, and the conversation budget stays where it was too.
 | | `blacklist` | model ids; of a fetched roster, these are not offered |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
-| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
+| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated, or 5 after a rate limit that named no wait (bravebot's own field) |
 | | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
 | | `setCacheKey` | `true` to send a `prompt_cache_key` in each chat-completions request, the same value for every request of a session and another value in the next session, for a service that routes by it to serve a session's prompt cache. Off where unstated, since it lets the host tie a session's requests together (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
@@ -348,6 +348,12 @@ Only the count and the wait change. Which failures are sent again does not: a re
 a model the service does not have is refused the same way each time, whatever count you gave. A wait
 the service asked for with a `Retry-After`, up to two minutes, is taken before each retry in place of
 the pause, so a large count against a service that keeps asking for it is a long wait.
+
+A rate limit (HTTP 429) that carries no usable `Retry-After` is sent again up to five times where you
+state no `maxRetries`, after waits of 8, 16, 32, 64 and 120 seconds, 240 seconds in all. A count you
+state replaces that figure as it replaces the two retries of every other failure, so `2` sends a rate
+limit three times and `0` once, and each wait of the schedule is taken before each retry, up to two
+minutes. A count of `7` against a limit that never lifts is held for about eight minutes of waiting.
 
 A gateway on this machine, such as a local Ollama, is waited on through any silence while you can
 stop the turn, so `idleTimeoutMs` does not reach it. `maxRetries` does.

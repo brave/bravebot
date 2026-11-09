@@ -578,6 +578,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     let mut jobs = tools::Jobs::default();
     let mut run_directory = tools::RunDirectory::at(workspace.root());
     let mut confined_failures = tools::ConfinedFailures::default();
+    let mut objections = tools::Objections::default();
     let done = tools::apply_kept_checkout(
         &mut policy,
         &mut tools::Tools {
@@ -616,6 +617,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
             confined_failures: &mut confined_failures,
+            objections: &mut objections,
             confine_runs: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
             asks_about_unconfined: false,
@@ -2433,6 +2435,9 @@ struct State<'s> {
     open_loops: Option<String>,
     run_directory: tools::RunDirectory,
     confined_failures: tools::ConfinedFailures,
+    /// The slots a check said `unsafe` about this turn, which `read_output` and `vet_content` do
+    /// not check again (OUTPUT-3).
+    objections: tools::Objections,
     spent: Elapsed,
     told_mode: crate::permission_mode::PermissionMode,
     /// The sandbox mode the planner was last told of, which is what its `run` description states
@@ -3465,6 +3470,7 @@ where
         // the change that gives a session somewhere to keep one.
         run_directory: tools::RunDirectory::at(workspace.root()),
         confined_failures: tools::ConfinedFailures::default(),
+        objections: tools::Objections::default(),
         // Seeded with the time the lists' questions kept the turn waiting on the person.
         spent,
         // The system prompt states the mode the turn starts in, and a plan-mode notice an earlier
@@ -4502,6 +4508,7 @@ where
                                 confirmer,
                                 &mut chat,
                                 reporter,
+                                &mut state.objections,
                                 &reference.slot,
                             )
                         } else {
@@ -4513,6 +4520,7 @@ where
                                 confirmer,
                                 &mut chat,
                                 reporter,
+                                &mut state.objections,
                                 &reference.slot,
                                 plan.beside,
                             )
@@ -9105,6 +9113,27 @@ mod tests {
         assert_eq!(note, "the delegate was stopped");
         let (note, _) = delegate_end::unfinished_account(&Finish::Lost, None, 3, id);
         assert_eq!(note, "the delegate could not finish");
+
+        // A limit or an outage is named to the planner beside the spent bound, and the person's
+        // note keeps the category as it does for every failure.
+        let limited = Finish::Failed {
+            took,
+            rounds: 3,
+            why: "rate-limited",
+        };
+        let (note, body) = delegate_end::unfinished_account(&limited, Some((took, 3)), 3, id);
+        assert_eq!(
+            note,
+            "the delegate could not finish (rate-limited), having spent its limit of 3 rounds"
+        );
+        assert!(
+            body.contains(
+                "(rate-limited), so starting the same delegate again meets the same limit."
+            )
+        );
+        assert!(body.ends_with(
+            " It had spent its limit of 3 rounds, so the same task will not get further."
+        ));
     }
 
     /// RECALL-9: which kept facts reach a turn's prompt, and what that does to the turn's label.
