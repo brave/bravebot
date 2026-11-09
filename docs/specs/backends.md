@@ -2350,12 +2350,15 @@ request sent to a backend that has a `provider` entry is told to raise `maxRetri
 ([BACKEND-55](#BACKEND-55)) and to set `fallbackModel` ([BACKEND-53](#BACKEND-53)). A request sent to
 any other backend (the Brave endpoint, an AWS account reached through the tier variables, the Vertex
 service the environment names, and the ChatGPT and xAI accounts) is told `fallbackModel` and to try
-again later, because there is no `maxRetries` for it to raise. Which sentence is said depends on a
-closed flag the driver sets from the variant that sent the request and the configuration it was
-selected with, never from a reply, a header or an address. The flag is for the person only and is
-not given to the planner.
+again later, because there is no `maxRetries` for it to raise. A request to a `provider` entry that
+failed on a 429 whose wait is past the two minutes [BACKEND-54](#BACKEND-54) takes is told the same
+two things, because that call ends on its first request and no `maxRetries` changes it. Which
+sentence is said depends on a closed flag the driver sets from the variant that sent the request and
+the configuration it was selected with, and on the parsed wait, never on text from a reply, a header
+or an address. The flag and the wait are for the person only and are not given to the planner.
 
 `verified-by: bravebot_session::sessions::a_rate_limit_ends_with_the_setting_that_lengthens_the_wait`
+`verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
 `verified-by: bravebot_agent::backend::only_a_backend_reached_through_a_provider_entry_has_a_retry_setting`
 `verified-by: bravebot_config::bedrock::only_an_account_a_block_named_has_a_place_for_max_retries`
 `verified-by: bravebot_config::provider::only_a_provider_written_in_an_entry_has_a_place_for_max_retries`
@@ -3471,7 +3474,9 @@ pause it would have had. A wait of more than two minutes is not taken: the reque
 again and the failure ends the call at once. For the category `rate-limited` the failure line then
 says the service asked for a wait of about that many minutes, rounded up. The figure is a number this program parsed
 and bounded and the sentence around it is the fixed one of [BACKEND-37](#BACKEND-37), so no text the
-service wrote is repeated. The wait only sets a timer and a line a person reads: it is never given
+service wrote is repeated. That line ends with `fallbackModel` and trying again later and does not
+name `maxRetries`, since no count changes a call that is never sent again
+([BACKEND-37](#BACKEND-37)). The wait only sets a timer and a line a person reads: it is never given
 to the planner, and nothing branches on the header's text. The wait is announced as the retry it
 is, and a stop ends it as it ends any pause between attempts.
 
@@ -3504,6 +3509,7 @@ status decides whether to wait, the parsed number only how long.
 `verified-by: bravebot_aichat::client::a_responses_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling`
 `verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
 `verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
+`verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
 
 <a id="BACKEND-55"></a>
 ### BACKEND-55: a provider entry states how often a request is sent again and how long a reply may go quiet

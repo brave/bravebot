@@ -917,9 +917,14 @@ pub fn failure_reason_with_model(
     // A rate limit ends with the settings that lengthen the wait or move the turn to another model.
     // Which of the two sentences is chosen by whether the backend that sent the request has a
     // `provider` entry, a fact the driver set from the variant, and nothing the service wrote is in
-    // either (BACKEND-37).
+    // either (BACKEND-37). A wait past the longest one the client sits through ends the call on its
+    // first request, so no `maxRetries` changes the outcome and only the other two remedies are
+    // named (BACKEND-54).
     if diagnosis.category == Category::RateLimited {
-        let next = if diagnosis.retry_setting {
+        let past_the_ceiling = diagnosis
+            .retry_after
+            .is_some_and(|wait| wait > bravebot_aichat::LONGEST_WAIT);
+        let next = if diagnosis.retry_setting && !past_the_ceiling {
             t!(failure_rate_limited_entry_next)
         } else {
             t!(failure_rate_limited_next)
@@ -4400,6 +4405,47 @@ mod tests {
             None,
         );
         assert!(!unavailable.contains("maxRetries"), "{unavailable}");
+    }
+
+    /// BACKEND-37, BACKEND-54: a 429 that asked for a wait past the longest one the client sits
+    /// through ends the call on its first request, so a rate-limited line for it never tells the
+    /// person to raise `maxRetries`, even for a request to a provider entry. A wait the client
+    /// would sit through (the ceiling itself included) keeps the sentence that names it.
+    ///
+    /// The fault this rejects: choosing the sentence from the provider entry alone, which sends a
+    /// person to raise a count that has no effect on a call that is never sent again.
+    #[test]
+    fn a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::LONGEST_WAIT;
+        use std::time::Duration;
+
+        let said = |wait: Duration, entry: bool| {
+            let mut diagnosis = Diagnosis::of(Category::RateLimited)
+                .with_status(429)
+                .asking_for_a_wait_of(wait);
+            if entry {
+                diagnosis = diagnosis.with_retry_setting();
+            }
+            failure_reason(diagnosis, None)
+        };
+
+        let past = said(LONGEST_WAIT + Duration::from_secs(1), true);
+        assert!(!past.contains("maxRetries"), "{past}");
+        assert!(past.contains("`fallbackModel`"), "{past}");
+        assert!(past.contains("try again later"), "{past}");
+        assert!(past.contains("about 3 minutes"), "{past}");
+
+        let at = said(LONGEST_WAIT, true);
+        assert!(at.contains("`maxRetries`"), "{at}");
+        assert!(at.contains("`fallbackModel`"), "{at}");
+
+        let under = said(Duration::from_secs(5), true);
+        assert!(under.contains("`maxRetries`"), "{under}");
+
+        let no_entry = said(LONGEST_WAIT + Duration::from_secs(1), false);
+        assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(no_entry.contains("try again later"), "{no_entry}");
     }
 
     /// A refusal that names the account, with neither a status nor a wait.
