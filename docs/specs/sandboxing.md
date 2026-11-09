@@ -3924,11 +3924,28 @@ documentation and launchers, and these were not shown by running the program:
   in a directory named by each of those four, so each selects the program that opens the address.
   `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs
   that for `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, and fails when any one of them
-  is left out of the list. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session. These
-  were not run: the Windows `rundll32` start, which was read; `kde-open` and a KDE session, because
-  `kde-open` is not installed on the host that ran the rest; a logged-in GNOME session; and
-  Electron on Linux starting `xdg-open` for `shell.openExternal` and `shell.openPath` with the
-  environment `ui/src/main/external-open.ts` leaves.
+  is left out of the list. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
+  Electron 44.9.3 on Linux, run under Xvfb, was made to call `openExternal` and `openPath` of
+  `ui/src/main/external-open.ts` with all five names set to directories and a script a stage could
+  have written. It started `xdg-open` for each call with none of the five in its environment. The
+  same two calls made on Electron's `shell` without the deletion started `xdg-open` with all five,
+  so Electron hands its environment to `xdg-open` and the deletion is what removes them. That run
+  was made by hand and no test repeats it. It needed `--no-sandbox` and `--disable-dev-shm-usage`
+  on the host that ran it.
+  The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
+  the five names, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
+  `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
+  launchers whose names are fixed, `KDE_SESSION_VERSION` to complete the name `kde-open5`,
+  `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`, and `XDG_RUNTIME_DIR`
+  for a `flatpak-info` file that switches to `gdbus`. None of those names a file to run.
+  `HOME` is not removed and does choose the handler: with `XDG_CURRENT_DESKTOP=GNOME` and no other
+  name set, an `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a
+  `.desktop` entry started the planted handler through `gio open`. It is tracked by #3849.
+  These were not run: the Windows `rundll32` start, which was read; `kde-open` and a KDE session,
+  because `kde-open` is not installed on the host that ran the rest, so what it reads is
+  unobserved; a logged-in GNOME session; and `XDG_DATA_DIRS` through `gio open`, since removing a
+  planted value there lets `gio open` use the system's handlers and start a real browser. They
+  are tracked by #3822.
 - `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
   tracked by #3809.
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
