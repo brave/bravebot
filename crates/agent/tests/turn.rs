@@ -50608,7 +50608,7 @@ fn a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a
                 reply_with("relayed"),
             ],
         );
-        let config = config_for(&endpoint);
+        let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
