@@ -55,6 +55,8 @@ READ_JOBS = 8
 NOTES = re.compile(r"^Notes:", re.MULTILINE)
 # Statuses after which the skill does nothing more with an item (SKILL.md, step 0), so it needs no claim.
 FINISHED = {"done", "skipped", "blocked"}
+# What GitHub answers (HTTP 404) when the label is not on the issue, which the session may have removed already.
+LABEL_GONE = "Label does not exist"
 
 
 def _load(name):
@@ -234,11 +236,14 @@ def api(method, path, *fields):
 
 
 def release(labelled):
-    """Remove the label from the issues it was added to, and return the numbers it could not be removed from."""
+    """Remove the label from the issues it was added to, and return the numbers it could not be removed from.
+
+    An issue that no longer has the label is not one of them: the label is off, which is what was asked.
+    """
     stuck = []
     for number in labelled:
         problem = api("DELETE", f"repos/{BASE_REPO}/issues/{number}/labels/{quote(LABEL, safe='')}")
-        if problem:
+        if problem and LABEL_GONE not in problem:
             stuck.append(number)
             print(
                 f"could not remove {LABEL} from #{number}: {problem}\n"
