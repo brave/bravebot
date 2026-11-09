@@ -2630,6 +2630,12 @@ impl Bridge {
     }
 }
 
+/// What `session.attach` and `session.view.resync` answer: the sequence of the snapshot sent
+/// before the answer, and how many earlier rows it leaves out.
+fn snapshot_answer((sequence, omitted): (u64, u64)) -> Value {
+    json!({"version": 1, "sequence": sequence, "omitted": omitted})
+}
+
 /// The files a turn is told a person dropped, each one accounted for as far as a string can be.
 ///
 /// The same shape as `files`, and a different promise. A named file is workspace-relative and the
@@ -2652,12 +2658,6 @@ impl Bridge {
 /// An entry that is not a string, and a `dropped` that is not a list at all, are left out rather
 /// than refused. Those are a front end built against a different version of this protocol, which
 /// is the case the leniency exists for.
-/// What `session.attach` and `session.view.resync` answer: the sequence of the snapshot sent
-/// before the answer, and how many earlier rows it leaves out.
-fn snapshot_answer((sequence, omitted): (u64, u64)) -> Value {
-    json!({"version": 1, "sequence": sequence, "omitted": omitted})
-}
-
 fn dropped_paths(request: &Request) -> Result<Vec<String>, Failure> {
     let Some(entries) = request.params.get("dropped").and_then(Value::as_array) else {
         return Ok(Vec::new());

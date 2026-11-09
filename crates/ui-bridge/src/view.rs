@@ -142,11 +142,12 @@ impl View {
 
     fn changed(&mut self, rows: Vec<Row>) -> Update {
         self.sequence += 1;
-        for row in &rows {
+        // A later state of a row already dropped is sent and not kept, so the rows kept stay the
+        // ones after `dropped_through`.
+        for row in rows.iter().filter(|row| row.id > self.dropped_through) {
             self.retained.insert(row.id, row.clone());
         }
-        // Ids rise with first appearance, so the first rows are the oldest. A later state of a row
-        // already dropped has the lowest id and is dropped again: it is sent and not kept.
+        // Ids rise with first appearance, so the first rows are the oldest.
         while self.retained.len() > RETAINED_ROWS {
             if let Some((id, _)) = self.retained.pop_first() {
                 self.dropped_through = id;
@@ -573,6 +574,8 @@ mod tests {
         let snapshot = view.snapshot();
         let ids: Vec<u64> = snapshot.state.rows.iter().map(|row| row.id).collect();
         assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
+        assert_eq!(snapshot.omitted, last_call - RETAINED_ROWS as u64);
+        assert_eq!(ids[0], snapshot.omitted + 1);
         assert!(!ids.contains(&first_call) && !ids.contains(&question));
         let last = snapshot.state.rows.last().unwrap();
         assert_eq!(

@@ -56,6 +56,8 @@ class Session implements AgentSession {
   private readonly replying = new Set<number>()
   /** Sends whose answer has not arrived, so the target of the turn they start is not yet known. */
   private sending = 0
+  /** How many resyncs have been asked for, so an answer can tell whether it is the latest. */
+  private resyncs = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
 
@@ -121,8 +123,10 @@ class Session implements AgentSession {
    */
   private resync(): void {
     this.set(awaitSnapshot(this.view))
+    // A later gap asks again once this snapshot has arrived, and only its answer can end the view.
+    const asked = ++this.resyncs
     const gap = (detail: string): void => {
-      if (this.current !== null && this.current.resyncing) this.set(endView(this.current, 'sequence_gap', detail))
+      if (asked === this.resyncs && this.current !== null && this.current.resyncing) this.set(endView(this.current, 'sequence_gap', detail))
     }
     this.connection.request(SESSION_VIEW_RESYNC, this.params(), undefined, { control: true }).then(
       () => gap('the snapshot did not arrive before the resync answer'),

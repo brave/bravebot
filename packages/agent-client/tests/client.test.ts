@@ -247,10 +247,14 @@ test('the stdio client reports that it lists no sessions and refuses to list or 
 /**
  * A bridge for session s1 that numbers rows and updates as the Rust view does, keeps its most
  * recent `retainedRows`, and answers `session.view.resync` with a snapshot of them unless `refuse`.
- * `drop` leaves out the update with that sequence, as a missed line would. `hold` keeps the
- * snapshot and the resync answer back until `release` is called.
+ * `drop` leaves out the updates with those sequences, as a missed line would. `hold` keeps the
+ * snapshot and the resync answer back until `release` is called, from the resync it numbers on
+ * when it is a number.
  */
-function aBridge(options: { capability?: Record<string, unknown>; drop?: number; refuse?: boolean; hold?: boolean } = {}) {
+function aBridge(options: { capability?: Record<string, unknown>; drop?: number | number[]; refuse?: boolean; hold?: boolean | number } = {}) {
+  const dropped = [options.drop ?? []].flat()
+  const holdFrom = options.hold === true ? 1 : options.hold === false || options.hold === undefined ? Infinity : options.hold
+  let resyncs = 0
   const capability = options.capability ?? (contract.capability as Record<string, unknown>)
   const retained = (capability.retainedRows as number | undefined) ?? Infinity
   const rows: { id: number; turn: number; kind: string; event: null; data: string; resolved: boolean }[] = []
@@ -284,7 +288,7 @@ function aBridge(options: { capability?: Record<string, unknown>; drop?: number;
         snapshot?.()
         client.receive(JSON.stringify({ id: request.id, ...(reply as object) }) + '\n')
       }
-      if (request.method === 'session.view.resync' && options.hold) held = answer
+      if (request.method === 'session.view.resync' && ++resyncs >= holdFrom) held = answer
       else answer()
     },
   }, { workspaces: [{ id: 'work', name: 'Work', directory: '/work' }] })
@@ -303,7 +307,7 @@ function aBridge(options: { capability?: Record<string, unknown>; drop?: number;
         row = { ...rows[changing - 1]!, data: `changed ${changing}` }
         rows[changing - 1] = row
       }
-      if (sequence !== options.drop) client.receive(JSON.stringify({ event: 'session.view.update', session: 's1', data: state([row]) }) + '\n')
+      if (!dropped.includes(sequence)) client.receive(JSON.stringify({ event: 'session.view.update', session: 's1', data: state([row]) }) + '\n')
     },
     release() {
       held?.()
@@ -340,6 +344,21 @@ test('a view waiting for a snapshot ignores updates and refuses sends without se
   assert.equal(session.view.ended, null)
   assert.equal(session.view.sequence, 4)
   assert.equal(session.view.rows.length, 4)
+})
+
+test('the answer to an earlier resync does not end a view waiting for a later one', async () => {
+  // The first answer is read before its callback runs, so a second gap in the same read asks again.
+  const bridge = aBridge({ drop: [2, 5], hold: 2 })
+  const session = await bridge.client.createSession({ workspace: 'work' })
+  for (let n = 0; n < 6; n++) bridge.emit()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(bridge.sent.filter((method) => method === 'session.view.resync').length, 2)
+  assert.equal(session.view.ended, null)
+  assert.equal(session.view.resyncing, true)
+  bridge.release()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(session.view.ended, null)
+  assert.equal(session.view.sequence, 6)
 })
 
 test('a refused resync ends the view as a sequence gap', async () => {

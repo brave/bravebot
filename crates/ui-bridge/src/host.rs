@@ -624,6 +624,7 @@ mod tests {
         for method in [
             "turn.send",
             "trust.reply",
+            "session.view.resync",
             "session.close",
             "session.attach",
         ] {
@@ -633,7 +634,12 @@ mod tests {
                 "{method}"
             );
         }
-        for method in ["turn.send", "trust.reply", "session.close"] {
+        for method in [
+            "turn.send",
+            "trust.reply",
+            "session.view.resync",
+            "session.close",
+        ] {
             assert_eq!(code(&host, 1, method), None, "{method}");
         }
         assert_eq!(
@@ -646,7 +652,13 @@ mod tests {
         for method in ["session.close", "session.attach"] {
             assert_eq!(code(&host, 2, method), None, "{method}");
         }
-        for method in ["turn.send", "turn.cancel", "trust.reply", "confirm.reply"] {
+        for method in [
+            "turn.send",
+            "turn.cancel",
+            "trust.reply",
+            "confirm.reply",
+            "session.view.resync",
+        ] {
             assert_eq!(
                 code(&host, 2, method),
                 Some(ErrorCode::NotAllowed),
