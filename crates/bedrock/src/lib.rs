@@ -23,10 +23,13 @@ pub mod credentials;
 pub mod eventstream;
 pub mod protocol;
 
+#[cfg(test)]
+use bravebot_aichat::ATTEMPTS;
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, OpenCall, Progress, pause_after_failure, read_in_background, reply_bound,
+    Completion, CutOff, OpenCall, Progress, attempts_allowed, pause_after_failure,
+    rate_limit_backoff, rate_limit_without_wait, read_in_background, reply_bound,
     retryable_within_ceiling,
 };
 use bravebot_config::bedrock::Bedrock;
@@ -382,12 +385,22 @@ impl Driven for BedrockClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &BedrockError) -> bool {
-        worth_another_attempt(self.attempts_allowed(), attempt, error)
+        worth_another_attempt(
+            attempts_allowed(self.config.patience(), throttled_without_wait(error)),
+            attempt,
+            error,
+        )
     }
 
     fn pause(&self, failures: u32, error: &BedrockError) -> Duration {
         match error {
             BedrockError::Egress(e) => pause_after_failure(self.pace.backoff, failures, e),
+            // A throttle reported inside the stream names no wait, so it is paused for as a 429
+            // that named none is.
+            BedrockError::Reported { .. } if throttled_without_wait(error) => {
+                rate_limit_backoff(self.pace.backoff, failures)
+                    .max(backoff(self.pace.backoff, failures))
+            }
             _ => backoff(self.pace.backoff, failures),
         }
     }
@@ -430,12 +443,6 @@ impl<'a> BedrockClient<'a> {
             learned_for: String::new(),
             pace: Pace::new(BACKOFF),
         }
-    }
-
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the account's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.config.patience().attempts(ATTEMPTS)
     }
 
     /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
@@ -1167,15 +1174,11 @@ fn now() -> u64 {
 ///
 /// Everything else it names is a property of the request, which a second identical one has too.
 const TRANSIENT_REPORTS: [&str; 4] = [
-    "throttlingException",
+    THROTTLE_REPORT,
     "modelStreamErrorException",
     "internalServerException",
     "serviceUnavailableException",
 ];
-
-/// How many times one request is sent before its failure is the caller's, where the account's block
-/// states no retry count.
-const ATTEMPTS: u32 = 3;
 
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
@@ -1211,6 +1214,20 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
 
 fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
+}
+
+/// The service's name for a throttle it reports part way through a reply.
+const THROTTLE_REPORT: &str = "throttlingException";
+
+/// Whether `error` is a rate limit that names no wait: a 429 with none ([`rate_limit_without_wait`]),
+/// or a throttle reported inside the stream, which carries no wait at all. Decided from the status
+/// or the kind the service reported, never from anything else in the reply.
+fn throttled_without_wait(error: &BedrockError) -> bool {
+    match error {
+        BedrockError::Egress(e) => rate_limit_without_wait(e),
+        BedrockError::Reported { kind } => kind == THROTTLE_REPORT,
+        _ => false,
+    }
 }
 
 /// Writes the decision to send again to the diagnostic log: which attempt, and the wait before it.
@@ -3475,7 +3492,9 @@ mod tests {
         }
     }
 
-    /// Real exception frames follow the existing retry policy and keep the final protocol kind.
+    /// Real exception frames follow the retry policy of their kind and keep the final protocol kind:
+    /// a throttle reported inside the stream names no wait, so it is sent as often as a 429 that
+    /// named none, and every other transient report keeps three requests.
     #[test]
     fn framed_service_exceptions_keep_their_kind_and_request_count() {
         use bravebot_core::{
@@ -3485,7 +3504,7 @@ mod tests {
         };
         for (kind, attempts) in [
             ("validationException", 1),
-            ("throttlingException", 3),
+            ("throttlingException", 6),
             ("serviceUnavailableException", 3),
             ("internalServerException", 3),
             ("PRIVATE_UNKNOWN_EXCEPTION", 1),
@@ -3496,7 +3515,8 @@ mod tests {
             let (http, received) = scripted_responses(vec![response; attempts]);
             let config = config();
             let egress = Egress::new();
-            let mut client = BedrockClient::new(&config, &egress);
+            let mut client =
+                BedrockClient::new(&config, &egress).with_backoff(Duration::from_millis(1));
             client.test_request = Some(http);
             let mut sink = RecordingSink::new();
             let mut routing = Routing::new();
@@ -3514,11 +3534,46 @@ mod tests {
             assert!(
                 matches!(error, BedrockError::Reported { kind: ref reported } if reported == kind)
             );
-            assert_eq!(client.attempts(), attempts as u32);
+            assert_eq!(client.attempts(), attempts as u32, "{kind}");
             for _ in 0..attempts {
                 received.recv_timeout(Duration::from_secs(2)).unwrap();
             }
         }
+    }
+
+    /// The pause after a throttle reported inside the stream is the longer schedule of a 429 that
+    /// named no wait, where a fault the service reports keeps the doubling from the base, and a
+    /// stated `maxRetries` replaces the count as it does for a 429.
+    #[test]
+    fn a_throttle_reported_in_the_stream_is_paused_for_on_the_rate_limit_schedule() {
+        let config = config();
+        let egress = Egress::new();
+        let client = BedrockClient::new(&config, &egress);
+        let reported = |kind: &str| BedrockError::Reported { kind: kind.into() };
+        let throttle = reported("throttlingException");
+        let pauses: Vec<u64> = (1..=6)
+            .map(|failures| client.pause(failures, &throttle).as_secs())
+            .collect();
+        assert_eq!(pauses, [8, 16, 32, 64, 120, 120]);
+        assert_eq!(
+            client.pause(1, &reported("serviceUnavailableException")),
+            BACKOFF
+        );
+        assert_eq!(
+            client.pause(2, &reported("internalServerException")),
+            BACKOFF * 2
+        );
+        assert!(client.asks_again(5, &throttle));
+        assert!(!client.asks_again(6, &throttle));
+        assert!(client.asks_again(2, &reported("serviceUnavailableException")));
+        assert!(!client.asks_again(3, &reported("serviceUnavailableException")));
+
+        let capped = account_stating(Some(1), None);
+        let capped_client = BedrockClient::new(&capped, &egress);
+        assert!(capped_client.asks_again(1, &throttle));
+        assert!(!capped_client.asks_again(2, &throttle));
+        let none = account_stating(Some(0), None);
+        assert!(!BedrockClient::new(&none, &egress).asks_again(1, &throttle));
     }
     /// One compiled-in figure for every model Bedrock fronts caps a reply far below what most of
     /// them allow, and the number the block already carries is the one the model actually has.
@@ -4905,6 +4960,49 @@ mod tests {
             waited >= Duration::from_secs(2),
             "it asked again after {waited:?}, before the two seconds the service asked for"
         );
+    }
+
+    /// A throttled request that carried no wait is sent again up to six requests, where every other
+    /// status is three: the fourth request is reached after three 429s, and a seventh is not sent.
+    #[test]
+    fn a_throttle_with_no_wait_is_asked_again_up_to_six_requests() {
+        let (http, _received) = scripted_responses(vec![
+            refused_with(429),
+            refused_with(429),
+            refused_with(429),
+            answered(),
+        ]);
+        let (result, attempts) =
+            asked_through(&account_stating(None, None), &Egress::new(), http, true);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(attempts, 4);
+
+        for streaming in [false, true] {
+            let (http, received) = refused_requests(vec![429; 8]);
+            let (result, attempts) = asked_through(
+                &account_stating(None, None),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(result.is_err(), "streaming {streaming}: {result:?}");
+            assert_eq!(attempts, 6, "streaming {streaming}");
+            assert_eq!(received.try_iter().count(), 6, "streaming {streaming}");
+
+            // A stated count replaces the longer default, and zero sends once.
+            for (stated, sent) in [(0u32, 1usize), (2, 3)] {
+                let (http, received) = refused_requests(vec![429; 8]);
+                let (result, attempts) = asked_through(
+                    &account_stating(Some(stated), None),
+                    &Egress::new(),
+                    http,
+                    streaming,
+                );
+                assert!(result.is_err(), "streaming {streaming}: {result:?}");
+                assert_eq!(attempts as usize, sent, "streaming {streaming}, {stated}");
+                assert_eq!(received.try_iter().count(), sent, "streaming {streaming}");
+            }
+        }
     }
 
     /// A wait past the ceiling is not sat through: the request is not sent again, and the failure

@@ -1101,7 +1101,9 @@ of [TURN-13](turns.md#TURN-13), which holds no more than the category and the re
 A recorded unauthorized failure ends with the commands [BACKEND-37](backends.md#BACKEND-37) names,
 since the reason is the line the interface showed. A recorded refused failure holds the backend
 that sent the requests, the model the turn ran on, the request fields the retries left out and the
-next step [BACKEND-37](backends.md#BACKEND-37) names, for the same reason. The model is the name
+next step [BACKEND-37](backends.md#BACKEND-37) names, for the same reason. A recorded rate-limited
+failure ends with the next step [BACKEND-37](backends.md#BACKEND-37) names, which is `maxRetries` and `fallbackModel` for a
+request to a `provider` entry and `fallbackModel` alone for any other backend. The model is the name
 the person configured or chose, written with control characters made visible; the rest are words of
 this program's, chosen from closed sets. Nothing the service sent is among them.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.

@@ -177,7 +177,10 @@ A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixd
 carried on the failure as a duration of at most one hour. A value that is neither, a date already
 past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backends.md#BACKEND-54)):
 the header's text is never kept or shown, and the retryable set above is decided from the status
-alone.
+alone. A 429 that carries no wait, because the header is absent, is neither of those forms or asks
+for zero seconds, is sent again on a longer schedule than the failures above
+([BACKEND-54](backends.md#BACKEND-54)). That schedule is decided from the status and the parsed
+figure, and no other header is read as a wait.
 
 A request that presents a client certificate ([NET-11](#NET-11)) is also sent once more after a
 connection-level failure on its first hop (for example a reset or a TLS handshake failure), and only when reading

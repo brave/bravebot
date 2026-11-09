@@ -4184,6 +4184,171 @@ fn a_larger_retry_count_does_not_make_a_refusal_worth_asking_again() {
     }
 }
 
+/// BACKEND-54: a 429 that carries no wait is sent again on a longer schedule than the connection
+/// failures get. Three of them and then an answer is reached on the fourth request, which the
+/// three-request limit ended the call before, and a limit that never lifts is given up on after
+/// the sixth request and not a seventh. Both paths have a loop of their own.
+#[test]
+fn a_rate_limit_with_no_wait_is_asked_again_up_to_six_requests() {
+    let model = "a-model-rate-limited-without-a-wait";
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Status(429),
+            Attempt::Status(429),
+            Attempt::Status(429),
+            answer_for(streaming),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&endpoint, model);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a limit that lifted after three requests ended the call: {result:?}"
+        );
+        assert_eq!(attempts, 4, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 4, "streaming {streaming}");
+
+        let (endpoint, received) = serve_attempts(
+            (0..6)
+                .map(|_| Attempt::Status(429))
+                .chain([answer_for(streaming)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&endpoint, model);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            matches!(
+                result,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                    status: 429,
+                    ..
+                }))
+            ),
+            "streaming {streaming}: {result:?}"
+        );
+        assert_eq!(attempts, 6, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 6, "streaming {streaming}");
+    }
+}
+
+/// BACKEND-55: a stated count replaces the rate limit default as it replaces the other one, so
+/// zero sends the request once and two sends it three times, and the cap of seven is eight
+/// requests for a rate limit as for any failure.
+#[test]
+fn a_stated_retry_count_bounds_a_rate_limit_with_no_wait() {
+    let model = "a-model-rate-limited-with-a-count";
+    for (stated, sent) in [(0u32, 1usize), (2, 3), (7, 8)] {
+        let (endpoint, received) = serve_attempts(
+            (0..9)
+                .map(|_| Attempt::Status(429))
+                .chain([answer_for(true)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, &format!(r#""maxRetries": {stated}"#));
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, true);
+        assert!(result.is_err(), "maxRetries {stated}: {result:?}");
+        assert_eq!(attempts as usize, sent, "maxRetries {stated}");
+        assert_eq!(received.try_iter().count(), sent, "maxRetries {stated}");
+    }
+}
+
+/// BACKEND-54: the longer count is for a 429 that carries no wait. One that named its wait keeps
+/// the count every failure has, and so does a 503 that carried a `Retry-After`.
+#[test]
+fn a_429_that_named_its_wait_keeps_the_three_requests() {
+    let model = "a-model-rate-limited-with-a-wait";
+    for status in [429u16, 503] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::StatusAfter(status, "1"),
+            Attempt::StatusAfter(status, "1"),
+            Attempt::StatusAfter(status, "1"),
+            answer_for(true),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&endpoint, model);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, true);
+        assert!(result.is_err(), "status {status}: {result:?}");
+        assert_eq!(attempts, 3, "status {status}");
+        assert_eq!(received.try_iter().count(), 3, "status {status}");
+    }
+}
+
+/// BACKEND-54: the pauses of the longer schedule are the ones of the schedule and not the doubling
+/// from the base: two 429s with no wait and a 50ms base wait 400ms and then 800ms before the third
+/// request, where the doubling would have waited 150ms in all.
+#[test]
+fn a_rate_limit_with_no_wait_pauses_on_the_longer_schedule() {
+    let (endpoint, _received) =
+        serve_attempts(vec![Attempt::Status(429), Attempt::Status(429), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(50));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+    let waited = started.elapsed();
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 3);
+    // 400ms then 800ms. The doubling from 50ms would have been 150ms.
+    assert!(
+        waited >= Duration::from_millis(1200),
+        "the doubling was taken for a rate limit: {waited:?}"
+    );
+}
+
+/// BACKEND-54: a stop lands in the middle of the longer wait and ends it at once, as it ends any
+/// pause, without a request after it.
+#[test]
+fn a_stop_ends_the_wait_after_a_rate_limit_with_no_wait() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Status(429), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let cancel = Cancel::new();
+    let stopper = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        stopper.cancel();
+    });
+    // Eight seconds is the first wait of the schedule at a one second base.
+    let mut client = AichatClient::new(&config, &egress)
+        .with_backoff(Duration::from_secs(1))
+        .with_cancel(cancel);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect_err("the wait ran to its end");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "the stop waited out the pause: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(error, ChatError::Cancelled), "{error:?}");
+    assert_eq!(received.try_iter().count(), 1);
+}
+
 /// A server that answers a whole reply as `pieces`, `pause` apart, after its headers.
 fn serve_json_trickled(pieces: Vec<&'static str>, pause: Duration) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");

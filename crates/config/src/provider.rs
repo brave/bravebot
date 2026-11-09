@@ -633,6 +633,11 @@ pub struct Provider {
     /// Nothing for an AWS entry: its account is what a client reaches and carries its own
     /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
     pub patience: Patience,
+    /// Whether a `provider` entry wrote this provider, as against the environment naming it.
+    ///
+    /// `options.maxRetries` is stated in an entry, so a failure line names that setting only where
+    /// one exists ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    pub(crate) written_in_entry: bool,
     /// Whether `options.setCacheKey` is `true`, so a chat-completions request carries a
     /// `prompt_cache_key` ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
     ///
@@ -910,6 +915,7 @@ impl Provider {
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
+            written_in_entry: true,
             set_cache_key: options
                 .and_then(|options| options.get("setCacheKey"))
                 .and_then(serde_json::Value::as_bool)
@@ -964,6 +970,7 @@ impl Provider {
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
+            written_in_entry: false,
             set_cache_key: false,
             output_budget: None,
             protocol,
@@ -1011,6 +1018,7 @@ impl Provider {
             models,
             context_window: None,
             patience: Patience::default(),
+            written_in_entry: true,
             set_cache_key: false,
             output_budget: None,
             protocol: Protocol::ChatCompletions,
@@ -1030,6 +1038,12 @@ impl Provider {
     /// under this name keeps that reading by naming the SDK.
     pub fn protocol(&self) -> Protocol {
         self.protocol
+    }
+
+    /// Whether a `provider` entry wrote this provider, so `options.maxRetries` has a place to be
+    /// stated. False for the Vertex service the environment names.
+    pub fn written_in_entry(&self) -> bool {
+        self.written_in_entry
     }
 
     /// The URL one chat completion goes to.
@@ -2084,6 +2098,24 @@ mod tests {
         for other in ["false", r#""true""#, "1", "null"] {
             assert!(!set(other), "{other}");
         }
+    }
+
+    /// `options.maxRetries` has a place to be stated only where a `provider` entry wrote the
+    /// provider. The Vertex service the environment names has none, so a rate-limited failure to it
+    /// is not told to raise a count it cannot set. The fault this rejects: the flag true for every
+    /// provider, or false for every provider.
+    #[test]
+    fn only_a_provider_written_in_an_entry_has_a_place_for_max_retries() {
+        let entry = one_entry(&format!(
+            r#"{{"options": {{"project": "{PLACEHOLDER_PROJECT}"}}}}"#
+        ));
+        assert!(entry.written_in_entry());
+
+        let from_environment = Provider::from_environment(&|name: &str| {
+            (name == crate::env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
+        })
+        .expect("a project names the service");
+        assert!(!from_environment.written_in_entry());
     }
 
     /// The `google-vertex` entry written as `entry`, which holds the whole block.

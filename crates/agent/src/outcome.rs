@@ -134,6 +134,14 @@ pub struct Diagnosis {
     /// Set from the variant that sent the request and never from a reply or an address. Never
     /// given to the planner.
     pub backend: Option<BackendKind>,
+    /// Whether the request went to a backend with a `provider` entry, which is where `maxRetries`
+    /// is stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    ///
+    /// Set from the variant that sent the request and the configuration it was selected with, and
+    /// never from a reply or an address. A front end uses it to name that setting in the next step of
+    /// a rate-limited failure. False for the Brave endpoint, a tier-variable account and the two
+    /// sign-in accounts. Never given to the planner.
+    pub retry_setting: bool,
 }
 
 /// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
@@ -155,6 +163,7 @@ impl Diagnosis {
             premium_key: false,
             conceded: Conceded::default(),
             backend: None,
+            retry_setting: false,
         }
     }
 
@@ -167,6 +176,12 @@ impl Diagnosis {
     /// The same, with the backend that sent the request.
     pub fn on_backend(mut self, backend: BackendKind) -> Self {
         self.backend = Some(backend);
+        self
+    }
+
+    /// The same, marked as a failure of a request to a backend that has a `provider` entry.
+    pub fn with_retry_setting(mut self) -> Self {
+        self.retry_setting = true;
         self
     }
 
