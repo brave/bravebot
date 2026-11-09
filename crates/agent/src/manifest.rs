@@ -115,8 +115,12 @@ optional name out so the tool uses its own default. The tools:";
 const SERVER_APPLY_SHAPE: &str = "\n\
 A tool listed with apply can be called once for each item of a list that was read: an isolated \
 processor reads the list and proposes the calls, such as which folder each bookmark goes in and \
-what the new folders are called, and the person approves the whole list before any call is made. \
-So a task that reorganises many items is one read, then one apply. The read must return the items \
+what the new folders are called; the person approves the whole list before any call is made, \
+unless the person's declaration marks every tool of the step unattended, when approving the plan \
+covers it. The step's own processor decides its calls, and what became of each is shown after, \
+so a step that drafts or shows a grouping beforehand describes calls that will not be made. \
+So a task that reorganises many items is one read, then one apply, and no process or answer step \
+besides to propose or preview what the apply will do. The read must return the items \
 themselves, each with what the calls need, such as every bookmark with its url, and not only the \
 names of the places that hold them; where unsure which read does, prefer one that needs no name. \
 Where a later call names something an earlier call of the step creates, such as the folder a \

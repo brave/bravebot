@@ -2832,6 +2832,13 @@ fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
             .any(|body| body.contains("so an existing one is used rather than made twice")),
         "no planning request held the guidance"
     );
+    // And that the apply step's own processor decides its calls, so no other step can preview them.
+    assert!(
+        ran.chat
+            .iter()
+            .any(|body| body.contains("So a task that reorganises many items is one read, then one apply, and no process or answer step besides")),
+        "no planning request said a separate step cannot preview the calls"
+    );
     assert!(ran.events.iter().any(|event| matches!(
         event,
         bravebot_core::event::Event::GatePassed { gate: "approval", detail }
