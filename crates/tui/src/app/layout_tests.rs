@@ -265,11 +265,12 @@ mod drawing {
     fn no_bots_draws_one_line_saying_how_to_make_one() {
         let mut session = without_a_session(Vec::new(), 120);
         let buffer = drawn(&mut session, 120, 20);
+        let screen = screen_text(&buffer);
         assert!(
-            screen_text(&buffer).contains("No bots yet. Make one in the desktop app"),
-            "{}",
-            screen_text(&buffer)
+            screen.contains("No bots yet. Press n to make one here."),
+            "{screen}"
         );
+        assert!(!screen.contains("desktop app"), "{screen}");
     }
 
     /// BOT-4.
@@ -605,6 +606,7 @@ mod keys {
             session.bots().message(),
             Some("Starting a session as a bot arrives in a later release.")
         );
+        assert!(!session.bots().form_open(), "Enter opened a form");
         assert_eq!(selected(&session), 1);
         assert!(session.panes_have_the_keys());
         let buffer = drawn(&mut session, 120, 30);
@@ -3016,5 +3018,460 @@ mod ladder_of_the_prompt_box {
                 "the second press did not leave, after {released:?}"
             );
         }
+    }
+}
+
+mod form {
+    use super::*;
+
+    fn listed(rows: Vec<Row>) -> Session {
+        let mut session = without_a_session(rows, 120);
+        drawn(&mut session, 120, 30);
+        session
+    }
+
+    fn type_line(session: &mut Session, line: &str) -> Action {
+        type_text(session, line);
+        handle_key(session, key(KeyCode::Enter))
+    }
+
+    fn shift_enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+    }
+
+    fn narrow(session: &mut Session) {
+        let mut laid = session.laid.clone();
+        laid.columns = 80;
+        session.note_layout(laid);
+    }
+
+    /// BOT-17.
+    #[test]
+    fn the_list_names_the_keys_that_apply_to_the_selected_row() {
+        let mut session = listed(three_bots());
+        let screen = screen_text(&drawn(&mut session, 120, 30));
+        assert!(screen.contains("n makes a bot"), "{screen}");
+        assert!(screen.contains("e edits it"), "{screen}");
+        assert!(screen.contains("a archives it"), "{screen}");
+        assert!(!screen.contains("d deletes"), "{screen}");
+
+        let mut archived = row("old", "Old", "was here", "seed-old");
+        archived.retired = 4.0;
+        let mut session = listed(vec![archived]);
+        let screen = screen_text(&drawn(&mut session, 120, 30));
+        assert!(screen.contains("r restores it"), "{screen}");
+        assert!(screen.contains("d deletes it"), "{screen}");
+        assert!(!screen.contains("a archives"), "{screen}");
+        assert!(!screen.contains("archived"), "{screen}");
+    }
+
+    /// BOT-17.
+    #[test]
+    fn n_opens_a_make_form_and_e_opens_the_selected_row() {
+        let mut empty = listed(Vec::new());
+        handle_key(&mut empty, key(KeyCode::Char('n')));
+        assert!(empty.bots().form_open());
+        assert_eq!(empty.bots().form_name(), Some(""));
+        assert_eq!(empty.bots().form_model(), None);
+
+        let mut session = listed(three_bots());
+        handle_key(&mut session, key(KeyCode::Char('e')));
+        assert_eq!(session.bots().form_name(), Some("Zeta"));
+        assert_eq!(session.bots().form_purpose(), Some("answers questions"));
+        assert_eq!(session.bots().form_model(), Some(""));
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(!session.bots().form_open());
+        handle_key(&mut session, key(KeyCode::Char('e')));
+        assert_eq!(
+            session.bots().form_name(),
+            Some("Zeta"),
+            "a cancelled edit kept a draft"
+        );
+    }
+
+    /// BOT-6, INPUT-2.
+    #[test]
+    fn shift_enter_and_ctrl_j_break_the_purpose_only_and_do_not_save() {
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        handle_key(&mut session, shift_enter());
+        assert_eq!(session.bots().form_name(), Some(""));
+        handle_key(&mut session, key(KeyCode::Tab));
+        handle_key(&mut session, shift_enter());
+        handle_key(&mut session, ctrl('j'));
+        assert_eq!(session.bots().form_purpose(), Some("\n\n"));
+        assert!(session.bots().form_open(), "a newline saved the form");
+        handle_key(&mut session, key(KeyCode::BackTab));
+        type_text(&mut session, "Ada");
+        assert_eq!(session.bots().form_name(), Some("Ada"));
+        assert_eq!(session.bots().form_purpose(), Some("\n\n"));
+    }
+
+    /// BOT-6.
+    #[test]
+    fn escape_drops_a_form_and_the_next_one_starts_empty() {
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        type_text(&mut session, "kept");
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(!session.bots().form_open());
+        assert!(!session.is_quitting());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        assert_eq!(session.bots().form_name(), Some(""));
+        assert_eq!(session.bots().form_purpose(), Some(""));
+    }
+
+    /// BOT-8.
+    #[test]
+    fn delete_is_not_offered_for_a_bot_that_is_not_archived() {
+        let mut session = listed(three_bots());
+        handle_key(&mut session, key(KeyCode::Char('d')));
+        assert!(!session.bots().confirmation_open());
+        assert_eq!(session.bots().row_count(), 3);
+        assert_eq!(
+            session.bots().message(),
+            Some("Delete is only for an archived bot.")
+        );
+        handle_key(&mut session, key(KeyCode::Char('a')));
+        assert!(session.bots().confirmation_open());
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(!session.bots().confirmation_open());
+        assert_eq!(session.bots().row_count(), 3);
+    }
+
+    /// BOT-6, PASTE-1.
+    #[test]
+    fn a_long_paste_lands_in_the_purpose_whole_and_a_picture_does_not() {
+        let pasted = "one\ntwo\nthree\nfour";
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert_eq!(handle_paste(&mut session, pasted), Action::Redraw);
+        assert_eq!(session.bots().form_purpose(), Some(pasted));
+        let screen = screen_text(&drawn(&mut session, 120, 30));
+        assert!(screen.contains("one"), "{screen}");
+        assert!(screen.contains("four"), "{screen}");
+        assert!(!screen.contains("[Pasted text"), "{screen}");
+
+        assert_eq!(handle_paste(&mut session, ""), Action::Redraw);
+        assert_eq!(session.bots().form_purpose(), Some(pasted));
+        assert!(
+            session
+                .bots()
+                .message()
+                .is_some_and(|message| message.contains("picture")),
+            "{:?}",
+            session.bots().message()
+        );
+        take_from_clipboard(
+            &mut session,
+            crate::clipboard::Pasted::Image(crate::clipboard::Image {
+                media_type: "image/png",
+                bytes: b"pixels".to_vec(),
+            }),
+        );
+        assert_eq!(session.bots().form_purpose(), Some(pasted));
+        assert!(session.input().is_empty());
+        assert!(session.attached().is_empty());
+    }
+
+    /// BOT-6.
+    #[test]
+    fn a_control_character_is_drawn_as_a_picture_and_kept_in_the_field() {
+        let pasted = "see\u{7}me";
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        handle_key(&mut session, key(KeyCode::Tab));
+        handle_paste(&mut session, pasted);
+        assert_eq!(session.bots().form_purpose(), Some(pasted));
+        let screen = screen_text(&drawn(&mut session, 120, 30));
+        assert!(screen.contains("see\u{2407}me"), "{screen}");
+        assert!(
+            screen.chars().all(|c| !c.is_control() || c == '\n'),
+            "{screen:?}"
+        );
+        assert_eq!(session.bots().form_purpose(), Some(pasted));
+    }
+
+    /// BOT-17.
+    #[test]
+    fn a_paste_while_the_form_is_not_drawn_or_a_confirmation_is_open_changes_nothing() {
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        type_text(&mut session, "Ada");
+        narrow(&mut session);
+        assert_eq!(handle_paste(&mut session, "MORE"), Action::None);
+        assert_eq!(session.bots().form_name(), Some("Ada"));
+        assert!(session.input().is_empty());
+
+        let mut session = listed(three_bots());
+        handle_key(&mut session, key(KeyCode::Char('a')));
+        assert_eq!(handle_paste(&mut session, "y"), Action::None);
+        assert!(session.bots().confirmation_open());
+        assert_eq!(session.bots().row_count(), 3);
+    }
+
+    /// BOT-17.
+    #[test]
+    fn narrowing_keeps_a_forms_text_and_cancels_a_confirmation() {
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        type_text(&mut session, "Ada");
+        narrow(&mut session);
+        assert_eq!(session.bots().form_name(), Some("Ada"));
+        assert!(session.bots().form_open());
+        let narrow_screen = screen_text(&drawn(&mut session, 80, 24));
+        assert!(!narrow_screen.contains("Ada"), "{narrow_screen}");
+        assert!(
+            narrow_screen.contains("The panes need a wider terminal"),
+            "{narrow_screen}"
+        );
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        assert_eq!(session.bots().form_name(), Some("Ada"));
+        assert_eq!(session.input(), "x");
+
+        let wide = screen_text(&drawn(&mut session, 120, 24));
+        assert!(wide.contains("Ada"), "{wide}");
+        handle_key(&mut session, key(KeyCode::Char('z')));
+        assert_eq!(session.bots().form_name(), Some("Adaz"));
+
+        let mut session = listed(three_bots());
+        handle_key(&mut session, key(KeyCode::Char('a')));
+        assert!(session.bots().confirmation_open());
+        narrow(&mut session);
+        assert!(
+            !session.bots().confirmation_open(),
+            "a confirmation survived being narrowed"
+        );
+        assert_eq!(session.bots().row_count(), 3);
+        handle_key(&mut session, key(KeyCode::Char('y')));
+        assert_eq!(session.bots().row_count(), 3);
+        assert!(!session.bots().confirmation_open());
+    }
+
+    /// BOT-17.
+    #[test]
+    fn layout_is_refused_while_a_form_or_a_confirmation_is_open() {
+        let mut wide = listed(Vec::new());
+        handle_key(&mut wide, key(KeyCode::Char('n')));
+        type_text(&mut wide, "Ada");
+        handle_key(&mut wide, alt('p'));
+        assert_eq!(type_line(&mut wide, "/layout default"), Action::Redraw);
+        assert_eq!(wide.status, Status::Idle);
+        assert!(
+            wide.bots()
+                .message()
+                .is_some_and(|message| message.contains("Save or cancel")),
+            "{:?}",
+            wide.bots().message()
+        );
+        assert_eq!(wide.interface_layout(), Layout::Bots);
+        assert_eq!(wide.bots().form_name(), Some("Ada"));
+        assert!(!wide.is_quitting());
+
+        let mut squeezed = listed(Vec::new());
+        handle_key(&mut squeezed, key(KeyCode::Char('n')));
+        type_text(&mut squeezed, "Ada");
+        narrow(&mut squeezed);
+        assert!(!squeezed.panes_are_drawn());
+        assert_eq!(type_line(&mut squeezed, "/layout default"), Action::Redraw);
+        assert_eq!(squeezed.status, Status::Idle);
+        assert!(
+            squeezed
+                .bots()
+                .message()
+                .is_some_and(|message| message.contains("Save or cancel")),
+            "{:?}",
+            squeezed.bots().message()
+        );
+        assert_eq!(squeezed.bots().form_name(), Some("Ada"));
+        assert_eq!(squeezed.interface_layout(), Layout::Bots);
+
+        let mut confirming = listed(three_bots());
+        handle_key(&mut confirming, key(KeyCode::Char('a')));
+        handle_key(&mut confirming, alt('p'));
+        assert_eq!(
+            type_line(&mut confirming, "/layout default"),
+            Action::Redraw
+        );
+        assert_eq!(confirming.status, Status::Idle);
+        assert!(
+            confirming
+                .bots()
+                .message()
+                .is_some_and(|message| message.contains("Save or cancel")),
+            "{:?}",
+            confirming.bots().message()
+        );
+        assert!(confirming.bots().confirmation_open());
+        assert_eq!(confirming.bots().row_count(), 3);
+    }
+
+    /// BOT-17, INPUT-4.
+    #[test]
+    fn the_first_ctrl_c_on_a_form_or_a_confirmation_follows_the_ladder() {
+        let mut confirming = listed(three_bots());
+        handle_key(&mut confirming, key(KeyCode::Char('a')));
+        assert_eq!(handle_key(&mut confirming, ctrl('c')), Action::Redraw);
+        assert!(!confirming.bots().confirmation_open());
+        assert_eq!(confirming.bots().row_count(), 3);
+        assert!(confirming.offered_to_leave);
+        assert!(!confirming.is_quitting());
+        assert_eq!(handle_key(&mut confirming, ctrl('c')), Action::Quit);
+
+        let mut held = listed(Vec::new());
+        handle_key(&mut held, key(KeyCode::Char('n')));
+        type_text(&mut held, "Ada");
+        assert_eq!(handle_key(&mut held, ctrl('c')), Action::Redraw);
+        assert_eq!(held.bots().form_name(), Some("Ada"));
+        assert!(held.offered_to_leave);
+        assert!(!held.is_quitting());
+        handle_key(&mut held, key(KeyCode::Esc));
+        assert!(
+            !held.bots().form_open(),
+            "Esc did not close a form that holds text"
+        );
+        assert!(!held.is_quitting());
+
+        let mut held = listed(Vec::new());
+        handle_key(&mut held, key(KeyCode::Char('n')));
+        type_text(&mut held, "Ada");
+        handle_key(&mut held, ctrl('c'));
+        assert_eq!(handle_key(&mut held, ctrl('c')), Action::Quit);
+
+        let mut empty = listed(Vec::new());
+        handle_key(&mut empty, key(KeyCode::Char('n')));
+        assert_eq!(handle_key(&mut empty, ctrl('c')), Action::Redraw);
+        assert!(!empty.bots().form_open());
+        assert!(empty.offered_to_leave);
+        assert!(!empty.is_quitting());
+        assert_eq!(handle_key(&mut empty, ctrl('c')), Action::Quit);
+
+        let mut hidden = listed(Vec::new());
+        handle_key(&mut hidden, key(KeyCode::Char('n')));
+        narrow(&mut hidden);
+        assert_eq!(handle_key(&mut hidden, ctrl('c')), Action::Redraw);
+        assert!(
+            hidden.bots().form_open(),
+            "Ctrl-C reached a form that was not drawn"
+        );
+        assert!(hidden.offered_to_leave);
+        assert!(!hidden.is_quitting());
+    }
+
+    /// BOT-7, BOT-17.
+    #[test]
+    fn a_long_purpose_keeps_the_model_field_the_keys_and_the_refusal_on_screen() {
+        let mut purpose = String::new();
+        for number in 0..40 {
+            purpose.push_str(&format!("LINE{number:02}\n"));
+        }
+        purpose.push_str("ENDMARKER");
+        let mut bot = row("editor", "Editor", &purpose, "editor");
+        bot.model = Some("claude".to_string());
+        let mut session = listed(vec![bot]);
+        handle_key(&mut session, key(KeyCode::Char('e')));
+        handle_key(&mut session, key(KeyCode::Tab));
+        let screen = screen_text(&drawn(&mut session, 120, 24));
+        assert!(screen.contains("ENDMARKER"), "{screen}");
+        assert!(screen.contains("Model"), "{screen}");
+        assert!(screen.contains("Enter saves"), "{screen}");
+        assert!(!screen.contains("LINE00"), "{screen}");
+        assert!(!screen.contains('\u{2588}'), "{screen}");
+
+        handle_key(&mut session, key(KeyCode::Enter));
+        let screen = screen_text(&drawn(&mut session, 120, 24));
+        assert!(screen.contains("state directory"), "{screen}");
+        assert!(screen.contains("Model"), "{screen}");
+        assert!(session.bots().form_open());
+    }
+
+    /// BOT-17.
+    #[test]
+    fn a_short_pane_still_draws_the_confirmation() {
+        let mut session = listed(three_bots());
+        handle_key(&mut session, key(KeyCode::Char('a')));
+        let text = pane_text(session.bots(), 44, 7);
+        assert!(
+            text.contains("y archives"),
+            "the question was not drawn:\n{text}"
+        );
+        assert!(text.contains("Zeta"), "{text}");
+    }
+
+    /// BOT-6, BOT-17.
+    #[test]
+    fn a_paste_follows_focus_and_an_empty_paste_into_the_form_says_why() {
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        type_text(&mut session, "Ada");
+        handle_key(&mut session, alt('p'));
+        assert!(!session.panes_have_the_keys());
+        assert_eq!(
+            handle_paste(&mut session, "/layout default"),
+            Action::Redraw
+        );
+        assert_eq!(session.bots().form_name(), Some("Ada"));
+        assert_eq!(session.input(), "/layout default");
+
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        type_text(&mut session, "Ada");
+        assert!(session.panes_have_the_keys());
+        let step = bots_screen::step(&mut session, TermEvent::Paste(String::new()));
+        assert!(
+            bots_screen::owes_a_frame(Some(&step)),
+            "an empty paste set the note and asked for no frame"
+        );
+        assert_eq!(session.bots().form_name(), Some("Ada"));
+        let screen = screen_text(&drawn(&mut session, 120, 30));
+        assert!(screen.contains("picture"), "{screen}");
+    }
+
+    /// BOT-17.
+    #[test]
+    fn a_one_row_pane_names_the_bot_and_says_how_to_agree() {
+        let name = "N".repeat(80);
+        let mut session = listed(vec![row("long-name", &name, "purpose", "long-name")]);
+        handle_key(&mut session, key(KeyCode::Char('a')));
+        let text = pane_text(session.bots(), 100, 1);
+        assert!(text.contains("y archives"), "{text}");
+        assert!(text.contains("NNN"), "{text}");
+        assert!(text.contains("Archive"), "{text}");
+    }
+
+    /// BOT-6.
+    #[test]
+    fn an_inactive_field_shows_the_rest_of_the_text() {
+        let mut leading = row("editor", "Editor", "\nVISIBLE", "editor");
+        leading.model = Some("claude".to_string());
+        let mut session = listed(vec![leading]);
+        handle_key(&mut session, key(KeyCode::Char('e')));
+        let screen = screen_text(&drawn(&mut session, 120, 24));
+        assert!(screen.contains("VISIBLE"), "{screen}");
+        assert!(screen.contains("Model"), "{screen}");
+
+        let purpose = format!("FIRST\nSECOND\n{}", "P".repeat(180));
+        let mut folded = row("folder", "Folder", &purpose, "folder");
+        folded.model = Some("claude".to_string());
+        let mut session = listed(vec![folded]);
+        handle_key(&mut session, key(KeyCode::Char('e')));
+        let screen = screen_text(&drawn(&mut session, 120, 24));
+        assert!(screen.contains("FIRST"), "{screen}");
+        assert!(screen.contains("SECOND"), "{screen}");
+        assert!(screen.contains('…'), "{screen}");
+    }
+
+    fn pane_text(state: &bots_pane::State, width: u16, height: u16) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                .expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                bots_pane::draw(frame.buffer_mut(), area, state, true);
+            })
+            .expect("draw");
+        screen_text(terminal.backend().buffer())
     }
 }

@@ -800,6 +800,9 @@ fn layout_refusal(session: &Session, incognito: bool) -> Option<String> {
     if !session.queued.is_empty() {
         return Some(t!(layout_refused_queued).to_string());
     }
+    if session.bots().form_open() || session.bots().confirmation_open() {
+        return Some(t!(layout_refused_form).to_string());
+    }
     if !session.loops().is_empty() || session.goal().is_some() {
         return Some(t!(layout_refused_pending).to_string());
     }
@@ -1223,8 +1226,15 @@ fn paste_into_box(session: &mut Session, text: &str) -> Action {
         || session.picking().is_some()
         || session.searching_history()
         || session.files_open()
-        || session.panes_have_the_keys()
     {
+        return Action::None;
+    }
+    match paste_for_an_open_form(session, text) {
+        FormPaste::Ignored => return Action::None,
+        FormPaste::Inserted | FormPaste::Noted => return Action::Redraw,
+        FormPaste::NotOurs => {}
+    }
+    if session.panes_have_the_keys() {
         return Action::None;
     }
     // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since the
@@ -1245,6 +1255,35 @@ fn paste_into_box(session: &mut Session, text: &str) -> Action {
     Action::Redraw
 }
 
+enum FormPaste {
+    NotOurs,
+    Ignored,
+    Noted,
+    Inserted,
+}
+
+fn paste_for_an_open_form(session: &mut Session, text: &str) -> FormPaste {
+    if session.bots().confirmation_open() {
+        return FormPaste::Ignored;
+    }
+    if !session.bots().form_open() {
+        return FormPaste::NotOurs;
+    }
+    if !session.panes_are_drawn() {
+        return FormPaste::Ignored;
+    }
+    if !session.panes_have_the_keys() {
+        return FormPaste::NotOurs;
+    }
+    if text.is_empty() {
+        let chord = session.bindings().paste_name();
+        session.note_once(t!(paste_arrived_empty, chord = chord));
+        return FormPaste::Noted;
+    }
+    session.bots_mut().paste_into_form(text);
+    FormPaste::Inserted
+}
+
 /// Bring what is on the clipboard into the prompt.
 ///
 /// Separated from the loop so it can be tested without a terminal, and taking the read as an
@@ -1253,6 +1292,23 @@ fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) 
     use crate::clipboard::Pasted;
     use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 
+    match &pasted {
+        Pasted::Text(text) => match paste_for_an_open_form(session, text) {
+            FormPaste::NotOurs => {}
+            FormPaste::Ignored | FormPaste::Noted | FormPaste::Inserted => return,
+        },
+        Pasted::Image(_) if session.bots().form_open() && session.panes_have_the_keys() => {
+            let chord = session.bindings().paste_name();
+            session.note_once(t!(paste_arrived_empty, chord = chord));
+            return;
+        }
+        _ if session.bots().confirmation_open()
+            || (session.bots().form_open() && session.panes_have_the_keys()) =>
+        {
+            return;
+        }
+        _ => {}
+    }
     if session.panes_have_the_keys() {
         return;
     }

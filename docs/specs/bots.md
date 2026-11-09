@@ -453,7 +453,16 @@ person first. Nothing here shows that the renderer displays fetched pages, which
 window be taken over.
 
 `verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore, bot.delete, bot.record_conversation, bot.record_archived, bot.release_session, bot.forget_conversation, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the methods named here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test. The terminal's form is not built)`
+`verified-by: bravebot_tui::app::layout_tests::n_opens_a_make_form_and_e_opens_the_selected_row`
+`verified-by: bravebot_tui::app::layout_tests::shift_enter_and_ctrl_j_break_the_purpose_only_and_do_not_save`
+`verified-by: bravebot_tui::app::layout_tests::escape_drops_a_form_and_the_next_one_starts_empty`
+`verified-by: bravebot_tui::app::layout_tests::a_long_paste_lands_in_the_purpose_whole_and_a_picture_does_not`
+`verified-by: bravebot_tui::app::layout_tests::a_paste_follows_focus_and_an_empty_paste_into_the_form_says_why`
+`verified-by: bravebot_tui::app::layout_tests::an_inactive_field_shows_the_rest_of_the_text`
+`verified-by: bravebot_tui::app::layout_tests::a_long_purpose_keeps_the_model_field_the_keys_and_the_refusal_on_screen`
+`verified-by: bravebot_tui::app::layout_tests::a_control_character_is_drawn_as_a_picture_and_kept_in_the_field`
+`verified-by: bravebot_tui::bots_form::a_long_paste_is_stored_whole_and_a_control_character_is_saved`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore, bot.delete, bot.record_conversation, bot.record_archived, bot.release_session, bot.forget_conversation, bot.list, bot.replace, bot.define, bot.redefine and bot.migrate is in it, so the window reaches the methods named here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test)`
 
 <a id="BOT-7"></a>
 ### BOT-7: the definition is written first, and the row only after it
@@ -467,7 +476,7 @@ disagree about what the bot is for. Setting the model is the same two writes, an
 edit form offers it as a model field that takes an identifier [BOT-3](#BOT-3) accepts. It is not
 offered while a turn of the bot is running, as the GUI's model picker is disabled then. The model
 belongs to the bot, so the change applies to every conversation of the bot, and the next turn of an
-open session runs under it. The make form has no model field. An edit changes the row's name, purpose, model and avatar only,
+open session runs under it. The make form has no model field. An empty model field in the terminal's edit form clears the stored model, so a later turn uses the configured default. Any other text is stored as typed, and a model the module refuses is left unchanged. An edit changes the row's name, purpose, model and avatar only,
 and not the fields that record what happened. A bot that has no definition has its row written and no
 definition made. The module reads the row once, under the lock of [BOT-4](#BOT-4), and writes the
 definition and then the row before it releases the lock, so a conversation another program records
@@ -521,7 +530,17 @@ definition.
 `verified-by: bravebot_agent::bots::operations::archiving_a_bot_that_is_archived_stamps_retired_again_and_leaves_the_definition`
 `verified-by: bravebot_agent::bots::operations::restoring_sets_retired_to_zero_and_each_write_stamps_updated`
 `verified-by: bravebot_agent::bots::operations::an_archive_or_a_restore_of_a_missing_bot_writes_nothing`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each, and that archiving a bot that is already archived stamps retired again, leaves the definition bytes unchanged, sets retired to zero on a restore, and changes updated on each of those writes; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. The recording operations are built, and ui/scripts/bot-operations-bridge.test.mjs asserts them through the real bravebot-rpc. The migration of a bot made before definitions is not built. The terminal's confirmation of an archive is not built)`
+`verified-by: bravebot_tui::bots_form::a_make_writes_the_definition_body_and_the_reread_list_holds_the_bot`
+`verified-by: bravebot_tui::bots_form::an_edit_rewrites_the_definition_body`
+`verified-by: bravebot_tui::bots_form::a_second_bot_with_the_same_name_takes_the_slug_with_a_number`
+`verified-by: bravebot_tui::bots_form::the_hundred_and_first_bot_is_refused_and_every_row_is_kept`
+`verified-by: bravebot_tui::bots_form::a_name_or_a_purpose_with_a_null_is_refused_and_the_file_is_unchanged`
+`verified-by: bravebot_tui::bots_form::a_model_over_the_bound_or_with_a_newline_is_refused_and_the_stored_model_is_unchanged`
+`verified-by: bravebot_tui::bots_form::an_empty_model_field_clears_the_model_and_any_other_text_is_stored`
+`verified-by: bravebot_tui::bots_form::a_failed_write_names_the_path_and_keeps_the_list`
+`verified-by: bravebot_tui::bots_form::archive_and_delete_wait_for_y_and_restore_does_not`
+`verified-by: bravebot_tui::bots_form_incognito::an_incognito_make_says_so_and_writes_nothing`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each, and that archiving a bot that is already archived stamps retired again, leaves the definition bytes unchanged, sets retired to zero on a restore, and changes updated on each of those writes; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. The recording operations are built, and ui/scripts/bot-operations-bridge.test.mjs asserts them through the real bravebot-rpc. The migration of a bot made before definitions is not built)`
 
 <a id="BOT-8"></a>
 ### BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
@@ -556,7 +575,10 @@ the GUI's delete removes today, and the module does the removal for both program
 `verified-by: bravebot_agent::bots::operations::a_slug_that_is_not_one_removes_nothing_and_a_missing_bot_removes_no_folder`
 `verified-by: bravebot_ui_bridge::bots::a_bot_archived_restored_and_deleted_through_the_bridge`
 `verified-by: bravebot_ui_bridge::bots::a_bad_slug_or_a_missing_row_refuses_before_a_folder_is_removed`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a delete removes the row and the folder under the data folder at bots/<slug> and no other folder, and that the definition, a session file in the state directory's sessions folder, a memory file in a folder the bot worked in, the home folder and a sibling folder under bots all remain; ui/scripts/bot-store.test.mjs invokes the function the remove handler calls, with the running flag set, through the fake bridge and a real folder, and asserts the refusal is thrown without a list read, including when the bridge cannot list the rows, that bot.delete was not sent, and that the row and the folder remain; make check-ui runs both. The terminal's confirmation and its offer of delete only for an archived bot are not built)`
+`verified-by: bravebot_tui::app::layout_tests::delete_is_not_offered_for_a_bot_that_is_not_archived`
+`verified-by: bravebot_tui::bots_form::delete_is_not_offered_for_a_bot_that_is_not_archived_and_removes_nothing`
+`verified-by: bravebot_tui::bots_form::archive_and_delete_wait_for_y_and_restore_does_not`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a delete removes the row and the folder under the data folder at bots/<slug> and no other folder, and that the definition, a session file in the state directory's sessions folder, a memory file in a folder the bot worked in, the home folder and a sibling folder under bots all remain; ui/scripts/bot-store.test.mjs invokes the function the remove handler calls, with the running flag set, through the fake bridge and a real folder, and asserts the refusal is thrown without a list read, including when the bridge cannot list the rows, that bot.delete was not sent, and that the row and the folder remain; make check-ui runs both)`
 
 ## Talking to a bot
 
@@ -1003,6 +1025,14 @@ session it starts is not recorded in a row. `--layout bots` given with `--agent`
 bot's session is addressed to the definition of its row and the flag would name a second one.
 
 `verified-by: bravebot_tui::app::layout_tests::no_bots_draws_one_line_saying_how_to_make_one`
+`verified-by: bravebot_tui::app::layout_tests::the_list_names_the_keys_that_apply_to_the_selected_row`
+`verified-by: bravebot_tui::app::layout_tests::narrowing_keeps_a_forms_text_and_cancels_a_confirmation`
+`verified-by: bravebot_tui::app::layout_tests::layout_is_refused_while_a_form_or_a_confirmation_is_open`
+`verified-by: bravebot_tui::app::layout_tests::the_first_ctrl_c_on_a_form_or_a_confirmation_follows_the_ladder`
+`verified-by: bravebot_tui::app::layout_tests::a_short_pane_still_draws_the_confirmation`
+`verified-by: bravebot_tui::app::layout_tests::a_one_row_pane_names_the_bot_and_says_how_to_agree`
+`verified-by: bravebot_tui::bots_form::a_make_selects_the_new_bot`
+`verified-by: bravebot_tui::app::layout_tests::a_paste_while_the_form_is_not_drawn_or_a_confirmation_is_open_changes_nothing`
 `verified-by: bravebot_tui::app::layout_tests::a_file_that_does_not_parse_shows_no_rows_and_names_its_path`
 `verified-by: bravebot_tui::app::layout_tests::a_row_reads_a_bounded_prefix_of_a_purpose_with_no_length_bound`
 `verified-by: bravebot_tui::app::layout_tests::a_row_with_a_multi_megabyte_purpose_draws_the_same_row_as_its_first_screenful`
@@ -1203,8 +1233,9 @@ list later if the list looks too packed.
   bot's working folder inside the state directory.** The bot keeps no memory there
   ([MEMORY-2](definition-memory.md#MEMORY-2)), and a folder holding the state directory leaves its
   definition unread ([SKILL-3](skills.md#SKILL-3)). Both fail safe.
-- **Clearing a bot's model from the edit form is not specified.** The row keeps the model it has until
-  a later change says what an empty field means.
+- **An empty model field in the terminal's edit form clears the stored model.** A field that is empty
+  after its blank characters are trimmed is removed, and a later turn uses the configured default. Any
+  other text is stored as typed, and a model the module refuses is left unchanged.
 - **What `/memory` does in the bots layout before a session exists is not specified.** The command
   works in a bot's session ([BOT-13](#BOT-13)).
 - **Each bot in the list is five rows tall because of its face, so a long list is tall.** The face can be
