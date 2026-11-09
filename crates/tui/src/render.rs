@@ -7741,7 +7741,7 @@ mod tests {
         let mut moved = std::collections::BTreeMap::new();
         moved.insert("enhance".to_string(), "alt-e".to_string());
         assert_eq!(
-            named(&Keybindings::from_map(&moved)).as_deref(),
+            named(&Keybindings::from_map(&moved, true).0).as_deref(),
             Some("alt-e")
         );
     }
@@ -7775,7 +7775,10 @@ mod tests {
         let mut moved = std::collections::BTreeMap::new();
         moved.insert("scroller".to_string(), "ctrl-alt-pgdn".to_string());
         moved.insert("stash".to_string(), "ctrl-alt-f12".to_string());
-        for bindings in [Keybindings::default(), Keybindings::from_map(&moved)] {
+        for bindings in [
+            Keybindings::default(),
+            Keybindings::from_map(&moved, true).0,
+        ] {
             for editing in crate::vim::Editing::ALL {
                 for width in 0..=200u16 {
                     for line in

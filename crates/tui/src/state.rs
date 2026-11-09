@@ -418,6 +418,16 @@ pub struct Session {
     /// The keys the Sessions screen answers (SCREEN-14), and what was refused when they were read.
     sessions_keys: crate::sessions_keys::SessionsKeys,
     sessions_keys_refused: Vec<crate::sessions_keys::Refused>,
+    /// Whether this terminal reports keys the disambiguation protocol's way (INPUT-48), which
+    /// decides whether a chord on Escape can arrive at all.
+    ///
+    /// A fact about the terminal rather than about the session, answered once at startup the way
+    /// [`Self::ctrl_enter_arrives`] is, and set before a settings file's chords are read. True on a
+    /// session nobody asked, so a test reads the chords it wrote without a terminal to ask.
+    keys_disambiguated: bool,
+    /// The chords a settings file asked for that this terminal cannot send, kept to be said at
+    /// startup (INPUT-32).
+    undeliverable_chords: Vec<crate::keybindings::Undeliverable>,
     /// How many rows one mouse wheel event moves the view by.
     ///
     /// A preference about the person's terminal rather than about the session, read once at startup
@@ -1391,6 +1401,8 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             sessions_keys: crate::sessions_keys::SessionsKeys::default(),
             sessions_keys_refused: Vec::new(),
+            keys_disambiguated: true,
+            undeliverable_chords: Vec::new(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
             context_menu: true,

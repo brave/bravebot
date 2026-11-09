@@ -5312,6 +5312,14 @@ sessions-screen-keys-unreadable = sessionsKeys.{ $name }: "{ $spelling }" is not
 sessions-screen-keys-kept = sessionsKeys.{ $name }: "{ $spelling }" is a key the screen keeps, so { $name } stays on { $key }
 sessions-screen-keys-contested = sessionsKeys.{ $name }: "{ $spelling }" is wanted by another action, so { $name } stays on { $key }
 sessions-screen-keys-more = and { $count } more keys refused
+# Said at startup where a chord a settings file asked for is one this terminal cannot send, which
+# a chord on Escape is unless the terminal reports keys the disambiguation protocol's way.
+keybindings-undeliverable = keybindings.{ $name }: "{ $spelling }" cannot be delivered by this terminal, so { $name } stays on { $key }
+keybindings-undeliverable-more =
+    { $count ->
+        [one] and { $count } more chord this terminal cannot send
+       *[other] and { $count } more chords this terminal cannot send
+    }
 sessions-screen-hint-help = help
 sessions-screen-hint-back = back
 sessions-screen-hint-move = move

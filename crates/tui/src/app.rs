@@ -2378,6 +2378,7 @@ fn adopt_settings(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
+    say_undeliverable_chords(session);
     session.adopt_sessions_keys(settings.sessions_keys());
     // And how far the wheel moves the view, for the reason the chords are read here: a figure read
     // once at startup describes the session, and a terminal's own idea of a notch does not change
@@ -2399,6 +2400,29 @@ fn adopt_settings(
     }
     session.adopt_prompt_files(crate::prompt_files::directory());
     session.adopt_suggestions(settings.suggestions() == Some(true));
+}
+
+/// Say which of the chords a settings file asked for this terminal cannot send (INPUT-32).
+///
+/// The action stayed on its default, so the key the person wrote does nothing and `?` names the
+/// default rather than it. Nothing else on the screen would show that, and the press they expect to
+/// work is Escape on a terminal that reports it with no modifier at all, which clears the line. One
+/// sentence with a count behind it where more than one was refused, as the Sessions screen says its
+/// own refused keys ([SCREEN-14](../../docs/specs/sessions-screen.md)).
+fn say_undeliverable_chords(session: &mut Session) {
+    let chords = session.undeliverable_chords();
+    let Some(first) = chords.first() else {
+        return;
+    };
+    let mut said = first.sentence();
+    if chords.len() > 1 {
+        let more = chords.len() - 1;
+        said = format!(
+            "{said}; {}",
+            t!(keybindings_undeliverable_more, count = more)
+        );
+    }
+    session.note(said);
 }
 
 /// Put what the command line asked for on a session whose record is open and every startup
@@ -2504,7 +2528,11 @@ fn begin_session(
     session.servers = mcp_servers;
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
     // asked there, so the question only settles it elsewhere.
-    session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
+    let disambiguated = cfg!(windows) || enhanced_keys();
+    session.ctrl_enter_arrives = disambiguated;
+    // The same answer decides whether a chord on Escape can arrive at all, and the session is given
+    // it here because the chords are read further down, out of the settings (INPUT-32).
+    session.adopt_keys_disambiguated(disambiguated);
     // The flag opens the session in bypass. The rung is on the ladder the key walks either way,
     // unless a settings layer took it off (MODE-5).
     if skip_permissions {
@@ -17287,6 +17315,80 @@ mod tests {
             "",
             "alt-esc moved onto stash restored the un-enhanced draft instead of stashing, \
              as plain escape over an enhancement would have"
+        );
+    }
+
+    /// The other half of the same bug. A terminal that was not asked to disambiguate has no bytes
+    /// for Ctrl-Escape and sends `ESC ESC` for Alt-Escape, which arrives as the Escape key alone, so
+    /// a chord moved there cannot be read however the arms above are written. The request is dropped
+    /// and said: the action keeps the key it had, the list `?` puts up names that key, and the
+    /// person finds out rather than pressing a key that clears the box (#2924).
+    #[test]
+    fn a_chord_on_escape_is_dropped_and_said_where_the_terminal_cannot_send_it() {
+        let settings = bravebot_config::Settings::parse(r#"{"keybindings": {"stash": "alt-esc"}}"#);
+        let mut session = Session::new("none");
+        session.adopt_keys_disambiguated(false);
+        adopt_settings(&mut session, &settings, None);
+
+        assert_eq!(
+            session.bindings().stash_name(),
+            "ctrl-s",
+            "the list names a chord this terminal cannot send"
+        );
+        assert!(
+            !session
+                .bindings()
+                .claims(&KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT)),
+            "an action was left on a chord that never arrives"
+        );
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter().any(|line| {
+                line.contains("\"alt-esc\" cannot be delivered by this terminal")
+                    && line.contains("stash stays on ctrl-s")
+            }),
+            "nothing on the screen said the chord cannot arrive: {said:?}"
+        );
+    }
+
+    /// Two of them are one line with a count behind it, as the Sessions screen says its own refused
+    /// keys. Both actions keep the keys they had.
+    #[test]
+    fn two_chords_the_terminal_cannot_send_are_said_in_one_line_with_a_count() {
+        let settings = bravebot_config::Settings::parse(
+            r#"{"keybindings": {"stash": "alt-esc", "undo": "ctrl-esc"}}"#,
+        );
+        let mut session = Session::new("none");
+        session.adopt_keys_disambiguated(false);
+        adopt_settings(&mut session, &settings, None);
+
+        assert_eq!(session.bindings().stash_name(), "ctrl-s");
+        assert_eq!(session.bindings().undo_name(), "ctrl-_");
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter().any(|line| {
+                *line
+                    == "keybindings.stash: \"alt-esc\" cannot be delivered by this terminal, \
+                        so stash stays on ctrl-s; and 1 more chord this terminal cannot send"
+            }),
+            "the second chord was not counted in one line: {said:?}"
+        );
+    }
+
+    /// And a terminal that does report the chord keeps it, with nothing said. The sentence is about
+    /// what this terminal cannot send rather than about how the chord was spelled.
+    #[test]
+    fn a_chord_on_escape_stands_unsaid_where_the_terminal_sends_it() {
+        let settings = bravebot_config::Settings::parse(r#"{"keybindings": {"stash": "alt-esc"}}"#);
+        let mut session = Session::new("none");
+        session.adopt_keys_disambiguated(true);
+        adopt_settings(&mut session, &settings, None);
+
+        assert_eq!(session.bindings().stash_name(), "alt-esc");
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            !said.iter().any(|line| line.contains("cannot be delivered")),
+            "a chord this terminal can send was said to be undeliverable: {said:?}"
         );
     }
 

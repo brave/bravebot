@@ -7,6 +7,7 @@
 //! A configured chord has to carry Ctrl or Alt, and four of those are spoken for anyway. Anything
 //! else, and anything the parser cannot read, leaves the action on the chord it had.
 
+use bravebot_i18n::t;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeMap;
 
@@ -179,6 +180,44 @@ impl KeyChord {
                 KeyCode::Char('c') | KeyCode::Char('d') | KeyCode::Char('j')
             )
     }
+
+    /// Whether this chord arrives only from a terminal that has been asked to disambiguate
+    /// (INPUT-48).
+    ///
+    /// Escape carrying a modifier is one. A terminal that reports keys the old way has no bytes for
+    /// Ctrl-Escape and sends nothing at all, and for Alt-Escape it sends `ESC ESC`, which the reader
+    /// takes as the Escape key pressed on its own because an ESC with nothing behind it is what
+    /// Escape is. Either way the chord never arrives, so an action left on it would be dead.
+    ///
+    /// Only Escape. Which other keys a terminal reports a modifier on varies, and a chord refused
+    /// here is a chord a person asked for and cannot have, so this claims no more than what the
+    /// reader proves.
+    pub fn needs_disambiguation(&self) -> bool {
+        self.code == KeyCode::Esc
+    }
+}
+
+/// A chord a settings file asked for that this terminal cannot send, and where it leaves the action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undeliverable {
+    /// The action as a settings file names it.
+    pub action: &'static str,
+    /// The chord that was asked for.
+    pub chord: KeyChord,
+    /// The chord the action stays on, which is its default.
+    pub stays: KeyChord,
+}
+
+impl Undeliverable {
+    /// The sentence that says the chord cannot arrive and where the action stayed.
+    pub fn sentence(&self) -> String {
+        t!(
+            keybindings_undeliverable,
+            name = self.action,
+            spelling = self.chord.display(),
+            key = self.stays.display()
+        )
+    }
 }
 
 /// Active keybindings for the interactive TUI prompt and navigation.
@@ -326,15 +365,34 @@ impl Keybindings {
     ///
     /// Swapping two actions works, since a chord is only contested if some *other* action still
     /// stands on it once that action's own request is counted.
-    pub fn from_map(configured: &BTreeMap<String, String>) -> Self {
+    ///
+    /// `disambiguated` is whether this terminal has been asked to report keys the way the
+    /// disambiguation protocol does (INPUT-48). Where it has not, a chord that arrives only under
+    /// that protocol is given up as well, and comes back to be said: the action is left on its
+    /// default, because the list `?` puts up is asked of the chord in force and naming a chord that
+    /// cannot arrive is worse than naming the key that works.
+    pub fn from_map(
+        configured: &BTreeMap<String, String>,
+        disambiguated: bool,
+    ) -> (Self, Vec<Undeliverable>) {
         let mut active = Self::default();
         let mut slots = active.slots();
         let defaults: [KeyChord; MOVABLE] = std::array::from_fn(|i| *slots[i].1);
+        let mut undeliverable = Vec::new();
         let mut asked: [Option<KeyChord>; MOVABLE] = std::array::from_fn(|i| {
-            configured
+            let chord = configured
                 .get(slots[i].0)
                 .and_then(|spelling| KeyChord::parse(spelling))
-                .filter(|chord| !chord.is_reserved())
+                .filter(|chord| !chord.is_reserved())?;
+            if !disambiguated && chord.needs_disambiguation() {
+                undeliverable.push(Undeliverable {
+                    action: slots[i].0,
+                    chord,
+                    stays: defaults[i],
+                });
+                return None;
+            }
+            Some(chord)
         });
 
         settle(&defaults, &mut asked);
@@ -342,7 +400,7 @@ impl Keybindings {
         for (i, (_, slot)) in slots.iter_mut().enumerate() {
             **slot = asked[i].unwrap_or(defaults[i]);
         }
-        active
+        (active, undeliverable)
     }
 
     pub fn is_background(&self, key: &KeyEvent) -> bool {
@@ -553,7 +611,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("stash".to_string(), "ctrl-c".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         // Should fall back to default ctrl-s
         assert_eq!(bindings.stash, KeyChord::ctrl('s'));
     }
@@ -584,7 +642,7 @@ mod tests {
             let mut map = BTreeMap::new();
             map.insert("stash".to_string(), spelling.to_string());
             assert_eq!(
-                Keybindings::from_map(&map).stash,
+                Keybindings::from_map(&map, true).0.stash,
                 KeyChord::ctrl('s'),
                 "{spelling} took the stash chord"
             );
@@ -608,12 +666,107 @@ mod tests {
         }
     }
 
+    /// A chord on Escape arrives only from a terminal that reports keys the disambiguation
+    /// protocol's way. Where it does not, the request is given up, so the action is left on a key
+    /// the terminal can send rather than on one that never arrives (#2924).
+    #[test]
+    fn a_chord_on_escape_is_given_up_where_the_terminal_cannot_send_it() {
+        let alt_esc = KeyChord::new(KeyCode::Esc, KeyModifiers::ALT);
+        let mut map = BTreeMap::new();
+        map.insert("stash".to_string(), "alt-esc".to_string());
+
+        let (asked, undeliverable) = Keybindings::from_map(&map, true);
+        assert_eq!(
+            asked.stash, alt_esc,
+            "a terminal that reports the chord did not get it"
+        );
+        assert!(
+            undeliverable.is_empty(),
+            "a chord the terminal can send was refused: {undeliverable:?}"
+        );
+
+        let (left, undeliverable) = Keybindings::from_map(&map, false);
+        assert_eq!(
+            left.stash,
+            KeyChord::ctrl('s'),
+            "stash was left on a chord this terminal cannot send"
+        );
+        assert_eq!(
+            undeliverable,
+            vec![Undeliverable {
+                action: "stash",
+                chord: alt_esc,
+                stays: KeyChord::ctrl('s'),
+            }],
+            "nothing came back to be said about the chord that was dropped"
+        );
+    }
+
+    /// Only Escape. Every other chord a settings file can ask for arrives from a terminal that was
+    /// never asked to disambiguate, so dropping one would take a working key away.
+    #[test]
+    fn a_terminal_that_cannot_disambiguate_keeps_every_chord_but_one_on_escape() {
+        for (spelling, chord) in [
+            ("alt-s", KeyChord::alt('s')),
+            ("ctrl-y", KeyChord::ctrl('y')),
+            (
+                "ctrl-alt-s",
+                KeyChord::new(
+                    KeyCode::Char('s'),
+                    KeyModifiers::CONTROL.union(KeyModifiers::ALT),
+                ),
+            ),
+            ("alt-f5", KeyChord::new(KeyCode::F(5), KeyModifiers::ALT)),
+            (
+                "ctrl-pgup",
+                KeyChord::new(KeyCode::PageUp, KeyModifiers::CONTROL),
+            ),
+            ("alt-tab", KeyChord::new(KeyCode::Tab, KeyModifiers::ALT)),
+        ] {
+            let mut map = BTreeMap::new();
+            map.insert("stash".to_string(), spelling.to_string());
+            let (bindings, undeliverable) = Keybindings::from_map(&map, false);
+            assert_eq!(bindings.stash, chord, "{spelling} was taken off stash");
+            assert!(
+                undeliverable.is_empty(),
+                "{spelling} was called undeliverable"
+            );
+        }
+    }
+
+    /// What is said names the chord that cannot arrive and the key the action answers instead, so
+    /// the sentence and the list `?` puts up agree.
+    #[test]
+    fn the_chord_a_terminal_cannot_send_is_said_with_the_key_it_stayed_on() {
+        let mut map = BTreeMap::new();
+        map.insert("stash".to_string(), "alt-esc".to_string());
+        map.insert("undo".to_string(), "ctrl-esc".to_string());
+        let (bindings, undeliverable) = Keybindings::from_map(&map, false);
+
+        assert_eq!(
+            undeliverable
+                .iter()
+                .map(Undeliverable::sentence)
+                .collect::<Vec<_>>(),
+            vec![
+                "keybindings.stash: \"alt-esc\" cannot be delivered by this terminal, \
+                 so stash stays on ctrl-s"
+                    .to_string(),
+                "keybindings.undo: \"ctrl-esc\" cannot be delivered by this terminal, \
+                 so undo stays on ctrl-_"
+                    .to_string(),
+            ]
+        );
+        assert_eq!(bindings.stash_name(), "ctrl-s");
+        assert_eq!(bindings.undo_name(), "ctrl-_");
+    }
+
     #[test]
     fn custom_chords_override_defaults() {
         let mut map = BTreeMap::new();
         map.insert("stash".to_string(), "alt-s".to_string());
         map.insert("scroller".to_string(), "alt-o".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         assert_eq!(bindings.stash, KeyChord::alt('s'));
         assert_eq!(bindings.scroller, KeyChord::alt('o'));
@@ -630,7 +783,7 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert("stash".to_string(), "alt-x".to_string());
         map.insert("scroller".to_string(), "alt-x".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         assert_eq!(bindings.stash, KeyChord::ctrl('s'));
         assert_eq!(bindings.scroller, KeyChord::ctrl('o'));
@@ -652,7 +805,7 @@ mod tests {
         for (action, chord) in taking_anothers_default {
             let mut map = BTreeMap::new();
             map.insert(action.to_string(), chord.to_string());
-            let bindings = Keybindings::from_map(&map);
+            let bindings = Keybindings::from_map(&map, true).0;
             assert_eq!(
                 Keybindings::default(),
                 bindings,
@@ -666,7 +819,7 @@ mod tests {
         map.insert("stash".to_string(), "ctrl-g".to_string());
         map.insert("trail".to_string(), "ctrl-g".to_string());
         map.insert("editor".to_string(), "ctrl-t".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(Keybindings::default(), bindings, "{bindings:?}");
     }
 
@@ -677,7 +830,7 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert("stash".to_string(), "ctrl-o".to_string());
         map.insert("scroller".to_string(), "ctrl-s".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         assert_eq!(bindings.stash, KeyChord::ctrl('o'));
         assert_eq!(bindings.scroller, KeyChord::ctrl('s'));
@@ -694,7 +847,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("background".to_string(), "alt-b".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.background, KeyChord::alt('b'));
         assert_eq!(bindings.background_name(), "alt-b");
         let moved = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT);
@@ -715,7 +868,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("outputs".to_string(), "alt-y".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.outputs, KeyChord::alt('y'));
         let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
         let vacated = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT);
@@ -726,10 +879,10 @@ mod tests {
         // action asking for another action's default: both fall back to the defaults.
         let mut map = BTreeMap::new();
         map.insert("editor".to_string(), "alt-l".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
         let mut map = BTreeMap::new();
         map.insert("outputs".to_string(), "ctrl-l".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
     }
 
     /// Printing the whole plan is an action of its own on Alt-A, because every Ctrl letter is
@@ -747,7 +900,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("todos".to_string(), "alt-y".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.todos_name(), "alt-y");
         let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
         assert!(bindings.is_todos(&moved) && bindings.claims(&moved));
@@ -765,10 +918,10 @@ mod tests {
     fn another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another() {
         let mut map = BTreeMap::new();
         map.insert("editor".to_string(), "alt-a".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
         let mut map = BTreeMap::new();
         map.insert("todos".to_string(), "alt-l".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
     }
 
     /// The panel is opened and closed from the box, so a person whose terminal or multiplexer
@@ -783,7 +936,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("panel".to_string(), "alt-i".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.panel_name(), "alt-i");
         let moved = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT);
         let vacated = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
@@ -802,7 +955,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("scope".to_string(), "alt-n".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.scope_name(), "alt-n");
         let moved = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT);
         let vacated = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
@@ -812,17 +965,17 @@ mod tests {
         // Taking another action's chord leaves both on their defaults.
         let mut map = BTreeMap::new();
         map.insert("scope".to_string(), "ctrl-r".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
         let mut map = BTreeMap::new();
         map.insert("history".to_string(), "ctrl-n".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
     }
 
     #[test]
     fn invalid_chord_falls_back_to_default() {
         let mut map = BTreeMap::new();
         map.insert("stash".to_string(), "not-a-valid-chord".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         assert_eq!(bindings.stash, KeyChord::ctrl('s'));
     }
@@ -832,7 +985,7 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert("unknown_action".to_string(), "alt-x".to_string());
         map.insert("stash".to_string(), "alt-s".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         assert_eq!(bindings.stash, KeyChord::alt('s'));
         assert_eq!(bindings.scroller, KeyChord::ctrl('o'));
@@ -848,7 +1001,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("undo".to_string(), "alt-u".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.undo_name(), "alt-u");
         let moved = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::ALT);
         let vacated = KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL);
@@ -880,7 +1033,7 @@ mod tests {
         // not with the chord a person chose instead.
         let mut map = BTreeMap::new();
         map.insert("undo".to_string(), "alt-u".to_string());
-        let moved = Keybindings::from_map(&map);
+        let moved = Keybindings::from_map(&map, true).0;
         assert!(!moved.is_undo(&KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL)));
     }
 
@@ -892,7 +1045,7 @@ mod tests {
     fn an_alternate_spelling_given_to_another_action_no_longer_answers_undo() {
         let mut map = BTreeMap::new();
         map.insert("trail".to_string(), "ctrl-/".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.trail, KeyChord::ctrl('/'));
 
         let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
@@ -920,7 +1073,7 @@ mod tests {
     fn a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up() {
         let mut map = BTreeMap::new();
         map.insert("trail".to_string(), "ctrl-_".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         assert_eq!(
             bindings.trail,
@@ -945,7 +1098,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("suspend".to_string(), "alt-z".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.suspend_name(), "alt-z");
         let moved = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT);
         let vacated = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
@@ -965,7 +1118,7 @@ mod tests {
             map.insert(action.to_string(), "ctrl-z".to_string());
             assert_eq!(
                 Keybindings::default(),
-                Keybindings::from_map(&map),
+                Keybindings::from_map(&map, true).0,
                 "{action} took Ctrl-Z from suspend"
             );
         }
@@ -974,7 +1127,7 @@ mod tests {
         map.insert("suspend".to_string(), "ctrl-t".to_string());
         assert_eq!(
             Keybindings::default(),
-            Keybindings::from_map(&map),
+            Keybindings::from_map(&map, true).0,
             "suspend took the trail's chord"
         );
     }
@@ -987,7 +1140,7 @@ mod tests {
     fn suspend_moved_onto_an_undo_spelling_takes_it_from_undo() {
         let mut map = BTreeMap::new();
         map.insert("suspend".to_string(), "ctrl-/".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
 
         let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
         assert!(bindings.is_suspend(&pressed));
@@ -1005,7 +1158,10 @@ mod tests {
     fn where_nothing_suspends_ctrl_z_is_free_for_another_action() {
         let mut map = BTreeMap::new();
         map.insert("trail".to_string(), "ctrl-z".to_string());
-        assert_eq!(Keybindings::from_map(&map).trail, KeyChord::ctrl('z'));
+        assert_eq!(
+            Keybindings::from_map(&map, true).0.trail,
+            KeyChord::ctrl('z')
+        );
     }
 
     /// The enhance chord is Ctrl-P, which a person whose terminal already uses it can move, with the
@@ -1021,7 +1177,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("enhance".to_string(), "alt-e".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         assert_eq!(bindings.enhance_name(), "alt-e");
         let moved = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
         assert!(bindings.is_enhance(&moved) && bindings.claims(&moved));
@@ -1029,10 +1185,10 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("enhance".to_string(), "ctrl-r".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
         let mut map = BTreeMap::new();
         map.insert("history".to_string(), "ctrl-p".to_string());
-        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
     }
 
     /// A chord moved onto one of the alternate spellings of Ctrl-_ is the moved action's, and that
@@ -1041,7 +1197,7 @@ mod tests {
     fn an_alternate_spelling_given_to_enhance_no_longer_answers_undo() {
         let mut map = BTreeMap::new();
         map.insert("enhance".to_string(), "ctrl-/".to_string());
-        let bindings = Keybindings::from_map(&map);
+        let bindings = Keybindings::from_map(&map, true).0;
         let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
 
         assert!(bindings.is_enhance(&pressed));

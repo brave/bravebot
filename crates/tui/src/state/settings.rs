@@ -565,9 +565,27 @@ impl Session {
         self.vetting = auto;
     }
 
-    /// Adopt configured keybindings from settings.
+    /// Adopt configured keybindings from settings. A chord this terminal cannot send is kept, to be
+    /// said at startup (INPUT-32).
     pub fn adopt_keybindings(&mut self, configured: &std::collections::BTreeMap<String, String>) {
-        self.bindings = crate::keybindings::Keybindings::from_map(configured);
+        let (bindings, undeliverable) =
+            crate::keybindings::Keybindings::from_map(configured, self.keys_disambiguated);
+        self.bindings = bindings;
+        self.undeliverable_chords = undeliverable;
+    }
+
+    /// Record whether this terminal reports keys the disambiguation protocol's way (INPUT-48).
+    ///
+    /// Answered at startup and set before the chords are read, because a chord on Escape arrives
+    /// only from a terminal that does. Taken as an answer rather than asked for here: asking costs a
+    /// round trip to the terminal, which a session that has none cannot make.
+    pub fn adopt_keys_disambiguated(&mut self, disambiguated: bool) {
+        self.keys_disambiguated = disambiguated;
+    }
+
+    /// The chords a settings file asked for that this terminal cannot send.
+    pub fn undeliverable_chords(&self) -> &[crate::keybindings::Undeliverable] {
+        &self.undeliverable_chords
     }
 
     /// Adopt the keys of the Sessions screen from settings (SCREEN-14). What a settings file asked
