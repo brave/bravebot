@@ -96,6 +96,11 @@ save()
 FAKE_BRAVEBOT = """#!{python}
 import json, os, sys, time
 json.dump({{"client": os.path.basename(sys.argv[0]), "argv": sys.argv[1:], "world": json.load(open(os.environ["FAKE_WORLD"]))}}, open(os.environ["FAKE_SESSION"], "w"))
+if os.environ.get("FAKE_UNLABEL"):
+    world = json.load(open(os.environ["FAKE_WORLD"]))
+    for one in world["issues"].values():
+        one["labels"] = [name for name in one["labels"] if name != os.environ["FAKE_UNLABEL"]]
+    json.dump(world, open(os.environ["FAKE_WORLD"], "w"))
 if os.environ.get("FAKE_HOLD"):
     open(os.environ["FAKE_HOLD"], "w").close()
     time.sleep(60)
@@ -315,6 +320,25 @@ class ImplementIssues(unittest.TestCase):
         result = self.run_script("10", FAKE_EXIT="3")
         self.assertEqual(result.code, 3)
         self.assertEqual(self.state()["10"]["labels"], [])
+
+    def test_a_label_the_session_already_removed_is_not_reported_as_an_error(self):
+        """GitHub answers 404 `Label does not exist` for a label that is off the issue, which is the state the
+        run wants, so it prints nothing and exits 0."""
+        result = self.run_script("10, 12", FAKE_UNLABEL=LABEL)
+        self.assertEqual(result.code, 0, result.err)
+        self.assertNotIn("could not remove", result.err)
+        self.assertNotIn("remove it with", result.err)
+        self.assertEqual(self.state()["10"]["labels"], [])
+        self.assertEqual(self.state()["12"]["labels"], [])
+
+    def test_a_label_that_cannot_be_removed_for_another_reason_is_still_reported(self):
+        self.world["fail"] = [f"DELETE {ISSUES}/10/labels/bot%2Fin-progress"]
+        result = self.run_script("10, 12")
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"could not remove {LABEL} from #10: {{\"message\": \"boom\"}}", result.err)
+        self.assertIn(f"gh issue edit 10 --repo brave/bravebot --remove-label {LABEL}", result.err)
+        self.assertNotIn("#12", result.err)
+        self.assertEqual(self.state()["12"]["labels"], [])
 
     def test_the_label_is_removed_when_the_client_cannot_be_started(self):
         broken = self.root / "broken"
