@@ -28275,6 +28275,79 @@ mod tests {
             }
         }
 
+        /// CMDLINE-17: the `run` tool's background branch gives the call's own cancellation and
+        /// deadline to the substitution it works out before the job starts. A cancel that arrives
+        /// while `NAME=$(slow) cmd` is being worked out ends it, and a deadline shorter than the
+        /// substitution refuses the line naming it; in both the program that would have used the
+        /// value never starts and no job is left behind. The regression it rejects is the branch
+        /// passing a fresh `Cancel` and the built-in five minutes, which the tests that call
+        /// `start_steps_within` directly would not notice.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused()
+         {
+            use crate::PermissionMode::Bypass;
+            use std::os::unix::fs::PermissionsExt;
+
+            for (cancelled, expected) in [
+                (true, "stopped because the turn was cancelled"),
+                (false, "ran out of time"),
+            ] {
+                let scratch = Scratch::new("run-background-substitution");
+                for (name, body) in [
+                    ("probe.sh", "#!/bin/sh\ntouch ran\n"),
+                    ("slow.sh", "#!/bin/sh\nsleep 30\n"),
+                ] {
+                    let program = scratch.path.join(name);
+                    std::fs::write(&program, body).expect("a program");
+                    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                        .expect("executable");
+                }
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let started = std::time::Instant::now();
+
+                let produced = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(Bypass);
+                    let stopper = tools.cancel.clone();
+                    std::thread::scope(|scope| {
+                        if cancelled {
+                            scope.spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                stopper.cancel();
+                            });
+                        }
+                        run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut crate::report::IgnoreReports,
+                            &json!({
+                                "command": "BRAVEBOT_TEST_ASSIGNED=$(./slow.sh) ./probe.sh",
+                                "background": true,
+                                "deadline_seconds": 1,
+                            }),
+                        )
+                    })
+                });
+                let said = told(&mut policy, &produced.text);
+
+                assert!(
+                    said.contains("did not start") && said.contains(expected),
+                    "cancelled={cancelled}: {said}"
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(20),
+                    "cancelled={cancelled}: the substitution was not ended"
+                );
+                assert!(
+                    !scratch.path.join("ran").exists(),
+                    "cancelled={cancelled}: the program started"
+                );
+            }
+        }
+
         /// GIT-5 and TOOL-6. A word off the list is refused by name whoever asked, and only the
         /// sentence sending the planner to git turns on whether this turn holds `run`. Asserted
         /// whole rather than by what it contains, because the refusal by name is the half the turn

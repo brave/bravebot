@@ -1031,6 +1031,7 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
 `verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
 `verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
+`verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
 `verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
 `verified-by: bravebot_core::remembered::a_step_carrying_an_expansion_is_not_covered_by_an_entry`
