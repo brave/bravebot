@@ -72,12 +72,18 @@ name is printed on a screen and pasted into a command, and a name built from the
 process id would put two facts about the machine somewhere they are nobody's business. Nothing
 orders sessions by it; the list is sorted on what each record says it was last written.
 
+The directory is named by [`bravebot_agent::home::key_for`](trust-map.md#TRUST-23), which every
+per-directory record under the state directory shares. A name of up to 200 bytes is unchanged. A
+longer one is cut to 200 bytes and ends in a digest of the path, so the session directory of a
+deeply nested checkout can be created.
+
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_session::sessions::a_session_is_named_by_a_uuid`
 `verified-by: bravebot_session::sessions::no_two_sessions_are_given_the_same_name`
 `verified-by: bravebot_session::sessions::a_list_puts_the_most_recently_written_session_first`
 `verified-by: bravebot_session::sessions::a_working_directory_becomes_one_readable_segment`
 `verified-by: bravebot_session::sessions::a_path_with_nothing_in_it_still_names_a_directory`
+`verified-by: bravebot_session::sessions::a_working_directory_too_deep_for_a_file_name_still_has_a_session_directory`
 
 <a id="SESSION-2"></a>
 ### SESSION-2: nothing untrusted is ever written down
@@ -1598,7 +1604,9 @@ stay behind because they were given for work that the brief describes only in wo
   an imported session. A phrase is not matched across two lines.
 - **Two working directories can share a session store.** The directory name is derived by mapping
   every character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all
-  reduce to the same name. The Sessions screen does not re-check afterwards: it reads every record in
+  reduce to the same name. A name longer than 200 bytes is cut and ends in a digest of the path's
+  own bytes, so two long directories do not share a store ([TRUST-23](trust-map.md#TRUST-23)). The
+  Sessions screen does not re-check afterwards: it reads every record in
   that directory without comparing the path recorded inside it. Since a resume restores standing
   permissions, permissions granted in one of those directories would be offered in another.
 
@@ -1607,6 +1615,11 @@ stay behind because they were given for work that the brief describes only in wo
   it was run in. The Sessions screen still does not. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
+
+- **A working directory whose key is longer than 200 bytes loses its listed sessions.** Its
+  session directory is now named with a digest, so the sessions written under the earlier name are
+  not listed or resumed from that directory, and nothing migrates them
+  ([TRUST-23](trust-map.md#TRUST-23) records the same cost for the other per-directory records).
 
 - **A resume trusts whatever checkout stands at the recorded path.** A record holds the directory
   it was written in as a path and nothing that identifies the checkout there, and a resume restores

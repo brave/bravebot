@@ -70,9 +70,10 @@ export function scratchCheckout(name) {
 /**
  * Remove the records the agent wrote for a scratch checkout. Sessions are kept per checkout under
  * a directory named by mangling its path (every character outside `[A-Za-z0-9._]` becomes a dash),
- * so the scratch checkout has one of its own and nothing else is in it. Without this, every run of
- * a driver leaves a session in the list the other drivers read, pointing at a folder that is
- * now gone.
+ * so the scratch checkout has one of its own and nothing else is in it. A scratch path is far
+ * under the 200 bytes after which the agent cuts the name and ends it in a digest. Without this,
+ * every run of a driver leaves a session in the list the other drivers read, pointing at a folder
+ * that is now gone.
  */
 export function forgetCheckoutSessions(checkout) {
   rmSync(join(homedir(), '.bravebot', 'sessions', checkout.replace(/[^A-Za-z0-9._]/g, '-')), {

@@ -1521,9 +1521,11 @@ a directory, so a person working in two clones of one repository answers in each
 begun in a subdirectory is a different
 directory from the one above it. That key is a directory's name with every character outside a small
 set mapped to `-`, which is lossy, so two directories whose names reduce to the same one are answered
-by one record; [sessions.md](../sessions.md) records the same cost of the session store, where it
-takes a person resuming another directory's session to reach it, and here it takes only a session
-begun in either. And a line whose arguments differ every time is not helped at all, which
+by one record. A name longer than 200 bytes is cut and ends in a digest of the path, so two such
+directories are told apart ([TRUST-23](../trust-map.md#TRUST-23)). [sessions.md](../sessions.md)
+records the same cost of the session store, where it takes a person resuming another directory's
+session to reach it, and here it takes only a session begun in either. And a line whose arguments
+differ every time is not helped at all, which
 [RUN-20](#RUN-20) is the answer to.
 
 `verified-by: bravebot_core::remembered::the_line_that_was_recorded_is_covered`

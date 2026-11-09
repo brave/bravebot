@@ -355,6 +355,49 @@ fn a_remembered_yes_settles_the_next_session_started_there() {
     assert_eq!(listed["remembered"]["path"], keeping, "{listed}");
 }
 
+/// A directory whose path is three components of 255 bytes is kept like any other: the question names
+/// a record whose file name fits, a yes writes it, the next launch is not asked, and taking the answer
+/// back removes the record. The directory is made only on Unix, where a path of that length can be
+/// created.
+#[cfg(unix)]
+#[test]
+fn a_yes_about_a_directory_with_a_very_long_path_is_kept_and_forgotten() {
+    let scratch = Scratch::new("bridge-trust-remembered-long");
+    let long = ["a", "b", "c"]
+        .iter()
+        .fold(scratch.path.join("long"), |path, letter| {
+            path.join(letter.repeat(255))
+        });
+    std::fs::create_dir_all(&long).expect("a directory with a very long path");
+    if Identity::of(&long).is_none() {
+        return;
+    }
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let keeping = remember(&mut front, &long);
+    assert!(
+        Path::new(&keeping).starts_with(scratch.records()),
+        "{keeping:?}"
+    );
+    let name = keeping.file_name().expect("a file name").len();
+    assert!(name <= 255, "the record's file name is {name} bytes");
+    assert!(keeping.is_file(), "nothing was written down");
+    drop(front);
+
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, question) = front.begin(&long);
+    assert_eq!(question, None, "a remembered answer was asked again");
+    assert_eq!(opened["remembered"]["path"], keeping.to_str().unwrap());
+    let listed = front.call(
+        "permissions.revoke",
+        json!({"session": handle(&opened), "kind": "remembered"}),
+    );
+    assert_eq!(listed["remembered"], Value::Null, "{listed}");
+    assert!(!keeping.exists(), "the answer outlived being forgotten");
+    let (_, question) = front.begin(&long);
+    assert!(question.is_some(), "a forgotten answer still settled it");
+}
+
 /// One directory has one record whichever way a window names it, and it is the record the terminal
 /// reads, which is kept under the name a turn resolves the directory to.
 #[test]

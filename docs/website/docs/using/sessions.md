@@ -626,7 +626,9 @@ is left out of the list, and a corrupt history reads as no history rather than a
 :::note
 Two working directories can share a session store. The directory name is derived by mapping every
 character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all reduce to the
-same name. Because a resume restores standing permissions, permissions granted in one of those
+same name. A name longer than 200 bytes is cut and ends in a digest of the path, so two long
+directories do not share a store. Because a resume restores standing permissions, permissions
+granted in one of those
 directories would be offered in another. This is
 [a known bug](https://github.com/brave/bravebot/issues), not a design decision.
 :::

@@ -42,6 +42,14 @@ class Keys(unittest.TestCase):
         self.assertEqual(sr.key_for(Path("/Users/me/my project/x_y.z")), "-Users-me-my-project-x_y.z")
         self.assertEqual(sr.key_for(Path("/")), "root")
 
+    def test_a_working_directory_too_long_for_a_file_name_is_cut_and_ends_in_a_digest_of_its_path(self):
+        """crates/agent/src/home.rs key_for: over 200 bytes, 167 characters, a dash and 32 hex digits of the SHA-256 of the path."""
+        key = sr.key_for(Path("/" + "x" * 300))
+        self.assertEqual(key, "-" + "x" * 166 + "-2f2e149caf438697dcb448f24724e955")
+        self.assertEqual(len(key), 200)
+        self.assertEqual(sr.key_for(Path("/" + "x" * 199)), "-" + "x" * 199)
+        self.assertNotEqual(sr.key_for(Path("/a/b/" + "z" * 400)), sr.key_for(Path("/a-b/" + "z" * 400)))
+
 
 class Choosing(unittest.TestCase):
     def ids(self, found, named=(), limit=8):
