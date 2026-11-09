@@ -5940,13 +5940,16 @@ fn http(status: u16, body: &str) -> String {
 
 /// The settings that send a run to `gateway` and name its one model, with no `models` key, so the
 /// roster is the gateway's own answer rather than something the file stated.
+///
+/// They state two retries, so that the count decides how many requests a gateway answering with a
+/// server error takes. Without one the window of BACKEND-55 holds the run for five minutes.
 fn settings_for(gateway: &Gateway) -> String {
     format!(
         r#"{{
             "provider": {{
                 "openrouter": {{
                     "env": ["OPENROUTER_API_KEY"],
-                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1", "maxRetries": 2}}
                 }}
             }},
             "model": "openrouter/reasons-only"
@@ -18232,12 +18235,13 @@ fn a_run_the_gateway_refuses(name: &str, flags: &[&str]) -> (Scratch, u16) {
     a_run_the_gateway_answers_with(name, flags, 401)
 }
 
-/// A run against a gateway that answers every chat request with `status`.
+/// A run against a gateway that answers every chat request with `status`, and is sent a request
+/// again twice where the status is one that is, so that the count and not the window decides.
 fn a_run_the_gateway_answers_with(name: &str, flags: &[&str], status: u16) -> (Scratch, u16) {
     let port = a_gateway_answering_with_a_secret(status);
     let scratch = Scratch::new(name).with_settings(&format!(
         r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
-            "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
+            "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1", "maxRetries": 2}}}}}},
             "model": "openrouter/reasons-only"}}"#
     ));
     let mut environment = NOTHING_CONFIGURED.to_vec();

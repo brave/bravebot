@@ -38336,7 +38336,7 @@ fn a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quar
             tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
             reply_with("done"),
         ]);
-        let config = config_for(&endpoint);
+        let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let mut reading = ReadsWhatItRan::new(true);
