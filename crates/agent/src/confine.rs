@@ -981,7 +981,7 @@ impl Confinement {
     /// it, for the reason an assignment removes a scope ([`Scope::of`]), and nothing where the
     /// session names no home, since both kinds of row are under it.
     fn requested_for(&self, step: &Step) -> &[Requested] {
-        match self.home.is_some() && step.environment.is_empty() {
+        match self.home.is_some() && !step.carries_an_assignment() {
             true => &self.requested,
             false => &[],
         }
@@ -1076,6 +1076,11 @@ impl Confinement {
         // A scope is chosen by the file name, so a file the plan could have written must not
         // earn `~/.aws` by being named `aws`.
         if self.writable_by_the_plan(&step.resolved) {
+            return None;
+        }
+        // An assignment whose value is worked out at spawn is unknown here, so it carries no scope
+        // for the reason a literal one does not.
+        if !step.expansions.is_empty() {
             return None;
         }
         Scope::of(&step.resolved, &step.args, &step.environment).filter(|scope| {
@@ -1281,6 +1286,7 @@ impl Confinement {
             started_as,
             args: _,
             environment: _,
+            expansions: _,
             routes: _,
         } = step;
         let mut policy = self.base_policy();
@@ -3564,6 +3570,7 @@ mod tests {
             started_as: PathBuf::from(resolved),
             args: args.iter().map(|argument| argument.to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }

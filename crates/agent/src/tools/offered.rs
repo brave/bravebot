@@ -1654,7 +1654,10 @@ fn table(
              globs and {a,b} all work in the operands. There is no shell: the line is compiled \
              here into the programs and arguments it names, and anything that cannot be worked \
              out from the line itself is refused rather than guessed at. $(...), backticks, $VAR \
-             and ${...} are refused for that reason: write the value out. `$?`, `$$`, `$@`, \
+             and ${...} are refused for that reason: write the value out. Only in a session that \
+             runs everything without asking, `NAME=$VAR cmd` and `NAME=\"$(cmd)\" cmd` are \
+             accepted in the assignment prefix of a program, and nothing else is expanded: not \
+             as an argument or a program, and no backticks. `$?`, `$$`, `$@`, \
              `$*`, `$#`, `$-`, `$!` and `$'...'` are refused too: the result of a run already says \
              how each step ended, no shell keeps parameters between steps, and escapes in \
              `$'...'` are not read, so a newline comes from a file or from standard input. Name \

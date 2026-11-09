@@ -343,6 +343,7 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
             started_as: _,
             args,
             environment,
+            expansions,
             routes: _,
         } = step;
         for spelling in [program.as_str(), &resolved.to_string_lossy()] {
@@ -360,7 +361,22 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
         // read as well as its arguments: `DOCKER_HOST` and `SSH_AUTH_SOCK` are said there rather
         // than in an argument, and the point of an assignment is that it decides what the program
         // reaches.
-        let written = args.iter().map(String::as_str).chain(
+        // What an expansion names is read as an assignment is: its name, and the text and the
+        // variable it is written with. The value is not known here and never is; a command inside
+        // one is a step of the plan and read in its turn.
+        let expanded: Vec<&str> = expansions
+            .iter()
+            .flat_map(|expansion| {
+                std::iter::once(expansion.name.as_str()).chain(expansion.parts.iter().filter_map(
+                    |part| match part {
+                        crate::command::ValuePart::Text(text) => Some(text.as_str()),
+                        crate::command::ValuePart::Variable(name) => Some(name.as_str()),
+                        crate::command::ValuePart::Substitution { .. } => None,
+                    },
+                ))
+            })
+            .collect();
+        let written = args.iter().map(String::as_str).chain(expanded).chain(
             environment
                 .iter()
                 .flat_map(|(name, value)| [name.as_str(), value.as_str()]),
@@ -535,6 +551,7 @@ mod tests {
             started_as: PathBuf::from(format!("/usr/bin/{}", program_name(program))),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }

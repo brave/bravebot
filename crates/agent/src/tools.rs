@@ -10794,7 +10794,20 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // which is an answer about the machine in place of the person's own decision, and it arrives
     // without the "do not retry" a rule's refusal owes the planner.
     let mut rules = |program: &str, args: &[String]| policy.before_command_rules(program, args);
-    let mut plan = match crate::cmdline::compile(&line, &directory, tools.profile, &mut rules) {
+    // Only bypass mode may write `NAME=$VAR` or `NAME="$(cmd)"` in front of a program; every other
+    // mode refuses `$` as it always has (CMDLINE-2).
+    let expansions = if tools.permission_mode.get() == crate::PermissionMode::Bypass {
+        crate::cmdline::Expansions::Assignments
+    } else {
+        crate::cmdline::Expansions::Refused
+    };
+    let mut plan = match crate::cmdline::compile_with(
+        &line,
+        &directory,
+        tools.profile,
+        &mut rules,
+        expansions,
+    ) {
         Ok(plan) => plan,
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
@@ -27147,6 +27160,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
 
@@ -27223,6 +27237,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
             let mut workspace = Workspace::new(&project.path).expect("workspace");
@@ -27317,6 +27332,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
             let profile: &'static std::path::Path =

@@ -3137,3 +3137,378 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
             .to_string_lossy()
     );
 }
+
+// --- NAME=$VAR and NAME="$(cmd)" in front of a step, worked out when the step starts ---------
+
+use bravebot_core::command::{Expansion, Plan, Step, Steps, ValuePart};
+
+/// A step for `program`, started as the path it is, carrying `expansions`.
+fn expanding(program: &std::path::Path, args: &[&str], expansions: Vec<Expansion>) -> Step {
+    Step {
+        program: program
+            .file_name()
+            .expect("a program path ends in a file name")
+            .to_string_lossy()
+            .into_owned(),
+        resolved: program.to_path_buf(),
+        started_as: program.to_path_buf(),
+        args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        environment: Vec::new(),
+        expansions,
+        routes: Vec::new(),
+    }
+}
+
+fn expansion(name: &str, parts: Vec<ValuePart>) -> Expansion {
+    Expansion {
+        name: name.to_string(),
+        parts,
+    }
+}
+
+fn substitution(source: &str, step: Step) -> ValuePart {
+    ValuePart::Substitution {
+        source: source.to_string(),
+        steps: Box::new(Steps::Pipeline(vec![step])),
+    }
+}
+
+fn plan_of(at: &std::path::Path, steps: Vec<Step>) -> Plan {
+    Plan {
+        line: String::new(),
+        directory: at.to_path_buf(),
+        steps: Steps::Pipeline(steps),
+        writes: Vec::new(),
+        reads: Vec::new(),
+        stdin: None,
+    }
+}
+
+fn run_expanding(plan: &Plan) -> Result<exec::Ran, ExecError> {
+    past_text_file_busy(|| run_plan(plan, &Cancel::new(), exec::LIMIT, None, None))
+}
+
+/// Prints the variable named by its first argument, without a newline.
+const PRINT_VARIABLE: &str = "#!/bin/sh\nprintenv \"$1\" | tr -d '\\n'\n";
+
+#[test]
+fn an_expanded_variable_reaches_the_spawned_program() {
+    let scratch = Scratch::new("expand-variable");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let _env = with_env(&[("BRAVEBOT_TEST_SOURCE_VAR", Some("from-the-environment"))]);
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![
+                    ValuePart::Text("a-".into()),
+                    ValuePart::Variable("BRAVEBOT_TEST_SOURCE_VAR".into()),
+                    ValuePart::Text("-b".into()),
+                ],
+            )],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    assert_eq!(ran.stdout, "a-from-the-environment-b");
+    assert!(ran.succeeded());
+}
+
+#[test]
+fn an_expanded_substitution_reaches_the_spawned_program_with_trailing_newlines_trimmed() {
+    let scratch = Scratch::new("expand-substitution");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let emit = script(
+        &scratch.path,
+        "emit.sh",
+        "#!/bin/sh\nprintf 'line one\\nline two\\n\\n\\n'\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit", expanding(&emit, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    // `tr -d` in the printer drops the interior newline too; the point here is that nothing
+    // trails, which the printer would hide, so ask the value's length as well.
+    assert_eq!(ran.stdout, "line oneline two");
+    let length = script(
+        &scratch.path,
+        "length.sh",
+        "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_TEST_TARGET\" | wc -c | tr -d ' \\n'\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &length,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit", expanding(&emit, &[], Vec::new()))],
+            )],
+        )],
+    );
+    // "line one\nline two" is 17 bytes once the trailing newlines are trimmed.
+    assert_eq!(run_expanding(&plan).expect("the line runs").stdout, "17");
+}
+
+#[test]
+fn an_expansion_reaches_a_job_started_in_the_background() {
+    let scratch = Scratch::new("expand-background");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let emit = script(&scratch.path, "emit.sh", "#!/bin/sh\necho from-sub\n");
+    let _env = with_env(&[("BRAVEBOT_TEST_SOURCE_VAR", Some("bg-value"))]);
+    let steps = vec![
+        expanding(
+            &print,
+            &["BRAVEBOT_TEST_ONE"],
+            vec![expansion(
+                "BRAVEBOT_TEST_ONE",
+                vec![ValuePart::Variable("BRAVEBOT_TEST_SOURCE_VAR".into())],
+            )],
+        ),
+        expanding(&emit, &[], Vec::new()),
+    ];
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("the job starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // The first step's output goes to the second, which ignores stdin: only the last prints.
+    assert_eq!(job.printed().trim(), "from-sub");
+    let steps = vec![expanding(
+        &print,
+        &["BRAVEBOT_TEST_ONE"],
+        vec![expansion(
+            "BRAVEBOT_TEST_ONE",
+            vec![
+                ValuePart::Variable("BRAVEBOT_TEST_SOURCE_VAR".into()),
+                substitution("emit", expanding(&emit, &[], Vec::new())),
+            ],
+        )],
+    )];
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("the job starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(job.printed().trim(), "bg-valuefrom-sub");
+}
+
+#[test]
+fn an_unset_variable_is_refused_naming_the_variable_and_nothing_runs() {
+    let scratch = Scratch::new("expand-unset");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let _env = with_env(&[("BRAVEBOT_TEST_NOT_SET", None)]);
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![ValuePart::Variable("BRAVEBOT_TEST_NOT_SET".into())],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("an unset variable was expanded");
+    assert!(
+        matches!(&error, ExecError::Variable { name, problem }
+            if name == "BRAVEBOT_TEST_NOT_SET" && *problem == exec::VariableProblem::Unset),
+        "{error}"
+    );
+    assert!(error.to_string().contains("BRAVEBOT_TEST_NOT_SET"));
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+#[test]
+fn a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output() {
+    let scratch = Scratch::new("expand-failing");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let fail = script(
+        &scratch.path,
+        "fail.sh",
+        "#!/bin/sh\necho LEAKME-out\necho LEAKME-err >&2\nexit 3\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution(
+                    "fail.sh --flag",
+                    expanding(&fail, &[], Vec::new()),
+                )],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a failing substitution was used");
+    let shown = error.to_string();
+    let debugged = format!("{error:?}");
+    assert!(shown.contains("fail.sh --flag"), "{shown}");
+    assert!(shown.contains('3'), "{shown}");
+    for text in [&shown, &debugged] {
+        assert!(!text.contains("LEAKME"), "{text}");
+    }
+}
+
+#[test]
+fn a_substitution_printing_a_nul_byte_is_refused_naming_only_its_source() {
+    let scratch = Scratch::new("expand-nul");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let emit = script(&scratch.path, "emit.sh", "#!/bin/sh\nprintf 'a\\000b'\n");
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit-nul", expanding(&emit, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a NUL was accepted");
+    assert!(
+        matches!(&error, ExecError::Substitution { source, .. } if source == "emit-nul"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error() {
+    let scratch = Scratch::new("expand-withheld");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let name = bravebot_config::env_var::SCRUBBED[0];
+    let secret = "withheld-secret-6f1d0c52";
+    let _env = with_env(&[
+        (name, Some(secret)),
+        (bravebot_config::env_var::SUBPROCESS_ENV_SCRUB, None),
+    ]);
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![ValuePart::Variable(name.to_string())],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a withheld variable was expanded");
+    assert!(
+        matches!(&error, ExecError::Variable { name: named, problem }
+            if named == name && *problem == exec::VariableProblem::Withheld),
+        "{error}"
+    );
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(text.contains(name), "{text}");
+        assert!(!text.contains(secret), "{text}");
+    }
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+#[test]
+fn an_expanded_secret_appears_in_no_plan_text_error_or_result() {
+    let scratch = Scratch::new("expand-leak");
+    let from_variable = "variable-secret-7a93b1e4";
+    let from_command = "command-secret-c20f58d9";
+    let _env = with_env(&[
+        ("BRAVEBOT_TEST_LEAK_VAR", Some(from_variable)),
+        ("BRAVEBOT_TEST_LEAK_CMD", Some(from_command)),
+    ]);
+    // Compares what it was handed with what the environment holds, and prints neither.
+    let check = script(
+        &scratch.path,
+        "check.sh",
+        "#!/bin/sh\n[ \"$BRAVEBOT_TEST_GOT_VAR\" = \"$BRAVEBOT_TEST_LEAK_VAR\" ] \
+         && [ \"$BRAVEBOT_TEST_GOT_CMD\" = \"pre-$BRAVEBOT_TEST_LEAK_CMD\" ] \
+         && echo matched || echo mismatched\n",
+    );
+    let emit = script(
+        &scratch.path,
+        "emit.sh",
+        "#!/bin/sh\nprintf '%s\\n' \"$BRAVEBOT_TEST_LEAK_CMD\"\n",
+    );
+    let fail = script(
+        &scratch.path,
+        "fail.sh",
+        "#!/bin/sh\nprintf '%s\\n' \"$BRAVEBOT_TEST_LEAK_CMD\"\n\
+         printf '%s\\n' \"$BRAVEBOT_TEST_LEAK_CMD\" >&2\nexit 3\n",
+    );
+    let expansions = |sub: &std::path::Path| {
+        vec![
+            expansion(
+                "BRAVEBOT_TEST_GOT_VAR",
+                vec![ValuePart::Variable("BRAVEBOT_TEST_LEAK_VAR".into())],
+            ),
+            expansion(
+                "BRAVEBOT_TEST_GOT_CMD",
+                vec![
+                    ValuePart::Text("pre-".into()),
+                    substitution("emit the command secret", expanding(sub, &[], Vec::new())),
+                ],
+            ),
+        ]
+    };
+
+    let good = plan_of(
+        &scratch.path,
+        vec![expanding(&check, &[], expansions(&emit))],
+    );
+    let ran = run_expanding(&good).expect("the line runs");
+    assert_eq!(
+        ran.stdout.trim(),
+        "matched",
+        "the program was not handed the values"
+    );
+
+    let bad = plan_of(
+        &scratch.path,
+        vec![expanding(&check, &[], expansions(&fail))],
+    );
+    let error = run_expanding(&bad).expect_err("the failing substitution was used");
+    assert!(error.to_string().contains("emit the command secret"));
+    assert!(error.to_string().contains('3'));
+
+    let mut texts = vec![format!("{error}"), format!("{error:?}"), format!("{ran:?}")];
+    for plan in [&good, &bad] {
+        texts.push(format!("{plan:?}"));
+        texts.push(plan.display());
+        texts.push(plan.canonical());
+        texts.push(plan.line.clone());
+        for step in plan.steps() {
+            texts.push(step.display());
+            texts.push(step.as_written());
+            texts.push(format!("{step:?}"));
+        }
+    }
+    for text in &texts {
+        for secret in [from_variable, from_command] {
+            assert!(!text.contains(secret), "a secret reached: {text}");
+        }
+    }
+    // The source is what the plan shows.
+    assert!(
+        good.display()
+            .contains("BRAVEBOT_TEST_GOT_VAR=$BRAVEBOT_TEST_LEAK_VAR")
+    );
+    assert!(good.display().contains("emit the command secret"));
+}

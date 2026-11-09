@@ -7402,6 +7402,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     started_as,
                     args,
                     environment: _,
+                    expansions: _,
                     routes: _,
                 } = step;
                 self.programs
@@ -7555,7 +7556,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 || self.resolves_inside_the_project(&step.resolved)
                 || self.resolves_inside_the_project(&step.started_as)
                 || renamed
-                || !step.environment.is_empty()
+                || step.carries_an_assignment()
                 || opens_a_file
             {
                 return None;
@@ -11793,6 +11794,7 @@ five
             started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }

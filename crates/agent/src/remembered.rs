@@ -702,6 +702,7 @@ mod tests {
                 started_as: PathBuf::from(format!("/usr/local/bin/{program}")),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
                 environment: vec![("CI".to_string(), "1".to_string())],
+                expansions: Vec::new(),
                 routes: vec![Route::StderrToStdout],
             }]),
             writes: Vec::new(),
@@ -1158,6 +1159,7 @@ mod tests {
                     .map(String::from)
                     .to_vec(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             ..plan("gh", &[])
@@ -1178,6 +1180,7 @@ mod tests {
                     .map(String::from)
                     .to_vec(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             ..plan("gh", &[])

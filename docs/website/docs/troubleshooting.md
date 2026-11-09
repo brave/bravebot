@@ -168,7 +168,10 @@ every time, whatever is vouched for.
 
 **A command line was refused rather than run.** `$(...)`, `$VAR`, `$?` and the other special
 parameters, `$'...'`, `$((...))`, `&`, here-documents and control flow are refused, because what they
-stand for is not in the line and so could not be shown to you at the prompt. Pipes, `&&`, redirection,
+stand for is not in the line and so could not be shown to you at the prompt. The one exception is
+bypass mode, where `NAME=$VAR cmd` and `NAME="$(cmd)" cmd` are accepted in the assignment prefix in
+front of a program, and nothing else is: not as an argument or a program, and not a backtick. Pipes,
+`&&`, redirection,
 globs and braces are all fine. The refusal names the part of the line that caused it, and single quotes
 turn any of them into an ordinary argument; double quotes do not. To use a real
 shell, type `!` yourself. See [`run`](reference/tools.md#run) and

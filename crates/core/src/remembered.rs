@@ -150,6 +150,10 @@ impl RememberedStep {
             started_as,
             args,
             environment,
+            // Not part of the key, and not storable: an entry has no field for a value worked out
+            // at spawn. `matches` refuses any step that carries one, so an entry recorded from
+            // such a step (which the gates refuse before this is reached) covers nothing.
+            expansions: _,
             routes,
         } = step;
         Self {
@@ -173,6 +177,7 @@ impl RememberedStep {
             started_as,
             args,
             environment,
+            expansions,
             routes,
         } = step;
         let Self {
@@ -183,7 +188,9 @@ impl RememberedStep {
             environment: held_environment,
             routes: held_routes,
         } = self;
-        held_program == program
+        // An entry holds no expansion, so a step with one is a line nobody answered for.
+        expansions.is_empty()
+            && held_program == program
             && held_resolved == resolved
             && held_started_as == started_as
             && held_environment == environment
@@ -212,6 +219,7 @@ impl RememberedStep {
             started_as: self.started_as.clone(),
             args: Vec::new(),
             environment: self.environment.clone(),
+            expansions: Vec::new(),
             routes: self.routes.clone(),
         }
     }
@@ -590,9 +598,10 @@ pub mod scopes {
             started_as,
             args,
             environment,
+            expansions,
             routes,
         } = step;
-        if !environment.is_empty() || !routes.is_empty() {
+        if !environment.is_empty() || !expansions.is_empty() || !routes.is_empty() {
             return None;
         }
         let [first, second, number, flag, repository] = args.as_slice() else {
@@ -712,6 +721,7 @@ mod tests {
             started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }
@@ -783,6 +793,7 @@ mod tests {
             started_as: PathBuf::from("/usr/bin/gmake"),
             args: vec!["check".to_string()],
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }]));
         assert!(!record.covers(&renamed));
@@ -800,6 +811,7 @@ mod tests {
             started_as: PathBuf::from("/tmp/make"),
             args: vec!["check".to_string()],
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }]));
         assert!(!record.covers(&elsewhere));
