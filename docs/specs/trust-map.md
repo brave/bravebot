@@ -52,10 +52,12 @@ governs:
 key_step_allowed:
   - crates/core/src/trust.rs::fold_case to_uppercase: a key is folded to upper case and then to lower, so two spellings a volume that folds case opens as one file are one key, and only a map told the volume folds compares them so (TRUST-2, Case)
   - crates/core/src/trust.rs::fold_case to_lowercase: the second half of that fold, taken after upper case so a letter whose lower case is itself still meets the letter the volume folds it to (TRUST-2, Case)
+  - crates/core/src/trust.rs::fold_simple to_uppercase: a key is folded one letter to one letter, so a trust compares two names as one only where every volume that folds case does, and `claß.md` stays apart from `class.md` (TRUST-2, Case)
+  - crates/core/src/trust.rs::fold_simple to_lowercase: the second half of that fold, taken after upper case for the reason `fold_case` is (TRUST-2, Case)
   - crates/core/src/trust.rs::canonical_form fold_case x2: a key is folded before its form is taken, again only where the volume folds case (TRUST-2, Case)
   - crates/core/src/trust.rs::canonical_form decompose x2: a name is compared in the form every canonically equivalent spelling shares, which joins the NFC and NFD spellings of a name for a refusal and a writer on purpose and never for a trust (TRUST-2, Normalization)
   - crates/core/src/permissions.rs::key_of fold: a rule and a path are compared in one case only where the volume folds case, which joins two spellings that volume opens as one file (TRUST-2, Case)
-  - crates/core/src/permissions.rs::fold fold_case: a rule and a path are folded a segment at a time, so the separators and the anchor are left as they were (TRUST-2, Case)
+  - crates/core/src/permissions.rs::fold fold_simple: a rule and a path are folded a segment at a time, one letter to one letter, so the separators and the anchor are left as they were and a grant about `claß.md` stays apart from `class.md` (TRUST-2, Case)
   - crates/core/src/permissions.rs::drive_in_upper_case make_ascii_uppercase: a drive letter is one drive in either case on a host that separates with a backslash, and a directory called `d:` elsewhere is left as written (TRUST-2, Drive letter row)
 guards:
   - symbol: TrustStore::trust
@@ -132,7 +134,13 @@ telling files apart), the map also compares bytes: the answer only widens what a
 a map that does not fold has never made trust cover a path it was not written about. A map made
 without the answer compares bytes, and a map moved to another directory takes that directory's
 answer. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
-as `src` and `ſ` is its own lower case. Where two rules differ only in case on a volume that folds,
+as `src` and `ſ` is its own lower case. A letter whose upper or lower case is more than one
+character, such as `ß` (`SS`), is the one place volumes differ: APFS opens `class.md` as `claß.md`
+and NTFS holds them apart. The map is not told which, and the volume cannot be asked without
+creating a file, so a distrust and an undecided boundary compare under the full fold and reach both
+spellings, and a trust compares under a fold that leaves such a letter as it is and reaches only
+the spellings every volume that folds case joins (`claß.md` and `CLAß.md`, `claẞ.md`). A trust of
+`claß.md` leaves `class.md` undecided. Where two rules differ only in case on a volume that folds,
 the weaker decides every spelling, whichever sorts first and whichever was written last: untrusted
 over undecided, and undecided over trusted. A decision about one spelling replaces the rule about
 that spelling and leaves a lower rule about another in force, since a name that folds the same is
@@ -193,6 +201,7 @@ that is not text is judged as the bytes it is, which a test of each start pins.
 | Drive letter, `\` and `\\?\` prefix | `C:\work\a.md` | one key where the host separates with `\` (TRUST-18) | covered | `bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates` |
 | Letter case | `SRC/a.md` | one rule where the volume folds case | covered, in either case the file is stored in | `bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted` |
 | Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
+| Letter whose case is two letters | `claß.md` and `class.md` | a distrust, an undecided boundary and the writer reservation join the two; a trust reaches only the spelling it was written about | covered | `bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`, `bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other` |
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
 | Symbolic link | a link to the file, or on the way to it | not handled (Known cost) | covered | #2328 |
 | Hard link | a second entry for the file | not handled (Known cost) | covered on Unix, by device and inode | #2328 |
@@ -212,7 +221,11 @@ accepted, since it names that one directory.
 rule too: two names a volume holds apart are two files, so the step that turns a name into a key
 gives them two keys, and a rule about one decides nothing about the other. Only a refusal and a
 writer in flight reach a name on purpose, and only the canonically equivalent spellings of the NFC
-and NFD row. Whitespace, a trailing dot, a leading `-`, a glob character, a backslash, a colon and
+and NFD row, and the pair `claß.md` and `class.md` (Letter whose case is two letters) on a volume
+that folds case. That pair is one group in the tables of the tests: a refusal and a writer in flight
+about one name reach the other, and a trust and an allow rule do not. On a volume that does not fold
+case it is two files that nothing reaches across. Whitespace, a trailing dot, a leading `-`, a glob
+character, a backslash, a colon and
 a character Unicode gives no width are part of a name where a path is bytes. A step that trims,
 folds case or decodes lossily joins two such files, and no row of the table lists a join of two
 files.
@@ -242,6 +255,14 @@ asks them as `Read("./name")`. A name with whitespace at its start is written fr
 A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
 a listing of the other only within a group.
 
+APFS holds `claß.md` and `class.md` as one file and NTFS as two, so no host has the pair both ways,
+and the pair tests skip it on a host that opens them as one.
+`the_sharp_s_pair_is_one_group_for_a_refusal_and_two_names_for_a_trust`
+asks the pair the same questions without a volume, once with the map folding case and once without.
+The copy of the map and of the rules for a checkout is pinned by
+`bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`:
+a refusal is copied under both spellings and a trust only under the one it was written about.
+
 A pair is two files when a write through the second name leaves the first as it was, so no host
 needs a file identity to say so. A Windows host leaves out the names of `AWKWARD_NAMES` it cannot
 hold as written (`*`, `\`, a control character) or that the workspace refuses before a key is made
@@ -251,7 +272,7 @@ is what compiles that arm locally, since no local target runs it.
 
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
 in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
-`fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
+`fold_case`, `fold_simple`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
 `drive_in_upper_case`. One those functions keep is listed under `key_step_allowed` in this spec's
 front matter, for the number of calls it names, with the files it joins and why. A step in any
 other function is for a reviewer to find.
@@ -279,6 +300,11 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
 `verified-by: bravebot_agent::workspace::a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule`
+`verified-by: bravebot_agent::workspace::the_sharp_s_pair_is_one_group_for_a_refusal_and_two_names_for_a_trust`
+`verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`
+`verified-by: bravebot_core::trust::a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length`
+`verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_full_fold`
 `verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
@@ -288,6 +314,9 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
 `verified-by: bravebot_core::trust::a_folding_volume_lets_the_weakest_case_variant_decide_every_spelling`
 `verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
+`verified-by: bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`
+`verified-by: bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other`
+`verified-by: bravebot_core::trust::withdrawing_a_trust_reaches_a_spelling_only_full_case_folding_joins`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
 `verified-by: bravebot_agent::workspace::a_volume_answering_to_either_spelling_folds_case`

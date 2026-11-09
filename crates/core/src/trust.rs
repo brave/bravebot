@@ -192,13 +192,24 @@ impl TrustStore {
         let from = self.key(from);
         let to = self.key(to);
         let at_root = self.decision_at_key(&from).flatten();
+        // A trust is copied only from a name every volume that folds case joins with `from`, the
+        // way a trust is matched ([`fold_simple`]). A rule that withholds trust is copied from every
+        // name [`fold_case`] joins with it, as a refusal is matched. Copying a trust from a name
+        // only the full fold joins would trust a place under `to` that nobody vouched for.
         let copies: Vec<(String, Option<Integrity>)> = self
             .rules
             .iter()
-            .filter(|(key, _)| **key != from && covers(&from, key, self.folds_case))
-            .map(|(key, decision)| {
-                let tail = key[from.len()..].trim_start_matches('/');
-                (format!("{to}/{tail}"), *decision)
+            .filter_map(|(key, decision)| {
+                let fold: fn(&str) -> String = match decision {
+                    Some(Integrity::Trusted) => fold_simple,
+                    _ => fold_case,
+                };
+                if !covers_by(&from, key, self.folds_case, fold) {
+                    return None;
+                }
+                let tail = tail_beneath(&from, key);
+                // A rule about `from` itself, spelled another way, is what `at_root` already is.
+                (!tail.is_empty()).then(|| (format!("{to}/{tail}"), *decision))
             })
             .collect();
         self.rules.insert(to, at_root);
@@ -576,6 +587,30 @@ pub fn fold_case(key: &str) -> String {
         .collect()
 }
 
+/// `key` with its letter case folded out by the mapping that gives every letter exactly one letter,
+/// which is how NTFS compares names.
+///
+/// [`fold_case`] takes `\u{df}` to `ss`, so it joins `cla\u{df}.md` with `class.md`, which APFS opens
+/// as one file and NTFS holds apart. A letter whose upper or lower case is more than one character
+/// stays as it is here, so a trust, which the map cannot tell the volume's mapping of, reaches only
+/// the spelling it was written about and the spellings every volume that folds case joins with it.
+pub fn fold_simple(key: &str) -> String {
+    key.chars()
+        .map(|letter| {
+            let mut upper = letter.to_uppercase();
+            let upper = match (upper.next(), upper.next()) {
+                (Some(only), None) => only,
+                _ => letter,
+            };
+            let mut lower = upper.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(only), None) => only,
+                _ => upper,
+            }
+        })
+        .collect()
+}
+
 /// `key` in the one form every canonically equivalent spelling of it shares, with case folded out
 /// as well where `folds_case` says the volume folds it.
 ///
@@ -606,7 +641,7 @@ pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
 /// A name, held in the forms it is compared in, for a lookup that tests it against many rules.
 struct Name<'a> {
     key: &'a str,
-    /// The key with case folded, where the volume folds it.
+    /// The key with case folded one letter to one letter, where the volume folds it.
     folded: Option<String>,
     canonical: Cow<'a, str>,
     folds_case: bool,
@@ -616,24 +651,25 @@ impl<'a> Name<'a> {
     fn new(key: &'a str, folds_case: bool) -> Self {
         Self {
             key,
-            folded: folds_case.then(|| fold_case(key)),
+            folded: folds_case.then(|| fold_simple(key)),
             canonical: canonical_form(key, folds_case),
             folds_case,
         }
     }
 
-    /// Whether `rule` is this name as the volume reads it: the same bytes, or the same bytes with
-    /// case folded where the volume folds it. A rule of either polarity about such a name decides
-    /// it.
+    /// Whether `rule` is this name as every volume that folds case reads it: the same bytes, or the
+    /// same bytes with case folded one letter to one letter ([`fold_simple`]). A rule of either
+    /// polarity about such a name decides it. A name only [`fold_case`] joins, such as `cla\u{df}.md`
+    /// and `class.md`, is [`Name::is_equivalent`] and decides by a refusal only.
     fn is(&self, rule: &str) -> bool {
         match &self.folded {
-            Some(folded) => fold_case(rule) == *folded,
+            Some(folded) => fold_simple(rule) == *folded,
             None => rule == self.key,
         }
     }
 
-    /// Whether `rule` is a canonically equivalent spelling of this name, which only a rule that
-    /// withholds trust may decide it by.
+    /// Whether `rule` is a canonically equivalent spelling of this name, or one [`fold_case`] joins
+    /// with it where the volume folds case, which only a rule that withholds trust may decide it by.
     ///
     /// Asked after [`Name::is`], and two ASCII names are one in the two senses or neither, so that
     /// pair is not compared again: on a volume that folds case it would fold the rule a second time
@@ -657,11 +693,20 @@ impl<'a> Name<'a> {
 /// untrusted content past the rule, the same class of spelling bypass as git CVE-2014-9390. The
 /// caller says so only of a volume it has probed, and elsewhere the comparison stays byte-exact so
 /// that a rule about `Docs` never covers a different file called `docs`.
+///
+/// The comparison is in the full fold ([`fold_case`]), which joins every name a volume might, so a
+/// caller using it to narrow (a withdrawal, a meet with the rules beneath a path) reaches the most.
+/// A caller that widens uses [`covers_by`] with [`fold_simple`].
 pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
+    covers_by(prefix, path, folds_case, fold_case)
+}
+
+/// [`covers`] comparing in `fold` where the volume folds case.
+fn covers_by(prefix: &str, path: &str, folds_case: bool, fold: fn(&str) -> String) -> bool {
     let (prefix, path) = if folds_case {
         (
-            std::borrow::Cow::Owned(fold_case(prefix)),
-            std::borrow::Cow::Owned(fold_case(path)),
+            std::borrow::Cow::Owned(fold(prefix)),
+            std::borrow::Cow::Owned(fold(path)),
         )
     } else {
         (
@@ -670,6 +715,22 @@ pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
         )
     };
     covers_spelled(&prefix, &path)
+}
+
+/// What is left of `key` after the segments `prefix` has, in `key`'s own spelling.
+///
+/// Counts segments and not bytes, since a rule can be written in a spelling of a different length
+/// than the prefix it is under (`ss` under `\u{17f}\u{17f}`). `key` is a key [`covers_by`] found under
+/// `prefix`.
+fn tail_beneath<'k>(prefix: &str, key: &'k str) -> &'k str {
+    let skipped = prefix
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .count();
+    key.trim_start_matches('/')
+        .splitn(skipped + 1, '/')
+        .nth(skipped)
+        .unwrap_or("")
 }
 
 /// [`covers`] for two keys already in the form they are compared in.
@@ -1289,6 +1350,67 @@ mod tests {
         assert!(!covers("Docs", "docs/a.md", false));
     }
 
+    /// NTFS holds `cla\u{df}.md` and `class.md` apart, and APFS opens one as the other. The map is
+    /// not told which, so a trust is about the spelling it was written about and the spellings every
+    /// volume that folds case joins with it, and does not reach a name only full case folding joins.
+    #[test]
+    fn a_trust_does_not_reach_a_spelling_only_full_case_folding_joins() {
+        for (trusted, named) in [
+            ("cla\u{df}.md", "class.md"),
+            ("class.md", "cla\u{df}.md"),
+            ("cla\u{df}.md", "CLASS.md"),
+            ("cla\u{1e9e}.md", "class.md"),
+        ] {
+            let mut store = TrustStore::new("/work").folding_case(true);
+            store.trust(trusted);
+            assert_eq!(
+                store.integrity_of(named),
+                None,
+                "a trust of {trusted} was read for {named}"
+            );
+            assert_eq!(store.integrity_of(trusted), Some(Integrity::Trusted));
+        }
+        // What every folding volume joins is still one name, `\u{df}` in either case included.
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust("cla\u{df}.md");
+        assert_eq!(
+            store.integrity_of("CLA\u{1e9e}.md"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// A refusal about either name is read for the other: a volume that opens one as the other
+    /// (APFS) would otherwise read the bytes a distrust was recorded about as trusted, and one that
+    /// holds them apart is only asked a question.
+    #[test]
+    fn a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other() {
+        for (refused, named) in [("cla\u{df}.md", "class.md"), ("class.md", "cla\u{df}.md")] {
+            for decision in [Some(Integrity::Untrusted), None] {
+                let mut store = TrustStore::new("/work").folding_case(true);
+                store.trust(".");
+                match decision {
+                    Some(_) => store.distrust(refused),
+                    None => store.undecide(refused),
+                }
+                assert_eq!(
+                    store.integrity_of(named),
+                    decision,
+                    "a refusal of {refused} was not read for {named}"
+                );
+            }
+        }
+    }
+
+    /// Dropping a trust only narrows, so withdrawing the trust of one name drops it for the other.
+    #[test]
+    fn withdrawing_a_trust_reaches_a_spelling_only_full_case_folding_joins() {
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust(".");
+        store.trust("class.md");
+        assert!(store.withdraw_trust("cla\u{df}.md"));
+        assert_eq!(store.integrity_of("class.md"), None);
+    }
+
     /// Pairs of spellings that Unicode makes one name: an accent as a mark or as part of the
     /// letter, a sign that decomposes to a letter, two marks in either order, a Hangul syllable
     /// whole or as its jamo, and a sign whose canonical form is an ASCII character.
@@ -1821,6 +1943,74 @@ mod tests {
             map.integrity_of("/state/other/a.rs"),
             Some(Integrity::Trusted)
         );
+    }
+
+    /// A trust under `class` is not a trust under `cla\u{df}`, which NTFS holds apart from it, so
+    /// the copy made for a checkout of `cla\u{df}` does not carry it (CHECKOUT-8, TRUST-2). A refusal
+    /// under `class` is carried, since APFS opens the two as one directory.
+    #[test]
+    fn a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/class/vouched");
+        map.distrust("/data/class/refused");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+
+        assert_eq!(
+            map.integrity_of("/state/c1/vouched"),
+            None,
+            "a trust of /data/class/vouched was copied under a checkout of /data/cla\u{df}"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/refused"),
+            Some(Integrity::Untrusted)
+        );
+
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{df}");
+        map.distrust("/data/class/refused");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/refused"),
+            Some(Integrity::Untrusted),
+            "a refusal under /data/class did not reach the copy of /data/cla\u{df}"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/other"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// The tail of a copied key is the segments after the source's, whatever the fold did to the
+    /// length of the source's spelling.
+    #[test]
+    fn a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/\u{17f}\u{17f}");
+        map.distrust("/data/ss/ab");
+        map.copy_beneath("/data/\u{17f}\u{17f}", "/state/c1");
+
+        assert_eq!(
+            map.integrity_of("/state/c1/ab"),
+            Some(Integrity::Untrusted),
+            "the refusal was copied under the wrong name"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/b"),
+            Some(Integrity::Trusted),
+            "a name the refusal does not name was refused"
+        );
+    }
+
+    /// Withdrawing a checkout drops every trust a fold joins with its name, the full fold included:
+    /// that leaves a question where a spelling is kept, and never a grant.
+    #[test]
+    fn withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/state/cla\u{df}/src");
+        map.trust("/state/class/src");
+        assert!(!map.withdraw_beneath("/state/cla\u{df}"));
+        assert_eq!(map.integrity_of("/state/class/src/a.rs"), None);
+        assert_eq!(map.integrity_of("/state/cla\u{df}/src/a.rs"), None);
     }
 
     /// Only a rule that distrusts a path outlives the checkout it was made for (CHECKOUT-8).

@@ -249,9 +249,12 @@ Whether two spellings that differ only in case are one file is a fact about the 
 is on (the trust map asks it the same way, [trust-map.md](trust-map.md)), so the caller asks the volume and hands the answer to
 the rules, which ask nothing. Where the volume folds case, both the pattern and the path have their
 letter case folded segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which
-opens the same file. Each letter is taken to upper case and then to lower case, so `ſrc` meets the
-`src` APFS opens it as, though `ſ` is its own lower case. A rule in any list is read this way, allow included: there the two spellings name one file,
-so an allow rule covers the same file the deny rule would. Where the volume keeps the spellings apart,
+opens the same file. A rule that restricts, in the `deny` or `ask` list, takes each letter to upper
+case and then to lower case, so `ſrc` meets the `src` APFS opens it as, though `ſ` is its own lower
+case, and `Read(claß.md)` covers `class.md`. An `allow` rule is matched with a letter whose upper or
+lower case is more than one character left as written, so `Edit(claß.md)` covers `claß.md`,
+`CLAß.md` and `claẞ.md` and does not cover `class.md`. NTFS holds `claß.md` and `class.md` apart,
+and a grant must not reach a file that may not be the one approved. Where the volume keeps the spellings apart,
 or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
 `docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
 as the narrower one.
@@ -265,6 +268,9 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_a_folding_volume_would_open`
 `verified-by: bravebot_core::permissions::a_tree_rule_covers_the_folded_spelling_of_its_path`
 `verified-by: bravebot_core::permissions::an_allow_rule_covers_the_folded_spelling_on_a_folding_volume`
+`verified-by: bravebot_core::permissions::an_allow_rule_does_not_reach_a_spelling_only_full_case_folding_joins`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_a_spelling_only_full_case_folding_joins`
+`verified-by: bravebot_core::permissions::a_deny_rule_decides_a_spelling_only_full_case_folding_joins_whatever_a_grant_says`
 `verified-by: bravebot_core::permissions::a_rule_does_not_cover_a_case_variant_on_a_volume_that_keeps_them_apart`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`

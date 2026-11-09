@@ -283,6 +283,11 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
 /// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
 /// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
 /// folding takes text.
+///
+/// The fold is the full one ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with
+/// `class`. That is the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given
+/// to [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root
+/// spelled `class`, and nothing is granted by it.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
     if !folds_case {
         let relative = path.strip_prefix(root).ok()?;
@@ -1473,6 +1478,26 @@ mod tests {
                 false
             ),
             Some("a/b".to_string())
+        );
+    }
+
+    /// A deny or ask rule about a place under `cla\u{df}` is also given as a place under a root
+    /// spelled `class` where the volume folds case, and a volume that does not fold keeps them apart.
+    /// Only refusals reach `beneath`, so reading the two as one narrows (TRUST-2, PERM-7).
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_the_full_fold() {
+        use std::path::Path;
+        assert_eq!(
+            beneath(Path::new("/p/cla\u{df}/a/b"), Path::new("/p/class"), true),
+            Some("a/b".to_string())
+        );
+        assert_eq!(
+            beneath(Path::new("/p/CLASS/a"), Path::new("/p/cla\u{df}"), true),
+            Some("a".to_string())
+        );
+        assert_eq!(
+            beneath(Path::new("/p/cla\u{df}/a/b"), Path::new("/p/class"), false),
+            None
         );
     }
 

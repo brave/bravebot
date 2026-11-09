@@ -1212,16 +1212,22 @@ fn segments_of(path: &str) -> Vec<&str> {
 ///
 /// There a planner's `.ENV` opens the same file as the `.env` a deny rule names, so both sides of
 /// a match are folded before they are compared, upper case first as
-/// [`fold_case`](crate::trust::fold_case) does. Folding segment-wise leaves the separators, and
+/// [`fold_simple`](crate::trust::fold_simple) does. Folding segment-wise leaves the separators, and
 /// with them the anchor and relative/absolute logic and the `*` and `**` semantics, exactly as
 /// they were. Nothing is folded where the volume keeps the spellings apart, since there it would
 /// make one rule cover another file.
+///
+/// A letter whose upper or lower case is more than one character, such as `ß`, is left as it is:
+/// NTFS holds `claß.md` and `class.md` apart and APFS opens one as the other, and the rules are not
+/// told which. The key is the one a grant is matched in, so a grant reaches only the spellings
+/// every volume that folds case joins. A rule that restricts is also matched in the full fold
+/// ([`Pattern::canonical`]), so it covers both spellings.
 fn fold(path: &str, folds: bool) -> String {
     if !folds {
         return path.to_string();
     }
     path.split('/')
-        .map(crate::trust::fold_case)
+        .map(crate::trust::fold_simple)
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -2490,6 +2496,102 @@ mod tests {
                 permissions.for_path(Subject::Edit, path),
                 Decision::Ruled(Ruling::Allow),
                 "{path} is the same file on this volume and was not granted"
+            );
+        }
+    }
+
+    /// NTFS holds `claß.md` and `class.md` apart and APFS opens one as the other, and the rules are
+    /// not told which. A grant covers the spellings every volume that folds case joins and not the
+    /// one only full case folding joins, so `Edit(claß.md)` never reaches a `class.md` that may be
+    /// another file.
+    #[test]
+    fn an_allow_rule_does_not_reach_a_spelling_only_full_case_folding_joins() {
+        for (written, same, other) in [
+            (
+                "Edit(cla\u{df}.md)",
+                ["cla\u{df}.md", "CLA\u{df}.md"],
+                "class.md",
+            ),
+            (
+                "Edit(cla\u{df}.md)",
+                ["cla\u{1e9e}.md", "Cla\u{df}.MD"],
+                "CLASS.md",
+            ),
+            ("Edit(class.md)", ["class.md", "CLASS.md"], "cla\u{df}.md"),
+            (
+                "Edit(cla\u{df}/**)",
+                ["cla\u{df}/a", "CLA\u{df}/a"],
+                "class/a",
+            ),
+            (
+                "Edit(a/cla\u{df}/**)",
+                ["a/cla\u{df}/b", "A/CLA\u{df}/b"],
+                "a/class/b",
+            ),
+        ] {
+            let permissions = rules_on_a_volume_that_folds_case(true, &[], &[], &[written]);
+            for path in same {
+                assert_eq!(
+                    permissions.for_path(Subject::Edit, path),
+                    Decision::Ruled(Ruling::Allow),
+                    "{written} should grant {path:?}"
+                );
+            }
+            assert_eq!(
+                permissions.for_path(Subject::Edit, other),
+                Decision::Unmatched,
+                "{written} granted {other:?}, which only full case folding joins to it"
+            );
+        }
+    }
+
+    /// The other polarities keep the full fold: a rule that restricts is read for the other
+    /// spelling, because on a volume that opens one as the other a rule that missed it would leave
+    /// the file open.
+    #[test]
+    fn a_deny_or_ask_rule_covers_a_spelling_only_full_case_folding_joins() {
+        for (written, path) in [
+            ("Read(cla\u{df}.md)", "class.md"),
+            ("Read(class.md)", "cla\u{df}.md"),
+            ("Read(class.md)", "CLA\u{df}.MD"),
+            ("Read(cla\u{df}/**)", "class/a"),
+            ("Read(class/**)", "cla\u{df}/a"),
+            ("Read(a/cla\u{df}.md)", "a/class.md"),
+        ] {
+            for (ruling, permissions) in [
+                (
+                    Ruling::Deny,
+                    rules_on_a_volume_that_folds_case(true, &[written], &[], &[]),
+                ),
+                (
+                    Ruling::Ask,
+                    rules_on_a_volume_that_folds_case(true, &[], &[written], &[]),
+                ),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(ruling),
+                    "{written} in the {ruling} list did not cover {path:?}"
+                );
+            }
+        }
+    }
+
+    /// An allow rule does not undo a restriction of the spelling it does not reach, and a
+    /// restriction of either spelling still decides both.
+    #[test]
+    fn a_deny_rule_decides_a_spelling_only_full_case_folding_joins_whatever_a_grant_says() {
+        let permissions = rules_on_a_volume_that_folds_case(
+            true,
+            &["Edit(class.md)"],
+            &[],
+            &["Edit(cla\u{df}.md)"],
+        );
+        for path in ["class.md", "cla\u{df}.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Ruled(Ruling::Deny),
+                "{path:?} was not refused"
             );
         }
     }
