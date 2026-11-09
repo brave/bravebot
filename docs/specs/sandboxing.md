@@ -3915,6 +3915,20 @@ documentation and launchers, and these were not shown by running the program:
 - A Homebrew or pip `aws` script, an asdf or pyenv shim and `gio open` and `kde-open` start an
   interpreter or another program by variables of their own, which are not listed. It is tracked by
   #3809.
+- The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
+  were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
+  mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
+  and `xdg-mime query default` returned a handler planted in a directory named by each of
+  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS`. With
+  `XDG_CURRENT_DESKTOP=GNOME`, `xdg-open` runs `gio open`, and `gio open` started a handler planted
+  in a directory named by each of those four, so each selects the program that opens the address.
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs
+  that for `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, and fails when any one of them
+  is left out of the list. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session. These
+  were not run: the Windows `rundll32` start, which was read; `kde-open` and a KDE session, because
+  `kde-open` is not installed on the host that ran the rest; a logged-in GNOME session; and
+  Electron on Linux starting `xdg-open` for `shell.openExternal` and `shell.openPath` with the
+  environment `ui/src/main/external-open.ts` leaves.
 - `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
   tracked by #3809.
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
@@ -4040,6 +4054,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_tui::opener::a_browser_entry_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+`verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
