@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // These tests run this repository's own packaging script with a fixed argument list.
 import { spawnSync } from 'node:child_process'
-import { buildProfile, executableTarget, fusedBinary } from './package.mjs'
+import { buildProfile, executableTarget, fusedBinary, isTransientDownloadError, withDownloadRetries } from './package.mjs'
 
 test('a bundle asked for a release build carries the release executables', () => {
   const profile = buildProfile(['--release'])
@@ -181,6 +181,60 @@ test('packaging refuses the profile that has not been built, naming the command 
     const run = spawnSync(process.execPath, [script, ...argv], { cwd: front, encoding: 'utf8' })
     assert.equal(run.status, 1)
     assert.equal(run.stderr.trim(), expected)
+  }
+})
+
+// The failure that took down a Windows installer job: Electron's zip came back 500 from GitHub.
+// `@electron/get` throws an `HTTPError` carrying the response, which is the shape built here.
+function httpError(status) {
+  const error = new Error(`Response code ${status} for https://github.com/electron/electron/releases/download/v1/electron.zip`)
+  error.name = 'HTTPError'
+  error.response = { status }
+  return error
+}
+
+test('a download that failed in the 500s, or never got an answer, is worth repeating, and one that was refused is not', () => {
+  for (const status of [500, 502, 503, 599]) assert.equal(isTransientDownloadError(httpError(status)), true, String(status))
+  for (const status of [301, 403, 404, 429]) assert.equal(isTransientDownloadError(httpError(status)), false, String(status))
+  assert.equal(isTransientDownloadError(new TypeError('fetch failed')), true)
+  assert.equal(isTransientDownloadError(new TypeError('Invalid URL')), false)
+  assert.equal(isTransientDownloadError(new Error('no bundle in out/')), false)
+  assert.equal(isTransientDownloadError(undefined), false)
+})
+
+test('packaging is repeated after a 500 and returns what the attempt that worked returned', async () => {
+  const waits = []
+  const logged = []
+  let calls = 0
+  const result = await withDownloadRetries(async () => {
+    calls++
+    if (calls < 3) throw httpError(500)
+    return ['dist/Brave Bot-win32-arm64']
+  }, { delayMs: 7000, sleep: async (ms) => waits.push(ms), log: (line) => logged.push(line) })
+  assert.deepEqual(result, ['dist/Brave Bot-win32-arm64'])
+  assert.equal(calls, 3)
+  assert.deepEqual(waits, [7000, 7000])
+  assert.equal(logged.length, 2)
+  assert.match(logged[0], /attempt 1 of 3, trying again in 7 seconds: Response code 500/)
+})
+
+test('packaging stops repeating after the attempts it was given and throws the last failure', async () => {
+  let calls = 0
+  await assert.rejects(
+    withDownloadRetries(async () => { calls++; throw httpError(500 + calls) }, { attempts: 2, sleep: async () => {}, log: () => {} }),
+    (error) => error.response.status === 502,
+  )
+  assert.equal(calls, 2)
+})
+
+test('packaging throws at once for a failure a second attempt cannot change', async () => {
+  for (const error of [httpError(404), new Error('no bundle in out/')]) {
+    let calls = 0
+    await assert.rejects(
+      withDownloadRetries(async () => { calls++; throw error }, { sleep: async () => assert.fail('waited'), log: () => {} }),
+      (thrown) => thrown === error,
+    )
+    assert.equal(calls, 1)
   }
 })
 
