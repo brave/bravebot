@@ -643,6 +643,14 @@ fn persistence_spellings(home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether `path`, in the form the caller resolved, is a [`persistence_locations`] place or lies
+/// inside one, each place compared in the spelling it has under `home` and where its links lead.
+pub fn inside_a_persistence_location(path: &Path, home: &Path) -> bool {
+    persistence_spellings(home)
+        .iter()
+        .any(|location| under(path, location))
+}
+
 /// Whether `path` is a credential location the base refuses on any platform, or lies inside one.
 ///
 /// A row granted at such a path lifts the refusal on macOS, where an allow at the depth of a deny

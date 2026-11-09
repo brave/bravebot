@@ -31,7 +31,7 @@ use bravebot_sandbox::rules::{
     Lists, Rules, persistence_locations, without_verbatim_prefix, writable_without_a_request,
 };
 use bravebot_sandbox::scope::{
-    Reach, Requested, Scope, candidate_public_keys, environment_reach, identity_key,
+    Reach, Requested, Scope, candidate_public_keys, environment_reach, identity_key, judged_socket,
     refused_identity_files, requested_reach, ssh_address, ssh_command,
 };
 use bravebot_sandbox::signing;
@@ -1274,9 +1274,11 @@ impl Confinement {
                 policy = Toolchain::grant_every_cache(policy, self.prelude, home);
             }
             // A step with an assignment in front carries no scope, so this is the socket the
-            // process started with, and never one the plan chose.
+            // process started with, and never one the plan chose. It is judged here, as each stage
+            // starts, and the row is the path the name leads to (SANDBOX-18).
+            let socket = agent_socket(Some(home), environment);
             let place = signing::Place {
-                agent: variable(environment, "SSH_AUTH_SOCK").map(PathBuf::from),
+                agent: socket.clone(),
                 ..self.place.clone()
             };
             let (toolchain, scope) = self.carries(step);
@@ -1294,7 +1296,7 @@ impl Confinement {
                     policy = policy.allow_read(key);
                 }
                 if matches!(scope, Scope::Remote | Scope::Signing)
-                    && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
+                    && let Some(socket) = socket.clone()
                 {
                     policy = policy.allow_write(socket);
                 }
@@ -1322,7 +1324,7 @@ impl Confinement {
                             Scope::Signing => signing::read(home, &self.place).enabled,
                             _ => false,
                         };
-                        match variable(environment, "SSH_AUTH_SOCK") {
+                        match socket.clone() {
                             Some(socket) if lends_the_agent => policy.allow_write(socket),
                             _ => policy,
                         }
@@ -1600,7 +1602,7 @@ impl Confinement {
     /// Counted from the environment the stage starts with and the person's own files, never from
     /// what a program printed.
     fn push_reach_sentence(&self, home: Option<&Path>, environment: &[(String, String)]) -> String {
-        let agent = match variable(environment, "SSH_AUTH_SOCK") {
+        let agent = match agent_socket(home, environment) {
             Some(_) => IDENTITY_AGENT_LENT_SENTENCE,
             None => IDENTITY_NO_AGENT_SENTENCE,
         };
@@ -1682,7 +1684,7 @@ impl Confinement {
         });
         match (
             reaches_the_socket,
-            variable(environment, "SSH_AUTH_SOCK").is_some(),
+            agent_socket(self.home.as_deref(), environment).is_some(),
         ) {
             (true, true) => SIGNING_AGENT_LENT_SENTENCE.to_string(),
             (true, false) => SIGNING_NO_AGENT_SENTENCE.to_string(),
@@ -3115,6 +3117,13 @@ fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
     lookup(environment, name, FOLD_CASE)
 }
 
+/// The socket the process's own `SSH_AUTH_SOCK` names, as a stage that carries a scope that lends
+/// the agent is granted it, or `None` where there is none or the row is refused
+/// ([`judged_socket`]).
+fn agent_socket(home: Option<&Path>, environment: &[(String, String)]) -> Option<PathBuf> {
+    judged_socket(Path::new(&variable(environment, "SSH_AUTH_SOCK")?), home?)
+}
+
 fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Option<String> {
     environment
         .iter()
@@ -3985,6 +3994,44 @@ mod tests {
             .writable
             .iter()
             .any(|row| row.path == Path::new(path))
+    }
+
+    /// A unix socket in the temporary directory, which stays a socket on disk after the listener
+    /// that made it is dropped and is removed when this is. The directory is the one it resolves
+    /// to, since a row is the path its name leads to.
+    #[cfg(unix)]
+    struct AgentSocket {
+        path: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl AgentSocket {
+        fn at(name: &str) -> Self {
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
+            let directory = std::env::temp_dir()
+                .canonicalize()
+                .expect("a temporary directory");
+            let path = directory.join(format!("bb{}-{name}.sock", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            drop(std::os::unix::net::UnixListener::bind(&path).expect("a socket"));
+            Self { path }
+        }
+
+        fn name(&self) -> &str {
+            self.path.to_str().expect("a path in text")
+        }
+
+        /// The environment of a process whose agent is at this socket.
+        fn environment(&self) -> Vec<(String, String)> {
+            vec![("SSH_AUTH_SOCK".to_string(), self.name().to_string())]
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for AgentSocket {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 
     fn prepared_in(confinement: &Confinement) -> Result<(), ExecError> {
@@ -5288,9 +5335,11 @@ mod tests {
     /// script that names no `git`, and still refuses the private keys in `~/.ssh`. The controls are
     /// the same stage with no request, and a stage that asked for another scope.
     #[test]
+    #[cfg(unix)]
     fn a_requested_remote_scope_lends_the_agent_socket_under_workspace_write() {
-        let socket = "/run/agent.sock";
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), socket.to_string())];
+        let agent = AgentSocket::at("requested-remote");
+        let socket = agent.name();
+        let environment = agent.environment();
         for prelude in [Prelude::Linux, Prelude::MacOs] {
             let script = step("/usr/bin/python3", &["pr-fix.py", "start", "1"]);
             let base = reading_confinement(prelude, &["/work/project"]);
@@ -7345,9 +7394,11 @@ mod tests {
     /// whose `known_hosts` write is a change outside the session, and one that withholds the scope
     /// from the argv alone and lends it to a request.
     #[test]
+    #[cfg(unix)]
     fn read_only_lends_no_network_and_no_remote_scope() {
         let known_hosts = format!("{HOME}/.ssh/known_hosts");
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("read-only");
+        let environment = agent.environment();
         let push = step("/usr/bin/git", &["push"]);
         let make = step("/usr/bin/make", &["all"]);
         for (mode, lent) in [
@@ -7387,7 +7438,7 @@ mod tests {
                     "{mode}: {how}"
                 );
                 assert_eq!(
-                    writes(&policy, "/run/agent.sock"),
+                    writes(&policy, agent.name()),
                     lent && how != "grant",
                     "{mode}: {how}"
                 );
@@ -7398,9 +7449,12 @@ mod tests {
     /// The agent socket is written only by a step that carries the remote scope, and is the
     /// process's own value for it.
     #[test]
+    #[cfg(unix)]
     fn the_agent_socket_goes_to_a_remote_step_and_to_no_other() {
         let confined = confinement(&["/work/project"]);
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("remote-only");
+        let socket = agent.name();
+        let environment = agent.environment();
 
         let push = confined.policy(
             &step("/usr/bin/git", &["push"]),
@@ -7414,9 +7468,9 @@ mod tests {
         );
         let bare = confined.policy(&step("/usr/bin/git", &["push"]), Path::new("/work"), &[]);
 
-        assert!(writes(&push, "/run/agent.sock"));
-        assert!(!writes(&make, "/run/agent.sock"));
-        assert!(!writes(&bare, "/run/agent.sock"));
+        assert!(writes(&push, socket));
+        assert!(!writes(&make, socket));
+        assert!(!writes(&bare, socket));
 
         // Closing the network leaves the socket where it was: the rule is about files, and the
         // stage that reaches a remote is the one that keeps both.
@@ -7431,23 +7485,229 @@ mod tests {
             Path::new("/work"),
             &environment,
         );
-        assert!(writes(&push, "/run/agent.sock") && push.allow_network);
-        assert!(!writes(&make, "/run/agent.sock") && !make.allow_network);
+        assert!(writes(&push, socket) && push.allow_network);
+        assert!(!writes(&make, socket) && !make.allow_network);
+    }
+
+    /// SANDBOX-18: the row for the socket `SSH_AUTH_SOCK` names is the path the name leads to, and
+    /// is granted only where that is a socket outside every credential and persistence location,
+    /// whichever way the stage came to carry a scope that lends the agent (the remote scope in its
+    /// argv, a request for it, a signing argv, a request for signing). A name replaced by a link to
+    /// a key or a credential directory, a file, a directory or nothing, or a socket made inside
+    /// `~/.ssh`, `~/.aws` or a systemd user directory, gets no row for the name or for what it
+    /// leads to, and the line says no agent was lent. The regression it rejects is granting the
+    /// string the variable holds, which Landlock opens by name and follows to the key.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_socket_name_is_granted_only_where_it_leads_to_a_socket_outside_the_credential_locations()
+     {
+        use std::os::unix::fs::symlink;
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let outside = temporary.join(format!("bb{}-relink", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        let home = outside.join("h");
+        for directory in [".ssh", ".aws", ".config/systemd/user", "keys"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        std::fs::create_dir_all(outside.join("run")).unwrap();
+        std::fs::create_dir_all(outside.join("plain-directory")).unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), "a private key").unwrap();
+        std::fs::write(home.join("keys/work.pub"), "a key").unwrap();
+        std::fs::write(outside.join("plain-file"), "not a socket").unwrap();
+        std::fs::write(home.join(".gitconfig"), SIGNS_WITH_A_KEY).unwrap();
+        // A socket is made at a short path and moved, since a path under a home can be longer
+        // than a socket can be bound at.
+        let socket_at = |path: PathBuf| {
+            let made = outside.join("made.sock");
+            drop(std::os::unix::net::UnixListener::bind(&made).unwrap());
+            std::fs::rename(made, &path).unwrap();
+            path
+        };
+        let in_ssh = socket_at(home.join(".ssh/agent.sock"));
+        let in_aws = socket_at(home.join(".aws/agent.sock"));
+        let in_systemd = socket_at(home.join(".config/systemd/user/agent.sock"));
+        let real = socket_at(outside.join("run/agent.sock"));
+        let link = |to: &Path, name: &str| {
+            let name = outside.join(name);
+            symlink(to, &name).unwrap();
+            name
+        };
+        let refused = [
+            (
+                "a link to a private key",
+                link(&home.join(".ssh/id_ed25519"), "to-key"),
+            ),
+            ("a link to ~/.aws", link(&home.join(".aws"), "to-aws")),
+            ("a link to ~/.ssh", link(&home.join(".ssh"), "to-ssh")),
+            (
+                "a link to a socket in ~/.aws",
+                link(&in_aws, "to-aws-socket"),
+            ),
+            ("a socket in ~/.ssh", in_ssh),
+            ("a socket in ~/.aws", in_aws),
+            ("a socket in a systemd user directory", in_systemd),
+            ("a regular file", outside.join("plain-file")),
+            ("a directory", outside.join("plain-directory")),
+            ("nothing", outside.join("nothing-here")),
+        ];
+
+        let confined = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            Some(&home),
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_network(Network::Closed)
+        .with_requests_offered(true);
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let script = step("/usr/bin/python3", &["pr-fix.py"]);
+        let ways = [
+            ("push", confined.clone(), push.clone()),
+            ("commit", confined.clone(), commit.clone()),
+            (
+                "requested remote",
+                confined
+                    .clone()
+                    .with_requested(&[Requested::Scope(Scope::Remote)]),
+                script.clone(),
+            ),
+            (
+                "requested signing",
+                confined
+                    .clone()
+                    .with_requested(&[Requested::Scope(Scope::Signing)]),
+                script.clone(),
+            ),
+        ];
+        let environment = |name: &Path| {
+            vec![(
+                "SSH_AUTH_SOCK".to_string(),
+                name.to_str().unwrap().to_string(),
+            )]
+        };
+        let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
+
+        for (what, name) in &refused {
+            let spellings = [Some(name.clone()), std::fs::canonicalize(name).ok()];
+            for (way, confined, step) in &ways {
+                let policy = confined.policy(step, Path::new("/work/project"), &environment(name));
+                for spelling in spellings.iter().flatten() {
+                    assert!(
+                        !writes(&policy, spelling.to_str().unwrap()),
+                        "{what}: {way} wrote {}",
+                        spelling.display()
+                    );
+                }
+                for row in &policy.writable {
+                    assert!(
+                        row.path != home.join(".ssh")
+                            && !row.path.starts_with(home.join(".ssh/id_ed25519"))
+                            && !row.path.starts_with(home.join(".ssh/agent.sock"))
+                            && !row.path.starts_with(home.join(".aws"))
+                            && !row.path.starts_with(home.join(".config/systemd")),
+                        "{what}: {way} wrote {}",
+                        row.path.display()
+                    );
+                }
+            }
+            let line = confined.profile_offering_in(&[&push], false, &environment(name));
+            assert!(says(&line, IDENTITY_NO_AGENT_SENTENCE), "{what}: {line}");
+            assert!(!says(&line, IDENTITY_AGENT_LENT_SENTENCE), "{what}: {line}");
+            let line = confined.profile_offering_in(&[&commit], false, &environment(name));
+            assert!(says(&line, SIGNING_NO_AGENT_SENTENCE), "{what}: {line}");
+            assert!(!says(&line, SIGNING_AGENT_LENT_SENTENCE), "{what}: {line}");
+        }
+
+        // The controls: a socket gets the row, and a link to one gets the row for what it leads
+        // to and not for the name, which is the object a program that opens the name reaches.
+        let linked = link(&real, "to-socket");
+        for (way, confined, step) in &ways {
+            let policy = confined.policy(step, Path::new("/work/project"), &environment(&real));
+            assert!(writes(&policy, real.to_str().unwrap()), "socket: {way}");
+            let policy = confined.policy(step, Path::new("/work/project"), &environment(&linked));
+            assert!(writes(&policy, real.to_str().unwrap()), "link: {way}");
+            assert!(!writes(&policy, linked.to_str().unwrap()), "link: {way}");
+        }
+        let line = confined.profile_offering_in(&[&push], false, &environment(&linked));
+        assert!(says(&line, IDENTITY_AGENT_LENT_SENTENCE), "{line}");
+
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     /// A step with an assignment in front of it carries no scope, so the socket does not follow it
     /// either.
     #[test]
+    #[cfg(unix)]
     fn an_assignment_in_front_of_a_push_removes_its_scope() {
         let confined = confinement(&["/work/project"]);
         let mut assigned = step("/usr/bin/git", &["push"]);
         assigned.environment = vec![("GIT_SSH_COMMAND".to_string(), "ssh".to_string())];
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("assigned");
+        let environment = agent.environment();
 
         let policy = confined.policy(&assigned, Path::new("/work"), &environment);
 
         assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
-        assert!(!writes(&policy, "/run/agent.sock"));
+        assert!(!writes(&policy, agent.name()));
+    }
+
+    /// SANDBOX-18: a session that names no home directory has no location to compare the socket
+    /// with, so it lends no agent socket whichever way a stage carries a scope, and the sentences
+    /// say that none was lent. The regression it rejects: judging the socket against no locations
+    /// at all, which lends any socket the variable names. The control is the same socket judged
+    /// against a home.
+    #[test]
+    #[cfg(unix)]
+    fn a_session_with_no_home_lends_no_agent_socket() {
+        let agent = AgentSocket::at("no-home");
+        let socket = agent.name();
+        let environment = agent.environment();
+        let confined = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            None,
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_requests_offered(true);
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let script = step("/usr/bin/python3", &["pr-fix.py"]);
+        let ways = [
+            ("push", confined.clone(), push.clone()),
+            ("commit", confined.clone(), commit),
+            (
+                "requested remote",
+                confined
+                    .clone()
+                    .with_requested(&[Requested::Scope(Scope::Remote)]),
+                script.clone(),
+            ),
+            (
+                "requested signing",
+                confined
+                    .clone()
+                    .with_requested(&[Requested::Scope(Scope::Signing)]),
+                script,
+            ),
+        ];
+
+        assert!(agent_socket(None, &environment).is_none());
+        assert!(agent_socket(Some(Path::new(HOME)), &environment).is_some());
+        for (way, confined, step) in &ways {
+            let policy = confined.policy(step, Path::new("/work/project"), &environment);
+            assert!(!writes(&policy, socket), "{way} wrote the socket");
+        }
+        let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
+        let line = confined.push_reach_sentence(None, &environment);
+        assert!(says(&line, IDENTITY_NO_AGENT_SENTENCE), "{line}");
+        assert!(!says(&line, IDENTITY_AGENT_LENT_SENTENCE), "{line}");
+        let line = confined.signing_agent_sentence(&[&push], &environment);
+        assert!(says(&line, SIGNING_NO_AGENT_SENTENCE), "{line}");
+        assert!(!says(&line, SIGNING_AGENT_LENT_SENTENCE), "{line}");
     }
 
     fn remembered(binary: &str, operation: Option<&str>, reached: Reached, write: bool) -> Grant {
@@ -9455,7 +9715,8 @@ mod tests {
     fn a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh() {
         let (home, confined) =
             a_confinement_over_a_home_that("signs", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("signs");
+        let environment = agent.environment();
         for args in [
             vec!["commit", "-m", "x"],
             vec!["rebase", "main"],
@@ -9465,7 +9726,7 @@ mod tests {
             let policy = confined.policy(&step, Path::new("/work/project"), &environment);
             let key = home.join("keys/work.pub");
             assert!(reads(&policy, key.to_str().unwrap()), "{args:?}");
-            assert!(writes(&policy, "/run/agent.sock"), "{args:?}");
+            assert!(writes(&policy, agent.name()), "{args:?}");
             assert!(
                 !reads(&policy, home.join(".ssh").to_str().unwrap()),
                 "{args:?}"
@@ -9484,7 +9745,7 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout.
+    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout. The path is the one the temporary directory resolves to, since the stage's row is the path its name leads to.
     #[cfg(unix)]
     fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
@@ -9497,7 +9758,8 @@ mod tests {
         // A socket path must fit in sun_path, which a home under a deep checkout does not.
         let name = home.file_name().unwrap().to_str().unwrap();
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let socket = std::env::temp_dir().join(format!("bb{}-{name}.sock", std::process::id()));
+        let directory = std::env::temp_dir().canonicalize().unwrap();
+        let socket = directory.join(format!("bb{}-{name}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::thread::spawn(move || {
@@ -9615,7 +9877,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh() {
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("not-signing");
+        let environment = agent.environment();
         for gitconfig in [
             "",
             "[user]\nsigningkey = ~/keys/work.pub\n",
@@ -9625,7 +9888,7 @@ mod tests {
                 a_confinement_over_a_home_that("not-signing", gitconfig, &["keys/work.pub"]);
             let step = step("/usr/bin/git", &["commit", "-m", "x"]);
             let policy = confined.policy(&step, Path::new("/work/project"), &environment);
-            assert!(!writes(&policy, "/run/agent.sock"), "{gitconfig}");
+            assert!(!writes(&policy, agent.name()), "{gitconfig}");
             assert!(
                 !reads(&policy, home.join("keys/work.pub").to_str().unwrap()),
                 "{gitconfig}"
@@ -9647,11 +9910,12 @@ mod tests {
     fn a_stage_that_does_not_sign_is_not_lent_the_agent() {
         let (home, confined) =
             a_confinement_over_a_home_that("reads", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("reads");
+        let environment = agent.environment();
         for args in [vec!["status"], vec!["log"], vec!["commit", "--exec=x"]] {
             let step = step("/usr/bin/git", &args);
             let policy = confined.policy(&step, Path::new("/work/project"), &environment);
-            assert!(!writes(&policy, "/run/agent.sock"), "{args:?}");
+            assert!(!writes(&policy, agent.name()), "{args:?}");
             assert!(!policy.allow_network, "{args:?}");
         }
         std::fs::remove_dir_all(&home).unwrap();
@@ -9667,28 +9931,29 @@ mod tests {
         use bravebot_sandbox::scope::Requested;
         let (home, confined) =
             a_confinement_over_a_home_that("asked", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("asked");
+        let environment = agent.environment();
         let script = step("/bin/sh", &["-c", "git -c core.editor=true rebase main"]);
         let key = home.join("keys/work.pub");
         let key = key.to_str().unwrap();
 
         let none = confined.policy(&script, Path::new("/work/project"), &environment);
         assert!(!reads(&none, key));
-        assert!(!writes(&none, "/run/agent.sock"));
+        assert!(!writes(&none, agent.name()));
 
         let aws = confined
             .clone()
             .with_requested(&[Requested::Scope(Scope::Aws)]);
         let other = aws.policy(&script, Path::new("/work/project"), &environment);
         assert!(!reads(&other, key));
-        assert!(!writes(&other, "/run/agent.sock"));
+        assert!(!writes(&other, agent.name()));
 
         let asked = confined
             .clone()
             .with_requested(&[Requested::Scope(Scope::Signing)]);
         let policy = asked.policy(&script, Path::new("/work/project"), &environment);
         assert!(reads(&policy, key));
-        assert!(writes(&policy, "/run/agent.sock"));
+        assert!(writes(&policy, agent.name()));
         assert!(!reads(&policy, home.join(".ssh").to_str().unwrap()));
         assert!(policy.allow_network);
         assert!(asked.egress(&script));
@@ -9705,7 +9970,7 @@ mod tests {
             &policy,
             home.join("keys/work.pub").to_str().unwrap()
         ));
-        assert!(!writes(&policy, "/run/agent.sock"));
+        assert!(!writes(&policy, agent.name()));
         let line = asked.profile(&[&script]);
         assert!(line.contains(SIGNING_KEY_SOURCE_SENTENCE), "{line}");
         assert!(!line.contains(SIGNING_KEY_REFUSED_SENTENCE), "{line}");
@@ -9769,7 +10034,8 @@ mod tests {
     #[cfg(unix)]
     fn a_failed_signature_says_whether_the_agent_socket_was_lent() {
         use bravebot_sandbox::scope::Requested;
-        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("failed-signature");
+        let socket = agent.environment();
         let script = step("/bin/sh", &["-c", "git rebase main"]);
         let said = |confined: &Confinement, environment: &[(String, String)]| {
             confined.profile_offering_in(&[&script], false, environment)
@@ -9870,7 +10136,8 @@ mod tests {
         let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
         let status = step("/usr/bin/git", &["status"]);
 
-        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("no-private-key");
+        let socket = agent.environment();
         let plain = confined.profile_offering_in(&[&commit], false, &socket);
         assert!(plain.contains("No private key found"), "{plain}");
         assert!(plain.contains("never reads a private key"), "{plain}");
@@ -9925,7 +10192,8 @@ mod tests {
             Some(Path::new("/var/scratch")),
         )
         .with_network(Network::Closed);
-        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("include-if");
+        let environment = agent.environment();
         let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
         let policy = confined.policy(&commit, &project, &environment);
         assert!(reads(&policy, home.join("keys/work.pub").to_str().unwrap()));
@@ -9937,7 +10205,7 @@ mod tests {
             &policy,
             home.join("keys/repo.pub").to_str().unwrap()
         ));
-        assert!(writes(&policy, "/run/agent.sock"));
+        assert!(writes(&policy, agent.name()));
 
         let elsewhere = Confinement::new(
             Prelude::Windows,
@@ -10642,7 +10910,8 @@ mod tests {
         let confined = places.confinement(&[]);
         let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
         let by_name = step("/usr/bin/git", &["push", "origin", "main"]);
-        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let agent = AgentSocket::at("failed-push");
+        let socket = agent.environment();
         let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
 
         let lent = confined.profile_offering_in(&[&push], false, &socket);

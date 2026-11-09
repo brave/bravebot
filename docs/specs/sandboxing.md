@@ -1047,7 +1047,8 @@ host said.
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
 agent's socket, and never the private key. The signing scope reads that file and the stage may write
-the socket `SSH_AUTH_SOCK` names, as the remote scope may. It is carried only where the person's own
+the socket `SSH_AUTH_SOCK` names, as the remote scope may, judged as the remote scope's is
+([SANDBOX-18](#SANDBOX-18)). It is carried only where the person's own
 `~/.gitconfig` or `~/.config/git/config` sets `gpg.format` to `ssh`, so an account that does not sign
 with ssh sees no difference, the network under a closed setting included. The later file and the last
 assignment win, section and variable names are matched without regard to case, a quoted value is
@@ -1458,7 +1459,16 @@ No row names the directories its program is read from or the two files the step 
 machine is read. A local MCP server, which is not a stage, also reads the installation above its
 program's `bin` directory when that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)).
 Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
-own environment is a write row ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no write outside
+own environment is a write row ([SANDBOX-3](#SANDBOX-3)), and the row is the path the name leads
+to once its links are followed, so a name that was relinked is not granted as the file it now
+leads to. The row is made only where that path is a socket, is not or inside a credential
+location or a persistence location, and passes the refusals a path in a variable gets (not
+`~/.ssh` or the state directory, and not the home directory or above it). Where it is refused the
+stage still starts, with no row, and its profile line says no agent was lent. The same judgement
+is made for the signing scope and for a requested scope that lends the agent, and for the sentence
+that says whether the agent was lent, and is made as each stage starts. A name relinked after
+that check and before the sandbox opens the row is not caught. A session that names no home
+directory has no location to compare with, so it lends no agent socket. Nothing else is in it: no write outside
 those, no credential location the stage's scope does not name, and no socket for a stage without
 the remote scope.
 
@@ -1480,7 +1490,10 @@ access without it; a write row there is written, and fails for an account that c
 named without the `\\?\` prefix a canonical form carries there, so it compares with the rows, unless
 the plain spelling would be 260 characters or more. Where the stage
 carries the remote scope, the socket `SSH_AUTH_SOCK` names in its own environment is a write row,
-since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no
+since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)), judged as on Linux and macOS
+except that the path is not checked to be a socket, since the agent there can be a named pipe, and
+that a session that names no home directory lends no agent socket, having no location to compare
+the path with. Nothing else is in it: no
 credential directory, no directory above a session directory, and no socket for a stage without the
 remote scope.
 
@@ -1629,6 +1642,8 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_macos_session_with_no_home_is_refused_a_directory_in_the_system_keychains`
 `verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
+`verified-by: bravebot_agent::confine::an_agent_socket_name_is_granted_only_where_it_leads_to_a_socket_outside_the_credential_locations`
+`verified-by: bravebot_agent::confine::a_session_with_no_home_lends_no_agent_socket`
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
@@ -4375,7 +4390,8 @@ and the stores an https helper reads:
 file is read by the base whatever scope a stage carries ([SANDBOX-12](#SANDBOX-12)), and the
 system service that holds it is reached whatever scope a stage carries (the last section's list of
 what has to exist first). The agent socket `$SSH_AUTH_SOCK`
-names is a write row for a stage that carries the remote scope and for no other
+names is a write row for a stage that carries the remote scope and for no other, and only where
+the path it leads to is a socket outside the credential and persistence locations
 ([SANDBOX-18](#SANDBOX-18)), and on macOS it is reached only while the profile leaves egress open. On macOS, where the backend creates
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
 without one records no host a confined push meets. A push signs through the agent and needs no
@@ -4482,8 +4498,9 @@ reported as what it is.
   and writes nothing to the record of what a person vouched for.
 - The agent socket is a write row because a socket is reached only through the second list
   ([SANDBOX-3](#SANDBOX-3)), which is wider than a row that carried a connect and no write. A
-  policy row for a connect alone would narrow it. The row has not been exercised against a running
-  agent.
+  policy row for a connect alone would narrow it. The row is the socket the name leads to, judged
+  as each stage starts, and the check is not repeated when the sandbox opens it, so a link swapped
+  in between is not caught. The row has not been exercised against a running agent.
 - The Windows base is empty, on the ground that a container reads the system directories through
   an entry the platform already wrote. The Windows job starts `cmd.exe /c` and the compiler on
   its `PATH` under it, and `git`. `git` opens `/dev/null`, which is `NUL`, before it reads its
