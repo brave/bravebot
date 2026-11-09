@@ -3440,8 +3440,8 @@ as the `model` key is, and the switch is decided by a category the driver derive
 ### BACKEND-54: a rate limit is waited out for as long as the service asked, up to a ceiling
 
 A reply that is refused with a status that means not now ([NET-6](network-egress.md#NET-6)) is
-sent again, at most twice unless the entry's block states another count
-([BACKEND-55](#BACKEND-55)). Where the answer was a 429 and carried a `Retry-After`
+sent again for as long as the count and window of [BACKEND-55](#BACKEND-55) allow. Where the answer
+was a 429 and carried a `Retry-After`
 header the wait before the next request is the one it asked for instead of the doubling from one
 second; any other status keeps the doubling whatever the header said. The
 header is read by the egress layer, as whole seconds or an HTTP date in the IMF-fixdate form, and
@@ -3512,27 +3512,45 @@ status decides whether to wait, the parsed number only how long.
 `verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
 
 <a id="BACKEND-55"></a>
-### BACKEND-55: a provider entry states how often a request is sent again and how long a reply may go quiet
+### BACKEND-55: a provider entry states how often a request is sent again, for how long, and how long a reply may go quiet
 
-An entry under `provider`, for a gateway and for an AWS account alike, may state two figures in its
+An entry under `provider`, for a gateway and for an AWS account alike, may state three figures in its
 `options`. `maxRetries` is how many times a request to it is sent again after a failure worth
-another attempt ([NET-6](network-egress.md#NET-6)). `idleTimeoutMs` is the longest gap, in
-milliseconds, between two pieces of a reply that is still arriving
+another attempt ([NET-6](network-egress.md#NET-6)). `retryWindowMs` is how long after its first
+failure a request whose connection failed is still sent again. `idleTimeoutMs` is the longest gap,
+in milliseconds, between two pieces of a reply that is still arriving
 ([NET-5](network-egress.md#NET-5)).
 
-Where `maxRetries` is not stated a request is sent again at most twice, or at most five times after
-a 429 that carries no wait ([BACKEND-54](#BACKEND-54)), and where `idleTimeoutMs` is not stated the
-gap is two minutes. A stated count replaces either default, so it caps the longer schedule of a
-429 as it caps any other failure: a count of two sends a rate limit three times in all, and a
-count of zero sends every request once. A count above seven is seven, and a gap above ten minutes
-is ten minutes. A value that is not a whole number, a negative
-one, and a gap of zero state nothing, and the entry is otherwise read as written.
+**The count and the window.** A failure of the connection, or a status that means not now, is one
+that nothing was taken from: no part of a reply arrived, so sending the request again costs nothing
+and fails the same way until the connection is back. Such a failure is sent again while the count
+allows and, past the count, for as long as the window holds. The window runs from the first such
+failure of the call, and a request is sent again only when the pause before it ends inside the
+window, so no attempt starts after the window ends. Every other failure worth another attempt, a
+reply that stopped early and a failure the service reported part way through one, is held to the
+count, because each repeat of it is billed.
 
-The figures set a count and a timer and decide nothing else. A request is sent again for the same
-failures as without them, taken from the status or the kind of failure and never from anything a
-reply said. The pause before each is the doubling from one second, or the schedule of
-[BACKEND-54](#BACKEND-54) after a 429 that carries no wait. A wait a service asked for is
-bound as [BACKEND-54](#BACKEND-54) says, and the count of requests a failure reports is the one
+Where `retryWindowMs` is not stated and `maxRetries` is, only the count decides, so a person who
+chose how often a request is sent is not overridden, and a count of zero sends every request once.
+Where `retryWindowMs` is stated it applies to a failed connection whatever `maxRetries` says. Where
+neither is stated a request is sent again at most twice, or at most five times after a 429 that
+carries no wait ([BACKEND-54](#BACKEND-54)), and a failed connection for five minutes from its
+first failure, so a 429 that carries no wait is sent again past those five times while the window
+holds the pause of the schedule that follows. A stated count replaces either default, so it caps
+the longer schedule of a 429 as it caps any other failure: a count of two sends a rate limit three
+times in all, and a count of zero sends every request once. `idleTimeoutMs`, where not stated,
+leaves the gap at two minutes.
+
+A count above seven is seven, a window above an hour is an hour, and a gap above ten minutes is ten
+minutes. A value that is not a whole number, a negative one, and a window or gap of zero state
+nothing, and the entry is otherwise read as written.
+
+The figures set a count and two timers and decide nothing else. A request is sent again for the
+same failures as without them, taken from the status or the kind of failure and never from anything
+a reply said. The pause before each is the doubling from one second, held at one minute once it
+reaches it, or the schedule of [BACKEND-54](#BACKEND-54) after a 429 that carries no wait. A wait a
+service asked for is taken in place of the pause and bound as
+[BACKEND-54](#BACKEND-54) says, and the count of requests a failure reports is the one
 [BACKEND-37](#BACKEND-37) states, so a stated count shows in it. A stated gap replaces the default
 in either direction, and does not move the bound on the reply as a whole.
 
@@ -3542,39 +3560,54 @@ names a `provider` block with these keys is dropped whole and `doctor` names the
 Brave's endpoint serves, and an account the tier variables alone configure, have no entry to state
 them in and are held to the defaults. A streamed reply from a gateway on this machine is waited on
 through any silence while a person can stop it ([NET-10](network-egress.md#NET-10)), so a stated
-gap does not reach it, and a stated count does.
+gap does not reach it, and a stated count and window do.
 
-**Why.** The defaults suit a service answering over a link that works. A person whose gateway
-thinks silently for longer than two minutes, or whose link drops more than two requests in a row,
-has no way to raise either, and a person billed for each request has no way to lower the count. A
-checkout does not get a say in either: a gap it stretched holds a turn on a connection that has
-died, and a count it raised multiplies requests billed to the person's account, on the strength of
-a file they did not open.
+**Why.** The defaults suit a service answering over a link that works. A machine coming back from
+sleep, a VPN reconnecting and a service recovering from a short outage each leave the connection
+down for longer than two retries span, and a turn that has run for most of an hour should survive
+one. A person whose gateway thinks silently for longer than two minutes has no way to raise the
+gap, and a person billed for each request has no way to lower the count. The window is a length of
+time and not a larger count because how long an attempt takes depends on how it failed: a refused
+connection fails at once and a dead one after the connection timeout, so a count says nothing about
+how long a person waits. A checkout does not get a say in any of them: a gap it stretched holds a
+turn on a connection that has died, and a count or window it raised multiplies requests billed to
+the person's account and holds their time, on the strength of a file they did not open.
 
-Seven retries pause for 127 seconds in all by the doubling, and none for longer than 64, which stays
-inside the two minutes [BACKEND-54](#BACKEND-54) holds a service's own request to. A gap longer than
-ten minutes would be longer than the bound on a reply of unstated length, so it could never be the
-bound that ended one. Both figures are read as numbers and set a count and a timer, so a service has
-no say in either.
+Seven retries pause for 123 seconds in all by the doubling held at a minute, and none for longer
+than that, which stays inside the two minutes [BACKEND-54](#BACKEND-54) holds a service's own
+request to. A window is at most an hour, so a failed connection is reported within that time of the
+first failure, plus the time the last attempt takes. A gap longer than ten minutes would be longer
+than the bound on a reply of unstated length, so it could never be the bound that ended one. The
+figures are read as numbers and set a count and timers, so a service has no say in any of them.
 
 `verified-by: bravebot_config::provider::a_block_states_how_often_a_request_is_sent_again_and_how_long_a_quiet_reply_is_waited_on`
 `verified-by: bravebot_config::provider::zero_retries_is_a_statement_and_zero_milliseconds_is_not`
 `verified-by: bravebot_config::provider::a_figure_above_the_cap_is_the_cap`
 `verified-by: bravebot_config::provider::a_figure_that_is_not_a_whole_number_states_nothing`
-`verified-by: bravebot_config::provider::an_aws_entry_states_the_same_two_figures`
+`verified-by: bravebot_config::provider::a_block_states_how_long_a_failed_connection_is_retried_and_an_hour_is_the_most`
+`verified-by: bravebot_config::provider::a_window_replaces_the_count_only_where_nothing_or_a_window_was_stated`
+`verified-by: bravebot_config::provider::an_aws_entry_states_the_same_three_figures`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap`
 `verified-by: bravebot_config::lib::a_managed_gateway_states_its_own_retry_count_and_idle_gap`
 `verified-by: bravebot_aichat::client::a_gateway_stating_no_retries_is_asked_once`
 `verified-by: bravebot_aichat::client::a_gateway_stating_a_retry_count_is_asked_again_that_many_times`
 `verified-by: bravebot_aichat::lib::a_stated_count_replaces_the_default_for_a_rate_limit_as_for_any_failure`
 `verified-by: bravebot_aichat::client::a_stated_retry_count_bounds_a_rate_limit_with_no_wait`
-`verified-by: bravebot_aichat::client::a_gateway_stating_nothing_is_asked_three_times`
+`verified-by: bravebot_aichat::client::a_gateway_stating_nothing_is_asked_again_while_the_default_window_holds`
+`verified-by: bravebot_aichat::client::a_gateway_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window`
+`verified-by: bravebot_aichat::call::a_failed_connection_is_sent_again_past_the_count_while_the_window_holds`
+`verified-by: bravebot_aichat::call::a_window_does_not_extend_the_count_for_a_failure_that_is_not_the_connection`
+`verified-by: bravebot_aichat::call::with_no_window_the_count_alone_decides`
+`verified-by: bravebot_aichat::call::a_pause_that_does_not_fit_the_window_is_not_waited_on`
+`verified-by: bravebot_aichat::lib::the_pause_doubles_to_a_cap_and_stays_there`
 `verified-by: bravebot_aichat::client::a_larger_retry_count_does_not_make_a_refusal_worth_asking_again`
 `verified-by: bravebot_aichat::client::a_gateway_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`
 `verified-by: bravebot_aichat::client::a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner`
 `verified-by: bravebot_aichat::client::a_gateway_on_this_machine_is_waited_on_through_silence_whatever_gap_was_stated`
 `verified-by: bravebot_bedrock::lib::an_account_stating_no_retries_is_asked_once`
 `verified-by: bravebot_bedrock::lib::an_account_stating_a_retry_count_is_asked_again_that_many_times`
+`verified-by: bravebot_bedrock::lib::an_account_stating_nothing_is_asked_again_while_the_default_window_holds`
+`verified-by: bravebot_bedrock::lib::an_account_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window`
 `verified-by: bravebot_bedrock::lib::an_account_stating_a_retry_count_reaches_a_service_that_recovers_inside_it`
 `verified-by: bravebot_bedrock::lib::a_larger_retry_count_does_not_make_a_refusal_worth_asking_again`
 `verified-by: bravebot_bedrock::lib::an_account_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`

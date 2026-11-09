@@ -115,6 +115,14 @@ impl Driven for GenerateContentClient<'_> {
         worth_another_attempt_or_report(self.provider.patience, attempt, error)
     }
 
+    fn retry_window(&self) -> Option<Duration> {
+        self.provider.patience.retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        crate::failed_connection(error)
+    }
+
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
         pause_before_retry(self.pace.backoff, failures, error)
     }
@@ -412,18 +420,10 @@ impl<'a> GenerateContentClient<'a> {
             plan,
             &mut progress,
             |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
-            |progress, attempt| {
+            |progress, retry| {
                 // Announced before the wait rather than after it, so the pause is explained
                 // while it is happening. Reply progress resets; completed costs remain charged.
-                progress(Progress {
-                    written: Labelled::new("", Label::untrusted_public()),
-                    output_tokens: 0,
-                    calling: None,
-                    thinking: Labelled::new("", Label::untrusted_public()),
-                    counted_by_server: false,
-                    prose: false,
-                    attempt,
-                });
+                progress(Progress::announcing(retry));
             },
         )
     }
@@ -521,7 +521,7 @@ impl<'a> GenerateContentClient<'a> {
                 thinking: Labelled::new("", label),
                 counted_by_server: reply.counted,
                 prose: Progress::has_prose(&reply.text),
-                attempt,
+                ..Progress::quiet(attempt)
             });
         }
 

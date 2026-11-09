@@ -1069,7 +1069,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
 | `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
-| `phase` | `{ phase }` | `Reporter::phase` |
+| `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
 | `narration` | `{ text }`, or `{ text, command }` | `Reporter::narration`, **empty ones dropped**; the bridge's own notices (a summary the ChatGPT account could not make, a move to the fallback model after it failed) carry `command`, the words of `text` that are a command to run, or `null` |

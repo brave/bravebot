@@ -543,7 +543,7 @@ pub(crate) mod scripted {
                 thinking: Labelled::new(&piece, Label::untrusted_public()),
                 counted_by_server: false,
                 prose: false,
-                attempt: 1,
+                ..Progress::quiet(1)
             });
         }
     }

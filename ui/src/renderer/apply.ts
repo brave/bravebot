@@ -4,6 +4,7 @@ import { receiveTurn } from './turn-details'
 import type { Live } from './live'
 import { leftOver, taken } from './interjecting'
 import { keepEnd } from './thinking'
+import { retryDue } from './retry'
 
 /** Fold one event into the live session. */
 export function apply(
@@ -39,8 +40,10 @@ export function apply(
       case 'audit':
         return old
       // A phase opens a round, so a call written, and a thought had, in the last one are over.
+      // The wait of a request that failed in transit is counted from now: the bridge sends spans
+      // and the two ends share no clock (VIEW-43). Every phase sets it, so it never outlives its wait.
       case 'phase':
-        return { ...old, phase: message.data.phase, composing: null, thinking: '' }
+        return { ...old, phase: message.data.phase, retry: retryDue(message.data.retry, Date.now()), composing: null, thinking: '' }
       case 'composing':
         return { ...old, composing: message.data.call }
       case 'thinking':

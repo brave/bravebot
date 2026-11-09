@@ -16,6 +16,13 @@
 
 export type Intent = 'create' | 'overwrite' | 'edit'
 export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
+/**
+ * A failed request waiting to be sent again, in the `phase` event: which attempt follows, and how
+ * long from the event until it goes and until the request is given up on (VIEW-43). The two ends
+ * share no clock, so these are spans and not times. `gives_up_in_ms` is `null` where a count and not
+ * a window decides how long the request goes on.
+ */
+export type RetryEvent = { attempt: number; in_ms: number; gives_up_in_ms: number | null }
 /** A wait the window shows: the agent's phase, or a first turn starting the session's MCP servers. */
 export type Waiting = Phase | 'starting-servers'
 
@@ -1073,7 +1080,8 @@ export interface EventMap {
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
   'schedule.ran': import('./schedule').ScheduleAnswer
-  phase: { phase: Phase }
+  /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
+  phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }
   /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */
   thinking: { text: string }

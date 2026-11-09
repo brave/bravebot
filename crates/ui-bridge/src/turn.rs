@@ -349,7 +349,10 @@ impl Reporter for BridgeReporter {
     }
 
     fn phase(&mut self, phase: Phase) {
-        self.say("phase", json!({ "phase": wire::phase(phase) }));
+        self.say(
+            "phase",
+            json!({ "phase": wire::phase(phase), "retry": wire::retry(phase) }),
+        );
     }
 
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {

@@ -560,6 +560,13 @@ person may be reading it, and cutting it would take away text they are in the mi
 then waits for the next boundary as above, or becomes a turn of its own when the reply ends the
 turn. The sentence before a call does not hold the cut off once the call has opened.
 
+**A request waiting to be sent again is cut for it.** An attempt that failed in transit is thrown
+away, and the request waits out a pause before the next attempt goes out. That request has said
+nothing, so a prompt sent during the pause ends the wait and the request goes out at once with the
+prompt in front of it, as for a reply that is only thinking. The pause a service asked for
+([BACKEND-54](backends.md#BACKEND-54)) is ended the same way as one the client chose. The request
+that replaces it is a call of its own and starts its own attempts.
+
 Stopping the turn ends a request that a prompt could have cut, as INPUT-4 says for any request:
 the request answers to a token of its own, which also reads as cancelled once the turn is. A cut
 that finds no prompt left to take, because the person took it back first, is not repeated for the
@@ -712,6 +719,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_thinking_is_in_the_next_request_at_once`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_a_call_is_being_written_is_in_the_next_request_at_once`
+`verified-by: bravebot_agent::cutting::a_line_typed_while_a_failed_request_waits_to_be_sent_again_goes_out_at_once`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_writing_prose_waits_for_the_reply`
 `verified-by: bravebot_agent::cutting::stopping_the_turn_still_ends_a_request_that_a_line_could_have_cut`
 `verified-by: bravebot_agent::cutting::a_cut_that_finds_no_line_is_not_repeated`

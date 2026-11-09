@@ -26938,8 +26938,10 @@ mod tests {
             .expect("policy")
         }
 
-        /// A backend nothing in these tests reaches, since every one of them stops at an
-        /// argument. It exists because `Tools` carries the model a processor would run on.
+        /// A backend that cannot be reached. It exists because `Tools` carries the model a
+        /// processor would run on, and the one test that makes a request ends on the failed lookup,
+        /// so it states two retries: the count decides how many attempts that takes, and not the
+        /// window of BACKEND-55.
         fn config() -> bravebot_config::Config {
             bravebot_config::Config::from_lookup(|key| {
                 match key {
@@ -26951,6 +26953,10 @@ mod tests {
                 .map(str::to_string)
             })
             .expect("configured")
+            .with_patience(bravebot_config::provider::Patience {
+                max_retries: Some(2),
+                ..bravebot_config::provider::Patience::default()
+            })
         }
 
         /// The turn's tool state, assembled for one call. A closure rather than a value because

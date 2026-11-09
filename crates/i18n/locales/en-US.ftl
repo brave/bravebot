@@ -2990,6 +2990,11 @@ indicator-checking = { $lines ->
 # Said while the turn waits for a delegate to finish and has nothing to ask the model until its
 # report arrives. The argument is the delegate's number, such as d1.
 indicator-waiting-on-delegate = Waiting on { $delegate }
+# Said while a request that failed in transit waits to be sent again. The first figure is the time
+# until the next attempt and the second, where the request is retried for a stated length of time,
+# the time until it is given up on. Both are the driver's own counts and timers.
+indicator-reconnecting-in = Reconnecting, next try in { $wait }
+indicator-reconnecting-until = Reconnecting, next try in { $wait }, giving up in { $left }
 # Said while a hook holds the turn open. The moment is the word the hooks file spells it with and
 # the program is the first word of the command the person wrote there: nothing the hook printed.
 indicator-hook = Running hook: { $program } ({ $moment })

@@ -14361,13 +14361,23 @@ fn a_turn_survives_a_connection_that_died_mid_request() {
 
     assert_eq!(outcome.reply_for_display(), "the answer, eventually");
 
-    // And the wait is explained rather than looking like the model thinking for longer.
+    // And the wait is explained rather than looking like the model thinking for longer, with the
+    // pause that follows it and the time left before the request would be given up on.
+    let announced = reporter.phases.iter().find_map(|phase| match phase {
+        bravebot_agent::report::Phase::Reconnecting(Some(retry)) => Some(*retry),
+        _ => None,
+    });
+    let retry = announced.unwrap_or_else(|| {
+        panic!("the pause was not explained: {:?}", reporter.phases);
+    });
+    assert_eq!(retry.attempt, 2, "{retry:?}");
+    assert_eq!(retry.pause, std::time::Duration::from_secs(1), "{retry:?}");
+    let left = retry
+        .gives_up_in
+        .expect("a window decides how long it goes on");
     assert!(
-        reporter
-            .phases
-            .contains(&bravebot_agent::report::Phase::Reconnecting),
-        "the pause was not explained: {:?}",
-        reporter.phases
+        left <= std::time::Duration::from_secs(300) && left > std::time::Duration::from_secs(290),
+        "{retry:?}"
     );
 }
 
@@ -38009,7 +38019,7 @@ fn a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quar
             tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
             reply_with("done"),
         ]);
-        let config = config_for(&endpoint);
+        let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let mut reading = ReadsWhatItRan::new(true);
@@ -50034,7 +50044,7 @@ fn a_delegate_that_could_not_finish_is_reported_as_a_failure() {
             reply_with("it could not be done"),
         ],
     )]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
@@ -50278,7 +50288,7 @@ fn a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a
                 reply_with("relayed"),
             ],
         );
-        let config = config_for(&endpoint);
+        let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -51309,7 +51319,9 @@ fn a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent() {
             (false, false) => None,
         }
     });
-    let config = config_for(&endpoint);
+    // The hang-up the delegate meets is a failed connection, which the window would send again for
+    // minutes; the count ends it (BACKEND-55).
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -51475,7 +51487,8 @@ fn run_budgeted_delegate(
             (false, false) => None,
         }
     });
-    let config = config_for(&endpoint);
+    // As in the bound test: the count ends a delegate whose connection is hung up on.
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -51955,7 +51968,7 @@ fn a_delegate_that_stopped_after_a_person_vouched_still_brings_the_answer_home()
             vec![tool_request("run", r#"{"command":"touch vouched.txt"}"#)],
         ),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
@@ -57333,7 +57346,7 @@ fn a_delegate_that_failed_gives_its_place_back() {
         ),
         ("ANSWERED-LATER", vec![reply_with("second")]),
     ]);
-    let mut config = config_for(&endpoint);
+    let mut config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     config.max_running_delegates = Some(1);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -67430,6 +67443,16 @@ fn take_a_turn_reporting(
     .outcome
 }
 
+/// What a test that ends a turn on a service that keeps failing states, so that the count decides
+/// how many requests that takes: three, as a service with nothing stated used to be sent. Without
+/// it the default holds a failed connection for minutes (BACKEND-55).
+fn three_requests_and_no_more() -> bravebot_config::provider::Patience {
+    bravebot_config::provider::Patience {
+        max_retries: Some(2),
+        ..bravebot_config::provider::Patience::default()
+    }
+}
+
 fn why_it_failed(error: &turn::TurnError) -> bravebot_agent::Diagnosis {
     match error.ending() {
         bravebot_agent::Ending::Failed(diagnosis) => diagnosis,
@@ -67454,7 +67477,7 @@ fn a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_mad
         Served::Status(503),
         Served::Status(503),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
@@ -67520,7 +67543,7 @@ fn a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it() {
         Served::DiagnosticStatus(503),
         Served::Reply(reply_with("the request failed")),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
@@ -67827,7 +67850,7 @@ fn a_model_the_service_keeps_failing_is_followed_by_a_request_naming_the_fallbac
         let mut script = vec![Served::Status(status); attempts];
         script.push(Served::Reply(reply_with("answered by the fallback")));
         let (endpoint, received) = serve_script(script);
-        let mut config = config_for(&endpoint);
+        let mut config = config_for(&endpoint).with_patience(three_requests_and_no_more());
         config.fallback_model = Some("fallback-model".into());
         let mut conversation = bravebot_agent::Conversation::new();
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -68347,7 +68370,7 @@ fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
     impl bravebot_agent::report::Reporter for StopOnRetry {
         fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
         fn phase(&mut self, phase: bravebot_agent::report::Phase) {
-            if phase == bravebot_agent::report::Phase::Reconnecting {
+            if matches!(phase, bravebot_agent::report::Phase::Reconnecting(_)) {
                 self.0.cancel();
             }
         }
@@ -69933,7 +69956,7 @@ fn a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said() {
             vec![tool_request("read_file", r#"{"path":"a.txt"}"#)],
         ),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -70838,7 +70861,8 @@ mod usage {
                 config_with_budget(&endpoint, 1_000)
             } else {
                 config_for(&endpoint)
-            };
+            }
+            .with_patience(three_requests_and_no_more());
             let reports = Arc::new(Mutex::new(Reports::default()));
             let mut reporter = Live(Arc::clone(&reports));
             let cancel = bravebot_core::cancel::Cancel::new();

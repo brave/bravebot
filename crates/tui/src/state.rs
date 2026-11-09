@@ -901,6 +901,9 @@ pub struct Session {
     /// Cleared between turns. `None` before the first request goes out, which is the only
     /// moment the generic word is all there is to say.
     pub phase: Option<Phase>,
+    /// When the phase in force was announced, which a request waiting to be sent again counts its
+    /// pause from.
+    phase_since: Option<Instant>,
     /// How many lines the check in flight was given, while one is in flight.
     ///
     /// Separate from [`Session::phase`] because a check is not a phase of the turn: it runs inside
@@ -1501,6 +1504,7 @@ impl Session {
             plan_detail: Default::default(),
             reported: Vec::new(),
             phase: None,
+            phase_since: None,
             checking: None,
             hook: None,
             waiting_on: Vec::new(),
@@ -1700,7 +1704,13 @@ impl Session {
         // server.py)…", which is a strange thing for a word beside a spinner to be. What that
         // word is for is showing that the session is alive while the answer takes its time.
         match self.phase {
-            Some(phase @ (Phase::Planning | Phase::Reconnecting | Phase::Compacting)) => {
+            // A request waiting to be sent again says when, until the wait is over. The attempt
+            // after it is out and has said nothing yet, which the bare word covers.
+            Some(Phase::Reconnecting(Some(retry))) => self
+                .phase_since
+                .and_then(|since| crate::indicator::waiting_to_retry(retry, since, Instant::now()))
+                .or_else(|| Some(Phase::Reconnecting(None).word().to_string())),
+            Some(phase @ (Phase::Planning | Phase::Reconnecting(None) | Phase::Compacting)) => {
                 Some(phase.word().to_string())
             }
             _ => None,
@@ -1999,6 +2009,7 @@ impl Session {
     /// Record what the turn is waiting on.
     pub fn set_phase(&mut self, phase: Phase) {
         self.phase = Some(phase);
+        self.phase_since = Some(Instant::now());
         // A phase is announced once at the top of every round and again when a request is being
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty. A delegate announces its own
@@ -4310,6 +4321,7 @@ impl Session {
     /// the sixth.
     fn clear_in_progress(&mut self) {
         self.phase = None;
+        self.phase_since = None;
         self.checking = None;
         self.hook = None;
         self.waiting_on.clear();
@@ -4701,7 +4713,7 @@ mod tests {
             // A delegate's request sent again throws away the delegate's words, not the turn's.
             session.reporting_for(Some(id));
             session.set_phase(Phase::Planning);
-            session.set_phase(Phase::Reconnecting);
+            session.set_phase(Phase::Reconnecting(None));
             session.reporting_for(None);
             assert_eq!(
                 session.reply_so_far(),
@@ -14172,7 +14184,7 @@ mod tests {
         fn a_round_starting_afresh_starts_from_an_empty_tail() {
             let mut s = working();
             s.streaming("this reply was abandoned");
-            s.set_phase(Phase::Reconnecting);
+            s.set_phase(Phase::Reconnecting(None));
             assert!(s.streaming.is_empty());
         }
 
@@ -14234,8 +14246,47 @@ mod tests {
             let mut s = working();
             s.set_phase(Phase::Planning);
             assert_eq!(s.indicator().expect("working").verb, "Planning");
-            s.set_phase(Phase::Reconnecting);
+            s.set_phase(Phase::Reconnecting(None));
             assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+        }
+
+        /// BACKEND-55: a request waiting to be sent again says when, and goes back to the bare
+        /// word once the pause is over and for the attempt that follows. A wait of a minute is
+        /// long enough that no test on a loaded machine outlasts it.
+        #[test]
+        fn a_request_waiting_to_be_sent_again_says_when_and_gives_the_word_back() {
+            let mut s = working();
+            let retry = |pause_secs, gives_up_in_secs: Option<u64>| bravebot_agent::report::Retry {
+                attempt: 2,
+                pause: Duration::from_secs(pause_secs),
+                gives_up_in: gives_up_in_secs.map(Duration::from_secs),
+            };
+
+            s.set_phase(Phase::Reconnecting(Some(retry(3600, Some(7200)))));
+            let said = s.indicator().expect("working").verb.to_string();
+            assert!(
+                said.starts_with("Reconnecting, next try in "),
+                "the wait was not explained: {said}"
+            );
+            assert!(said.contains(", giving up in "), "{said}");
+
+            s.set_phase(Phase::Reconnecting(Some(retry(3600, None))));
+            let said = s.indicator().expect("working").verb.to_string();
+            assert!(said.starts_with("Reconnecting, next try in "), "{said}");
+            assert!(!said.contains("giving up"), "{said}");
+
+            // The attempt is out and has said nothing: no time to count down to.
+            s.set_phase(Phase::Reconnecting(None));
+            assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+
+            // A pause that has run its course reads as the bare word, never as a negative time.
+            s.set_phase(Phase::Reconnecting(Some(retry(0, Some(10)))));
+            assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+
+            // And the next phase takes the countdown with it.
+            s.set_phase(Phase::Reconnecting(Some(retry(3600, Some(7200)))));
+            s.set_phase(Phase::Thinking);
+            assert_eq!(s.phase, Some(Phase::Thinking));
         }
 
         /// A check takes it from every phase, which is the whole point of the pair. The phase the

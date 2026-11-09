@@ -7,7 +7,7 @@
 use crate::protocol::{ChatRequest, Usage};
 use crate::{Completion, Refusals};
 use bravebot_core::cancel::Cancel;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How often a wait looks up to see whether it should stop.
 const SLICE: Duration = Duration::from_millis(50);
@@ -241,8 +241,21 @@ pub trait Driven {
     /// has already ruled out a concession that was given up.
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &Self::Error) -> bool;
 
-    /// Whether attempt number `attempt` failing with `error` is worth another attempt.
+    /// Whether attempt number `attempt` failing with `error` is worth another attempt, by the count
+    /// of requests this client allows.
     fn asks_again(&self, attempt: u32, error: &Self::Error) -> bool;
+
+    /// How long after its first such failure a request is still sent again, in place of the count,
+    /// where it failed as [`Driven::of_the_connection`] says. `None` where only the count decides.
+    fn retry_window(&self) -> Option<Duration>;
+
+    /// Whether `error` is the connection failing, or a status that means not now, in the cases
+    /// [`Driven::asks_again`] sends again.
+    ///
+    /// The failures that are about the connection and not about a reply: no part of a reply was
+    /// taken, so sending the request again costs nothing, and the failure is the same however many
+    /// times it is repeated until the connection is back. A failure after a reply began is not one.
+    fn of_the_connection(error: &Self::Error) -> bool;
 
     /// How long to wait after `failures` failed attempts, `error` being the last.
     fn pause(&self, failures: u32, error: &Self::Error) -> Duration;
@@ -260,6 +273,23 @@ pub trait Driven {
     }
 }
 
+/// A request that is about to wait out a pause before it is sent again, as announced to whoever is
+/// showing the reply.
+///
+/// Numbers the driver worked out from a count and a timer, never anything a service wrote: the
+/// longest wait a service can ask for is a figure this program parsed and bounded
+/// ([BACKEND-54](../../../docs/specs/backends.md#BACKEND-54)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retry {
+    /// Which attempt follows the pause, counting from one.
+    pub attempt: u32,
+    /// How long the pause is, from the moment it is announced.
+    pub pause: Duration,
+    /// How long, from the same moment, until the request is given up on if every attempt fails.
+    /// `None` where a count decides that and not a window, so the time is not known.
+    pub gives_up_in: Option<Duration>,
+}
+
 /// What differs between one call of the driver and another, other than the client.
 #[derive(Debug, Clone, Copy)]
 pub struct Plan<'a> {
@@ -275,14 +305,20 @@ pub struct Plan<'a> {
 /// and stopping when asked.
 ///
 /// The caller has begun the call ([`Spent::begin_call`]). `send` makes one attempt and receives
-/// `context` and the number of the attempt; `announce` is told the number of the attempt about to
-/// follow a pause, before the wait, so that a caller showing a reply can say why it went quiet.
+/// `context` and the number of the attempt; `announce` is told which attempt is about to follow a
+/// pause and how long the pause is, before the wait, so that a caller showing a reply can say why
+/// it went quiet and when it will be sent again.
 ///
 /// A refusal of the request's contents is answered with the next concession in `plan.order` and
 /// sent again at once, and counts against no limit. A failure the client mends ([`Driven::mend`])
 /// is sent again at once the same way. Anything else the client says is worth another attempt
 /// waits `pause` and counts. What answered after a concession is remembered, and a probe
 /// that failed as well remembers nothing and puts back what was known before the request.
+///
+/// A failure of the connection ([`Driven::of_the_connection`]) is also sent again once the count is
+/// spent, for as long as the client's window ([`Driven::retry_window`]) holds the pause that
+/// would follow, measured from the first such failure of the call. No attempt starts after the
+/// window ends. Every other failure is held to the count.
 pub fn drive<C, X, Send, Announce>(
     client: &mut C,
     request: &ChatRequest,
@@ -294,12 +330,13 @@ pub fn drive<C, X, Send, Announce>(
 where
     C: Driven,
     Send: FnMut(&mut C, &mut X, u32) -> Result<Completion, C::Error>,
-    Announce: FnMut(&mut X, u32),
+    Announce: FnMut(&mut X, Retry),
 {
     let recalled = client.recall(plan.key);
     *client.refusals_mut() = recalled;
     let mut probed = false;
     let mut attempt = 1;
+    let mut first_failed = None;
     loop {
         // Moves what the last attempt was billed into the call's total before the next replaces it.
         client.spent_mut().begin_attempt();
@@ -331,11 +368,10 @@ where
             client.refusals_mut().give_up(concession);
             client.spent_mut().conceded.push(concession);
             probed = true;
-        } else if client.asks_again(attempt, &error) {
-            let pause = client.pause(attempt, &error);
-            client.log_retry(attempt + 1, pause);
-            announce(context, attempt + 1);
-            if !client.pace().wait(pause) {
+        } else if let Some(retry) = pause_before_next(client, attempt, &error, &mut first_failed) {
+            client.log_retry(retry.attempt, retry.pause);
+            announce(context, retry);
+            if !client.pace().wait(retry.pause) {
                 return Err(C::cancelled());
             }
             attempt += 1;
@@ -349,6 +385,36 @@ where
             return Err(error);
         }
     }
+}
+
+/// The retry to announce and wait out after attempt number `attempt` failed with `error`, or `None`
+/// where the failure is the caller's.
+///
+/// The count decides first. Past it, a failure of the connection is sent again while the client's
+/// window, measured from `first_failed` (set at the first such failure), still holds the pause
+/// that would precede the next attempt. The pause is asked for only when it is going to be waited
+/// on or weighed against the window.
+fn pause_before_next<C: Driven>(
+    client: &C,
+    attempt: u32,
+    error: &C::Error,
+    first_failed: &mut Option<Instant>,
+) -> Option<Retry> {
+    let failed_at =
+        C::of_the_connection(error).then(|| *first_failed.get_or_insert_with(Instant::now));
+    let window = client.retry_window().zip(failed_at);
+    let gives_up_in = window.map(|(window, failed_at)| window.saturating_sub(failed_at.elapsed()));
+    let retry = |pause| Retry {
+        attempt: attempt + 1,
+        pause,
+        gives_up_in,
+    };
+    if client.asks_again(attempt, error) {
+        return Some(retry(client.pause(attempt, error)));
+    }
+    let (window, failed_at) = window?;
+    let pause = client.pause(attempt, error);
+    (failed_at.elapsed() + pause <= window).then(|| retry(pause))
 }
 
 /// The reply of an attempt that answered, with the cost of the earlier ones added, after
@@ -542,6 +608,10 @@ mod tests {
         Refused,
         /// A rate limit, asking for this long a wait.
         Throttled(Duration),
+        /// The connection failed before any of a reply came.
+        Dropped,
+        /// A reply that began and was cut off, which the count sends again and the window does not.
+        Cut,
         /// A failure nobody can do anything about.
         Failed,
         /// A failure the client repairs once and sends the request again after.
@@ -558,6 +628,8 @@ mod tests {
         script: std::collections::VecDeque<(Option<Usage>, Ended)>,
         /// How many requests may be sent in all.
         allowed: u32,
+        /// How long after the first failed connection requests are still sent, where stated.
+        window: Option<Duration>,
         /// The pause the driver asked this client for, per wait.
         paused: std::cell::RefCell<Vec<Duration>>,
         /// `mend` repairs only the first rejection, so a second repair is told from the first.
@@ -572,6 +644,7 @@ mod tests {
                 refusals: Refusals::default(),
                 script: script.into(),
                 allowed: 3,
+                window: None,
                 paused: std::cell::RefCell::new(Vec::new()),
                 mended: 0,
             }
@@ -588,6 +661,8 @@ mod tests {
         started: std::time::Instant,
         sent_with: Vec<Refusals>,
         announced: Vec<(u32, Duration)>,
+        /// The whole announcement of each retry, in order.
+        retries: Vec<Retry>,
     }
 
     impl Seen {
@@ -596,6 +671,7 @@ mod tests {
                 started: std::time::Instant::now(),
                 sent_with: Vec::new(),
                 announced: Vec::new(),
+                retries: Vec::new(),
             }
         }
     }
@@ -636,7 +712,16 @@ mod tests {
         }
 
         fn asks_again(&self, attempt: u32, error: &Ended) -> bool {
-            attempt < self.allowed && matches!(error, Ended::Throttled(_))
+            attempt < self.allowed
+                && matches!(error, Ended::Throttled(_) | Ended::Dropped | Ended::Cut)
+        }
+
+        fn retry_window(&self) -> Option<Duration> {
+            self.window
+        }
+
+        fn of_the_connection(error: &Ended) -> bool {
+            matches!(error, Ended::Throttled(_) | Ended::Dropped)
         }
 
         fn pause(&self, _: u32, error: &Ended) -> Duration {
@@ -687,7 +772,10 @@ mod tests {
             Plan { key, order },
             seen,
             attempt_of,
-            |seen, attempt| seen.announced.push((attempt, seen.started.elapsed())),
+            |seen, retry| {
+                seen.announced.push((retry.attempt, seen.started.elapsed()));
+                seen.retries.push(retry);
+            },
         )
     }
 
@@ -929,6 +1017,163 @@ mod tests {
         let result = run_fake(&mut client, "driver-test\nfailed", &[], &mut seen);
         assert_eq!(result.unwrap_err(), Ended::Failed);
         assert_eq!(seen.sent_with.len(), 1);
+    }
+
+    /// BACKEND-55: a failed connection is sent again past the count for as long as the window
+    /// holds the pause that would follow, and no longer.
+    ///
+    /// The script holds fifty failures, so a driver that ignores the window runs it out (the fake
+    /// panics) and one that stops at the count sends three. Every pause taken fits the window,
+    /// so a driver that lets one run past it is rejected by the sum.
+    ///
+    /// The window is ten pauses, so a machine that stalls a test for a few hundred milliseconds
+    /// costs some attempts and not the extension past the count. The pauses are slept for real,
+    /// since the window is measured on the clock.
+    #[test]
+    fn a_failed_connection_is_sent_again_past_the_count_while_the_window_holds() {
+        let window = Duration::from_secs(1);
+        let pause = Duration::from_millis(100);
+        let mut client = Fake::ending(vec![Ended::Throttled(pause); 50]);
+        client.window = Some(window);
+        let mut seen = Seen::new();
+
+        let result = run_fake(&mut client, "driver-test\nwindow", &[], &mut seen);
+
+        assert_eq!(result.unwrap_err(), Ended::Throttled(pause));
+        assert!(
+            seen.sent_with.len() > 3,
+            "the window did not extend the count: {} requests",
+            seen.sent_with.len()
+        );
+        assert!(
+            client.script.len() > 30,
+            "the window was not honoured, {} of fifty failures were used",
+            50 - client.script.len()
+        );
+        let taken: Duration = client.paused.borrow()[..seen.sent_with.len() - 1]
+            .iter()
+            .sum();
+        assert!(
+            taken <= window,
+            "pauses of {taken:?} were taken inside a window of {window:?}"
+        );
+        assert!(
+            seen.started.elapsed() < window + Duration::from_millis(500),
+            "the call ran on past its window: {:?}",
+            seen.started.elapsed()
+        );
+    }
+
+    /// BACKEND-55: a failure that came after a reply began is held to the count whatever the
+    /// window, because each repeat of it is billed. Rejects a driver that widens the window to
+    /// every failure the count sends again.
+    #[test]
+    fn a_window_does_not_extend_the_count_for_a_failure_that_is_not_the_connection() {
+        let mut client = Fake::ending(vec![Ended::Cut; 10]);
+        client.window = Some(Duration::from_secs(3600));
+        let mut seen = Seen::new();
+
+        let result = run_fake(&mut client, "driver-test\ncut", &[], &mut seen);
+
+        assert_eq!(result.unwrap_err(), Ended::Cut);
+        assert_eq!(seen.sent_with.len(), 3, "the window sent a cut reply again");
+    }
+
+    /// BACKEND-55: where only a count was stated the count alone decides, as it did before there
+    /// was a window. Rejects a driver that reads no window as an unlimited one.
+    #[test]
+    fn with_no_window_the_count_alone_decides() {
+        let mut client = Fake::ending(vec![Ended::Dropped; 10]);
+        let mut seen = Seen::new();
+
+        let result = run_fake(&mut client, "driver-test\nno-window", &[], &mut seen);
+
+        assert_eq!(result.unwrap_err(), Ended::Dropped);
+        assert_eq!(seen.sent_with.len(), 3, "more requests than are allowed");
+    }
+
+    /// BACKEND-55: a pause that does not fit the window is not waited on, and the failure is the
+    /// caller's at once. Rejects a driver that waits first and finds out afterwards.
+    #[test]
+    fn a_pause_that_does_not_fit_the_window_is_not_waited_on() {
+        let mut client = Fake::ending(vec![Ended::Throttled(Duration::from_secs(30)); 3]);
+        client.allowed = 1;
+        client.window = Some(Duration::from_millis(50));
+        let mut seen = Seen::new();
+
+        let result = run_fake(&mut client, "driver-test\nunfit", &[], &mut seen);
+
+        assert_eq!(
+            result.unwrap_err(),
+            Ended::Throttled(Duration::from_secs(30))
+        );
+        assert_eq!(seen.sent_with.len(), 1);
+        assert!(
+            seen.started.elapsed() < Duration::from_secs(5),
+            "the pause was waited on: {:?}",
+            seen.started.elapsed()
+        );
+        assert!(seen.announced.is_empty(), "a retry was announced");
+    }
+
+    /// BACKEND-55: a retry is announced with the pause that follows and, where a window decides,
+    /// how long is left before the request is given up on, which is less at the second retry than
+    /// at the first. Rejects an announcement that carries no time, and one that repeats the
+    /// window whole each time.
+    #[test]
+    fn a_retry_is_announced_with_its_pause_and_the_time_left_in_the_window() {
+        let window = Duration::from_secs(10);
+        let pause = Duration::from_millis(40);
+        let mut client = Fake::ending(vec![
+            Ended::Throttled(pause),
+            Ended::Throttled(pause),
+            Ended::Answered,
+        ]);
+        client.window = Some(window);
+        let mut seen = Seen::new();
+
+        run_fake(&mut client, "driver-test\nannounce-window", &[], &mut seen)
+            .expect("the third request answers");
+
+        let [first, second] = seen.retries[..] else {
+            panic!("expected two announcements, got {:?}", seen.retries);
+        };
+        assert_eq!((first.attempt, first.pause), (2, pause));
+        assert_eq!((second.attempt, second.pause), (3, pause));
+        let (left_first, left_second) = (
+            first.gives_up_in.expect("a window decides"),
+            second.gives_up_in.expect("a window decides"),
+        );
+        assert!(
+            left_first <= window,
+            "more time than the window: {left_first:?}"
+        );
+        assert!(
+            left_first > window - Duration::from_secs(5),
+            "the window was spent before the first retry: {left_first:?}"
+        );
+        assert!(
+            left_second < left_first,
+            "the time left did not shrink: {left_first:?} then {left_second:?}"
+        );
+    }
+
+    /// BACKEND-55: where only a count decides, the announcement names the pause and no time to give
+    /// up, because there is none to name. Rejects one that invents a deadline.
+    #[test]
+    fn a_retry_governed_by_a_count_names_no_time_to_give_up() {
+        let pause = Duration::from_millis(40);
+        let mut client = Fake::ending(vec![Ended::Throttled(pause), Ended::Answered]);
+        let mut seen = Seen::new();
+
+        run_fake(&mut client, "driver-test\nannounce-count", &[], &mut seen)
+            .expect("the second request answers");
+
+        let [retry] = seen.retries[..] else {
+            panic!("expected one announcement, got {:?}", seen.retries);
+        };
+        assert_eq!((retry.attempt, retry.pause), (2, pause));
+        assert_eq!(retry.gives_up_in, None);
     }
 
     /// BACKEND-37: the fields a call gave up are kept in the order it gave them up, and a later

@@ -669,12 +669,13 @@ impl<'a> AichatClient<'a> {
         self
     }
 
-    /// The retry count the gateway's block stated, which is none where it stated none.
+    /// What the request is held to: the gateway block's figures, or the configuration's for
+    /// Brave's own endpoint.
     fn patience(&self) -> Patience {
-        self.gateway
-            .as_ref()
-            .map(|gateway| gateway.provider.patience)
-            .unwrap_or_default()
+        self.gateway.as_ref().map_or_else(
+            || self.config.patience(),
+            |gateway| gateway.provider.patience,
+        )
     }
 
     /// Wait this long before the first retry instead of the default one-second wait. Later
@@ -988,19 +989,11 @@ impl<'a> AichatClient<'a> {
             plan,
             &mut progress,
             |client, progress, attempt| client.stream_once(policy, &request, attempt, progress),
-            |progress, attempt| {
+            |progress, retry| {
                 // Announced before the wait rather than after it, so the pause is explained
                 // while it is happening. Reply content and progress start again from nothing;
                 // completed costs remain in the call total.
-                progress(Progress {
-                    written: Labelled::new("", Label::untrusted_public()),
-                    output_tokens: 0,
-                    calling: None,
-                    thinking: Labelled::new("", Label::untrusted_public()),
-                    counted_by_server: false,
-                    prose: false,
-                    attempt,
-                });
+                progress(Progress::announcing(retry));
             },
         )
     }
@@ -1135,7 +1128,7 @@ impl<'a> AichatClient<'a> {
                 thinking: Labelled::new(&thinking, label),
                 counted_by_server: reported.is_some(),
                 prose: Progress::has_prose(accumulated.content()),
-                attempt,
+                ..Progress::quiet(attempt)
             });
         }
 
@@ -1231,9 +1224,43 @@ pub struct Progress<'a> {
     /// count goes back to zero with it, so a display that only ever saw the number climb would
     /// otherwise show it falling for no stated reason.
     pub attempt: u32,
+    /// When the next attempt will be sent, on the report that announces the wait before it and
+    /// on no other.
+    ///
+    /// Numbers the driver worked out from a count and a timer. A display that has this knows how
+    /// long to say the request will be quiet, which it cannot tell from the attempt number alone.
+    pub retry: Option<call::Retry>,
 }
 
 impl Progress<'_> {
+    /// A report of attempt `attempt` that has said nothing yet: no words, no thinking, no call, no
+    /// tokens and no wait. A client sets what its stream has delivered and takes the rest from
+    /// here.
+    pub fn quiet(attempt: u32) -> Progress<'static> {
+        Progress {
+            written: Labelled::new("", Label::untrusted_public()),
+            output_tokens: 0,
+            calling: None,
+            thinking: Labelled::new("", Label::untrusted_public()),
+            counted_by_server: false,
+            prose: false,
+            attempt,
+            retry: None,
+        }
+    }
+
+    /// The report that announces `retry`, before the pause it names.
+    ///
+    /// Nothing of the reply so far is in it, since the attempt that failed is thrown away, and its
+    /// `prose` is false because the request that follows has said nothing. A line typed meanwhile
+    /// may therefore end the wait (INPUT-10).
+    pub fn announcing(retry: call::Retry) -> Progress<'static> {
+        Progress {
+            retry: Some(retry),
+            ..Progress::quiet(retry.attempt)
+        }
+    }
+
     /// Whether `text`, the reply written so far, is anything at all, for a client to state in the
     /// report it makes of that reply. Only whether a text event has delivered something is asked:
     /// the text is not read.
@@ -1274,6 +1301,13 @@ const RATE_LIMIT_FIRST_WAIT_FACTOR: u32 = 8;
 /// than a turn sitting unattended for minutes. Lower than `bravebot_net::LONGEST_RETRY_AFTER`,
 /// which only bounds the figure the network layer will carry.
 pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
+
+/// The longest pause the client chooses between two attempts, which the doubling from [`BACKOFF`]
+/// stays at once it reaches it.
+///
+/// Half of [`LONGEST_WAIT`], so a pause the client chose is never longer than one it would sit
+/// through for a service. A wait a service asks for is not held to it.
+pub const LONGEST_PAUSE: Duration = Duration::from_secs(60);
 
 /// The slowest a reply is taken to be written, in tokens a second.
 ///
@@ -1408,6 +1442,14 @@ impl Driven for AichatClient<'_> {
         worth_another_attempt(self.patience(), attempt, error)
     }
 
+    fn retry_window(&self) -> Option<Duration> {
+        self.patience().retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        failed_connection(error)
+    }
+
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
         pause_before_retry(self.pace.backoff, failures, error)
     }
@@ -1415,6 +1457,12 @@ impl Driven for AichatClient<'_> {
     fn log_retry(&self, attempt: u32, pause: Duration) {
         log_retry(attempt, pause);
     }
+}
+
+/// Whether `error` is the connection failing, or a status that means not now, that a second attempt
+/// is worth: a failure of the transport, not of a reply that began.
+fn failed_connection(error: &ChatError) -> bool {
+    matches!(error, ChatError::Egress(e) if retryable_within_ceiling(e))
 }
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
@@ -1437,8 +1485,13 @@ fn worth_another_attempt(patience: Patience, attempt: u32, error: &ChatError) ->
     }
 }
 
-fn backoff(base: Duration, failures: u32) -> Duration {
-    base * 2u32.pow(failures - 1)
+/// The pause after `failures` failed attempts: `base` doubled for each failure after the first, and
+/// never more than [`LONGEST_PAUSE`].
+///
+/// Saturating, so a window of an hour of failures cannot overflow the doubling.
+pub fn backoff(base: Duration, failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(31);
+    base.saturating_mul(1 << doublings).min(LONGEST_PAUSE)
 }
 
 /// Whether a failed attempt should be repeated, for a client that also reads a failure the service
@@ -2501,6 +2554,7 @@ mod tests {
         let stated = |retries: Option<u32>| Patience {
             max_retries: retries,
             idle_timeout: None,
+            retry_window: None,
         };
         assert_eq!(attempts_allowed(stated(None), true), 6);
         assert_eq!(attempts_allowed(stated(None), false), 3);
@@ -2557,6 +2611,30 @@ mod tests {
         assert_eq!(
             pause_after_failure(second, 2, &other_status(503, Some(Duration::from_secs(90)))),
             Duration::from_secs(2)
+        );
+    }
+
+    /// BACKEND-55: the pause between attempts doubles from the base, stops growing at a minute, and
+    /// stays there however many failures there have been. Rejects a pause with no cap, which an
+    /// hour of failures would take to days, and one that overflows on a long run of them.
+    #[test]
+    fn the_pause_doubles_to_a_cap_and_stays_there() {
+        let seconds = |failures| backoff(BACKOFF, failures).as_secs();
+
+        let first_seven: Vec<u64> = (1..=7).map(seconds).collect();
+        assert_eq!(first_seven, [1, 2, 4, 8, 16, 32, 60]);
+        for failures in [8, 9, 20, 32, 33, 100, u32::MAX] {
+            assert_eq!(seconds(failures), 60, "after {failures} failures");
+        }
+        assert_eq!(
+            backoff(Duration::from_millis(1), 3),
+            Duration::from_millis(4),
+            "a base below a second doubles from itself"
+        );
+        assert_eq!(
+            backoff(Duration::from_secs(90), 1),
+            LONGEST_PAUSE,
+            "a base above the cap is held to it"
         );
     }
 }

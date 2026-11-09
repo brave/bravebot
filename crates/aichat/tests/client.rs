@@ -4131,10 +4131,12 @@ fn a_gateway_stating_a_retry_count_is_asked_again_that_many_times() {
     }
 }
 
-/// A block that says nothing about retries is the three requests every block has always had.
+/// BACKEND-55: a block that says nothing about retries sends a request whose connection failed
+/// again for as long as the default window holds, so a service that recovers on the fourth request
+/// is reached. Rejects a client still held to the three requests it used to send.
 #[test]
-fn a_gateway_stating_nothing_is_asked_three_times() {
-    let model = "a-model-asked-three-times";
+fn a_gateway_stating_nothing_is_asked_again_while_the_default_window_holds() {
+    let model = "a-model-asked-while-the-window-holds";
     for streaming in [false, true] {
         let (endpoint, received) = serve_attempts(vec![
             Attempt::Status(503),
@@ -4147,9 +4149,69 @@ fn a_gateway_stating_nothing_is_asked_three_times() {
 
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
 
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a service that recovered on the fourth request was given up on: {result:?}"
+        );
+        assert_eq!(attempts, 4, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 4, "streaming {streaming}");
+    }
+}
+
+/// BACKEND-55: a stated window sends a failed connection again past the stated count, and ends the
+/// call when the next pause would not fit. Rejects a client that reads the count as the whole of
+/// the limit, and one that sits out the window and past it.
+#[test]
+fn a_gateway_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window() {
+    let model = "a-model-asked-for-its-window";
+    for streaming in [false, true] {
+        // The count alone would stop at the second request, and the window carries on to the fifth.
+        let (endpoint, received) = serve_attempts(
+            (0..4)
+                .map(|_| Attempt::Status(503))
+                .chain([answer_for(streaming)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(
+            &endpoint,
+            model,
+            r#""maxRetries": 1, "retryWindowMs": 60000"#,
+        );
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: the count was taken for the whole limit: {result:?}"
+        );
+        assert_eq!(attempts, 5, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
+
+        // A service that never recovers is given up on when the window is spent, well before the
+        // sixty requests it was ready to refuse.
+        let (endpoint, received) = serve_attempts((0..60).map(|_| Attempt::Status(503)).collect());
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 150"#);
+        let started = std::time::Instant::now();
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
         assert!(result.is_err(), "streaming {streaming}: {result:?}");
-        assert_eq!(attempts, 3, "streaming {streaming}");
-        assert_eq!(received.try_iter().count(), 3, "streaming {streaming}");
+        assert!(
+            attempts > 3,
+            "streaming {streaming}: the window sent only {attempts} requests"
+        );
+        assert!(
+            attempts < 30,
+            "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "streaming {streaming}: the call outlasted its window: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            received.try_iter().count() as u32,
+            attempts,
+            "streaming {streaming}"
+        );
     }
 }
 
@@ -4215,7 +4277,10 @@ fn a_rate_limit_with_no_wait_is_asked_again_up_to_six_requests() {
                 .collect(),
         );
         let config = config_for(&endpoint);
-        let gateway = gateway_naming(&endpoint, model);
+        // A window of a millisecond cannot hold any pause of the schedule, so only the default
+        // count of six decides. Without it the default window would send the request again for
+        // as long as it holds, which the 1 ms base of this helper never spends.
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1"#);
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
         assert!(
             matches!(
@@ -4267,7 +4332,9 @@ fn a_429_that_named_its_wait_keeps_the_three_requests() {
             answer_for(true),
         ]);
         let config = config_for(&endpoint);
-        let gateway = gateway_naming(&endpoint, model);
+        // A window of a millisecond holds none of these pauses, so only the default count of
+        // three decides and the default window does not send a fourth request.
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1"#);
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, true);
         assert!(result.is_err(), "status {status}: {result:?}");
         assert_eq!(attempts, 3, "status {status}");
