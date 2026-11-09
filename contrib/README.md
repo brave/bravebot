@@ -17,8 +17,10 @@ request until each has been read, so a single read drops approved, passing pull 
 saying so. A pull request that would be listed if it were `MERGEABLE` is pending: the list is read
 again every 3 seconds for up to `WAIT` seconds (30 by default) while any is pending, and stderr
 names them (`waiting for 2 pull requests GitHub has not computed as mergeable (UNKNOWN): #3, #4`).
-A draft, unapproved, failing or conflicting pull request is never waited for. Each pull request is
-printed as `<url>  <title>` on stdout once, as soon as a read shows it mergeable. Any still
+A draft, unapproved, failing or conflicting pull request is never waited for. The pull requests are
+printed as `<url>  <title>` on stdout once, after the last read, in the order they have waited: the
+one waiting longest first and the most recent last. A pull request waits from the reviewer's latest
+approval, or from when it was opened if that has no time, and a tie goes by number. Any still
 `UNKNOWN` when the wait ends are named on stderr as missing from the list. A failure of `gh` exits 1.
 
 ```sh
@@ -32,7 +34,8 @@ which serves scripted reads from a stand-in `gh` and runs the script and the mak
 ## review-ready-menubar
 
 A macOS menu bar app that shows the list `make review-ready` prints. The icon shows how many pull
-requests are listed, and choosing one in the menu opens it in the browser.
+requests are listed, and choosing one in the menu opens it in the browser. The menu keeps the order
+the make target prints: longest waiting at the top, most recent last.
 
 ```sh
 contrib/review-ready-menubar/install.sh [--interval SECONDS] [--make-args "REVIEWER=login"] [--login] [--dir DIRECTORY]
