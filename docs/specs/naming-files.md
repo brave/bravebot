@@ -107,6 +107,8 @@ a row that reads like another one's.
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list`
 `verified-by: bravebot_tui::render::beneath::two_names_that_differ_only_by_an_invisible_character_draw_differently`
 `verified-by: bravebot_tui::render::beneath::a_plain_name_draws_as_it_is`
+`verified-by: bravebot_tui::render::beneath::a_marked_directorys_trailing_slash_is_drawn_outside_any_quoting`
+`verified-by: bravebot_tui::render::beneath::a_plain_directorys_name_draws_with_its_slash`
 `verified-by: bravebot_ui_bridge::mentions::an_entry_carries_its_path_marked_for_a_character_that_reads_as_nothing`
 `verified-by: bravebot_ui_bridge::mentions::a_marked_directorys_shown_path_carries_no_trailing_slash`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/drive-at-mentions.mjs types into a marked file and a marked directory in the real window and asserts both rows draw their own marking, the directory's slash outside any quoting, and make check-ui runs it)`

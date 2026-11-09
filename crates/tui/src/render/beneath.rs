@@ -762,8 +762,17 @@ pub(super) fn entry_lines(
 
             let mut spans = vec![
                 Span::styled(if chosen { "  ❯ " } else { "    " }, style),
-                Span::styled(bravebot_agent::confirm::shown_name(&entry.path), style),
+                Span::styled(
+                    bravebot_agent::confirm::shown_name(entry.path.trim_end_matches('/')),
+                    style,
+                ),
             ];
+            // A directory's trailing slash is drawn plain, outside whatever quoting marking the
+            // rest of the name added (NAME-4): marking it with the slash still on would put the
+            // slash inside the quotes, where the pick below does not look for it.
+            if entry.is_directory {
+                spans.push(Span::styled("/", style));
+            }
             // A session says what it is, since its name is an id nobody chooses by.
             if let Some(note) = &entry.note {
                 spans.push(Span::styled(format!("  {note}"), dim()));
@@ -811,6 +820,16 @@ mod tests {
         }
     }
 
+    fn dir_entry(path: &str) -> bravebot_mentions::Entry {
+        bravebot_mentions::Entry {
+            path: path.to_string(),
+            kind: bravebot_mentions::Kind::Directory,
+            is_directory: true,
+            note: None,
+            title: None,
+        }
+    }
+
     /// NAME-4: two entries whose names differ only by whitespace or a character that draws as
     /// nothing must not draw as the same row, the same claim PROMPT-1 already pins for a vouch
     /// prompt's own use of `shown_name`.
@@ -838,5 +857,26 @@ mod tests {
     #[test]
     fn a_plain_name_draws_as_it_is() {
         assert_eq!(drawn_row(&file_entry("notes.md")), "    notes.md");
+    }
+
+    /// NAME-4: a directory's trailing slash is taken off before marking and put back after,
+    /// outside any quoting, the same as the window's bridge already does
+    /// (`bravebot_ui_bridge::mentions::offer`). Marking the slash along with the rest of the name
+    /// would put it inside the quotes, where a pick looking for it at the end would not find it.
+    #[test]
+    fn a_marked_directorys_trailing_slash_is_drawn_outside_any_quoting() {
+        let marked = bravebot_agent::confirm::shown_name("a\u{200b}b");
+        assert_eq!(
+            drawn_row(&dir_entry("a\u{200b}b/")),
+            format!("    {marked}/"),
+            "the slash was not drawn plain, outside the marked name"
+        );
+    }
+
+    /// The common case for a directory: nothing to mark, the trailing slash stays, unaffected by
+    /// the split that marking a name needs.
+    #[test]
+    fn a_plain_directorys_name_draws_with_its_slash() {
+        assert_eq!(drawn_row(&dir_entry("src/")), "    src/");
     }
 }
