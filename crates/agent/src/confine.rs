@@ -100,11 +100,9 @@ pub struct Confinement {
     grants: Vec<Grant>,
     /// The person's own filesystem lists, resolved against this session's directories.
     filesystem: Rules,
-    /// The paths the person let programs reach for this session (SANDBOX-28). Applied before
-    /// `filesystem`, so a denial of the person's still removes them.
-    path_reach: Rules,
-    /// The same paths all as reads, which is all of them that `read-only` keeps (SANDBOX-22).
-    path_reach_read_only: Rules,
+    /// The paths the person let programs reach for this session, as they were approved
+    /// (SANDBOX-28). Judged again each time a policy is built: see [`Confinement::reach_held`].
+    path_reach: Vec<crate::workspace::PathReach>,
     /// Whether the session gives the stages it starts every path a `request_path` for writing would
     /// be granted, without the planner asking (SANDBOX-28). Set only for the lead session in bypass.
     unasked_writes: bool,
@@ -228,8 +226,7 @@ impl Confinement {
             temporary_held_back: false,
             grants: Vec::new(),
             filesystem: Rules::none(),
-            path_reach: Rules::none(),
-            path_reach_read_only: Rules::none(),
+            path_reach: Vec::new(),
             unasked_writes: false,
             withheld_writes: Vec::new(),
             host_grants: Vec::new(),
@@ -365,33 +362,49 @@ impl Confinement {
         self
     }
 
-    /// This confinement with the paths the person let programs reach for the session, each judged
-    /// when it was approved (SANDBOX-28).
+    /// This confinement with the paths the person let programs reach for the session
+    /// (SANDBOX-28). Each is judged again whenever a policy is built, so a name that has been
+    /// relinked since the approval is given no row.
     pub fn with_path_reach(mut self, reach: &[crate::workspace::PathReach]) -> Self {
-        let read: Vec<PathBuf> = reach
-            .iter()
-            .filter(|row| !row.write)
-            .map(|row| row.path.clone())
-            .collect();
-        let write: Vec<PathBuf> = reach
-            .iter()
-            .filter(|row| row.write)
-            .map(|row| row.path.clone())
-            .collect();
-        self.path_reach = Rules::granted(&read, &write);
-        self.path_reach_read_only =
-            Rules::granted(&[read.as_slice(), write.as_slice()].concat(), &[]);
+        self.path_reach = reach.to_vec();
         self
+    }
+
+    /// The paths the person let programs reach whose names still lead to what was approved
+    /// (SANDBOX-28). The name is not a link, none of its parents is one, it is the directory or
+    /// file that was approved, and it is not at, inside or above a credential location, a
+    /// persistence location, `~/.ssh` or the state directory. A name that fails is given no row
+    /// and the stage still starts. Decided from file system metadata and the path alone, as each
+    /// stage's policy is built.
+    fn reach_held(&self) -> Vec<&crate::workspace::PathReach> {
+        let home = self.home.as_deref();
+        self.path_reach
+            .iter()
+            .filter(|row| {
+                row.stands(home)
+                    && reaching_credentials(self.prelude, home, std::iter::once(&row.path))
+                        .is_none()
+            })
+            .collect()
     }
 
     /// The paths the person let programs reach, as the mode holds them: under `read-only` a grant
     /// for writing gives its read and not its write, as a new request for it would (SANDBOX-22,
     /// SANDBOX-28). The grant is still held, so a move back gives the write again.
-    fn reach_in_force(&self) -> &Rules {
-        match self.mode {
-            SandboxMode::ReadOnly => &self.path_reach_read_only,
-            _ => &self.path_reach,
-        }
+    fn reach_in_force(&self) -> Rules {
+        let held = self.reach_held();
+        let read_only = self.mode == SandboxMode::ReadOnly;
+        let read: Vec<PathBuf> = held
+            .iter()
+            .filter(|row| read_only || !row.write)
+            .map(|row| row.path.clone())
+            .collect();
+        let write: Vec<PathBuf> = held
+            .iter()
+            .filter(|row| !read_only && row.write)
+            .map(|row| row.path.clone())
+            .collect();
+        Rules::granted(&read, &write)
     }
 
     /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
@@ -548,7 +561,14 @@ impl Confinement {
                 }
             }
         }
-        self.filesystem.apply(self.path_reach.apply(policy))
+        let write_reach: Vec<PathBuf> = self
+            .reach_held()
+            .iter()
+            .filter(|row| row.write)
+            .map(|row| row.path.clone())
+            .collect();
+        self.filesystem
+            .apply(Rules::granted(&[], &write_reach).apply(policy))
     }
 
     /// Whether every stage of `steps`, started in `directory`, is held to a sandbox that leaves a
@@ -1771,7 +1791,7 @@ impl Confinement {
                 rules.allow_read, rules.deny_read, rules.allow_write, rules.deny_write,
             ),
         };
-        let requested_paths = self.path_reach.counts();
+        let requested_paths = self.reach_in_force().counts();
         let rules = match requested_paths.allow_read + requested_paths.allow_write {
             0 => rules,
             asked => format!(
@@ -6729,11 +6749,11 @@ mod tests {
     /// rejects is a profile line that names the tool whatever the list holds.
     #[test]
     fn the_profile_line_names_request_path_only_where_the_list_holds_it() {
-        let granted = [crate::workspace::PathReach {
-            path: PathBuf::from("/data/out"),
-            write: true,
-            why: "the build needs it".to_string(),
-        }];
+        let granted = [crate::workspace::PathReach::new(
+            PathBuf::from("/data/out"),
+            true,
+            "the build needs it".to_string(),
+        )];
         let script = step("/bin/sh", &["-c", "false"]);
         for mode in [
             SandboxMode::Strict,
@@ -7056,10 +7076,12 @@ mod tests {
             ("/data/out", true),
             ("/data/kept", true),
         ]
-        .map(|(path, write)| crate::workspace::PathReach {
-            path: PathBuf::from(path),
-            write,
-            why: "the build needs it".to_string(),
+        .map(|(path, write)| {
+            crate::workspace::PathReach::new(
+                PathBuf::from(path),
+                write,
+                "the build needs it".to_string(),
+            )
         });
         let plain = reading_confinement(Prelude::Linux, &["/work/project"]);
         let held = plain
@@ -7089,11 +7111,11 @@ mod tests {
     /// and not its write, and gives the write again after a move back, since it is still held.
     #[test]
     fn a_write_grant_held_before_read_only_writes_nothing_until_the_mode_returns() {
-        let granted = [crate::workspace::PathReach {
-            path: PathBuf::from("/data/out"),
-            write: true,
-            why: "the build needs it".to_string(),
-        }];
+        let granted = [crate::workspace::PathReach::new(
+            PathBuf::from("/data/out"),
+            true,
+            "the build needs it".to_string(),
+        )];
         let writing =
             reading_confinement(Prelude::Linux, &["/work/project"]).with_path_reach(&granted);
         let cat = step("/bin/cat", &["file"]);
@@ -7124,11 +7146,11 @@ mod tests {
     /// in every mode, since a file written before a move to `read-only` outlives it.
     #[test]
     fn a_held_write_grant_still_marks_its_files_as_the_plans_under_read_only() {
-        let granted = [crate::workspace::PathReach {
-            path: PathBuf::from("/data/out"),
-            write: true,
-            why: "the build needs it".to_string(),
-        }];
+        let granted = [crate::workspace::PathReach::new(
+            PathBuf::from("/data/out"),
+            true,
+            "the build needs it".to_string(),
+        )];
         let read_only = reading_confinement(Prelude::Linux, &["/work/project"])
             .with_path_reach(&granted)
             .with_mode(SandboxMode::ReadOnly);
@@ -7141,11 +7163,11 @@ mod tests {
     /// grant adds no row anywhere that programs may write.
     #[test]
     fn a_path_let_reach_does_not_reach_its_parent_or_a_sibling() {
-        let granted = [crate::workspace::PathReach {
-            path: PathBuf::from("/data/in"),
-            write: false,
-            why: "the build needs it".to_string(),
-        }];
+        let granted = [crate::workspace::PathReach::new(
+            PathBuf::from("/data/in"),
+            false,
+            "the build needs it".to_string(),
+        )];
         let plain = reading_confinement(Prelude::Linux, &["/work/project"]);
         let held = plain.clone().with_path_reach(&granted);
         let cat = step("/bin/cat", &["file"]);
@@ -8059,6 +8081,244 @@ mod tests {
         }
     }
 
+    /// SANDBOX-28, SANDBOX-18: a path the person let programs reach is judged again as each
+    /// policy is built. A name that has since been relinked to a credential location, replaced by
+    /// another directory, or reached through a parent that is now a link is given no row on any
+    /// prelude and in every mode, and the profile does not count it. The control is the same name
+    /// untouched, which keeps its row. The regressions it rejects: a row opened by the name it had
+    /// at approval, a check that follows links and so sees only a directory, and one that compares
+    /// the place but not the directory (device and inode).
+    #[test]
+    #[cfg(unix)]
+    fn a_path_let_reach_is_given_no_row_once_its_name_leads_elsewhere() {
+        use std::os::unix::fs::symlink;
+        let top = crate::testutil::scratch_dir("confine-reach-relinked");
+        let _ = std::fs::remove_dir_all(&top);
+        let make = |name: &str| {
+            std::fs::create_dir_all(top.join(name)).expect("directory");
+        };
+        for name in [
+            "home/.ssh",
+            "home/.aws",
+            "kept",
+            "to-ssh",
+            "to-aws",
+            "swapped",
+            "viaparent/inner",
+        ] {
+            make(name);
+        }
+        let top = std::fs::canonicalize(&top).expect("canonical");
+        let home = top.join("home");
+        let stage = step("/usr/bin/make", &[]);
+        let rows = [
+            ("kept", true),
+            ("to-ssh", true),
+            ("to-aws", false),
+            ("swapped", true),
+            ("viaparent/inner", true),
+        ];
+        // Approved before any name is changed, so the identity recorded is the one approved.
+        let granted: Vec<_> = rows
+            .iter()
+            .map(|(name, write)| {
+                crate::workspace::PathReach::new(
+                    top.join(name),
+                    *write,
+                    "the build needs it".to_string(),
+                )
+            })
+            .collect();
+        let held = |prelude, mode| {
+            Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(&home),
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            )
+            .with_mode(mode)
+            .with_path_reach(&granted)
+        };
+        let before = held(Prelude::Linux, SandboxMode::WorkspaceWrite);
+        let at = |name: &str| top.join(name).to_str().expect("utf-8").to_string();
+        let policy = before.policy(&stage, Path::new("/work"), &[]);
+        for (name, write) in rows {
+            assert!(
+                reads(&policy, &at(name)),
+                "{name}: the fixture grants nothing"
+            );
+            assert_eq!(writes(&policy, &at(name)), write, "{name}");
+        }
+        assert!(before.profile(&[&stage]).contains("5 paths"));
+
+        // The approved directories are moved aside and their names are made to lead elsewhere.
+        for name in ["to-ssh", "to-aws", "swapped", "viaparent"] {
+            std::fs::rename(top.join(name), top.join(format!("{name}.old"))).expect("move");
+        }
+        symlink(home.join(".ssh"), top.join("to-ssh")).expect("link");
+        symlink(home.join(".aws"), top.join("to-aws")).expect("link");
+        std::fs::create_dir(top.join("swapped")).expect("another directory");
+        symlink(top.join("viaparent.old"), top.join("viaparent")).expect("link");
+
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            for mode in [
+                SandboxMode::WorkspaceWrite,
+                SandboxMode::ReadOnly,
+                SandboxMode::Strict,
+            ] {
+                let after = held(prelude, mode);
+                let policy = after.policy(&stage, Path::new("/work"), &[]);
+                let label = format!("{prelude:?} {mode:?}");
+                for gone in [
+                    at("to-ssh"),
+                    at("to-aws"),
+                    at("swapped"),
+                    at("viaparent/inner"),
+                    home.join(".ssh").to_str().expect("utf-8").to_string(),
+                    home.join(".aws").to_str().expect("utf-8").to_string(),
+                ] {
+                    assert!(
+                        !reads(&policy, &gone) && !writes(&policy, &gone),
+                        "{label}: a relinked name still reached {gone}"
+                    );
+                }
+                assert!(
+                    reads(&policy, &at("kept")),
+                    "{label}: the untouched row went"
+                );
+                assert_eq!(
+                    writes(&policy, &at("kept")),
+                    mode != SandboxMode::ReadOnly,
+                    "{label}"
+                );
+                let said = after.profile(&[&stage]);
+                assert!(said.contains("1 path through"), "{label}: {said}");
+            }
+        }
+    }
+
+    /// A grant made while nothing was at the name has no identity to compare, so a directory made
+    /// there later is judged as a new request for the same access would be: the home directory,
+    /// a directory above it, and a persistence location for a write are given no row, and an
+    /// ordinary directory for the same access is, which is the control. A name that is a link to
+    /// an ordinary directory is given no row either. The regressions it rejects are a row kept
+    /// without being judged again, and a link followed when there is no identity to compare.
+    #[test]
+    #[cfg(unix)]
+    fn a_path_let_reach_made_before_it_existed_is_judged_when_a_stage_starts() {
+        let top = crate::testutil::scratch_dir("confine-reach-made-later");
+        let _ = std::fs::remove_dir_all(&top);
+        for name in ["home/.config/systemd/user", "home/work", "other"] {
+            std::fs::create_dir_all(top.join(name)).expect("directory");
+        }
+        let top = std::fs::canonicalize(&top).expect("canonical");
+        let home = top.join("home");
+        std::os::unix::fs::symlink(top.join("other"), home.join("linked")).expect("link");
+        let stage = step("/usr/bin/make", &[]);
+        let rows = [
+            (top.clone(), true),
+            (home.clone(), true),
+            (home.join(".config/systemd/user"), true),
+            (home.join("work"), true),
+            (home.join("linked"), true),
+        ];
+        let granted: Vec<_> = rows
+            .iter()
+            .map(|(path, write)| crate::workspace::PathReach {
+                path: path.clone(),
+                write: *write,
+                why: "the build needs it".to_string(),
+                identity: None,
+            })
+            .collect();
+        let confined = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            Some(&home),
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_mode(SandboxMode::WorkspaceWrite)
+        .with_path_reach(&granted);
+
+        let policy = confined.policy(&stage, Path::new("/work"), &[]);
+        let at = |path: &Path| path.to_str().expect("utf-8").to_string();
+
+        assert!(
+            writes(&policy, &at(&home.join("work"))),
+            "the control row went"
+        );
+        for refused in [
+            &top,
+            &home,
+            &home.join(".config/systemd/user"),
+            &home.join("linked"),
+        ] {
+            assert!(
+                !reads(&policy, &at(refused)) && !writes(&policy, &at(refused)),
+                "{} was given a row",
+                refused.display()
+            );
+        }
+    }
+
+    /// SANDBOX-18, SANDBOX-28: a path the person let programs reach is compared with the credential
+    /// locations as the platform compares names. Where names are not case sensitive (the macOS and
+    /// Windows preludes) a row spelled `.SSH` or `.Aws/inner` is at or inside `.ssh` and `.aws` and
+    /// is given no row; a row that only shares a prefix with one (`.sshkeys`) is, which is the
+    /// control. Where names are case sensitive (the Linux prelude) the differently spelled rows are
+    /// other directories and keep their rows. The rows name nothing on disk, so the result does not
+    /// depend on whether the file system running the test folds case. The regression it rejects is
+    /// a comparison that is exact on a platform whose file system is not.
+    #[test]
+    fn a_path_let_reach_is_compared_with_the_credential_locations_as_the_platform_does() {
+        let top = crate::testutil::scratch_dir("confine-reach-case");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("home")).expect("directory");
+        let top = std::fs::canonicalize(&top).expect("canonical");
+        let home = top.join("home");
+        let stage = step("/usr/bin/make", &[]);
+        let at = |path: &Path| path.to_str().expect("utf-8").to_string();
+        let different_case = [home.join(".SSH"), home.join(".Aws/inner")];
+        let control = home.join(".sshkeys");
+        let granted: Vec<_> = different_case
+            .iter()
+            .chain(std::iter::once(&control))
+            .map(|path| {
+                crate::workspace::PathReach::new(path.clone(), true, "the build needs it".into())
+            })
+            .collect();
+        for (prelude, folds) in [
+            (Prelude::Windows, true),
+            (Prelude::MacOs, true),
+            (Prelude::Linux, false),
+        ] {
+            let policy = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(&home),
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            )
+            .with_mode(SandboxMode::WorkspaceWrite)
+            .with_path_reach(&granted)
+            .policy(&stage, Path::new("/work"), &[]);
+            assert!(
+                writes(&policy, &at(&control)),
+                "{prelude:?}: the control row went"
+            );
+            for path in &different_case {
+                assert_eq!(
+                    writes(&policy, &at(path)),
+                    !folds,
+                    "{prelude:?}: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+
     /// The plan says what was remembered, with the day, and the failure line names the scope. The
     /// regressions it rejects: a policy that carries a row the plan never showed, and a profile
     /// line that says `none` for a scope the policy added.
@@ -8920,10 +9180,12 @@ mod tests {
         let remembered_read = place("remembered-read");
         let requested_write = place("requested-write");
         let requested_read = place("requested-read");
-        let reach = |path: &Path, write| crate::workspace::PathReach {
-            path: path.to_path_buf(),
-            write,
-            why: "the build needs it".to_string(),
+        let reach = |path: &Path, write| {
+            crate::workspace::PathReach::new(
+                path.to_path_buf(),
+                write,
+                "the build needs it".to_string(),
+            )
         };
         let closed = reading_confinement(Prelude::Linux, &["/work/project"])
             .with_network(Network::Closed)

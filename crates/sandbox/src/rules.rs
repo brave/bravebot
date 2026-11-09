@@ -1764,6 +1764,45 @@ mod tests {
         }
     }
 
+    /// An entry beside the home directory that is a link, to a credential directory or to an
+    /// ordinary one, is given no row, and neither is anything reached through it. A directory
+    /// beside it is a row, which is the control that the entries are listed at all. The
+    /// regression it rejects is an entry listed by what it leads to, which would write the
+    /// credential directory under the link's name.
+    #[test]
+    #[cfg(unix)]
+    fn what_is_written_without_a_request_gives_a_link_beside_the_home_no_row() {
+        let top = fresh("unasked-link");
+        let home = top.join("home");
+        for directory in ["home/.ssh", "beside", "elsewhere"] {
+            fs::create_dir_all(top.join(directory)).unwrap();
+        }
+        std::os::unix::fs::symlink(home.join(".ssh"), top.join("to-ssh")).unwrap();
+        std::os::unix::fs::symlink(top.join("elsewhere"), top.join("to-elsewhere")).unwrap();
+        let home = home.canonicalize().unwrap();
+        let top = top.canonicalize().unwrap();
+
+        let rows = writable_without_a_request(&home);
+        let granted = |path: &Path| rows.iter().any(|row| path.starts_with(row));
+
+        assert!(
+            granted(&top.join("beside/new")),
+            "the control directory is not a row: {rows:?}"
+        );
+        for refused in [
+            top.join("to-ssh"),
+            top.join("to-ssh/new"),
+            top.join("to-elsewhere"),
+            home.join(".ssh/new"),
+        ] {
+            assert!(
+                !granted(&refused),
+                "{} is writable: {rows:?}",
+                refused.display()
+            );
+        }
+    }
+
     /// What a stage writes without a request leaves out each place where a write becomes code that
     /// runs later with no profile: a shell startup file, a per-user job, git's own configuration,
     /// present or not, and where a link to one leads. A file beside each stays writable, so the

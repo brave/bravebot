@@ -3190,17 +3190,37 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   settings layer, project file or permission rule grants one in advance, because none names it.
 - **Shown and recorded.** `/status` lists each path held, with its access, and the
   trace carries one `path_reach` record for each yes, naming the path and the access.
-- **Judged once.** The path is stored as it was judged and is not resolved or judged again when a
-  line starts. A path later replaced by a link keeps its row for the stored path, and what the
-  sandbox backend does with a row that has become a link is that backend's. No test replaces a
-  held path with a link on either backend. For macOS, a comment in `crates/sandbox/src/macos.rs`
-  about refusal rows says the path a process ends up opening is the one matched, and no test checks
-  that. For Linux, the risk is that the row is opened by following the link, so it may widen to the
-  link's target. That has not been checked either.
-  [#2914](https://github.com/brave/bravebot/issues/2914) tracks the case and the two missing
-  tests. This differs from a directory given by `/reach`,
-  which is judged again when it is used ([SANDBOX-23](#SANDBOX-23)). The session holds the grant
-  only, so a `git switch` changes what is at the path and leaves the grant in place.
+- **Judged again when a stage starts.** The grant records the device and inode of what was at
+  the path, read without following a link. Each time a stage's policy is built the row is judged
+  again, and it is given no row, with the stage still started, when something is at the path and
+  the name is a link, a parent of it is a link, it is not the device and inode approved, or it is
+  refused as a new request for the same access would be: at, inside or above a credential location
+  ([SANDBOX-12](#SANDBOX-12)), `~/.ssh`, `~/.bravebot`, a persistence location for a write
+  ([SANDBOX-18](#SANDBOX-18)), or the home directory and any directory above it. A name with
+  nothing at it keeps its row, since a row opens nothing. A grant made while nothing was at the
+  name has no identity to compare, so the directory made there later is judged as each stage
+  starts, as a new request for the same access would be. The grant is still held and listed by
+  `/status`, so a name restored to the directory approved gives its row again, and the count the
+  profile states is of the rows given. The comparison reads file system metadata and the path
+  alone. A directory replaced by another ordinary directory, or by a link to one, loses its row
+  until the person asks again. The check is made when the policy is built, so a name changed after
+  that and before the program opens it is not caught by this clause; the backend opens a row by the
+  path it was given. On Linux that is a handle that follows links, so a row opened after its name
+  became a link is attached to the link's target. On macOS the profile matches the path a process
+  ends up opening, so a row whose name became a link gives the target nothing. Both are recorded
+  by tests in `crates/sandbox`, the Linux one built and run only on Linux. This is the same judgement a directory given by
+  `/reach` receives ([SANDBOX-23](#SANDBOX-23)). The session holds the grant only, so a `git
+  switch` that changes what is at the path leaves the grant in place and the row follows the
+  directory approved.
+  The comparison with the credential and persistence locations folds case where the platform's
+  names are not case sensitive (macOS and Windows), so a name spelled `.SSH` is refused as `.ssh`
+  is, and does not where they are (Linux).
+  `verified-by: bravebot_agent::confine::a_path_let_reach_is_given_no_row_once_its_name_leads_elsewhere`
+  `verified-by: bravebot_agent::confine::a_path_let_reach_is_compared_with_the_credential_locations_as_the_platform_does`
+  `verified-by: bravebot_agent::confine::a_path_let_reach_does_not_reach_its_parent_or_a_sibling`
+  `verified-by: bravebot_agent::confine::a_path_let_reach_made_before_it_existed_is_judged_when_a_stage_starts`
+  `verified-by: bravebot_sandbox::macos::a_granted_row_replaced_by_a_link_gives_its_target_nothing`
+  `verified-by: bravebot_sandbox::linux::a_granted_row_replaced_by_a_link_is_attached_to_what_the_name_leads_to_when_opened`
 - **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
   as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
   a sub-task is reach the person never set up.
@@ -3259,8 +3279,10 @@ not covered until the next. A program directory on the account's search path, su
 `~/.local/bin`, `~/.cargo/bin` or a Homebrew prefix, is written like any other, so a program a stage
 leaves there runs unconfined when the person's shell finds it before the one they meant; refusing
 them would refuse `pip install --user`, `cargo install` and `brew` under bypass. A stage cannot run
-`git config --global`, since git's configuration is a persistence location. The refusals above are
-the whole of what is held back.
+`git config --global`, since git's configuration is a persistence location. A row of a `request_path`
+grant is also withheld while its name leads somewhere other than where the person approved
+(above), and the grant stays listed. This and the refusals above are the whole of what is held
+back.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
@@ -3281,6 +3303,7 @@ the whole of what is held back.
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_where_a_write_runs_later`
+`verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_gives_a_link_beside_the_home_no_row`
 `verified-by: bravebot_sandbox::rules::a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not`
 `verified-by: bravebot_agent::confine::a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory`
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
