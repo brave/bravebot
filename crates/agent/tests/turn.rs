@@ -50286,8 +50286,9 @@ fn delegate_ends(sink: &RecordingSink) -> Vec<(bool, String)> {
 
 /// TRACE-8 for a delegate whose model call failed: the trail says how long it ran, how many of its
 /// rounds it made and the fixed name of the failure, the person's note names the same failure,
-/// and neither holds a word of what the service answered. The planner is still told only that it
-/// did not finish (BACKEND-37).
+/// and neither holds a word of what the service answered. A failure other than rate-limited or
+/// unavailable is not named to the planner, which is told only that the delegate did not finish
+/// (BACKEND-37).
 #[test]
 fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply() {
     let scratch = Scratch::new("delegate-end-failed");
@@ -50366,9 +50367,182 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
         .find(|body| body.contains("The delegate d1 did not finish."))
         .expect("the planner was never told the delegate did not finish");
     assert!(
-        !told.contains("(refused)") && !told.contains("ran out of scripted replies"),
+        !told.contains("(refused)")
+            && !told.contains("ran out of scripted replies")
+            && !told.contains("starting the same delegate again"),
         "the planner was told why the delegate failed: {told}"
     );
+}
+
+/// Answers a request carrying `failing` with `status` and an empty body, and every other request
+/// from `script`, in order. The requests the client sends are retried on a 429 or a 503, so a
+/// delegate asked for a failing task sees the status on every attempt.
+///
+/// A 429 here names a wait of one second. One that names none is sent again up to six times with
+/// pauses of 8, 16, 32, 64 and 120 seconds, which takes over four minutes in a test.
+fn serve_failing_delegate(
+    failing: &'static str,
+    status: u16,
+    turn: &'static str,
+    script: Vec<String>,
+) -> (String, MockRequests) {
+    let mut script = script.into_iter();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+            let body = String::from_utf8_lossy(&body).to_string();
+            let _ = sender.send(body.clone());
+
+            let answer = match body.contains(turn) || !body.contains(failing) {
+                true => match script.next() {
+                    Some(reply) => {
+                        let frames = as_sse(&reply);
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                            frames.len()
+                        )
+                    }
+                    None => out_of_script(),
+                },
+                false => {
+                    let wait = if status == 429 {
+                        "Retry-After: 1\r\n"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "HTTP/1.1 {status} Refused\r\n{wait}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                }
+            };
+            let _ = stream.write_all(answer.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
+}
+
+/// BACKEND-37, DELEGATE-26. A delegate whose requests meet a 429 or a 503 on every attempt ends
+/// rate-limited or unavailable, and the planner is told that category in the driver's own
+/// sentence and that starting the same delegate again meets the same limit. Without it the
+/// planner starts the same delegate again into the same limit. Nothing the service answered, and
+/// no other category, reaches the planner, and the person's note and the trail keep the category.
+#[test]
+fn a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit() {
+    for (status, category, said) in [
+        (
+            429,
+            "rate-limited",
+            "It ended because the service asked for fewer requests (rate-limited), so starting \
+             the same delegate again meets the same limit.",
+        ),
+        (
+            503,
+            "unavailable",
+            "It ended because the service could not answer (unavailable), so starting the same \
+             delegate again meets the same limit.",
+        ),
+    ] {
+        let scratch = Scratch::new("delegate-end-limited");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_failing_delegate(
+            "THIS-DELEGATE-MEETS-THE-LIMIT",
+            status,
+            "SEND-ONE-THAT-MEETS-A-LIMIT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"THIS-DELEGATE-MEETS-THE-LIMIT"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        turns::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("SEND-ONE-THAT-MEETS-A-LIMIT"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn survives a delegate that did not finish");
+
+        let ends = delegate_ends(&sink);
+        let [(_, detail)] = ends.as_slice() else {
+            panic!("the trail did not record the delegate ending once: {ends:?}");
+        };
+        assert!(
+            detail.ends_with(&format!("it did not finish ({category})")),
+            "the trail does not name the category: {detail}"
+        );
+
+        let (_, note, failed) = reporter
+            .delegates_finished
+            .first()
+            .expect("no delegate was reported as finishing");
+        assert!(
+            *failed,
+            "the failed delegate was drawn as an answer: {note}"
+        );
+        assert_eq!(
+            note,
+            &format!(
+                "the delegate could not finish ({category}); it ran 0 commands and made 0 writes"
+            )
+        );
+
+        let told = received
+            .try_iter()
+            .find(|body| body.contains("The delegate d1 did not finish."))
+            .expect("the planner was never told the delegate did not finish");
+        assert!(
+            told.contains(said),
+            "the planner was not told the delegate met a limit: {told}"
+        );
+        assert!(
+            !told.contains("ran out of scripted replies") && !told.contains("Refused"),
+            "what the service answered reached the planner: {told}"
+        );
+    }
 }
 
 /// TRACE-8 for a delegate held to its rounds: one that reached its bound was told it had no rounds
@@ -51300,9 +51474,10 @@ fn a_delegate_whose_childs_spend_takes_it_near_its_token_budget_is_warned() {
 /// twelve that reached its bound ended without a report, and the planner, told only that the
 /// delegate did not finish, spawned the same delegate on the same task again.
 ///
-/// The failure stays the fixed category ([`a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`]
-/// pins that the planner is told no more than that). What is added is the bound, which is a count
-/// this driver fixed before the run started.
+/// A failure other than rate-limited or unavailable stays the fixed category
+/// ([`a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`] pins that
+/// the planner is told no more than that for `refused`). What is added is the bound, which is a
+/// count this driver fixed before the run started.
 #[test]
 fn a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent() {
     let scratch = Scratch::new("delegate-bound-spent-failed");

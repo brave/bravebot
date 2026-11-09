@@ -2241,13 +2241,17 @@ before backoff does not count until it starts. Cancelling that wait retains the 
 
 Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
 messages do not enter these details. Processor failures use a fixed category in their tool results;
-delegate failures tell the planner that the delegate did not finish, and nothing about the failure
-beyond that. Where the run had spent its round bound, the driver's own count of that bound is said
-too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a number this process fixed before the run
-started rather than anything read out of the answer that failed. Compaction failure messages also
-use the category, except that one that failed on the ChatGPT account says that failure's sentence
-([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)). These paths do not copy raw backend errors into the
-conversation.
+delegate failures tell the planner that the delegate did not finish and nothing about the failure
+beyond that, except that a delegate that ended rate-limited or unavailable is told so in a sentence
+this driver writes for each of the two categories, and says that starting the same delegate again
+meets the same limit ([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
+closed category name the trail records, so no word of the service's answer is carried, and every
+other category is still not named to the planner. Where the run had spent its round bound, the
+driver's own count of that bound is said too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a
+number this process fixed before the run started rather than anything read out of the answer that
+failed. Compaction failure messages also use the category, except that one that failed on the
+ChatGPT account says that failure's sentence ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)). These
+paths do not copy raw backend errors into the conversation.
 
 A refused failure also carries the request fields the attempt driver left out after the service
 refused the request (effort, cache lifetime, cache marks, the assumed reply limit, tool arguments as
@@ -2420,6 +2424,8 @@ not given to the planner.
 `verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
 `verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
 
 <a id="BACKEND-38"></a>
 ### BACKEND-38: one machine-level file pins a destination above everything a person can set

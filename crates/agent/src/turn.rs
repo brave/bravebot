@@ -9113,6 +9113,27 @@ mod tests {
         assert_eq!(note, "the delegate was stopped");
         let (note, _) = delegate_end::unfinished_account(&Finish::Lost, None, 3, id);
         assert_eq!(note, "the delegate could not finish");
+
+        // A limit or an outage is named to the planner beside the spent bound, and the person's
+        // note keeps the category as it does for every failure.
+        let limited = Finish::Failed {
+            took,
+            rounds: 3,
+            why: "rate-limited",
+        };
+        let (note, body) = delegate_end::unfinished_account(&limited, Some((took, 3)), 3, id);
+        assert_eq!(
+            note,
+            "the delegate could not finish (rate-limited), having spent its limit of 3 rounds"
+        );
+        assert!(
+            body.contains(
+                "(rate-limited), so starting the same delegate again meets the same limit."
+            )
+        );
+        assert!(body.ends_with(
+            " It had spent its limit of 3 rounds, so the same task will not get further."
+        ));
     }
 
     /// RECALL-9: which kept facts reach a turn's prompt, and what that does to the turn's label.

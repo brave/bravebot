@@ -396,8 +396,10 @@ ok      delegate: d2: ended after 1559.0s and 37 of 120 rounds: it did not finis
 
 The cause comes from which way the result came back, the run's round count and the failure's
 category. None of it is text a service or a tool produced, so the entry holds no content (TRACE-2).
-The note the person sees when the delegate finishes names the same cause. The planner is still told
-only that the delegate did not finish ([BACKEND-37](backends.md#BACKEND-37)).
+The note the person sees when the delegate finishes names the same cause. The planner is told only
+that the delegate did not finish, except for a rate-limited or unavailable ending, which it is told
+by name and with the sentence that starting the same delegate again meets the same limit
+([BACKEND-37](backends.md#BACKEND-37), [DELEGATE-26](delegation.md#DELEGATE-26)).
 
 **Why.** Without it, a delegate that ran for 26 minutes and then did not finish leaves the reader of
 the trail unable to tell whether it ran out of rounds, lost its backend or was stopped. Each calls
@@ -408,6 +410,7 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
 `verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
 
 <a id="TRACE-9"></a>
 ### TRACE-9: `/request` shows the request already built, each span with where its words came from

@@ -336,14 +336,25 @@ report.
 A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
 There is no report to sit beside, so the sentence says the limit was spent and that the same task
 will not get further; the person's note gains the bound the same way. What the failure was stays the
-fixed category and nothing more ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this
-driver holds, not a reason read off a service's answer.
+fixed category, said to the planner only for a limit or an outage as below
+([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this driver holds, not a reason
+read off a service's answer.
 
 **Why this case and not only the answering one.** It is the common way the bound is reached rather
 than a corner of it. A delegate held to a tight bound loses its tools and is asked to answer; where
 it asks for a tool instead, there is no answer to carry and the run ends as a failure. The planner
 is then told only that the delegate did not finish, which reads as bad luck, so it spawns the same
 delegate on the same task and the budget goes on repeats of a run that cannot end differently.
+
+**A limit or an outage is named, because a repeat meets it again.** A delegate that ended
+rate-limited or unavailable is told of with its category and with the sentence that starting the
+same delegate again meets the same limit, beside the bound sentence where the bound was also spent.
+A planner told only that the delegate did not finish takes it for bad luck and starts the same
+delegate again, which makes the same requests into the same limit. The sentence is written by this
+driver for each of the two categories from the closed name the trail records
+([TRACE-8](trace.md#TRACE-8)), so nothing the service answered is carried
+([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and a lost thread are still
+told as only that the delegate did not finish.
 
 **Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
 limiting round to say what stopped it, and that is model text: a delegate may spend its last round
@@ -359,6 +370,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
 
 <a id="DELEGATE-29"></a>
 ### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
