@@ -9,6 +9,7 @@
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
+use crate::progress::{printable, printable_path};
 use bravebot_agent::accounts;
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::home;
@@ -73,7 +74,7 @@ fn sign_in<R: BufRead, W: Write>(
             return refused(
                 err,
                 Ending::Failed,
-                t!(brave_key_unreadable, path = path.display()),
+                t!(brave_key_unreadable, path = printable_path(&path)),
             );
         }
         Err(other) => unreachable!("not a refusal of the place a Brave key is stored: {other:?}"),
@@ -111,12 +112,12 @@ fn sign_in<R: BufRead, W: Write>(
             Ending::Failed,
             t!(
                 brave_not_stored,
-                path = path.display(),
-                error = error.to_string()
+                path = printable_path(&path),
+                error = printable(&error.to_string())
             ),
         );
     }
-    tell(out, t!(brave_stored, path = path.display()));
+    tell(out, t!(brave_stored, path = printable_path(&path)));
     Ending::Done
 }
 
@@ -137,8 +138,8 @@ pub(crate) fn logout() -> ExitCode {
             Ending::Failed,
             t!(
                 brave_not_forgotten,
-                path = path.display(),
-                error = error.to_string()
+                path = printable_path(&path),
+                error = printable(&error.to_string())
             ),
         ),
         Err(other) => unreachable!("the Brave key is only ever not removed: {other:?}"),
@@ -311,6 +312,24 @@ mod tests {
             accounts::brave(Some(&scratch.0)).standing,
             accounts::Standing::Unusable(_)
         ));
+    }
+
+    /// LAYER-3: the refusal for a key file names a path a checkout may have chosen, and a control
+    /// character or bidirectional control in it is drawn as a picture or its code point.
+    #[test]
+    fn a_path_naming_a_control_character_is_drawn_in_the_refusal() {
+        let scratch = Scratch::new("odd\u{1b}[31m\u{202e}name");
+        std::fs::write(brave_key::file(&scratch.0), "not a key").expect("a file");
+
+        let (ending, _, err) = signed_in(&task(Some(&scratch.0)), "y\n", Some(THE_KEY));
+
+        assert_eq!(ending, Ending::Failed);
+        assert!(err.contains("odd"), "{err}");
+        assert!(
+            !err.chars().any(|c| c == '\u{1b}' || c == '\u{202e}'),
+            "a character the terminal acts on reached the refusal: {err:?}"
+        );
+        assert!(err.contains("U+202E"), "{err:?}");
     }
 
     /// INCOG-7 and CLI-18: an incognito session stores no key, a pipe has nobody to type one, and a

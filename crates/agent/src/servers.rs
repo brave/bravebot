@@ -584,7 +584,7 @@ fn settle<A: Asker + ?Sized>(
         Err(why) => {
             let reason = t!(
                 mcp_unreadable,
-                path = mcp::declarations_file(directory).display().to_string(),
+                path = crate::confirm::shown_path(&mcp::declarations_file(directory)),
                 reason = unreadable(&why)
             );
             notes.push(t!(
@@ -864,12 +864,15 @@ fn aliases(requested: &[(PathBuf, String)]) -> String {
 /// A settings file as the person knows it: relative to the project where it is inside it.
 ///
 /// `project` has its links followed, so the file is compared with its own followed too.
+///
+/// A checkout can make a settings layer a link to a file whose name holds control characters, and
+/// the name is followed here, so it is drawn with [`crate::confirm::shown_path`]. The result is
+/// printed by the CLI as it is. The desktop bridge sends it as `Question.file`, where the window
+/// draws it, and the CLI's `mcp` commands draw it again with `printable`, which leaves what is
+/// already drawn unchanged.
 pub fn named(file: &Path, project: &Path) -> String {
     let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-    file.strip_prefix(project)
-        .unwrap_or(&file)
-        .display()
-        .to_string()
+    crate::confirm::shown_path(file.strip_prefix(project).unwrap_or(&file))
 }
 
 /// What a declaration that runs in an OpenShell sandbox starts.
@@ -1761,20 +1764,20 @@ pub fn problem(found: &Problem) -> String {
         Problem::Program => t!(mcp_problem_program).to_string(),
         Problem::Name => t!(mcp_problem_name).to_string(),
         Problem::Env => t!(mcp_problem_env).to_string(),
-        Problem::Value(name) => t!(mcp_problem_value, name = name),
-        Problem::Twice(name) => t!(mcp_problem_twice, name = name),
+        Problem::Value(name) => t!(mcp_problem_value, name = shown(name)),
+        Problem::Twice(name) => t!(mcp_problem_twice, name = shown(name)),
         Problem::Reads => t!(mcp_problem_reads).to_string(),
         Problem::Directory => t!(mcp_problem_directory).to_string(),
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
-        Problem::Header(name) => t!(mcp_problem_header, name = name),
+        Problem::Header(name) => t!(mcp_problem_header, name = shown(name)),
         Problem::Remote(key) => t!(mcp_problem_remote, key = *key),
         Problem::Timeout(key) => t!(
             mcp_problem_timeout,
             key = *key,
             most = mcp::MAX_TIMEOUT_SECS
         ),
-        Problem::Tool(name) => t!(mcp_problem_tool, name = name),
+        Problem::Tool(name) => t!(mcp_problem_tool, name = shown(name)),
         Problem::Tools(key) => t!(mcp_problem_tools, key = *key),
         Problem::Hosts(entry) if entry.is_empty() => t!(mcp_problem_hosts_list).to_string(),
         Problem::Hosts(entry) => t!(mcp_problem_hosts, entry = shown(entry)),
@@ -1810,7 +1813,7 @@ pub fn record(
     crate::home::replace(&path, approvals.to_text()).map_err(|error| {
         t!(
             mcp_not_written,
-            path = path.display().to_string(),
+            path = crate::confirm::shown_path(&path),
             error = error.to_string()
         )
     })
@@ -2141,7 +2144,7 @@ fn start_under(
                             t!(
                                 servers_no_home,
                                 alias = alias,
-                                path = place.display().to_string(),
+                                path = crate::confirm::shown_path(&place),
                                 reason = error.to_string()
                             )
                             .to_string(),
@@ -3015,6 +3018,152 @@ mod tests {
         declarations.insert("weather", &declaration);
         std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
         (home, project, declaration)
+    }
+
+    /// The reason an approval was not recorded names the approvals file as `shown_path` draws it. The
+    /// state directory comes from the environment, so a control character in it would otherwise
+    /// reach the terminal the reason is printed to.
+    #[test]
+    fn the_path_in_an_approval_that_was_not_recorded_is_drawn() {
+        let root = scratch("record-path-drawn");
+        let missing = root.join("state\u{1b}[2Jdir");
+        let mut approvals = Approvals::default();
+        let declaration =
+            Declaration::stdio(words(&["weather-mcp"]), Vec::new(), None).expect("declaration");
+        let reason = record(
+            &missing,
+            &Declarations::default(),
+            &mut approvals,
+            "weather",
+            &declaration,
+        )
+        .expect_err("the directory is not there, so nothing is written");
+        assert!(
+            !reason.chars().any(char::is_control),
+            "a control character reached the reason: {reason:?}"
+        );
+        assert!(
+            reason.contains("state\u{241b}[2Jdir"),
+            "the path is drawn with the picture of the control character: {reason:?}"
+        );
+    }
+
+    /// The note for declarations that cannot be read names the file as `shown_path` draws it, since
+    /// the state directory comes from the environment.
+    #[cfg(unix)]
+    #[test]
+    fn the_path_in_a_note_about_unreadable_declarations_is_drawn() {
+        let root = scratch("unreadable-path-drawn");
+        let home = root.join("state\u{1b}[2Jdir");
+        std::fs::create_dir_all(mcp::declarations_file(&home)).expect("a directory for a file");
+        let bin = root.join("bin");
+        installed(&bin, "weather-mcp");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+
+        let settled = settled(&home, &project, Asking::Person, true, true, "", &bin);
+
+        assert!(settled.plans.is_empty());
+        let note = settled.notes.join("\n");
+        assert!(
+            !note.chars().any(|c| c.is_control() && c != '\n'),
+            "a control character reached the note: {note:?}"
+        );
+        assert!(note.contains("state\u{241b}[2Jdir"), "{note:?}");
+    }
+
+    /// The note for a server whose own directory could not be made names the directory as
+    /// `shown_path` draws it. The state directory, and the system temporary directory a throwaway
+    /// one is made in, come from the environment, so a control character in either would otherwise
+    /// reach the terminal the note is printed to.
+    ///
+    /// Rejects the note naming the directory as the file system spells it.
+    #[cfg(unix)]
+    #[test]
+    fn the_path_in_a_note_about_a_server_directory_that_could_not_be_made_is_drawn() {
+        let root = scratch("server-home-path-drawn");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let state = root.join("state\u{1b}[2J\u{202e}dir");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::write(state.join("mcp-home"), "").expect("a file where the directory goes");
+        let program = installed(&root.join("bin"), "weather-mcp");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: Some(state),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work),
+            declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, None),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert!(started.is_empty(), "the server started: {notes:?}");
+        let note = notes.join("\n");
+        assert!(
+            note.contains("mcp-home"),
+            "no note named the directory: {note:?}"
+        );
+        assert!(
+            !note.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "a character a terminal acts on reached the note: {note:?}"
+        );
+        assert!(note.contains("state\u{241b}[2J"), "{note:?}");
+    }
+
+    /// A checkout can make `.bravebot/settings.json` a link to a file inside it whose name holds
+    /// control characters, and the question names the file the link leads to. The question is
+    /// printed to the terminal as it is, so the name is drawn when it is made.
+    ///
+    /// Rejects `named` returning the followed name as the file system spells it.
+    #[cfg(unix)]
+    #[test]
+    fn the_settings_file_a_question_names_is_drawn_when_a_link_leads_to_an_odd_name() {
+        let root = scratch("named-odd-file");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let project = project.canonicalize().expect("project resolved");
+        let target = project.join("odd\u{1b}[2J\u{202e}.json");
+        std::fs::write(&target, "{}").expect("the file the link leads to");
+        let link = project.join(".bravebot").join("settings.json");
+        std::os::unix::fs::symlink(&target, &link).expect("a link to it");
+
+        let said = named(&link, &project);
+
+        assert!(said.contains("odd"), "{said:?}");
+        assert!(
+            !said.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "a character a terminal acts on reached the name: {said:?}"
+        );
+        assert_eq!(
+            named(&project.join(".bravebot/absent.json"), &project),
+            ".bravebot/absent.json"
+        );
     }
 
     struct Settled {

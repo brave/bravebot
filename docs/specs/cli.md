@@ -263,7 +263,9 @@ is named as never transmitted, and a value from a settings file is never printed
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning. Text it names from a settings file, such as a rule, a key
 or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
-because the project and local files belong to whoever made the checkout.
+because the project and local files belong to whoever made the checkout. So are the paths it prints
+for those files, the managed file, the state directory, the key files and the client certificate and
+key, wherever the path came from: the report does not decide by origin which path to draw.
 
 The state directory is reported with the variable that named it. A `BRAVEBOT_HOME` that is set to
 something that is not an absolute path names no directory and is passed over; the report says so, naming
@@ -306,6 +308,8 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
 `verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it`
 `verified-by: bravebot_cli::doctor::a_refused_region_and_its_file_are_reported_with_control_characters_drawn_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_a_checkouts_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_state_directory_and_key_files_the_environment_names_as_pictures`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would

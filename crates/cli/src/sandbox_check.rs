@@ -8,6 +8,7 @@
 //! [SANDBOX-21]: ../../../docs/specs/sandboxing.md
 
 use crate::exit::{Ending, fail};
+use crate::progress::{printable, printable_path};
 use bravebot_i18n::t;
 use std::process::ExitCode;
 
@@ -54,15 +55,13 @@ mod unix {
                         Kind::Setup => t!(doctor_sandbox_fix_setup).to_string(),
                         Kind::Login => t!(doctor_sandbox_fix_login).to_string(),
                         Kind::NotConfined(detail) => {
-                            t!(doctor_sandbox_fix_not_confined, detail = detail).to_string()
+                            t!(doctor_sandbox_fix_not_confined, detail = printable(detail))
+                                .to_string()
                         }
                     };
                     lines.push((t!(doctor_sandbox_fix).to_string(), fix));
                     if let Some(log) = &failure.log {
-                        lines.push((
-                            t!(doctor_sandbox_log).to_string(),
-                            log.display().to_string(),
-                        ));
+                        lines.push((t!(doctor_sandbox_log).to_string(), printable_path(log)));
                     }
                 }
             }
@@ -106,7 +105,7 @@ mod unix {
             Err(Unavailable::Root(path)) => {
                 return fail(
                     Ending::Failed,
-                    t!(doctor_sandbox_temporary, path = path.display().to_string()),
+                    t!(doctor_sandbox_temporary, path = printable_path(&path)),
                 );
             }
             Err(Unavailable::Io(error)) => {
@@ -114,7 +113,7 @@ mod unix {
                     Ending::Failed,
                     t!(
                         doctor_sandbox_io,
-                        path = root.display().to_string(),
+                        path = printable_path(&root),
                         detail = error.to_string()
                     ),
                 );
@@ -261,6 +260,30 @@ mod tests {
         assert!(text.contains("sandbox.filesystem.allowRead"), "{text}");
         assert!(text.contains("--insecure-storage"), "{text}");
         assert_eq!(ending, Ending::Failed);
+    }
+
+    /// LAYER-3: the log's path comes from the state directory the environment names, and the
+    /// detail is the platform's own text, so both are drawn with their control and bidirectional
+    /// characters spelled out. The regression it rejects: either printed as it is.
+    #[test]
+    fn doctor_sandbox_draws_the_log_path_and_the_platform_detail() {
+        let hostile = "dir\u{1b}[2J\u{202e}end";
+        let mut failed = failure(Kind::NotConfined(format!("no profile {hostile}")));
+        failed.log = Some(PathBuf::from(format!("/state/{hostile}/stage-3.log")));
+        let report = Report {
+            rows: vec![row(Outcome::Failed(failed))],
+        };
+
+        let (text, _) = text(&report);
+
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(!text.contains('\u{202e}'), "{text:?}");
+        assert_eq!(
+            text.matches("dir\u{241b}[2J\u{2039}U+202E\u{203A}end")
+                .count(),
+            2,
+            "{text:?}"
+        );
     }
 
     /// The regression it rejects: a skipped workflow read as a failure, which fails the report on

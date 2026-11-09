@@ -511,9 +511,48 @@ sign-in commands, and the directory `sessions import` was told to read are drawn
 way. The model a stored pick names and the reason it was
 refused, the model the opening line of a session in lines names, the model a service reported
 serving instead of the one asked for, the report of a stored manifest run that `--resume` or
-`--fork` names, and the directories a kept answer or a resume hint names are drawn the same way. The
-line breaks those sentences run over are kept and every other control character is pictured. The
-trail Ctrl-T shows in the terminal and the audit
+`--fork` names, and the directories a kept answer or a resume hint names are drawn the same way.
+So are the settings, managed, key and certificate files and the state directory that `doctor`,
+the sign-in commands and the `mcp` commands name, the AWS profiles and the failure the AWS CLI
+gave, the names and paths the `mcp` commands print, the settings file a question about starting
+connectors names, the ids a stored key is held for, the start of a session id and the name and
+directory in a `sessions` row, and what `sessions import` prints about a session another program
+wrote. The file a ChatGPT sign-in was stored in, the settings files a refused sandbox mode names,
+the paths and the platform's detail in the sandbox check of `doctor` are drawn the same way. So is
+the directory named in the note that a local connector was not started because a directory of its
+own could not be made, which is under the state directory or the system temporary directory the
+environment chose. A path
+the person's environment chose is drawn like one a checkout chose, so no site decides by where a
+path came from.
+
+The managed file's path is fixed for the platform when bravebot is built, so neither a checkout nor
+the environment chooses it. The `bravebot` command line draws it anyway where it names it
+(`auth.rs` `managed_path`, `doctor.rs` `managed_layer`, `import.rs` `pinned_lines`, and the
+sandbox refusal). Other places name it as it is: the managed-layer refusal of a connector,
+built by `bravebot_agent::mcp::managed_refusal`, which the `mcp` commands of the command line print
+unchanged; the terminal client's `/sandbox` refusal and its network status line; and the text the
+desktop bridge sends to the window.
+
+Five texts are not drawn because nothing a checkout, a file or the environment can choose reaches
+them:
+
+- the alias in the notes about a connector that was not started, declined or asked about by
+  nobody. `settle` reaches those notes only for an alias that `is_alias` accepted (letters,
+  digits, `-` and `_`); any other alias is a declaration problem drawn by `shown`;
+- the instant an account list line says its access token expires, which is formatted from a stored
+  integer;
+- the text of the operating system's error when a key cannot be read from the terminal, which
+  `auth` and `brave` print;
+- the operating system's error that the `mcp` commands print beside a path they could not write,
+  which is the system's wording for the failed call and names no path;
+- the operating system's error that the sandbox check of `doctor` prints when it cannot make or use
+  its test directory, which names no path either.
+
+The line breaks those sentences run over are kept and every other control character is pictured.
+The `bravebot` command line draws with `progress::printable`, which also spells a bidirectional
+control and a zero-width character as `‹U+XXXX›`, so every existing caller of it draws them that
+way as well as the control characters. The terminal client draws only control characters in notes;
+that is tracked in brave/bravebot#3829. The trail Ctrl-T shows in the terminal and the audit
 inspector in the desktop window draw the same text the same way, so a control character is shown as
 a picture and is not dropped by the screen or the page. The desktop bridge sends, beside each audit
 event, the words `bravebot_approval::printable` makes of each string field of the event, and the
@@ -536,6 +575,32 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_cli::plain::the_opening_lines_draw_a_model_name_and_a_refusal_as_pictures`
 `verified-by: bravebot_cli::plain::the_kept_answer_line_draws_the_paths_it_names_as_pictures`
 `verified-by: bravebot_cli::running::the_refusal_of_a_definitions_model_draws_the_definitions_name_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_model_the_settings_name_as_pictures`
+`verified-by: bravebot_cli::model::the_managed_refusal_draws_the_model_and_the_file_as_pictures`
+`verified-by: bravebot_cli::running::the_output_schema_refusal_draws_the_model_it_names_as_pictures`
+`verified-by: bravebot_cli::running::the_off_schema_complaint_draws_the_property_it_names_as_pictures`
+`verified-by: bravebot_cli::running::a_sign_in_that_cannot_be_forgotten_draws_its_path_as_pictures`
+`verified-by: bravebot_cli::auth::the_aws_failure_a_sign_in_prints_is_drawn`
+`verified-by: bravebot_cli::auth::a_key_file_path_with_control_characters_is_drawn_where_it_is_named`
+`verified-by: bravebot_cli::auth::the_path_named_when_a_kept_key_cannot_be_read_again_is_drawn`
+`verified-by: bravebot_cli::auth::the_ids_a_stored_key_is_held_for_are_drawn_on_the_list_of_ways`
+`verified-by: bravebot_cli::auth::a_row_is_worded_with_what_a_checkout_chose_drawn`
+`verified-by: bravebot_cli::doctor::the_aws_profiles_the_cli_lists_are_drawn_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_managed_files_path_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_state_directory_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_a_checkouts_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_the_home_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_state_directory_and_key_files_the_environment_names_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_client_certificate_paths_the_environment_names_as_pictures`
+`verified-by: bravebot_cli::background::the_start_of_an_id_a_line_shows_is_drawn`
+`verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row`
+`verified-by: bravebot_agent::servers::the_settings_file_a_question_names_is_drawn_when_a_link_leads_to_an_odd_name`
+`verified-by: bravebot_agent::servers::the_path_in_a_note_about_a_server_directory_that_could_not_be_made_is_drawn`
+`verified-by: bravebot_cli::running::what_sessions_import_prints_about_a_foreign_session_is_drawn_as_pictures`
+`verified-by: bravebot_cli::session_import::the_title_and_id_of_a_session_another_program_wrote_are_drawn_as_pictures`
+`verified-by: bravebot_cli::mcp::a_control_character_in_a_name_an_mcp_command_prints_is_drawn_as_its_picture`
+`verified-by: bravebot_cli::background::a_bidirectional_control_in_a_session_name_or_directory_is_written_out`
 `verified-by: bravebot_cli::running::the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures`
 `verified-by: bravebot_cli::running::the_refusal_of_a_directory_that_is_a_file_draws_its_name_as_pictures`
 `verified-by: bravebot_cli::plain::a_turn_that_could_not_run_is_said_beside_the_reply_drawn_as_pictures`

@@ -6,7 +6,7 @@
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
-use crate::progress::printable;
+use crate::progress::{printable, printable_lines};
 use bravebot_agent::accounts::BedrockSwitch as Switch;
 #[cfg(test)]
 use bravebot_agent::accounts::write_keys;
@@ -334,7 +334,7 @@ fn bedrock() -> ExitCode {
     let mut switched_on = false;
     for (profile, account) in accounts {
         let signed_in = match Backend::sign_in_to(account, |line| println!("{line}")) {
-            Err(failure) => Err(failure.to_string()),
+            Err(failure) => Err(drawn(&failure)),
             // Asked again, because `aws sso login` can finish for a profile whose credentials still
             // cannot be exported, and the export is what a turn signs with.
             Ok(()) if !Backend::signed_in_to(account) => Err(t!(auth_aws_still_signed_out).into()),
@@ -466,6 +466,12 @@ pub(crate) use bravebot_agent::accounts::inherited_profile;
 /// A path made printable, since a path may hold control characters a terminal would act on.
 fn shown(path: &Path) -> String {
     printable(&path.display().to_string())
+}
+
+/// The words of a failure of the AWS CLI or of the check after it, drawn. They carry the first line
+/// the CLI wrote, which a profile or an environment variable can shape (LAYER-3).
+fn drawn(failure: &dyn std::fmt::Display) -> String {
+    printable_lines(&failure.to_string())
 }
 
 fn managed_path() -> String {
@@ -632,7 +638,7 @@ fn gateway_refused(err: &mut impl Write, task: &Task<'_>, refusal: key_entry::Re
             Ending::Failed,
             t!(
                 auth_gateway_keys_unreadable,
-                path = task.directory.map(keys::file).unwrap_or_default().display()
+                path = shown(&task.directory.map(keys::file).unwrap_or_default())
             ),
         ),
         Refusal::Incognito
@@ -752,7 +758,7 @@ fn store_key(
             return refused(
                 err,
                 Ending::Failed,
-                t!(auth_gateway_keys_unreadable, path = path.display()),
+                t!(auth_gateway_keys_unreadable, path = shown(&path)),
             );
         }
         Err(key_entry::StoreError::NotStored(error)) => {
@@ -761,8 +767,8 @@ fn store_key(
                 Ending::Failed,
                 t!(
                     auth_gateway_not_stored,
-                    path = path.display(),
-                    error = error.to_string()
+                    path = shown(&path),
+                    error = printable(&error.to_string())
                 ),
             );
         }
@@ -780,13 +786,13 @@ fn store_key(
             false => t!(
                 auth_gateway_stored,
                 id = id,
-                path = path.display(),
+                path = shown(&path),
                 host = host
             ),
             true => t!(
                 auth_gateway_stored_and_recorded,
                 id = id,
-                path = path.display(),
+                path = shown(&path),
                 file = shown(settings),
                 host = host
             ),
@@ -875,7 +881,7 @@ fn record_kept(
                 Ending::Failed,
                 t!(
                     auth_gateway_keys_unreadable,
-                    path = keys::file(directory).display()
+                    path = shown(&keys::file(directory))
                 ),
             );
         }
@@ -1152,7 +1158,7 @@ fn worded(row: accounts::Row) -> Line {
             (Why::NothingStored, Of::Xai) => t!(auth_status_xai_none).into(),
             (Why::NothingStored, _) => t!(auth_status_gateway_none).into(),
             (Why::BraveUnreadable { path }, _) => {
-                t!(brave_key_unreadable, path = path.display()).to_string()
+                t!(brave_key_unreadable, path = shown(&path)).to_string()
             }
             (Why::ChatGpt(failure), _) => crate::chatgpt::said_of_account(&failure),
             (Why::Xai(failure), _) => crate::xai::said_of_account(&failure),
@@ -1288,7 +1294,7 @@ fn forget_gateway(named: Option<&str>) -> ExitCode {
     let unreadable = || {
         fail(
             Ending::Failed,
-            t!(auth_gateway_keys_unreadable, path = path.display()),
+            t!(auth_gateway_keys_unreadable, path = shown(&path)),
         )
     };
     let Ok(stored) = Keys::read(&directory) else {
@@ -1306,8 +1312,8 @@ fn forget_gateway(named: Option<&str>) -> ExitCode {
                 Ending::Failed,
                 t!(
                     auth_logout_gateway_not_written,
-                    path = path.display(),
-                    error = error.to_string()
+                    path = shown(&path),
+                    error = printable(&error.to_string())
                 ),
             );
         }
@@ -3116,6 +3122,21 @@ mod tests {
         }
     }
 
+    /// LAYER-3: what the AWS CLI wrote about a failed sign-in is printed after the profile name, and
+    /// a control character in it is drawn as its picture, a bidirectional control as its code point.
+    #[test]
+    fn the_aws_failure_a_sign_in_prints_is_drawn() {
+        let said = drawn(&CredentialError::Refused {
+            detail: "denied\u{1b}[31m\u{202e}red".into(),
+        });
+        assert!(said.contains("denied"), "{said:?}");
+        assert!(
+            !said.chars().any(|c| c == '\u{1b}' || c == '\u{202e}'),
+            "{said:?}"
+        );
+        assert!(said.contains("U+202E"), "{said:?}");
+    }
+
     /// CLI-18: a file of keys that cannot be read once the key is not typed is a failure, as it is
     /// everywhere else the file is read, and not a sign-in that ended well.
     #[test]
@@ -3143,6 +3164,150 @@ mod tests {
             std::fs::read_to_string(keys::file(&run.directory)).expect("the keys"),
             "not a file of keys"
         );
+    }
+
+    /// LAYER-3: the path of the file of keys is named by a state directory a checkout may have chosen,
+    /// so the refusal that names it and the line that says where a key went draw a control character
+    /// as its picture and a bidirectional control as its code point.
+    #[test]
+    fn a_key_file_path_with_control_characters_is_drawn_where_it_is_named() {
+        let odd = "odd\u{1b}[31m\u{202e}dir";
+        let acts = |text: &str| text.chars().any(|c| c == '\u{1b}' || c == '\u{202e}');
+
+        let refused = sign_in(
+            odd,
+            Given {
+                named: Some("openai"),
+                keys: Some("not a file of keys"),
+                ..Given::default()
+            },
+        );
+        assert_eq!(refused.ending, Ending::Failed, "{}", refused.err);
+        assert!(refused.err.contains("odd"), "{:?}", refused.err);
+        assert!(!acts(&refused.err), "{:?}", refused.err);
+        assert!(refused.err.contains("U+202E"), "{:?}", refused.err);
+
+        let stored = sign_in(
+            odd,
+            Given {
+                named: Some("openai"),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(stored.ending, Ending::Done, "{}", stored.err);
+        assert!(stored.out.contains("odd"), "{:?}", stored.out);
+        assert!(!acts(&stored.out) && !acts(&stored.err), "{:?}", stored.out);
+        assert!(stored.out.contains("U+202E"), "{:?}", stored.out);
+    }
+
+    /// LAYER-3: a key stored for a known service no block names is recorded without a key being
+    /// typed. The file of keys is read again first, and where it can no longer be read the refusal
+    /// names its path, which a state directory a checkout chose may fill with control characters.
+    ///
+    /// Rejects the second read's refusal naming the path as the file system spells it.
+    #[test]
+    fn the_path_named_when_a_kept_key_cannot_be_read_again_is_drawn() {
+        let odd = "kept\u{1b}[31m\u{202e}dir";
+        let spoil = |directory: &Path| {
+            std::fs::write(keys::file(directory), "not a file of keys").expect("spoil the keys");
+        };
+        let run = sign_in(
+            odd,
+            Given {
+                named: Some("openai"),
+                typed: None,
+                meanwhile: Some(&spoil),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+        assert!(run.err.contains("kept"), "{:?}", run.err);
+        assert!(
+            !run.err.chars().any(|c| c == '\u{1b}' || c == '\u{202e}'),
+            "{:?}",
+            run.err
+        );
+        assert!(run.err.contains("U+202E"), "{:?}", run.err);
+    }
+
+    /// LAYER-3: the ids the list of ways shows beside the gateway line come from the file of keys,
+    /// which a state directory a checkout chose can fill with any text, so each is drawn.
+    ///
+    /// Rejects joining the ids as they are stored.
+    #[test]
+    fn the_ids_a_stored_key_is_held_for_are_drawn_on_the_list_of_ways() {
+        let mut stored = Keys::default();
+        stored.insert(
+            "odd\u{1b}[31m\u{202e}id",
+            Secret::new("placeholder-gateway-key"),
+        );
+        stored.insert("plain", Secret::new("placeholder-gateway-key"));
+
+        let said = gateways_held(Ok(stored)).expect("a line for the keys held");
+
+        assert!(said.contains("plain"), "{said:?}");
+        assert!(said.contains("odd"), "{said:?}");
+        assert!(
+            !said.chars().any(|c| c == '\u{1b}' || c == '\u{202e}'),
+            "{said:?}"
+        );
+        assert!(said.contains("U+202E"), "{said:?}");
+    }
+
+    /// LAYER-3: the name a row is reported under and the words of its standing hold a gateway id,
+    /// an AWS profile, a configuration problem and a path, each of which a checkout can choose, so
+    /// `status` and the list draw them.
+    ///
+    /// Rejects a row worded from any of those as it was read.
+    #[test]
+    fn a_row_is_worded_with_what_a_checkout_chose_drawn() {
+        use bravebot_agent::accounts::{Row, Standing as Of, Way as For, Why};
+        let odd = "odd\u{1b}[31m\u{202e}name";
+        let acts = |text: &str| text.chars().any(|c| c == '\u{1b}' || c == '\u{202e}');
+        let row = |way, standing| Row {
+            way,
+            standing,
+            stored: false,
+        };
+        let rows = [
+            row(
+                For::Gateway { id: odd.into() },
+                Of::NotSignedIn(Why::GatewayAbsent),
+            ),
+            row(
+                For::Gateway { id: odd.into() },
+                Of::NotSignedIn(Why::GatewayNoneStored),
+            ),
+            row(
+                For::Gateway { id: odd.into() },
+                Of::NotSignedIn(Why::GatewayUnrecorded),
+            ),
+            row(
+                For::Bedrock {
+                    profile: Some(odd.into()),
+                },
+                Of::NotSignedIn(Why::BedrockLapsed),
+            ),
+            row(
+                For::Gateway { id: "work".into() },
+                Of::Misconfigured(ConfigError::InvalidEndpoint { value: odd.into() }),
+            ),
+            row(
+                For::Brave,
+                Of::NotSignedIn(Why::BraveUnreadable {
+                    path: PathBuf::from(odd),
+                }),
+            ),
+        ];
+        for row in rows {
+            let described = format!("{row:?}");
+            let (name, standing) = worded(row);
+            let said = format!("{name}: {}", standing.said());
+            assert!(said.contains("odd"), "{described}: {said:?}");
+            assert!(!acts(&said), "{described}: {said:?}");
+            assert!(said.contains("U+202E"), "{described}: {said:?}");
+        }
     }
 
     /// CLI-18: a settings file under the size bravebot reads can be taken past it by the entry, which
