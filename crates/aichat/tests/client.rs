@@ -4277,7 +4277,10 @@ fn a_rate_limit_with_no_wait_is_asked_again_up_to_six_requests() {
                 .collect(),
         );
         let config = config_for(&endpoint);
-        let gateway = gateway_naming(&endpoint, model);
+        // A window of a millisecond cannot hold any pause of the schedule, so only the default
+        // count of six decides. Without it the default window would send the request again for
+        // as long as it holds, which the 1 ms base of this helper never spends.
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1"#);
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
         assert!(
             matches!(
@@ -4329,7 +4332,9 @@ fn a_429_that_named_its_wait_keeps_the_three_requests() {
             answer_for(true),
         ]);
         let config = config_for(&endpoint);
-        let gateway = gateway_naming(&endpoint, model);
+        // A window of a millisecond holds none of these pauses, so only the default count of
+        // three decides and the default window does not send a fourth request.
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1"#);
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, true);
         assert!(result.is_err(), "status {status}: {result:?}");
         assert_eq!(attempts, 3, "status {status}");

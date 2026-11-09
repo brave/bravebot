@@ -2554,6 +2554,7 @@ mod tests {
         let stated = |retries: Option<u32>| Patience {
             max_retries: retries,
             idle_timeout: None,
+            retry_window: None,
         };
         assert_eq!(attempts_allowed(stated(None), true), 6);
         assert_eq!(attempts_allowed(stated(None), false), 3);

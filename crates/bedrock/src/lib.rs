@@ -5048,9 +5048,10 @@ mod tests {
         assert_eq!(attempts, 4);
 
         for streaming in [false, true] {
+            // A window of a millisecond holds none of the pauses, so the count of six decides.
             let (http, received) = refused_requests(vec![429; 8]);
             let (result, attempts) = asked_through(
-                &account_stating(None, None),
+                &account_stating_a_window(None, 1),
                 &Egress::new(),
                 http,
                 streaming,
