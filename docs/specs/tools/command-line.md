@@ -969,9 +969,12 @@ is text in both modes (`NAME='$X' cmd`).
 **The plan carries the source, never the value.** The step holds the text as written (`$X`,
 `$(cmd)`) and the compiled steps of `cmd`. The plan text, its canonical form and key, the trail, the
 history, an error and anything the planner is told are made from that source alone. The value is
-resolved at the moment the step is spawned, put in that one process's environment after the line's
-literal assignments, and then the environment is withheld from again, so a removed credential is not
-brought back. It is held in no structure that is written or printed.
+resolved when the pipeline holding the step is about to start, before any stage of that pipeline is
+spawned: in `a | NAME=$(cmd) b`, `cmd` runs before `a` does. A variable that is unset or withheld, or
+a substitution that fails, refuses the pipeline with none of its stages started. The value is put in
+that one process's environment after the line's literal assignments, and then the environment is
+withheld from again, so a removed credential is not brought back. It is held in no structure that is
+written or printed.
 
 **The command is compiled by the same compiler.** `cmd` goes through the same program resolution,
 permission checks, redirection and write-set handling as any stage, and what it reads and writes is

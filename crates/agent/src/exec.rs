@@ -1834,7 +1834,8 @@ fn command_for(
         started_as,
         args: _,
         environment: _,
-        // Their values are `expanded`, worked out by the caller just before this step starts.
+        // Their values are `expanded`, worked out by the caller for the whole pipeline before its
+        // first step starts.
         expansions: _,
         routes: _,
     } = step;

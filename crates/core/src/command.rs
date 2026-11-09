@@ -308,7 +308,7 @@ pub fn is_the_null_device(path: &Path) -> bool {
     path.as_os_str() == NULL_DEVICE
 }
 
-/// One piece of the value of an assignment that is worked out when the step starts.
+/// One piece of the value of an assignment that is worked out when the step's pipeline starts.
 ///
 /// Only ever the *source*: the name of a variable, or the line of a command. What either comes to
 /// is resolved at spawn time, held by the spawn alone, and never stored in a plan, a key, a trail or
@@ -394,8 +394,9 @@ pub struct Step {
     pub environment: Vec<(String, String)>,
     /// `NAME=$VAR` and `NAME="$(cmd)"` written in front of this step's own program, as source.
     ///
-    /// Accepted in bypass mode only. Nothing here holds a value: they are worked out when the step
-    /// starts and go to the process alone. Applied after [`Step::environment`].
+    /// Accepted in bypass mode only. Nothing here holds a value: they are worked out when the
+    /// pipeline holding this step starts and go to the process alone. Applied after
+    /// [`Step::environment`].
     pub expansions: Vec<Expansion>,
     /// Where this step's streams go.
     pub routes: Vec<Route>,

@@ -158,7 +158,8 @@ to it as vouched, including one another account or program wrote, so instruction
 `NAME=$VAR cmd`, `NAME=${VAR} cmd` and `NAME="$(other)" cmd` are accepted in the assignment prefix in
 front of a program; everywhere else, and in every other mode, `$VAR`, `$(…)` and backticks are refused
 as before. The plan, the trail and every message hold the text as written, and the value is looked up
-only when the step starts. A variable bravebot removes from every program, or that `run.scrubEnv`
+only when the pipeline holding the step starts, before any of its stages is spawned. A variable
+bravebot removes from every program, or that `run.scrubEnv`
 names, is refused, as is one that is not set. See [`run`](../reference/run-tool.md#an-assignment-can-take-a-variable-or-a-command-in-bypass-mode).
 
 Starting a language server is answered only where the sandbox mode is `off`, which
