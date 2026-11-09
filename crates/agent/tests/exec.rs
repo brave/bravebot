@@ -3411,6 +3411,10 @@ fn set_raw(name: &str, bytes: &[u8]) {
 }
 
 /// A step printing the variable `BRAVEBOT_TEST_TARGET` after `parts` were put in it.
+///
+/// Only the tests that are `cfg(unix)` use it, so it is compiled for them alone: on Windows an
+/// unused helper fails the lint under `-D warnings`.
+#[cfg(unix)]
 fn printing(print: &std::path::Path, parts: Vec<ValuePart>) -> Step {
     expanding(
         print,
