@@ -52,8 +52,8 @@ What the equivalent tool in Claude Code offers, as the list this spec is measure
 | `\|`, `&&`, `\|\|`, `;` | yes | pipe only | yes |
 | Redirection | yes | no | yes, as a write destination |
 | Globs | yes, by the shell | no | yes, by the harness |
-| `$(...)`, backticks | yes | no | **refused** |
-| `$VAR` | yes | no | **refused** |
+| `$(...)`, backticks | yes | no | **refused**, except `NAME="$(cmd)" prog` in the assignment prefix under bypass ([CMDLINE-17](#CMDLINE-17)) |
+| `$VAR` | yes | no | **refused**, except `NAME=$VAR prog` in the assignment prefix under bypass ([CMDLINE-17](#CMDLINE-17)) |
 | Output to the model | direct text | reference, then a second call | direct where the label allows |
 | Truncation | head and tail kept | none | head and tail kept |
 | Deadline | per call, 2min default, 10min ceiling | fixed 300s | per call, ceiling |
@@ -63,6 +63,7 @@ What the equivalent tool in Claude Code offers, as the list this spec is measure
 | Permission rules | per sub-command prefix | per stage | per compiled stage |
 
 The two rows in bold are where parity is refused on purpose, and [CMDLINE-2](#CMDLINE-2) says why.
+The one exception is narrow, exists only in bypass mode, and is [CMDLINE-17](#CMDLINE-17).
 Everything else is adopted.
 
 ## Why the shell exclusion said never, and what changes
@@ -142,14 +143,15 @@ Accepted, and nothing else:
 | Brace expansion | `{a,b}`, `{1..9}` |
 | Home | leading `~` |
 | Per-command environment | `NAME=literal cmd` |
+| Per-command environment from a variable or a command, **bypass mode only** | `NAME=$VAR cmd`, `NAME=${VAR} cmd`, `NAME=a-$VAR-b cmd`, `NAME="$(cmd)" cmd`, `NAME=$(cmd) cmd`, in the assignment prefix of a program and nowhere else ([CMDLINE-17](#CMDLINE-17)) |
 
 Refused, as a compile error with the offending span named:
 
 | Construct | Why |
 |---|---|
-| `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw; inside double quotes it is still one, and the refusal says single quotes pass it as text |
+| `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw; inside double quotes it is still one, and the refusal says single quotes pass it as text. Outside bypass mode this holds everywhere; in bypass mode `$(…)` is accepted as the value of an assignment in front of a program ([CMDLINE-17](#CMDLINE-17)) and refused everywhere else, and a backtick is refused everywhere, an assignment value included |
 | `<(…)`, `>(…)` | same, plus a file descriptor nobody named |
-| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` followed by no name, brace, parenthesis, special parameter or quote (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$` |
+| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` followed by no name, brace, parenthesis, special parameter or quote (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$`. In bypass mode only, and only in the value of an assignment in front of a program, `$NAME` and `${NAME}` are accepted ([CMDLINE-17](#CMDLINE-17)); `${X:-y}`, `${#X}`, `$1` and the like stay refused |
 | `$?` | the exit status of an earlier step is not in the line; the refusal names the whole `$?` and says the run result already reports how each step ended ([RUN-13](run.md#RUN-13)) and that single quotes pass the characters as text |
 | `$$`, `$@`, `$*`, `$#`, `$-`, `$!` | no shell holds parameters between the steps of a line, so there is no value for these to stand for; the refusal names both characters and says single quotes pass the text as one argument |
 | `$'…'`, `$"…"` | a quote after a `$` asks a shell to read escapes, and escapes are not read; the refusal names the whole quoted text (to the end of the line where it is never closed, a backslash keeping the next character inside it) and says a newline comes from a file or from standard input |
@@ -175,6 +177,12 @@ then the planner could have written it. Substituting it before the prompt makes 
 pointless; substituting it after makes the endorsement a lie. A closed set of harness-supplied
 names (the workspace root, say) could be admitted later by expanding them at compile time, which
 is the same thing as the planner having written them.
+
+**The one exception, bypass mode only.** Under bypass nobody endorses a plan, so the objection above
+has no prompt to make false, and a value taken from the environment or from a command in the
+assignment prefix is admitted there and nowhere else. The exception is [CMDLINE-17](#CMDLINE-17), it
+covers the assignment prefix of a program and nothing more, and outside bypass every form in the
+tables above is refused exactly as written.
 
 `verified-by: bravebot_agent::cmdline::a_simple_command_is_its_program_and_its_operands`
 `verified-by: bravebot_agent::cmdline::a_pipeline_keeps_its_stages_in_order`
@@ -744,6 +752,10 @@ less this agent's own credentials and with the session's own directory named
 ([TRUST-17](../trust-map.md#TRUST-17)). A planner that needs a variable set puts it on the line that
 needs it.
 
+Under bypass the value on that line may come from a variable or a command
+([CMDLINE-17](#CMDLINE-17)); that is still the line's own assignment, set for one program and not
+carried to the next call.
+
 A stage whose program is `cd`, `pushd`, `popd` or `export` is refused when the line is compiled,
 wherever it stands in the line and whether or not the host has a program of that name, because it
 would change nothing for the stages after it. The refusal says that the `directory` argument of the
@@ -935,6 +947,103 @@ into the expensive path. Wording that changes behaviour is behaviour.
 `verified-by: bravebot_agent::tools::the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere`
 `verified-by: bravebot_agent::tools::the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c`
 
+<a id="CMDLINE-17"></a>
+### CMDLINE-17: under bypass, an assignment in front of a program may take a variable or a command
+
+Outside bypass mode every form below is refused exactly as [CMDLINE-2](#CMDLINE-2) says. Under
+bypass (`tools.permission_mode` is `Bypass`) the compiler accepts these, and only these, and only
+in the `NAME=value` prefix in front of a program (the words since the start of the line or the last
+`|`, `&&`, `||`, `;` or `(` that are all assignments):
+
+| Form | Meaning |
+|---|---|
+| `NAME=$VAR cmd`, `NAME=${VAR} cmd`, `NAME="$VAR" cmd`, `NAME=a-$VAR-b cmd` | the value is the text with each named variable's value put in |
+| `NAME="$(cmd)" cmd`, `NAME=$(cmd) cmd` | the value is what `cmd` printed on standard output, trailing newlines trimmed |
+
+Several assignments may each carry one, and so may the prefix of a later stage (`a | NAME=$X b`).
+Everything else stays refused with the reasons it has today: a bare `$VAR` or `$(…)` as an argument
+or as the program, backticks anywhere (an assignment value included), `eval`, a pattern in an
+assignment value (`FOO=*.rs cmd`), `$1`, `$?`, `$$`, `${X:-y}` and `${#X}`. In single quotes a `$`
+is text in both modes (`NAME='$X' cmd`).
+
+**The plan carries the source, never the value.** The step holds the text as written (`$X`,
+`$(cmd)`) and the compiled steps of `cmd`. The plan text, its canonical form and key, the trail, the
+history, an error and anything the planner is told are made from that source alone. The value is
+resolved when the pipeline holding the step is about to start, before any stage of that pipeline is
+spawned: in `a | NAME=$(cmd) b`, `cmd` runs before `a` does. A variable that is unset or withheld, or
+a substitution that fails, refuses the pipeline with none of its stages started. The value is put in
+that one process's environment after the line's literal assignments, and then the environment is
+withheld from again, so a removed credential is not brought back. It is held in no structure that is
+written or printed.
+
+**The command is compiled by the same compiler.** `cmd` goes through the same program resolution,
+permission checks, redirection and write-set handling as any stage, and what it reads and writes is
+in the plan's sets. It runs as an earlier stage, in the same directory, under the same deadline,
+cancellation, confinement and scrubbed environment as the stage that uses it, with no standard
+input. A job started in the background works its substitutions out before its first stage starts,
+under the `run` call's own cancellation and deadline: a cancel ends the substitution and starts
+nothing, and one that outlasts the deadline is refused naming its source. The job it starts is not
+held to that deadline. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
+`cmd` is reported as that refusal.
+
+**A variable that is withheld is refused.** A name `bravebot_config::scrub::withheld()` returns,
+which includes this agent's own credentials and the names in `run.scrubEnv`, is refused when the
+line is compiled and again when the step is spawned. A variable that is unset, or whose value is not
+valid Unicode, is refused when the step is spawned, naming the variable and nothing else. A
+variable set to `v-\xff` is refused as not valid text; one set to `v-\u{FFFD}` is valid text and
+reaches the program unchanged.
+
+**A failure says what ran and how it ended, not what it printed.** A substitution that fails to
+start, is stopped, exits non-zero or prints bytes that are not valid Unicode fails the line before
+the stage that uses it, naming the source text and the exit status. A substitution that prints more
+than 65536 bytes (64 KiB) fails the line the same way, naming the source and that limit. Neither its
+standard output nor its standard error is in the message. What it printed is judged as the bytes the
+pipe delivered, so a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text
+holding a NUL byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
+start, and that error names the program and the operating system's words, never the value.
+
+**Nothing remembered covers such a line.** A line carrying an expansion is treated as a line with an
+environment assignment is: a remembered answer, a grant or an allow rule is not matched against it,
+and it is not offered the keys that remember a line, because what it will run depends on a value
+nobody was shown. (Under bypass no prompt is drawn at all; this is what holds for the same plan if
+it reaches one.)
+
+`verified-by: bravebot_agent::cmdline::a_variable_is_refused`
+`verified-by: bravebot_agent::cmdline::an_assignment_in_front_of_the_program_is_environment`
+`verified-by: bravebot_agent::cmdline::bypass_expansions_are_refused_outside_bypass_mode`
+`verified-by: bravebot_agent::cmdline::bypass_assignment_variables_are_kept_as_source`
+`verified-by: bravebot_agent::cmdline::bypass_assignment_substitution_runs_as_an_earlier_stage`
+`verified-by: bravebot_agent::cmdline::bypass_assignment_may_precede_a_later_pipeline_stage_or_a_second_assignment`
+`verified-by: bravebot_agent::cmdline::bypass_leaves_every_other_expansion_refused`
+`verified-by: bravebot_agent::cmdline::bypass_refuses_backticks_everywhere_including_an_assignment_value`
+`verified-by: bravebot_agent::cmdline::bypass_refuses_a_withheld_variable`
+`verified-by: bravebot_agent::cmdline::bypass_substitution_is_one_level_deep_and_inner_refusals_propagate`
+`verified-by: bravebot_agent::cmdline::bypass_substitution_is_judged_by_the_rules_like_any_step`
+`verified-by: bravebot_agent::exec::an_expanded_variable_reaches_the_spawned_program`
+`verified-by: bravebot_agent::exec::an_expanded_substitution_reaches_the_spawned_program_with_trailing_newlines_trimmed`
+`verified-by: bravebot_agent::exec::an_expansion_reaches_a_job_started_in_the_background`
+`verified-by: bravebot_agent::exec::an_unset_variable_is_refused_naming_the_variable_and_nothing_runs`
+`verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
+`verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
+`verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_background_start_is_cancelled_while_its_substitution_runs`
+`verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
+`verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
+`verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
+`verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
+`verified-by: bravebot_core::remembered::a_step_carrying_an_expansion_is_not_covered_by_an_entry`
+`verified-by: bravebot_core::remembered::a_line_carrying_an_expansion_is_covered_by_no_entry_and_no_scope`
+`verified-by: bravebot_core::remembered::a_line_carrying_an_expansion_is_offered_no_scope`
+`verified-by: bravebot_core::command::an_expansion_counts_as_an_assignment_and_keeps_a_line_from_being_remembered`
+`verified-by: bravebot_core::policy::a_vouched_line_carrying_an_expansion_is_asked_about`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_expansion_is_untrusted`
+`verified-by: bravebot_core::policy::an_expansion_asks_even_for_a_line_a_rule_allows`
+`verified-by: bravebot_core::policy::a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key`
+`verified-by: bravebot_core::policy::an_expansion_leaves_a_step_unproven`
+
 ## Amendments to existing specs
 
 This spec cannot land without these. Each is a real change to a normative clause and none should be
@@ -960,7 +1069,10 @@ nothing until you have opened that file.
 
 - **Command substitution and parameter expansion.** [CMDLINE-2](#CMDLINE-2). These are the whole of
   what makes a shell string unendorsable, and adopting them would give up the property the rest of
-  the spec is built to keep.
+  the spec is built to keep. The sole exception is the bypass-only assignment prefix of
+  [CMDLINE-17](#CMDLINE-17): `$NAME`, `${NAME}` and one level of `$(cmd)` as the value of
+  `NAME=` in front of a program. As an argument, as a program, nested, or outside bypass, they stay
+  refused.
 - **A fallback to a real shell when compilation fails.** The single change that voids this spec.
 - **Aliases and profile loading.** A line's meaning must be in the line. Shell mode loads the user's
   syntax because a person typed it; nothing here does.

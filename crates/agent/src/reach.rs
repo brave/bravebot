@@ -180,12 +180,13 @@ fn key_of(step: &Step) -> Key<'_> {
         started_as: _,
         args,
         environment,
+        expansions,
         routes: _,
     } = step;
     Key {
         binary: resolved.clone(),
         args,
-        assigned: !environment.is_empty(),
+        assigned: !environment.is_empty() || !expansions.is_empty(),
     }
 }
 
@@ -226,9 +227,11 @@ impl Grant {
             started_as: _,
             args,
             environment,
+            expansions,
             routes: _,
         } = step;
         environment.is_empty()
+            && expansions.is_empty()
             && *resolved == self.binary
             && match &self.operation {
                 Some(operation) => operation_of(args).as_ref() == Some(operation),
@@ -1073,6 +1076,7 @@ mod tests {
             started_as: PathBuf::from(resolved),
             args: args.iter().map(|argument| argument.to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }

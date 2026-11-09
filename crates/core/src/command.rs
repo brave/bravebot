@@ -308,6 +308,63 @@ pub fn is_the_null_device(path: &Path) -> bool {
     path.as_os_str() == NULL_DEVICE
 }
 
+/// One piece of the value of an assignment that is worked out when the step's pipeline starts.
+///
+/// Only ever the *source*: the name of a variable, or the line of a command. What either comes to
+/// is resolved at spawn time, held by the spawn alone, and never stored in a plan, a key, a trail or
+/// a result, because it may be a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValuePart {
+    /// Text taken as written.
+    Text(String),
+    /// `$NAME` or `${NAME}`: the value of a variable of the environment bravebot runs in.
+    Variable(String),
+    /// `$(source)`: what the compiled `steps` print, trailing newlines trimmed.
+    Substitution { source: String, steps: Box<Steps> },
+}
+
+/// `NAME=value` in front of a program where the value is not all literal text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expansion {
+    pub name: String,
+    pub parts: Vec<ValuePart>,
+}
+
+impl Expansion {
+    /// The assignment as written, from its source alone.
+    pub fn display(&self) -> String {
+        if let [ValuePart::Variable(variable)] = self.parts.as_slice() {
+            return format!("{}=${variable}", self.name);
+        }
+        let spelled = |out: &mut String, text: &str, escape: bool| {
+            for c in text.chars() {
+                if escape && matches!(c, '\\' | '"' | '$' | '`') {
+                    out.push('\\');
+                    out.push(c);
+                } else if needs_spelling(c) {
+                    out.push_str(&format!("\\u{{{:x}}}", c as u32));
+                } else {
+                    out.push(c);
+                }
+            }
+        };
+        let mut out = format!("{}=\"", self.name);
+        for part in &self.parts {
+            match part {
+                ValuePart::Text(text) => spelled(&mut out, text, true),
+                ValuePart::Variable(variable) => out.push_str(&format!("${{{variable}}}")),
+                ValuePart::Substitution { source, .. } => {
+                    out.push_str("$(");
+                    spelled(&mut out, source, false);
+                    out.push(')');
+                }
+            }
+        }
+        out.push('"');
+        out
+    }
+}
+
 /// One program in a plan, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {
@@ -335,11 +392,22 @@ pub struct Step {
     pub args: Vec<String>,
     /// `NAME=value` written in front of this step's own program.
     pub environment: Vec<(String, String)>,
+    /// `NAME=$VAR` and `NAME="$(cmd)"` written in front of this step's own program, as source.
+    ///
+    /// Accepted in bypass mode only. Nothing here holds a value: they are worked out when the
+    /// pipeline holding this step starts and go to the process alone. Applied after
+    /// [`Step::environment`].
+    pub expansions: Vec<Expansion>,
     /// Where this step's streams go.
     pub routes: Vec<Route>,
 }
 
 impl Step {
+    /// Whether an assignment is written in front of this step's program, literal or not.
+    pub fn carries_an_assignment(&self) -> bool {
+        !self.environment.is_empty() || !self.expansions.is_empty()
+    }
+
     /// The step as a person should read it before approving.
     ///
     /// The binary rather than the name, because that is what will run: the path it is started by
@@ -404,6 +472,10 @@ impl Step {
         for (name, value) in &self.environment {
             out.push_str(&format!("{name}={} ", quoted(value)));
         }
+        for expansion in &self.expansions {
+            out.push_str(&expansion.display());
+            out.push(' ');
+        }
         out.push_str(program);
         for arg in args {
             out.push(' ');
@@ -445,6 +517,7 @@ impl Step {
             started_as,
             args,
             environment: _,
+            expansions: _,
             routes: _,
         } = self;
         crate::programs::Command::new(resolved.clone(), args.clone(), directory)
@@ -493,7 +566,20 @@ impl Steps {
 
     fn gather<'a>(&'a self, out: &mut Vec<&'a Step>) {
         match self {
-            Self::Pipeline(steps) => out.extend(steps.iter()),
+            Self::Pipeline(steps) => {
+                for step in steps {
+                    // A command whose output becomes a value runs before the step that uses it,
+                    // and is as much a step as any other for every gate that walks the plan.
+                    for expansion in &step.expansions {
+                        for part in &expansion.parts {
+                            if let ValuePart::Substitution { steps, .. } = part {
+                                steps.gather(out);
+                            }
+                        }
+                    }
+                    out.push(step);
+                }
+            }
             Self::Join { left, right, .. } => {
                 left.gather(out);
                 right.gather(out);
@@ -691,7 +777,7 @@ impl Plan {
     /// Any step, not the first: an assignment in front of a stage in the middle of a pipeline
     /// decides what that stage loads, and what it prints is what the next stage reads.
     pub fn carries_an_assignment(&self) -> bool {
-        self.steps().iter().any(|step| !step.environment.is_empty())
+        self.steps().iter().any(|step| step.carries_an_assignment())
     }
 
     /// Whether an entry could record this line as the person read it.
@@ -841,6 +927,7 @@ fn encode_step(out: &mut String, step: &Step) {
         started_as,
         args,
         environment,
+        expansions,
         routes,
     } = step;
     length_prefixed_path(out, resolved);
@@ -853,6 +940,29 @@ fn encode_step(out: &mut String, step: &Step) {
     for (name, value) in environment {
         length_prefixed(out, name);
         length_prefixed(out, value);
+    }
+    // The source, never a value: the value is not known here and must not be.
+    out.push_str(&format!("x{}|", expansions.len()));
+    for expansion in expansions {
+        length_prefixed(out, &expansion.name);
+        out.push_str(&format!("p{}|", expansion.parts.len()));
+        for part in &expansion.parts {
+            match part {
+                ValuePart::Text(text) => {
+                    out.push('t');
+                    length_prefixed(out, text);
+                }
+                ValuePart::Variable(name) => {
+                    out.push('v');
+                    length_prefixed(out, name);
+                }
+                ValuePart::Substitution { source, steps } => {
+                    out.push('s');
+                    length_prefixed(out, source);
+                    encode(out, steps);
+                }
+            }
+        }
     }
     out.push_str(&format!("r{}|", routes.len()));
     for route in routes {
@@ -883,6 +993,7 @@ mod tests {
             started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }
@@ -1022,6 +1133,35 @@ mod tests {
         );
     }
 
+    /// CMDLINE-17: an expansion is an assignment written in front of a program, so the step and the
+    /// plan carry one, and a line carrying one is not a line an entry could record.
+    #[test]
+    fn an_expansion_counts_as_an_assignment_and_keeps_a_line_from_being_remembered() {
+        let expanding = || Step {
+            expansions: vec![Expansion {
+                name: "TOKEN".to_string(),
+                parts: vec![ValuePart::Variable("SECRET".to_string())],
+            }],
+            ..step("prog", &[])
+        };
+        assert!(!step("prog", &[]).carries_an_assignment());
+        assert!(expanding().carries_an_assignment());
+
+        let bare = plan(Steps::Pipeline(vec![step("prog", &[])]));
+        assert!(!bare.carries_an_assignment());
+        assert!(bare.can_be_remembered(), "the control cannot be remembered");
+
+        let later_stage = plan(Steps::Pipeline(vec![step("a", &[]), expanding()]));
+        assert!(
+            later_stage.carries_an_assignment(),
+            "an expansion on a later stage was not seen"
+        );
+        assert!(
+            !later_stage.can_be_remembered(),
+            "a line carrying an expansion could be remembered"
+        );
+    }
+
     /// The directory decides what a relative path in the plan means, so it is part of the plan.
     #[test]
     fn the_directory_a_plan_runs_in_is_part_of_what_it_encodes() {
@@ -1094,7 +1234,7 @@ mod tests {
             resolving_to(0xff).canonical(),
             // `0:` is the empty standard input, which every plan encodes whether it has one. The
             // path twice, as the file and as the path that starts it.
-            format!("t5:/work0:P1|{UNSHOWABLE_FF}{UNSHOWABLE_FF}a0|e0|r0|"),
+            format!("t5:/work0:P1|{UNSHOWABLE_FF}{UNSHOWABLE_FF}a0|e0|x0|r0|"),
             "the endorsement is bound to the path's own bytes"
         );
     }
@@ -1603,6 +1743,7 @@ mod tests {
                 started_as: PathBuf::from("/usr/bin/sed"),
                 args: vec!["-n".into(), "2p".into()],
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]));
             out.stdin = label;

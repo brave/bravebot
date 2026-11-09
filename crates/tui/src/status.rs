@@ -2482,6 +2482,7 @@ mod tests {
                     .map(String::from)
                     .to_vec(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             writes: Vec::new(),

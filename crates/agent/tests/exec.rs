@@ -3137,3 +3137,652 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
             .to_string_lossy()
     );
 }
+
+// --- NAME=$VAR and NAME="$(cmd)" in front of a step, worked out before the pipeline starts ---
+
+use bravebot_core::command::{Expansion, Plan, Step, Steps, ValuePart};
+
+/// A step for `program`, started as the path it is, carrying `expansions`.
+fn expanding(program: &std::path::Path, args: &[&str], expansions: Vec<Expansion>) -> Step {
+    Step {
+        program: program
+            .file_name()
+            .expect("a program path ends in a file name")
+            .to_string_lossy()
+            .into_owned(),
+        resolved: program.to_path_buf(),
+        started_as: program.to_path_buf(),
+        args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        environment: Vec::new(),
+        expansions,
+        routes: Vec::new(),
+    }
+}
+
+fn expansion(name: &str, parts: Vec<ValuePart>) -> Expansion {
+    Expansion {
+        name: name.to_string(),
+        parts,
+    }
+}
+
+fn substitution(source: &str, step: Step) -> ValuePart {
+    ValuePart::Substitution {
+        source: source.to_string(),
+        steps: Box::new(Steps::Pipeline(vec![step])),
+    }
+}
+
+fn plan_of(at: &std::path::Path, steps: Vec<Step>) -> Plan {
+    Plan {
+        line: String::new(),
+        directory: at.to_path_buf(),
+        steps: Steps::Pipeline(steps),
+        writes: Vec::new(),
+        reads: Vec::new(),
+        stdin: None,
+    }
+}
+
+fn run_expanding(plan: &Plan) -> Result<exec::Ran, ExecError> {
+    past_text_file_busy(|| run_plan(plan, &Cancel::new(), exec::LIMIT, None, None))
+}
+
+/// Prints the variable named by its first argument, without a newline.
+const PRINT_VARIABLE: &str = "#!/bin/sh\nprintenv \"$1\" | tr -d '\\n'\n";
+
+/// The point of the relaxation: a variable named in an assignment must arrive in the one
+/// process's environment, joined to the literal text around it. Without it the line would run with
+/// the unexpanded `$NAME` or with nothing, and the program would act on the wrong value.
+#[test]
+fn an_expanded_variable_reaches_the_spawned_program() {
+    let scratch = Scratch::new("expand-variable");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let _env = with_env(&[("BRAVEBOT_TEST_SOURCE_VAR", Some("from-the-environment"))]);
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![
+                    ValuePart::Text("a-".into()),
+                    ValuePart::Variable("BRAVEBOT_TEST_SOURCE_VAR".into()),
+                    ValuePart::Text("-b".into()),
+                ],
+            )],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    assert_eq!(ran.stdout, "a-from-the-environment-b");
+    assert!(ran.succeeded());
+}
+
+/// A command's output is delivered the way a shell would deliver it: trailing newlines trimmed,
+/// interior ones kept. A value that kept its trailing newline would differ from what the person
+/// wrote the line expecting, and the program would compare or open the wrong string.
+#[test]
+fn an_expanded_substitution_reaches_the_spawned_program_with_trailing_newlines_trimmed() {
+    let scratch = Scratch::new("expand-substitution");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let emit = script(
+        &scratch.path,
+        "emit.sh",
+        "#!/bin/sh\nprintf 'line one\\nline two\\n\\n\\n'\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit", expanding(&emit, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    // `tr -d` in the printer drops the interior newline too; the point here is that nothing
+    // trails, which the printer would hide, so ask the value's length as well.
+    assert_eq!(ran.stdout, "line oneline two");
+    let length = script(
+        &scratch.path,
+        "length.sh",
+        "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_TEST_TARGET\" | wc -c | tr -d ' \\n'\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &length,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit", expanding(&emit, &[], Vec::new()))],
+            )],
+        )],
+    );
+    // "line one\nline two" is 17 bytes once the trailing newlines are trimmed.
+    assert_eq!(run_expanding(&plan).expect("the line runs").stdout, "17");
+}
+
+/// A background start has its own path to the spawn, separate from the foreground run. If only the
+/// foreground resolved assignments, a job started with `background` would get no value, or the
+/// literal `$NAME`, and nothing else in the foreground tests would notice.
+#[test]
+fn an_expansion_reaches_a_job_started_in_the_background() {
+    let scratch = Scratch::new("expand-background");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let emit = script(&scratch.path, "emit.sh", "#!/bin/sh\necho from-sub\n");
+    let _env = with_env(&[("BRAVEBOT_TEST_SOURCE_VAR", Some("bg-value"))]);
+    let steps = vec![
+        expanding(
+            &print,
+            &["BRAVEBOT_TEST_ONE"],
+            vec![expansion(
+                "BRAVEBOT_TEST_ONE",
+                vec![ValuePart::Variable("BRAVEBOT_TEST_SOURCE_VAR".into())],
+            )],
+        ),
+        expanding(&emit, &[], Vec::new()),
+    ];
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("the job starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // The first step's output goes to the second, which ignores stdin: only the last prints.
+    assert_eq!(job.printed().trim(), "from-sub");
+    let steps = vec![expanding(
+        &print,
+        &["BRAVEBOT_TEST_ONE"],
+        vec![expansion(
+            "BRAVEBOT_TEST_ONE",
+            vec![
+                ValuePart::Variable("BRAVEBOT_TEST_SOURCE_VAR".into()),
+                substitution("emit", expanding(&emit, &[], Vec::new())),
+            ],
+        )],
+    )];
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("the job starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(job.printed().trim(), "bg-valuefrom-sub");
+}
+
+/// An unset variable must not become an empty string: the program would run on a value nobody
+/// chose. The refusal names the variable so the planner can fix the line, and the step never
+/// starts, so no side effect happens on a guess.
+#[test]
+fn an_unset_variable_is_refused_naming_the_variable_and_nothing_runs() {
+    let scratch = Scratch::new("expand-unset");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let _env = with_env(&[("BRAVEBOT_TEST_NOT_SET", None)]);
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![ValuePart::Variable("BRAVEBOT_TEST_NOT_SET".into())],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("an unset variable was expanded");
+    assert!(
+        matches!(&error, ExecError::Variable { name, problem }
+            if name == "BRAVEBOT_TEST_NOT_SET" && *problem == exec::VariableProblem::Unset),
+        "{error}"
+    );
+    assert!(error.to_string().contains("BRAVEBOT_TEST_NOT_SET"));
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+/// A command that fails has no value to hand on, so the line is refused before the using step
+/// starts. The error says which command and how it ended, but never what it printed, because the
+/// output of a command that exists to produce a value is likely to hold that value or a secret,
+/// and the error goes to the planner and into the trail.
+#[test]
+fn a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output() {
+    let scratch = Scratch::new("expand-failing");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let fail = script(
+        &scratch.path,
+        "fail.sh",
+        "#!/bin/sh\necho LEAKME-out\necho LEAKME-err >&2\nexit 3\n",
+    );
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution(
+                    "fail.sh --flag",
+                    expanding(&fail, &[], Vec::new()),
+                )],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a failing substitution was used");
+    let shown = error.to_string();
+    let debugged = format!("{error:?}");
+    assert!(shown.contains("fail.sh --flag"), "{shown}");
+    assert!(shown.contains('3'), "{shown}");
+    for text in [&shown, &debugged] {
+        assert!(!text.contains("LEAKME"), "{text}");
+    }
+}
+
+/// An environment cannot hold a NUL. The line is not refused by looking at what the command
+/// printed, since the output is untrusted and must not steer a decision or a message; the step that
+/// would receive it fails to start instead, and the error is the operating system's words about the
+/// program, with no part of the value in it.
+#[test]
+fn a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value() {
+    let scratch = Scratch::new("expand-nul");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let emit = script(&scratch.path, "emit.sh", "#!/bin/sh\nprintf 'a\\000b'\n");
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &print,
+            &["BRAVEBOT_TEST_TARGET"],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit-nul", expanding(&emit, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a NUL reached a program's environment");
+    assert!(
+        matches!(&error, ExecError::NotStarted { program, .. } if program == "print.sh"),
+        "{error}"
+    );
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(!text.contains('\0'), "{text:?}");
+        assert!(
+            !text.contains("a\0b") && !text.contains("emit-nul"),
+            "{text:?}"
+        );
+    }
+}
+
+/// CMDLINE-17: a substitution that prints more than 64 KiB is refused naming its source and the
+/// byte limit, and the step that would have used the value never starts. One that prints exactly
+/// the limit is accepted, so the bound is not off by one.
+#[cfg(unix)]
+#[test]
+fn a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit() {
+    let scratch = Scratch::new("expand-substitution-size");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let over = script(
+        &scratch.path,
+        "over.sh",
+        "#!/bin/sh\nhead -c 65537 /dev/zero | tr '\\000' a\n",
+    );
+    let exact = script(
+        &scratch.path,
+        "exact.sh",
+        "#!/bin/sh\nhead -c 65536 /dev/zero | tr '\\000' a\n",
+    );
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit-big", expanding(&over, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a substitution over the limit was accepted");
+    assert!(
+        matches!(&error, ExecError::Substitution { source, detail }
+            if source == "emit-big" && detail.contains("65536")),
+        "{error}"
+    );
+    let shown = error.to_string();
+    assert!(
+        shown.contains("emit-big") && shown.contains("65536"),
+        "{shown}"
+    );
+    assert!(!shown.contains("aaaa"), "{shown}");
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(
+            &print,
+            vec![substitution(
+                "emit-exact",
+                expanding(&exact, &[], Vec::new()),
+            )],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("a substitution at the limit runs");
+    assert_eq!(ran.stdout.len(), 65536);
+}
+
+/// Set `name` to `bytes` for the life of the guard `with_env` returned for it.
+#[cfg(unix)]
+fn set_raw(name: &str, bytes: &[u8]) {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: the caller holds the guard from `with_env`, which serialises these tests and
+    // restores the variable.
+    unsafe { std::env::set_var(name, std::ffi::OsStr::from_bytes(bytes)) };
+}
+
+/// A step printing the variable `BRAVEBOT_TEST_TARGET` after `parts` were put in it.
+///
+/// Only the tests that are `cfg(unix)` use it, so it is compiled for them alone: on Windows an
+/// unused helper fails the lint under `-D warnings`.
+#[cfg(unix)]
+fn printing(print: &std::path::Path, parts: Vec<ValuePart>) -> Step {
+    expanding(
+        print,
+        &["BRAVEBOT_TEST_TARGET"],
+        vec![expansion("BRAVEBOT_TEST_TARGET", parts)],
+    )
+}
+
+/// A variable that is not valid text is refused and nothing starts, and one holding the
+/// replacement character, which is valid text, reaches the program as it is.
+#[cfg(unix)]
+#[test]
+fn a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not() {
+    let scratch = Scratch::new("expand-variable-utf8");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let name = "BRAVEBOT_TEST_SOURCE_VAR";
+    let _env = with_env(&[(name, None)]);
+
+    set_raw(name, b"v-\xff");
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![ValuePart::Variable(name.into())],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a variable that is not text was expanded");
+    assert!(
+        matches!(&error, ExecError::Variable { name: named, problem }
+            if named == name && *problem == exec::VariableProblem::NotUnicode),
+        "{error}"
+    );
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+
+    set_raw(name, "v-\u{FFFD}".as_bytes());
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(&print, vec![ValuePart::Variable(name.into())])],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    assert_eq!(ran.stdout, "v-\u{FFFD}");
+}
+
+/// The same pair for a command's output. `\xff` is not valid text and is refused, naming the
+/// source and nothing printed, before the step that uses it starts; the replacement character
+/// itself is valid text and arrives unchanged. The regression it rejects is the lossy decoding of
+/// the pipe turning the first into the second.
+#[cfg(unix)]
+#[test]
+fn a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not()
+ {
+    let scratch = Scratch::new("expand-substitution-utf8");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let bad = script(&scratch.path, "bad.sh", "#!/bin/sh\nprintf 'v-\\377'\n");
+    let good = script(
+        &scratch.path,
+        "good.sh",
+        "#!/bin/sh\nprintf 'v-\\357\\277\\275'\n",
+    );
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit-bad", expanding(&bad, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("output that is not text was accepted");
+    assert!(
+        matches!(&error, ExecError::Substitution { source, .. } if source == "emit-bad"),
+        "{error}"
+    );
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(!text.contains('\u{FFFD}') && !text.contains("v-"), "{text}");
+    }
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(
+            &print,
+            vec![substitution("emit-good", expanding(&good, &[], Vec::new()))],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    assert_eq!(ran.stdout, "v-\u{FFFD}");
+}
+
+/// CMDLINE-17: a job started in the background works its substitutions out under the call's own
+/// cancellation. A cancel that arrives while one is running ends it, and the step that would have
+/// used the value never starts.
+#[cfg(unix)]
+#[test]
+fn a_background_start_is_cancelled_while_its_substitution_runs() {
+    let scratch = Scratch::new("expand-background-cancel");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let slow = script(&scratch.path, "slow.sh", "#!/bin/sh\nsleep 30\n");
+    let steps = vec![printing(
+        &touch,
+        vec![substitution("slow", expanding(&slow, &[], Vec::new()))],
+    )];
+    let cancel = Cancel::new();
+    let started = std::time::Instant::now();
+    let outcome = std::thread::scope(|scope| {
+        let stopper = cancel.clone();
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            stopper.cancel();
+        });
+        past_text_file_busy(|| {
+            exec::start_steps_within(&steps, &scratch.path, None, None, &cancel, exec::LIMIT)
+        })
+    });
+    assert!(
+        matches!(outcome, Err(ExecError::Cancelled)),
+        "a cancelled background start was not reported as cancelled"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the cancel did not end the substitution"
+    );
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+/// CMDLINE-17: and under the call's deadline, so a substitution that outlasts it is refused naming
+/// its source, rather than held to the built-in five minutes.
+#[cfg(unix)]
+#[test]
+fn a_background_start_holds_its_substitution_to_the_calls_deadline() {
+    let scratch = Scratch::new("expand-background-deadline");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let slow = script(&scratch.path, "slow.sh", "#!/bin/sh\nsleep 30\n");
+    let steps = vec![printing(
+        &touch,
+        vec![substitution("slow", expanding(&slow, &[], Vec::new()))],
+    )];
+    let started = std::time::Instant::now();
+    let outcome = past_text_file_busy(|| {
+        exec::start_steps_within(
+            &steps,
+            &scratch.path,
+            None,
+            None,
+            &Cancel::new(),
+            Duration::from_millis(500),
+        )
+    });
+    assert!(
+        matches!(&outcome, Err(ExecError::Substitution { source, .. }) if source == "slow"),
+        "a slow substitution was not refused at the call's deadline"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the deadline did not end the substitution"
+    );
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+/// The variables the subprocess scrub withholds hold credentials. Letting `NAME=$TOKEN` copy one
+/// into a child's environment would undo the scrub, so the line is refused; and the refusal names
+/// the variable but never its value, since the error reaches the planner and the trail.
+#[test]
+fn a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error() {
+    let scratch = Scratch::new("expand-withheld");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let name = bravebot_config::env_var::SCRUBBED[0];
+    let secret = "withheld-secret-6f1d0c52";
+    let _env = with_env(&[
+        (name, Some(secret)),
+        (bravebot_config::env_var::SUBPROCESS_ENV_SCRUB, None),
+    ]);
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![ValuePart::Variable(name.to_string())],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a withheld variable was expanded");
+    assert!(
+        matches!(&error, ExecError::Variable { name: named, problem }
+            if named == name && *problem == exec::VariableProblem::Withheld),
+        "{error}"
+    );
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(text.contains(name), "{text}");
+        assert!(!text.contains(secret), "{text}");
+    }
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+/// The feature exists to pass a secret to one program, so the secret must stay out of everything
+/// bravebot shows or writes: the plan's text, its `Debug` and canonical forms, errors, and the
+/// result of the run. One leak in any of them would put the value in front of the model or on disk.
+#[test]
+fn an_expanded_secret_appears_in_no_plan_text_error_or_result() {
+    let scratch = Scratch::new("expand-leak");
+    let from_variable = "variable-secret-7a93b1e4";
+    let from_command = "command-secret-c20f58d9";
+    let _env = with_env(&[
+        ("BRAVEBOT_TEST_LEAK_VAR", Some(from_variable)),
+        ("BRAVEBOT_TEST_LEAK_CMD", Some(from_command)),
+    ]);
+    // Compares what it was handed with what the environment holds, and prints neither.
+    let check = script(
+        &scratch.path,
+        "check.sh",
+        "#!/bin/sh\n[ \"$BRAVEBOT_TEST_GOT_VAR\" = \"$BRAVEBOT_TEST_LEAK_VAR\" ] \
+         && [ \"$BRAVEBOT_TEST_GOT_CMD\" = \"pre-$BRAVEBOT_TEST_LEAK_CMD\" ] \
+         && echo matched || echo mismatched\n",
+    );
+    let emit = script(
+        &scratch.path,
+        "emit.sh",
+        "#!/bin/sh\nprintf '%s\\n' \"$BRAVEBOT_TEST_LEAK_CMD\"\n",
+    );
+    let fail = script(
+        &scratch.path,
+        "fail.sh",
+        "#!/bin/sh\nprintf '%s\\n' \"$BRAVEBOT_TEST_LEAK_CMD\"\n\
+         printf '%s\\n' \"$BRAVEBOT_TEST_LEAK_CMD\" >&2\nexit 3\n",
+    );
+    let expansions = |sub: &std::path::Path| {
+        vec![
+            expansion(
+                "BRAVEBOT_TEST_GOT_VAR",
+                vec![ValuePart::Variable("BRAVEBOT_TEST_LEAK_VAR".into())],
+            ),
+            expansion(
+                "BRAVEBOT_TEST_GOT_CMD",
+                vec![
+                    ValuePart::Text("pre-".into()),
+                    substitution("emit the command secret", expanding(sub, &[], Vec::new())),
+                ],
+            ),
+        ]
+    };
+
+    let good = plan_of(
+        &scratch.path,
+        vec![expanding(&check, &[], expansions(&emit))],
+    );
+    let ran = run_expanding(&good).expect("the line runs");
+    assert_eq!(
+        ran.stdout.trim(),
+        "matched",
+        "the program was not handed the values"
+    );
+
+    let bad = plan_of(
+        &scratch.path,
+        vec![expanding(&check, &[], expansions(&fail))],
+    );
+    let error = run_expanding(&bad).expect_err("the failing substitution was used");
+    assert!(error.to_string().contains("emit the command secret"));
+    assert!(error.to_string().contains('3'));
+
+    let mut texts = vec![format!("{error}"), format!("{error:?}"), format!("{ran:?}")];
+    for plan in [&good, &bad] {
+        texts.push(format!("{plan:?}"));
+        texts.push(plan.display());
+        texts.push(plan.canonical());
+        texts.push(plan.line.clone());
+        for step in plan.steps() {
+            texts.push(step.display());
+            texts.push(step.as_written());
+            texts.push(format!("{step:?}"));
+        }
+    }
+    for text in &texts {
+        for secret in [from_variable, from_command] {
+            assert!(!text.contains(secret), "a secret reached: {text}");
+        }
+    }
+    // The source is what the plan shows.
+    assert!(
+        good.display()
+            .contains("BRAVEBOT_TEST_GOT_VAR=$BRAVEBOT_TEST_LEAK_VAR")
+    );
+    assert!(good.display().contains("emit the command secret"));
+}

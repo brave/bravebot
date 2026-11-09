@@ -10793,7 +10793,20 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // which is an answer about the machine in place of the person's own decision, and it arrives
     // without the "do not retry" a rule's refusal owes the planner.
     let mut rules = |program: &str, args: &[String]| policy.before_command_rules(program, args);
-    let mut plan = match crate::cmdline::compile(&line, &directory, tools.profile, &mut rules) {
+    // Only bypass mode may write `NAME=$VAR` or `NAME="$(cmd)"` in front of a program; every other
+    // mode refuses `$` as it always has (CMDLINE-2).
+    let expansions = if tools.permission_mode.get() == crate::PermissionMode::Bypass {
+        crate::cmdline::Expansions::Assignments
+    } else {
+        crate::cmdline::Expansions::Refused
+    };
+    let mut plan = match crate::cmdline::compile_with(
+        &line,
+        &directory,
+        tools.profile,
+        &mut rules,
+        expansions,
+    ) {
         Ok(plan) => plan,
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
@@ -11038,11 +11051,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
-        return match crate::exec::start_steps(
+        return match crate::exec::start_steps_within(
             steps,
             &plan.directory,
             tools.workspace.scratch(),
             confinement.as_ref(),
+            tools.cancel,
+            limit,
         ) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
@@ -27059,6 +27074,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
 
@@ -27135,6 +27151,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
             let mut workspace = Workspace::new(&project.path).expect("workspace");
@@ -27229,6 +27246,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
             let profile: &'static std::path::Path =
@@ -28113,6 +28131,132 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+
+        /// CMDLINE-17: only bypass mode lets `NAME=$VAR` in front of a program through `run`. The
+        /// regressions it rejects: the choice inverted (bypass refused, the others let through) and
+        /// the choice made once for every mode (the line always accepted, or always refused). The
+        /// program leaves a file when it starts, so "accepted" is the program having run and not
+        /// only a plan having compiled.
+        #[cfg(unix)]
+        #[test]
+        fn a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Bypass, Plan};
+            use std::os::unix::fs::PermissionsExt;
+
+            for (mode, runs) in [
+                (Bypass, true),
+                (Ask, false),
+                (AcceptEdits, false),
+                (Plan, false),
+            ] {
+                let scratch = Scratch::new("run-assignment-by-mode");
+                let program = scratch.path.join("probe.sh");
+                std::fs::write(&program, "#!/bin/sh\ntouch ran\n").expect("a program");
+                std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                    .expect("executable");
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+
+                let produced = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(mode);
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"command": "BRAVEBOT_TEST_ASSIGNED=$PATH ./probe.sh"}),
+                    )
+                });
+                let said = told(&mut policy, &produced.text);
+
+                assert_eq!(
+                    scratch.path.join("ran").exists(),
+                    runs,
+                    "{mode:?}: the program's having run is not what the mode allows: {said}"
+                );
+                assert_eq!(produced.ran_a_program, runs, "{mode:?}: {said}");
+                let refusal = crate::cmdline::Reason::Variable.to_string();
+                assert_eq!(
+                    said.contains(&refusal),
+                    !runs,
+                    "{mode:?}: the `$` refusal is not what the mode allows: {said}"
+                );
+            }
+        }
+
+        /// CMDLINE-17: the `run` tool's background branch gives the call's own cancellation and
+        /// deadline to the substitution it works out before the job starts. A cancel that arrives
+        /// while `NAME=$(slow) cmd` is being worked out ends it, and a deadline shorter than the
+        /// substitution refuses the line naming it; in both the program that would have used the
+        /// value never starts and no job is left behind. The regression it rejects is the branch
+        /// passing a fresh `Cancel` and the built-in five minutes, which the tests that call
+        /// `start_steps_within` directly would not notice.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused()
+         {
+            use crate::PermissionMode::Bypass;
+            use std::os::unix::fs::PermissionsExt;
+
+            for (cancelled, expected) in [
+                (true, "stopped because the turn was cancelled"),
+                (false, "ran out of time"),
+            ] {
+                let scratch = Scratch::new("run-background-substitution");
+                for (name, body) in [
+                    ("probe.sh", "#!/bin/sh\ntouch ran\n"),
+                    ("slow.sh", "#!/bin/sh\nsleep 30\n"),
+                ] {
+                    let program = scratch.path.join(name);
+                    std::fs::write(&program, body).expect("a program");
+                    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                        .expect("executable");
+                }
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let started = std::time::Instant::now();
+
+                let produced = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(Bypass);
+                    let stopper = tools.cancel.clone();
+                    std::thread::scope(|scope| {
+                        if cancelled {
+                            scope.spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                stopper.cancel();
+                            });
+                        }
+                        run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut crate::report::IgnoreReports,
+                            &json!({
+                                "command": "BRAVEBOT_TEST_ASSIGNED=$(./slow.sh) ./probe.sh",
+                                "background": true,
+                                "deadline_seconds": 1,
+                            }),
+                        )
+                    })
+                });
+                let said = told(&mut policy, &produced.text);
+
+                assert!(
+                    said.contains("did not start") && said.contains(expected),
+                    "cancelled={cancelled}: {said}"
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(20),
+                    "cancelled={cancelled}: the substitution was not ended"
+                );
+                assert!(
+                    !scratch.path.join("ran").exists(),
+                    "cancelled={cancelled}: the program started"
+                );
             }
         }
 

@@ -584,6 +584,7 @@ fn start(
         started_as: started_as.clone(),
         args: args.clone(),
         environment: Vec::new(),
+        expansions: Vec::new(),
         routes: Vec::new(),
     };
 
@@ -815,6 +816,7 @@ fn ask_for_the_login(
         started_as: gh.to_path_buf(),
         args: args.to_vec(),
         environment: Vec::new(),
+        expansions: Vec::new(),
         routes: Vec::new(),
     };
     let command = login_command(

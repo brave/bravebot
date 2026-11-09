@@ -1185,6 +1185,7 @@ mod tests {
             started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         };
         let mut writing = step("tee", &[]);
@@ -1938,6 +1939,7 @@ mod tests {
             started_as: std::path::PathBuf::from("/bin/cat"),
             args: Vec::new(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdin {
                 path: secret.clone(),
             }],
@@ -2058,6 +2060,7 @@ mod tests {
             started_as: std::path::PathBuf::from("/usr/bin/git"),
             args: vec!["log".to_string()],
             environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
+            expansions: Vec::new(),
             routes: Vec::new(),
         };
         RunRequest {
@@ -2224,6 +2227,7 @@ mod tests {
             started_as: std::path::PathBuf::from("/bin/sh"),
             args: vec!["check.sh".to_string()],
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdout {
                 path: destination.clone(),
                 append: false,
@@ -2556,6 +2560,7 @@ mod tests {
                 started_as: "/usr/bin/gh".into(),
                 args: vec!["-R".to_string(), "a/b".to_string(), "pr".to_string()],
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]);
         for request in [

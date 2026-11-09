@@ -31,6 +31,7 @@ pub fn steps_of(pipeline: &Pipeline, resolved: &[PathBuf]) -> Result<Vec<Step>, 
             started_as: path.clone(),
             args: stage.args.clone(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         })
         .collect())

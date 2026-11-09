@@ -60,7 +60,7 @@
 use crate::confine::Confinement;
 use crate::interjections::Arrival;
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
-use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
+use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, ValuePart, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -182,6 +182,47 @@ impl Deadlines {
 pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
 /// See [`WAIT_FLOOR`].
 pub const WAIT_CEILING: Duration = Duration::from_secs(600);
+
+/// The most a substitution may print before it is refused, in bytes.
+const SUBSTITUTION_LIMIT: usize = 64 * 1024;
+
+/// A worked-out value of an assignment, which may be a secret.
+///
+/// Held from the moment it is worked out until it is handed to a process, and printed nowhere:
+/// its `Debug` says only that it is redacted, so no struct holding one can leak it by derive.
+struct Secret(String);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// The value of `$name` in the environment bravebot runs in.
+///
+/// A variable withheld from programs is refused here as it is at compile time: the final
+/// environment is stripped of it again, but a value assembled into another variable would route
+/// around that. Names the variable and the problem, never anything it holds.
+fn variable_value(name: &str) -> Result<String, ExecError> {
+    let refuse = |problem| ExecError::Variable {
+        name: name.to_string(),
+        problem,
+    };
+    if bravebot_config::scrub::withheld()
+        .iter()
+        .any(|withheld| withheld.eq_ignore_ascii_case(name))
+    {
+        return Err(refuse(VariableProblem::Withheld));
+    }
+    let value = std::env::var_os(name).ok_or_else(|| refuse(VariableProblem::Unset))?;
+    let value = value
+        .into_string()
+        .map_err(|_| refuse(VariableProblem::NotUnicode))?;
+    if value.contains('\0') {
+        return Err(refuse(VariableProblem::NotUnicode));
+    }
+    Ok(value)
+}
 
 /// How often the wait loop looks up to see whether it should stop.
 const TICK: Duration = Duration::from_millis(50);
@@ -318,6 +359,26 @@ pub enum ExecError {
         path: std::path::PathBuf,
         detail: String,
     },
+    /// A `$VAR` in an assignment could not be used. Names the variable and nothing it holds.
+    Variable {
+        name: String,
+        problem: VariableProblem,
+    },
+    /// A `$(source)` in an assignment did not produce a value. Carries the source the planner
+    /// typed and how it ended, and never a byte of what it printed: that is the value, or part of
+    /// it, and may be a secret.
+    Substitution { source: String, detail: String },
+}
+
+/// Why a variable named in an assignment was not expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariableProblem {
+    /// It is one of the variables [`bravebot_config::scrub::withheld`] holds back from programs.
+    Withheld,
+    /// The environment bravebot runs in does not set it.
+    Unset,
+    /// It is set to something that is not text.
+    NotUnicode,
 }
 
 impl fmt::Display for ExecError {
@@ -340,6 +401,20 @@ impl fmt::Display for ExecError {
             }
             Self::Unopened { path, detail } => {
                 write!(f, "'{}' could not be opened: {detail}", path.display())
+            }
+            Self::Variable { name, problem } => {
+                let problem = match problem {
+                    VariableProblem::Withheld => "it is withheld from programs",
+                    VariableProblem::Unset => "it is not set",
+                    VariableProblem::NotUnicode => "it is not valid text",
+                };
+                write!(f, "the variable '{name}' cannot be expanded: {problem}")
+            }
+            Self::Substitution { source, detail } => {
+                write!(
+                    f,
+                    "the command substitution '$({source})' did not produce a value: {detail}"
+                )
             }
         }
     }
@@ -502,6 +577,10 @@ struct Running<'a> {
     started: Instant,
     limit: Duration,
     stdout: String,
+    /// The last stage's standard output as the bytes the pipe delivered, kept only where the caller
+    /// has to decide from them before they are decoded: a substitution, whose value must reach a
+    /// program exactly as printed or not at all. `None` for every other run.
+    raw_stdout: Option<Vec<u8>>,
     stderr: String,
     codes: Vec<Option<i32>>,
     stopped: Option<Duration>,
@@ -550,6 +629,7 @@ impl<'a> Running<'a> {
             started: Instant::now(),
             limit,
             stdout: String::new(),
+            raw_stdout: None,
             stderr: String::new(),
             codes: Vec::new(),
             stopped: None,
@@ -574,6 +654,95 @@ impl<'a> Running<'a> {
             stopped: self.stopped,
             ended_well,
         }
+    }
+
+    /// Work out the assignments of every step of one pipeline, in step order.
+    ///
+    /// Done for the whole pipeline before its first step starts, and by the steps the plan holds:
+    /// a substitution runs as a nested line with this run's directory, deadline, cancellation,
+    /// scratch directory, confinement and notification hooks, and the same scrubbed environment as
+    /// any step, with nothing on standard input. The values go to the caller and are never kept
+    /// here.
+    fn expand_all(&mut self, steps: &[Step]) -> Result<Vec<Vec<(String, Secret)>>, ExecError> {
+        let mut all = Vec::with_capacity(steps.len());
+        for step in steps {
+            let mut values = Vec::with_capacity(step.expansions.len());
+            for expansion in &step.expansions {
+                let mut value = String::new();
+                for part in &expansion.parts {
+                    match part {
+                        ValuePart::Text(text) => value.push_str(text),
+                        ValuePart::Variable(name) => value.push_str(&variable_value(name)?),
+                        ValuePart::Substitution { source, steps } => {
+                            value.push_str(&self.substitute(source, steps)?.0);
+                        }
+                    }
+                }
+                values.push((expansion.name.clone(), Secret(value)));
+            }
+            all.push(values);
+        }
+        Ok(all)
+    }
+
+    /// Run `steps`, the compiled form of `$(source)`, and hand back what they printed with the
+    /// trailing newlines trimmed.
+    ///
+    /// Every way this fails says the source and how the line ended, and nothing it printed on
+    /// either stream: the output is the value, or part of it.
+    fn substitute(&mut self, source: &str, steps: &Steps) -> Result<Secret, ExecError> {
+        let failed = |detail: &str| ExecError::Substitution {
+            source: source.to_string(),
+            detail: detail.to_string(),
+        };
+        let remaining = self.limit.saturating_sub(self.started.elapsed());
+        let mut inner = Running::new(self.directory, self.cancel, remaining, self.scratch, None);
+        inner.raw_stdout = Some(Vec::new());
+        inner.confinement = self.confinement;
+        inner.entering = self.entering.take();
+        inner.reading = self.reading.take();
+        let ended = inner.run(steps);
+        self.entering = inner.entering.take();
+        self.reading = inner.reading.take();
+        let well = match ended {
+            Ok(well) => well,
+            Err(ExecError::Cancelled) => return Err(ExecError::Cancelled),
+            Err(other) => return Err(failed(&other.to_string())),
+        };
+        if inner.stopped.is_some() {
+            return Err(failed("it ran out of time"));
+        }
+        if !well {
+            let detail = match inner.codes.iter().rev().find(|code| **code != Some(0)) {
+                Some(Some(code)) => format!("it exited with status {code}"),
+                Some(None) => "it was ended by a signal".to_string(),
+                None => "it failed".to_string(),
+            };
+            return Err(failed(&detail));
+        }
+        // The bytes the pipe delivered, not the text `Drain::text` makes of them: that is lossy, so
+        // a program printing `\xff` would otherwise hand the next program U+FFFD and the line would
+        // run on a value nobody printed. A value that is not valid UTF-8 is refused, as a variable
+        // that is not is ([`variable_value`]), with the source and nothing of the output.
+        let raw = inner.raw_stdout.take().unwrap_or_default();
+        if raw.len() > SUBSTITUTION_LIMIT {
+            return Err(failed(&format!(
+                "it printed more than {SUBSTITUTION_LIMIT} bytes"
+            )));
+        }
+        // `FromUtf8Error` holds the bytes, so it is dropped here rather than formatted.
+        let mut value =
+            String::from_utf8(raw).map_err(|_| failed("its output is not valid UTF-8"))?;
+        while value.ends_with('\n') {
+            value.pop();
+            if value.ends_with('\r') {
+                value.pop();
+            }
+        }
+        // A NUL in the value is not looked for: `Command::env` cannot hold one, so the step that
+        // would receive it fails to start, and that error names the program and the operating
+        // system's words, never the value.
+        Ok(Secret(value))
     }
 
     /// Run one shape of a plan, and say whether it ended well.
@@ -609,6 +778,11 @@ impl<'a> Running<'a> {
         }
         the_directory_exists(self.directory)?;
         still_approved(steps)?;
+        // Every step's assignments are worked out before anything in this pipeline starts, so a
+        // variable that is unset or withheld, or a substitution that fails, refuses the pipeline
+        // with nothing of it running. The values live in `expanded` and reach `command_for` and
+        // nothing else.
+        let expanded = self.expand_all(steps)?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
@@ -640,7 +814,7 @@ impl<'a> Running<'a> {
         let last = steps.len() - 1;
 
         for (index, step) in steps.iter().enumerate() {
-            let command = command_for(step, self.directory, self.scratch);
+            let command = command_for(step, self.directory, self.scratch, &expanded[index]);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
@@ -781,6 +955,9 @@ impl<'a> Running<'a> {
         }
 
         if let Some(tail) = &tail {
+            if let Some(raw) = self.raw_stdout.as_mut() {
+                raw.extend_from_slice(&tail.bytes());
+            }
             self.stdout.push_str(&tail.text());
         }
         for drain in &draining {
@@ -1160,6 +1337,11 @@ impl Drain {
         String::from_utf8_lossy(&read).into_owned()
     }
 
+    /// The bytes the pipe has delivered so far, undecoded.
+    fn bytes(&self) -> Vec<u8> {
+        self.read.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// How many bytes the pipe has delivered so far.
     ///
     /// The buffer's length, which is not the length of what [`Drain::text`] returns: that is taken
@@ -1330,6 +1512,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             started_as,
             args: _,
             environment: _,
+            expansions: _,
             routes: _,
         } = step;
         if started_as.canonicalize().ok().as_ref() != Some(resolved) {
@@ -1638,6 +1821,7 @@ fn command_for(
     step: &Step,
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
+    expanded: &[(String, Secret)],
 ) -> Command {
     // Exhaustive so that a field added to `Step` stops the build here. This is where a step
     // becomes a real process, so a field this applies that no standing answer's key holds
@@ -1650,6 +1834,9 @@ fn command_for(
         started_as,
         args: _,
         environment: _,
+        // Their values are `expanded`, worked out by the caller for the whole pipeline before its
+        // first step starts.
+        expansions: _,
         routes: _,
     } = step;
     // Started by the path the name was found by, which some programs read
@@ -1687,6 +1874,10 @@ fn command_for(
     for (name, value) in &step.environment {
         command.env(name, value);
     }
+    // After the literal ones, and the only place a worked-out value is handed to anything.
+    for (name, value) in expanded {
+        command.env(name, &value.0);
+    }
     // Withheld again, since the line is the planner's and a name it assigns is not the
     // person's own: `run.scrubEnv` lists what their commands may not be handed.
     inherits.withhold(&mut command);
@@ -1701,18 +1892,48 @@ fn command_for(
 /// is what [`crate::tools`] refuses anything else for. Every step's own environment is applied, as
 /// it is in the foreground, and so is the session's own directory: a program left running is one
 /// with more reason to want somewhere to write, not less.
+///
+/// For a caller with no turn behind it: a substitution in a step's assignments runs under the
+/// built-in [`LIMIT`] and a token nobody holds. The `run` tool calls [`start_steps_within`].
 pub fn start_steps(
     steps: &[Step],
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
     confinement: Option<&Confinement>,
 ) -> Result<Background, ExecError> {
+    start_steps_within(
+        steps,
+        directory,
+        scratch,
+        confinement,
+        &Cancel::new(),
+        LIMIT,
+    )
+}
+
+/// [`start_steps`] with the call's own cancellation and deadline for the substitutions in the
+/// steps' assignments, which are run before the first step starts and so while the call is still
+/// in progress. A cancelled call ends the substitution and starts nothing; one that outlasts
+/// `limit` is refused with its source and no output. The job that is started is not bound by
+/// `limit`: it outlives the call.
+pub fn start_steps_within(
+    steps: &[Step],
+    directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
+    confinement: Option<&Confinement>,
+    cancel: &Cancel,
+    limit: Duration,
+) -> Result<Background, ExecError> {
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
     the_directory_exists(directory)?;
     still_approved(steps)?;
-
+    // Worked out before the first step starts, as in the foreground, under the caller's
+    // cancellation and deadline.
+    let mut resolving = Running::new(directory, cancel, limit, scratch, None);
+    resolving.confinement = confinement;
+    let expanded = resolving.expand_all(steps)?;
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());
     let mut upstream: Option<Handle> = None;
     let mut tail: Option<Drain> = None;
@@ -1720,7 +1941,7 @@ pub fn start_steps(
     let last = steps.len() - 1;
 
     for (index, step) in steps.iter().enumerate() {
-        let command = command_for(step, directory, scratch);
+        let command = command_for(step, directory, scratch, &expanded[index]);
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {
