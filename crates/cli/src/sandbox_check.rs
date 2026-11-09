@@ -8,13 +8,13 @@
 //! [SANDBOX-21]: ../../../docs/specs/sandboxing.md
 
 use crate::exit::{Ending, fail};
-use crate::progress::{printable, printable_path};
 use bravebot_i18n::t;
 use std::process::ExitCode;
 
 #[cfg(unix)]
 mod unix {
     use super::*;
+    use crate::progress::{printable, printable_path};
     use bravebot_agent::usability::{self, Kind, Outcome, Report, Unavailable};
     use std::path::Path;
 

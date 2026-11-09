@@ -308,13 +308,28 @@ impl Workspace {
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve_with_home(relative, self.home.as_deref())?;
-        if self.in_the_stores(&resolved) {
+        if self.in_the_stores(&resolved) || self.spelled_in_the_stores(relative) {
             return Err(WorkspaceError::Escapes {
                 path: relative.to_string(),
                 remedy: Remedy::Nothing,
             });
         }
         Ok(resolved)
+    }
+
+    /// Whether `relative`, as it is spelled and before any link in it is followed, is in a store or
+    /// is the home rules file under some spelling of its name (RECALL-8).
+    ///
+    /// [`Workspace::in_the_stores`] is asked of where a name lands, so a link named `agents.md`
+    /// that leads elsewhere lands outside the stores on a volume that tells `agents.md` and
+    /// `AGENTS.md` apart. The spec refuses the link by its name, and this is that test. Only the
+    /// typed name is compared with the store names, so nothing a file holds is read.
+    fn spelled_in_the_stores(&self, relative: &str) -> bool {
+        let Ok(expanded) = self.spelled(relative, self.home.as_deref()) else {
+            return false;
+        };
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
+        self.in_the_stores(&self.root.join(candidate))
     }
 
     /// The directories under `state` that hold the person's facts and rules, as a path lands on

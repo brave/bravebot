@@ -233,6 +233,7 @@ A fact is trusted. Its confidentiality is the planner context's at the moment of
 `verified-by: bravebot_agent::workspace::a_differently_cased_store_name_is_refused_whatever_the_volume_says`
 `verified-by: bravebot_agent::workspace::the_home_rules_file_is_refused_under_any_case_before_it_exists`
 `verified-by: bravebot_agent::workspace::a_link_spelled_in_another_case_is_refused_by_name_and_by_landing_only_where_it_is_the_rules`
+`verified-by: bravebot_agent::workspace::a_link_spelled_agents_md_is_refused_by_name_whatever_it_leads_to`
 `verified-by: bravebot_sandbox::base::programs_are_refused_the_fact_store`
 `verified-by: bravebot_agent::tools::a_redirection_reading_from_the_stores_is_refused_before_it_runs`
 `verified-by: bravebot_agent::workspace::git_leaves_the_stores_out_of_a_repository_that_tracks_them`
