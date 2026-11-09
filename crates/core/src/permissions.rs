@@ -2989,6 +2989,42 @@ mod tests {
         }
     }
 
+    /// A deny or ask rule and an allow rule that land on one path in the checkout (`\u{df}` and
+    /// `\u{1e9e}` are one name to the one-letter fold) are both copied there, and the more
+    /// restrictive list decides as it does under the working directory (CHECKOUT-9, PERM-3).
+    #[test]
+    fn a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused() {
+        for (refused, granted) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            for checked_out in ["cla\u{df}", "cla\u{1e9e}"] {
+                let mut permissions = rules_on_a_volume_that_folds_case(
+                    true,
+                    &[&format!("Read(//work/{refused}/x/**)")],
+                    &[&format!("Read(//work/{refused}/y/**)")],
+                    &[
+                        &format!("Read(//work/{granted}/x/**)"),
+                        &format!("Read(//work/{granted}/y/**)"),
+                    ],
+                );
+                assert_eq!(
+                    permissions.for_path(Subject::Read, &format!("/work/{checked_out}/x/a")),
+                    Decision::Ruled(Ruling::Deny),
+                    "the working directory does not refuse /work/{checked_out}/x/a"
+                );
+                permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+                for (path, decision) in [
+                    ("/state/c1/x/a", Decision::Ruled(Ruling::Deny)),
+                    ("/state/c1/y/a", Decision::Ruled(Ruling::Ask)),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        decision,
+                        "{path} was ruled wrongly under a copy for /work/{checked_out} of a refusal at {refused} and a grant at {granted}"
+                    );
+                }
+            }
+        }
+    }
+
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a
     /// canonical name with backslashes and a drive prefix, or in the case a folding volume stores,
     /// reaches the same file as the spelling a gate asks about.

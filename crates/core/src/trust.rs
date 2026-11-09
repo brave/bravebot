@@ -186,8 +186,13 @@ impl TrustStore {
     ///
     /// Each rule under `from` is copied to the same relative path under `to`, and `to` itself is
     /// given the decision in force at `from`, or an undecided boundary where no rule covers `from`,
-    /// so a broader rule over `to` does not answer for a path nobody has said anything about. A
-    /// rule already under `to` is replaced by its copy.
+    /// so a broader rule over `to` does not answer for a path nobody has said anything about.
+    ///
+    /// Two rules under `from` that land on one key under `to` (`claß/x` and `claẞ/x`, which the
+    /// one-letter fold joins, are both `x`) are copied as the weakest of them, a distrust before an
+    /// undecided boundary before a trust, which is how the lookup reads them under `from`. So is a
+    /// rule already at a key a copy lands on: no copy replaces a decision that withholds trust with
+    /// one that grants it.
     pub fn copy_beneath(&mut self, from: &str, to: &str) {
         let from = self.key(from);
         let to = self.key(to);
@@ -200,7 +205,7 @@ impl TrustStore {
         // from a name only the full fold joins would trust a place under `to` that nobody vouched
         // for.
         let folds = self.folds_case;
-        let copies: Vec<(String, Option<Integrity>)> = self
+        let found: Vec<(String, Option<Integrity>)> = self
             .rules
             .iter()
             .filter_map(|(key, decision)| {
@@ -219,8 +224,20 @@ impl TrustStore {
                 (!tail.is_empty()).then(|| (format!("{to}/{tail}"), *decision))
             })
             .collect();
-        self.rules.insert(to, at_root);
-        self.rules.extend(copies);
+        let mut copies: BTreeMap<String, Option<Integrity>> = BTreeMap::new();
+        for (key, decision) in found.into_iter().chain([(to, at_root)]) {
+            let weakest = copies
+                .get(&key)
+                .map_or(decision, |&other| weaker(other, decision));
+            copies.insert(key, weakest);
+        }
+        for (key, decision) in copies {
+            let weakest = self
+                .rules
+                .get(&key)
+                .map_or(decision, |&held| weaker(held, decision));
+            self.rules.insert(key, weakest);
+        }
     }
 
     /// Drop every rule at or beneath `under` except those that distrust a path (CHECKOUT-8).
@@ -384,11 +401,7 @@ impl TrustStore {
                     || (**decision != Some(Integrity::Trusted) && name.is_equivalent(rule))
             })
             .map(|(_, decision)| decision)
-            .min_by_key(|decision| match decision {
-                Some(Integrity::Untrusted) => 0,
-                None => 1,
-                Some(Integrity::Trusted) => 2,
-            })
+            .min_by_key(|decision| strength(**decision))
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -537,6 +550,23 @@ impl TrustStore {
         if kept == Some(self.root.as_str()) {
             self.allow_confined_lines();
         }
+    }
+}
+
+/// How much a decision grants: a distrust least, then an undecided boundary, then a trust.
+fn strength(decision: Option<Integrity>) -> u8 {
+    match decision {
+        Some(Integrity::Untrusted) => 0,
+        None => 1,
+        Some(Integrity::Trusted) => 2,
+    }
+}
+
+/// The one of two decisions that grants less.
+fn weaker(a: Option<Integrity>, b: Option<Integrity>) -> Option<Integrity> {
+    match strength(b) < strength(a) {
+        true => b,
+        false => a,
     }
 }
 
@@ -2056,6 +2086,107 @@ mod tests {
         assert_eq!(
             map.integrity_of("/state/c1/vouched/a"),
             Some(Integrity::Trusted)
+        );
+    }
+
+    /// A distrust at `claß/x` and a trust at `claẞ/x` are one path to the one-letter fold, and the
+    /// source reads it as untrusted. The copy for a checkout of `claß` reads it so whichever of the
+    /// two spellings sorts later (CHECKOUT-8, TRUST-2).
+    #[test]
+    fn a_copy_of_a_distrust_and_a_trust_under_the_pair_the_simple_fold_joins_is_untrusted() {
+        for (distrusted, trusted) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            let mut map = TrustStore::new("/work").folding_case(true);
+            map.trust("/data/cla\u{df}");
+            map.distrust(&format!("/data/{distrusted}/x"));
+            map.trust(&format!("/data/{trusted}/x"));
+            assert_eq!(
+                map.integrity_of("/data/cla\u{df}/x"),
+                Some(Integrity::Untrusted)
+            );
+            map.copy_beneath("/data/cla\u{df}", "/state/c1");
+            assert_eq!(
+                map.integrity_of("/state/c1/x"),
+                Some(Integrity::Untrusted),
+                "a distrust at /data/{distrusted}/x was overwritten by a trust at /data/{trusted}/x in the copy"
+            );
+        }
+    }
+
+    /// Two rules the one-letter fold joins (`\u{df}` and `\u{1e9e}`) land on one path in the
+    /// checkout, and the copy says what the source says there: the weakest of them, a distrust before
+    /// an undecided boundary before a trust, whichever spelling sorts later (CHECKOUT-8, TRUST-2).
+    #[test]
+    fn a_copy_of_two_rules_that_share_a_destination_is_the_weakest_of_them() {
+        let decisions = [Some(Integrity::Untrusted), None, Some(Integrity::Trusted)];
+        let set = |map: &mut TrustStore, path: &str, decision: Option<Integrity>| match decision {
+            Some(Integrity::Trusted) => map.trust(path),
+            Some(Integrity::Untrusted) => map.distrust(path),
+            None => map.undecide(path),
+        };
+        for (first, second) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            for checked_out in ["cla\u{df}", "cla\u{1e9e}"] {
+                for at_first in decisions {
+                    for at_second in decisions {
+                        let mut map = TrustStore::new("/work").folding_case(true);
+                        map.trust(&format!("/data/{checked_out}"));
+                        set(&mut map, &format!("/data/{first}/x"), at_first);
+                        set(&mut map, &format!("/data/{second}/x"), at_second);
+                        let read = map.integrity_of(&format!("/data/{checked_out}/x/a"));
+                        let expected = if at_first == Some(Integrity::Untrusted)
+                            || at_second == Some(Integrity::Untrusted)
+                        {
+                            Some(Integrity::Untrusted)
+                        } else if at_first.is_none() || at_second.is_none() {
+                            None
+                        } else {
+                            Some(Integrity::Trusted)
+                        };
+                        assert_eq!(
+                            read, expected,
+                            "the source did not read the weakest of {at_first:?} at /data/{first}/x and {at_second:?} at /data/{second}/x"
+                        );
+                        map.copy_beneath(&format!("/data/{checked_out}"), "/state/c1");
+                        assert_eq!(
+                            map.integrity_of("/state/c1/x/a"),
+                            expected,
+                            "the copy for a checkout of /data/{checked_out} did not read the weakest of {at_first:?} at /data/{first}/x and {at_second:?} at /data/{second}/x"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A rule already at a key a copy lands on is weighed with the copy and not replaced by it, so
+    /// a copy never turns a refusal into a grant at the checkout's root or beneath it (CHECKOUT-8).
+    #[test]
+    fn a_copy_does_not_replace_a_refusal_already_at_its_destination() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{df}");
+        map.trust("/data/cla\u{df}/x");
+        map.distrust("/state/c1/x");
+        map.distrust("/state/c1");
+        map.copy_beneath("/data/cla\u{1e9e}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/x/a"),
+            Some(Integrity::Untrusted),
+            "a copied trust replaced a distrust already at /state/c1/x"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/y"),
+            Some(Integrity::Untrusted),
+            "a copied trust replaced a distrust already at /state/c1"
+        );
+
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{df}");
+        map.undecide("/data/cla\u{df}/x");
+        map.trust("/state/c1/x");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/x/a"),
+            None,
+            "a trust already at /state/c1/x outlived the copy of an undecided boundary"
         );
     }
 

@@ -257,6 +257,8 @@ lower case is more than one character left as written, so `Edit(claß.md)` cover
 and a grant must not reach a file that may not be the one approved. The copy of a rule for a
 checkout ([CHECKOUT-9](checkouts.md#CHECKOUT-9)) follows the same split: a `deny` or `ask` rule
 written with `class` is copied under a checkout of `claß`, and an `allow` rule for `class` is not.
+Where a `deny` or `ask` rule and an `allow` rule are copied to one path under the checkout, the
+lists decide as they do under the working directory: the `deny` or `ask` rule wins.
 Where the volume keeps the spellings apart,
 or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
 `docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
@@ -277,6 +279,7 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_rule_does_not_cover_a_case_variant_on_a_volume_that_keeps_them_apart`
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
 `verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
+`verified-by: bravebot_core::permissions::a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`

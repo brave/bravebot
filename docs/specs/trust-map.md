@@ -265,8 +265,12 @@ a refusal is copied under both spellings and a trust only under the one it was w
 A refusal is copied where either fold joins its name with the checkout's, since `ẞ` and `ß` are one
 name to the one-letter fold a refusal is read by and two to the full fold:
 `bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins` pins a
-distrust and an undecided boundary at `claẞ` copied under a checkout of `claß` and the reverse. The
-same pair is one writer slot, one root a refusal names and one rule copied for a checkout.
+distrust and an undecided boundary at `claẞ` copied under a checkout of `claß` and the reverse. Rules
+that land on one path under the checkout are copied as the weakest of them, a distrust before an
+undecided boundary before a trust: a distrust at `claß/x` and a trust at `claẞ/x` are one path to the
+one-letter fold, the working directory reads it as untrusted, and so does the checkout, whichever
+spelling sorts later. A copy also keeps a rule already at a path it lands on when that rule grants
+less. The same pair is one writer slot, one root a refusal names and one rule copied for a checkout.
 A checkout withdrawn drops a trust that either fold joins with its name: `ẞ` and `ß` are one name to
 the one-letter fold a trust is decided by and two to the full fold, and a trust under either still
 decides a path beneath the checkout, so a withdrawal by the full fold alone would leave it. A
@@ -313,6 +317,9 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`
 `verified-by: bravebot_core::trust::a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length`
 `verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins`
+`verified-by: bravebot_core::trust::a_copy_of_a_distrust_and_a_trust_under_the_pair_the_simple_fold_joins_is_untrusted`
+`verified-by: bravebot_core::trust::a_copy_of_two_rules_that_share_a_destination_is_the_weakest_of_them`
+`verified-by: bravebot_core::trust::a_copy_does_not_replace_a_refusal_already_at_its_destination`
 `verified-by: bravebot_core::trust::a_refusal_under_a_name_only_the_simple_fold_joins_narrows_a_read_beneath`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins`
