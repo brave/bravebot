@@ -2872,9 +2872,11 @@ fn write_skill_spelled(root: &Path, dir: &str, file: &str) {
 }
 
 /// SKILL-1, INSTR-1: a project directory whose file is `skill.md` is not a skill, and the exact
-/// `SKILL.md` beside it still is. Each skill is in a directory of its own, so the fixture holds on
-/// a volume that tells the two spellings apart and on one that folds them. The fault this rejects
-/// is the file opened by name, which a folding volume answers for `skill.md`.
+/// `SKILL.md` beside it still is. Each skill is in a directory of its own, so the fixture runs on
+/// a volume that tells the two spellings apart and on one that folds them. It rejects the file
+/// opened by name only where the volume folds case. On a case-sensitive host it passes with either
+/// lookup, and the unit test `a_listing_holding_skill_md_does_not_hold_the_skill_file` in
+/// `crates/agent/src/skills.rs` pins the lookup there.
 #[test]
 fn a_project_directory_holding_skill_md_in_another_case_is_not_offered() {
     let scratch = Scratch::new("project-skill-other-case");
@@ -2905,9 +2907,9 @@ fn a_project_directory_holding_skill_md_in_another_case_is_not_offered() {
 /// SKILL-1, INSTR-1: a skill directory whose only file is `skill.md` is not offered by discovery.
 /// The test asks the volume whether `skill.md` opens as `SKILL.md`. Where it does, the fault this
 /// rejects, `directory.join("SKILL.md").is_file()` standing for the lookup, would offer the skill,
-/// and the test asserts that situation exists before it asserts the skill is absent. Where the
-/// volume tells the names apart the absence holds with either lookup, so the test passes without
-/// pinning the lookup there.
+/// and the failure message says so. Where the volume tells the names apart the absence holds with
+/// either lookup, so the test does not pin the lookup on a case-sensitive host. The unit test
+/// `a_listing_holding_skill_md_does_not_hold_the_skill_file` in `crates/agent/src/skills.rs` does.
 #[test]
 fn discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelling() {
     let scratch = Scratch::new("skill-only-lowercase");
@@ -2933,7 +2935,9 @@ fn discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelli
 
 /// SKILL-6, INSTR-1: in a project nobody vouched for, a directory holding `skill.md` is not counted
 /// as a skill that was not loaded, so the person is told about the one `SKILL.md` and no more. Its
-/// name is repeated nowhere.
+/// name is repeated nowhere. Only a volume that folds case separates the lookups here; the unit test
+/// `a_listing_holding_skill_md_does_not_hold_the_skill_file` in `crates/agent/src/skills.rs` pins
+/// the lookup on a case-sensitive host.
 #[test]
 fn an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted() {
     let scratch = Scratch::new("untrusted-skill-other-case");
@@ -2957,7 +2961,10 @@ fn an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted() {
 }
 
 /// SKILL-1, INSTR-1: the same holds for the person's own `~/.bravebot/skills`. A directory holding
-/// `skill.md` there is not offered, and nothing is said of it as a skill left out.
+/// `skill.md` there is not offered, and nothing is said of it as a skill left out. Only a volume
+/// that folds case separates the lookups here; the unit test
+/// `a_listing_holding_skill_md_does_not_hold_the_skill_file` in `crates/agent/src/skills.rs` pins
+/// the lookup on a case-sensitive host.
 #[test]
 fn a_home_directory_holding_skill_md_in_another_case_is_not_offered() {
     let scratch = Scratch::new("home-skill-other-case");

@@ -107,7 +107,9 @@ next machine.
 `verified-by: bravebot_agent::preamble::only_the_first_project_file_that_exists_is_read`
 `verified-by: bravebot_agent::preamble::a_root_file_spelled_in_another_case_is_not_the_projects_file`
 `verified-by: bravebot_agent::skills::a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory`
-`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_in_another_case_does_not_hold_the_skill_file`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_does_not_hold_the_skill_file`
+`verified-by: bravebot_agent::skills::a_listing_without_the_skill_file_does_not_hold_it`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_exactly_holds_the_skill_file_only_when_it_is_a_file`
 `verified-by: bravebot_agent::skills::a_project_directory_holding_skill_md_in_another_case_is_not_offered`
 `verified-by: bravebot_agent::skills::discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelling`
 `verified-by: bravebot_agent::skills::an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted`

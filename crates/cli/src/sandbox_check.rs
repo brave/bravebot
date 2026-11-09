@@ -83,6 +83,24 @@ mod unix {
         (lines, ending)
     }
 
+    /// What is said when the suite could not run, with `root` the directory it would have run in.
+    /// Every path in it is drawn with its control and bidirectional characters spelled out
+    /// (LAYER-3).
+    pub(super) fn unavailable_message(why: &Unavailable, root: &Path) -> String {
+        match why {
+            Unavailable::NoBase => t!(doctor_sandbox_cannot_confine).to_string(),
+            Unavailable::Root(path) => {
+                t!(doctor_sandbox_temporary, path = printable_path(path)).to_string()
+            }
+            Unavailable::Io(error) => t!(
+                doctor_sandbox_io,
+                path = printable_path(root),
+                detail = error.to_string()
+            )
+            .to_string(),
+        }
+    }
+
     pub(super) fn run() -> ExitCode {
         if !usability::available() {
             return fail(Ending::Failed, t!(doctor_sandbox_cannot_confine));
@@ -99,25 +117,7 @@ mod unix {
             .and_then(|report| with_the_login(report, &root))
         {
             Ok(report) => report,
-            Err(Unavailable::NoBase) => {
-                return fail(Ending::Failed, t!(doctor_sandbox_cannot_confine));
-            }
-            Err(Unavailable::Root(path)) => {
-                return fail(
-                    Ending::Failed,
-                    t!(doctor_sandbox_temporary, path = printable_path(&path)),
-                );
-            }
-            Err(Unavailable::Io(error)) => {
-                return fail(
-                    Ending::Failed,
-                    t!(
-                        doctor_sandbox_io,
-                        path = printable_path(&root),
-                        detail = error.to_string()
-                    ),
-                );
-            }
+            Err(why) => return fail(Ending::Failed, unavailable_message(&why, &root)),
         };
         let (lines, ending) = facts(&report);
         for (name, value) in lines {
@@ -152,9 +152,9 @@ pub fn run() -> ExitCode {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix::facts;
+    use super::unix::{facts, unavailable_message};
     use super::*;
-    use bravebot_agent::usability::{Expect, Failure, Kind, Outcome, Report, Row};
+    use bravebot_agent::usability::{Expect, Failure, Kind, Outcome, Report, Row, Unavailable};
     use std::path::PathBuf;
 
     fn row(outcome: Outcome) -> Row {
@@ -284,6 +284,37 @@ mod tests {
             2,
             "{text:?}"
         );
+    }
+
+    /// LAYER-3: the path the suite could not run in comes from the state directory the environment
+    /// names, so each message that holds one draws it with its control and bidirectional characters
+    /// spelled out. The regression it rejects: the path of `Unavailable::Root` or of
+    /// `Unavailable::Io` printed as it is, which a terminal would act on.
+    #[test]
+    fn doctor_sandbox_draws_the_path_when_the_suite_could_not_run() {
+        let hostile = "dir\u{1b}[2J\u{202e}end";
+        let drawn = "dir\u{241b}[2J\u{2039}U+202E\u{203A}end";
+        let root = PathBuf::from(format!("/state/{hostile}/doctor-sandbox"));
+        let cases = [
+            (Unavailable::Root(root.clone()), "Root"),
+            (Unavailable::Io(std::io::Error::other("denied")), "Io"),
+        ];
+
+        for (why, variant) in cases {
+            let said = unavailable_message(&why, &root);
+
+            assert!(!said.contains('\u{1b}'), "{variant}: {said:?}");
+            assert!(!said.contains('\u{202e}'), "{variant}: {said:?}");
+            assert_eq!(said.matches(drawn).count(), 1, "{variant}: {said:?}");
+        }
+    }
+
+    /// A platform with no base to confine against says it cannot confine, with no path in it.
+    #[test]
+    fn doctor_sandbox_says_it_cannot_confine_when_there_is_no_base() {
+        let said = unavailable_message(&Unavailable::NoBase, &PathBuf::from("/state/x"));
+
+        assert_eq!(said, t!(doctor_sandbox_cannot_confine).to_string());
     }
 
     /// The regression it rejects: a skipped workflow read as a failure, which fails the report on

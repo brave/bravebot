@@ -1816,7 +1816,24 @@ fn skill_entries(root: &Path) -> impl Iterator<Item = std::fs::DirEntry> {
 /// the name would offer a differently spelled file as a skill. The directory's own listing is
 /// compared with the fixed name and nothing a file holds is consulted.
 fn is_skill_directory(directory: &Path) -> bool {
-    crate::preamble::holds_file_named(directory, SKILL_FILE)
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+    holds_skill_file(entries.flatten().map(|entry| entry.file_name()), || {
+        directory.join(SKILL_FILE).is_file()
+    })
+}
+
+/// Whether `listed`, the entry names of a directory, includes `SKILL.md` byte for byte and `opens`,
+/// which asks the volume whether that name is a file, agrees.
+///
+/// The decision is made on the names given, so a test can hand it a listing and an answer from the
+/// volume that no case-sensitive host produces, such as `skill.md` listed while `SKILL.md` opens.
+fn holds_skill_file(
+    listed: impl IntoIterator<Item = std::ffi::OsString>,
+    opens: impl FnOnce() -> bool,
+) -> bool {
+    crate::preamble::names_include(listed, SKILL_FILE) && opens()
 }
 
 #[cfg(test)]
@@ -1824,10 +1841,10 @@ mod tests {
     use super::*;
 
     /// SKILL-1, INSTR-1: a directory is a skill directory only when its own entry is spelled
-    /// `SKILL.md`. Where the volume folds case `skill.md` opens as `SKILL.md`, so a lookup that only
-    /// opens the name offers it as a skill. The fault this rejects is `directory.join(name).is_file()`
-    /// standing for the lookup. Where the volume tells the two names apart `skill.md` is not
-    /// `SKILL.md` either way, and the exact one beside it is still a skill.
+    /// `SKILL.md`, checked against real directories. Where the volume folds case `skill.md` opens as
+    /// `SKILL.md`, so a lookup that only opens the name offers it as a skill. Where the volume tells
+    /// the two names apart `skill.md` is not `SKILL.md` either way, so this test does not pin the
+    /// lookup there: `a_listing_holding_skill_md_does_not_hold_the_skill_file` does, on any host.
     #[test]
     fn a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory() {
         let root = crate::testutil::scratch_dir("skill-directory-cased");
@@ -1853,24 +1870,44 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// SKILL-1, INSTR-1: a listing that holds `skill.md` does not hold `SKILL.md`. Decided on the
-    /// names alone, so it holds on a host whose volume tells the two apart as well as on one that
-    /// folds case. The fault this rejects is the skill file compared ignoring case, which is what a
-    /// folding volume does to an open.
-    #[test]
-    fn a_listing_holding_skill_md_in_another_case_does_not_hold_the_skill_file() {
-        let names = |listed: &[&str]| {
-            listed
-                .iter()
-                .map(std::ffi::OsString::from)
-                .collect::<Vec<_>>()
-        };
-        let holds = |listed: &[&str]| crate::preamble::names_include(names(listed), SKILL_FILE);
+    fn listing(names: &[&str]) -> Vec<std::ffi::OsString> {
+        names.iter().map(std::ffi::OsString::from).collect()
+    }
 
-        assert!(!holds(&["skill.md"]));
-        assert!(!holds(&["Skill.MD", "notes.md"]));
-        assert!(holds(&["skill.md", "SKILL.md"]));
-        assert!(!holds(&[]));
+    /// SKILL-1, INSTR-1: a listing that holds `skill.md` does not hold the skill file, although the
+    /// volume answers that `SKILL.md` opens, which is what a volume that folds case says. The answer
+    /// is given here, so the test fails on any host for the fault it rejects: the open standing for
+    /// the lookup, as `directory.join("SKILL.md").is_file()` does, with the listing not consulted.
+    #[test]
+    fn a_listing_holding_skill_md_does_not_hold_the_skill_file() {
+        assert!(!holds_skill_file(listing(&["skill.md"]), || true));
+        assert!(!holds_skill_file(
+            listing(&["Skill.MD", "notes.md"]),
+            || { true }
+        ));
+    }
+
+    /// SKILL-1: a listing with neither spelling holds nothing, and an empty one holds nothing, even
+    /// where the volume answers that the name opens.
+    #[test]
+    fn a_listing_without_the_skill_file_does_not_hold_it() {
+        assert!(!holds_skill_file(
+            listing(&["notes.md", "SKILL.md.bak"]),
+            || { true }
+        ));
+        assert!(!holds_skill_file(listing(&[]), || true));
+    }
+
+    /// SKILL-1: a listing holding `SKILL.md` holds the skill file when the name is a file, with
+    /// `skill.md` beside it or not, and does not when it is something else, such as a directory or a
+    /// link to nothing. The fault this rejects is the listing alone standing for the lookup.
+    #[test]
+    fn a_listing_holding_skill_md_exactly_holds_the_skill_file_only_when_it_is_a_file() {
+        assert!(holds_skill_file(listing(&["SKILL.md"]), || true));
+        assert!(holds_skill_file(listing(&["skill.md", "SKILL.md"]), || {
+            true
+        }));
+        assert!(!holds_skill_file(listing(&["SKILL.md"]), || false));
     }
 
     /// The planner chooses a skill from its name and description alone, so a file declaring only
