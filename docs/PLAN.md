@@ -10,8 +10,8 @@ evidence, and this file is updated when a change materially moves the status bel
 The design is merged. Slice 1 is merged. Slice 2a is on `bots/slice-2a-layouts`, rebased onto
 main. Slice 2b is on `bots/slice-2b-layout`, rebased onto slice 2a. Slice 3a is on
 `bots/slice-3-operations`, rebased onto slice 2b. Slice 3b is on `bots/slice-3b-archive`, rebased
-onto slice 3a. Slice 3c is on `bots/slice-3c-record`, rebased onto slice 3b. The later slices are
-not on this branch. The design is
+onto slice 3a. Slice 3c is on `bots/slice-3c-record`, rebased onto slice 3b. Slice 4 is on
+`bots/slice-4-form`, rebased onto slice 3c. Slices 5 to 11 are not on this branch. The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
 
@@ -295,6 +295,55 @@ slice 6, and that `bot.define` and `bot.redefine` stay. `bot.replace`, `updateBo
 Slice 3c is built on `bots/slice-3c-record`. There is no pull request, so the evidence is the tests
 on that branch. The plan does not repeat them.
 
+Slice 4 is built on `bots/slice-4-form`, stacked on `bots/slice-3c-record`. There is no pull request.
+The terminal makes, edits, archives, restores and deletes a bot from the list. The form and the
+confirmation live on `bots_pane::State`, beside the listing. A form is make or edit, with plain
+string fields, the active field and a cursor into that string. A confirmation is archive or delete,
+and it remembers the slug and the name it asks about. After a write the pane rereads with
+`bots::list` and shows `Refused`'s display under the list. A new phase, and reusing
+`Session::paste_text`, were rejected: the form is not the prompt box, and `paste_text` folds a long
+paste to a marker and strips invisible characters.
+
+With focus in the list, `n` opens the make form, including when the list is empty. `e` opens the
+edit form for the selected row. `a` opens the archive confirmation only when that row is not
+archived. `r` restores an archived row immediately. `d` opens the delete confirmation only when the
+row is archived, and otherwise shows a line that delete is only for an archived bot. Enter still
+shows the later-release line and starts nothing. These keys are the slice's choice. They are not an
+owner decision. Tab and Shift-Tab move between fields. Shift-Enter and Ctrl-J insert a newline in
+the purpose field only and do not save. Enter saves. Esc cancels, and a cancelled form keeps no
+draft. Archive and delete ask with `y` or `Y`. Any other key, Esc included, keeps the bot.
+
+The make form has name and purpose and no model field. The edit form has name, purpose and model,
+one field to a row, prefilled from the row. On 2026-11-06 the user decided that an empty model field
+clears the stored model. Absent means later turns use the configured default. A field that is empty
+after its blank characters are trimmed is sent as clearing the model. Any other text is sent as
+typed, in one `edit` with the name and the purpose, and the module refuses a bad one. A make passes
+no model and no avatar. The list stays in the order the module returns, which is file order, and an
+archived row has no mark.
+
+A paste into an open form that is drawn lands in the active field whole. It is not folded to a
+marker, and control characters stay in the saved string. They are drawn as pictures. Below 100
+columns a form is not drawn, keeps its text, and no key reaches it. A confirmation open when the
+width goes below 100 columns is cancelled with nothing done, when the frame width is applied.
+`/layout` is refused while a form or a confirmation is open, drawn or not, with a line saying to
+save or cancel it first, and that refusal ends nothing. The first Ctrl-C, only while the form or
+confirmation is drawn, closes a confirmation with nothing done and offers the way out, leaves a form
+that holds text open and offers the way out, and closes an empty form. The second press leaves by
+the existing ladder. Only Esc closes a form that holds text. The form keeps the active field, the
+other fields' labels, the key line and a refusal on screen, and draws only a window of a long
+purpose around the cursor. A confirmation stays drawn when the pane is short, so `y` is not
+answering a question that is off the screen. A paste follows focus. A make selects the new row.
+
+The automated tests are not a real terminal. These done-when cases were not run there: making a bot
+and seeing it in the desktop app after a restart, seeing an edit in that app, a second bot with the
+same name, the hundred and first bot, a null in the name or the purpose, a model over its bound or
+with a line break, a failed write, archive and delete waiting for `y`, delete not offered for a bot
+that is not archived, a make in a terminal started with `--incognito`, a long paste into the purpose
+field, narrowing below 100 columns with a form open and then widening, narrowing with a confirmation
+open, `/layout` while a form or a confirmation is open including a form the narrow terminal does not
+draw, the first Ctrl-C on a confirmation, on a form that holds text and on an empty form, and Esc on
+a form that holds text.
+
 The order of the remaining work:
 
 1. Review the design against the overriding rule of `.claude/CLAUDE.md`, using
@@ -545,7 +594,7 @@ for bots, so each terminal function is in the bots layout.
      bridge, a release sets `session` to none and `archived` to zero and keeps the conversation, a
      forgotten conversation is removed from every row that lists it, and each of those writes stamps
      `updated` and leaves the definition file unchanged.
-4. **The terminal makes, edits, archives, restores and deletes a bot.**
+4. **The terminal makes, edits, archives, restores and deletes a bot.** Built. The Status above describes it.
    - Slice 2b's pane reads the rows once, when the phase with no session opens
      (`bots_pane::State::read`). Reread them after each write of this slice. Slice 2b leaves out the
      refusal of `/layout` with a form or a confirmation open, so add it here.
