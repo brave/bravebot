@@ -3276,9 +3276,8 @@ covered. A key waiting to be read is not a hangup, and nothing is looked at wher
 not a terminal.
 
 **Why.** crossterm takes a read of nothing for no event yet and reads again, so a session whose
-terminal had gone spun at a core's worth of CPU and stayed for as long as the machine did. Thirty of
-them, left behind by one selftest, held eight hundred percent of the CPU for a day and a half, and
-every build and test run on the machine slowed with them.
+terminal has gone spins at a core's worth of CPU for as long as it lives, and every other process on
+the machine slows with it. Sessions left behind this way add up, one core each.
 
 **Known costs.** The session ends as the signal ends it, without the cleanup of a normal exit.
 
