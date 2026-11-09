@@ -3285,3 +3285,4 @@ every build and test run on the machine slowed with them.
 `verified-by: bravebot_tui::hangup::a_terminal_that_is_idle_or_has_a_key_waiting_has_not_hung_up`
 `verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
 `verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
+`verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`
