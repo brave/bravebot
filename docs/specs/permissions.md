@@ -254,7 +254,10 @@ case and then to lower case, so `ſrc` meets the `src` APFS opens it as, though 
 case, and `Read(claß.md)` covers `class.md`. An `allow` rule is matched with a letter whose upper or
 lower case is more than one character left as written, so `Edit(claß.md)` covers `claß.md`,
 `CLAß.md` and `claẞ.md` and does not cover `class.md`. NTFS holds `claß.md` and `class.md` apart,
-and a grant must not reach a file that may not be the one approved. Where the volume keeps the spellings apart,
+and a grant must not reach a file that may not be the one approved. The copy of a rule for a
+checkout ([CHECKOUT-9](checkouts.md#CHECKOUT-9)) follows the same split: a `deny` or `ask` rule
+written with `class` is copied under a checkout of `claß`, and an `allow` rule for `class` is not.
+Where the volume keeps the spellings apart,
 or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
 `docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
 as the narrower one.
@@ -272,6 +275,7 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_a_spelling_only_full_case_folding_joins`
 `verified-by: bravebot_core::permissions::a_deny_rule_decides_a_spelling_only_full_case_folding_joins_whatever_a_grant_says`
 `verified-by: bravebot_core::permissions::a_rule_does_not_cover_a_case_variant_on_a_volume_that_keeps_them_apart`
+`verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`

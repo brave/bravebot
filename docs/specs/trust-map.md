@@ -262,6 +262,10 @@ asks the pair the same questions without a volume, once with the map folding cas
 The copy of the map and of the rules for a checkout is pinned by
 `bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`:
 a refusal is copied under both spellings and a trust only under the one it was written about.
+A checkout withdrawn drops a trust that either fold joins with its name: `ẞ` and `ß` are one name to
+the one-letter fold a trust is decided by and two to the full fold, and a trust under either still
+decides a path beneath the checkout, so a withdrawal by the full fold alone would leave it. A
+distrust stays, as before.
 
 A pair is two files when a write through the second name leaves the first as it was, so no host
 needs a file identity to say so. A Windows host leaves out the names of `AWKWARD_NAMES` it cannot
@@ -304,6 +308,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`
 `verified-by: bravebot_core::trust::a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins`
+`verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_full_fold`
 `verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`

@@ -218,14 +218,21 @@ impl TrustStore {
 
     /// Drop every rule at or beneath `under` except those that distrust a path (CHECKOUT-8).
     ///
+    /// A rule is at or beneath `under` where either [`fold_case`] or [`fold_simple`] joins its
+    /// segments with those of `under`. The two joins differ (`\u{df}` and `\u{1e9e}` are one name to
+    /// the simple fold and two to the full one), and a trust is decided by the simple fold, so a
+    /// withdrawal by the full fold alone would leave a trust that still decides a path beneath
+    /// `under`.
+    ///
     /// Whether any rule was kept.
     pub fn withdraw_beneath(&mut self, under: &str) -> bool {
         let under = self.key(under);
         let folds = self.folds_case;
-        self.rules.retain(|key, decision| {
-            !covers(&under, key, folds) || *decision == Some(Integrity::Untrusted)
-        });
-        self.rules.keys().any(|key| covers(&under, key, folds))
+        let beneath =
+            |key: &str| covers(&under, key, folds) || covers_by(&under, key, folds, fold_simple);
+        self.rules
+            .retain(|key, decision| !beneath(key) || *decision == Some(Integrity::Untrusted));
+        self.rules.keys().any(|key| beneath(key))
     }
 
     /// Drop the rule at `path` if it trusts that path, and nothing else (TRUST-9).
@@ -2011,6 +2018,29 @@ mod tests {
         assert!(!map.withdraw_beneath("/state/cla\u{df}"));
         assert_eq!(map.integrity_of("/state/class/src/a.rs"), None);
         assert_eq!(map.integrity_of("/state/cla\u{df}/src/a.rs"), None);
+    }
+
+    /// Withdrawing a checkout drops a trust that either fold joins with its name. `\u{df}` and
+    /// `\u{1e9e}` are one name to the simple fold and so one trust, and two to the full fold, so a
+    /// withdrawal by the full fold alone leaves a trust that still decides a path beneath the
+    /// checkout (CHECKOUT-8).
+    #[test]
+    fn withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not() {
+        for (trusted, withdrawn) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")] {
+            let mut map = TrustStore::new("/work").folding_case(true);
+            map.trust(&format!("/state/{trusted}/src"));
+            assert_eq!(
+                map.integrity_of(&format!("/state/{withdrawn}/src/a.rs")),
+                Some(Integrity::Trusted),
+                "the simple fold no longer joins /state/{trusted} with /state/{withdrawn}"
+            );
+            assert!(!map.withdraw_beneath(&format!("/state/{withdrawn}")));
+            assert_eq!(
+                map.integrity_of(&format!("/state/{withdrawn}/src/a.rs")),
+                None,
+                "a trust at /state/{trusted}/src outlived a withdrawal at /state/{withdrawn}"
+            );
+        }
     }
 
     /// Only a rule that distrusts a path outlives the checkout it was made for (CHECKOUT-8).

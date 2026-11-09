@@ -414,11 +414,17 @@ impl Rule {
     /// written out: a wildcard in that stretch is a pattern about more than the one directory and
     /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
     /// through a link is, and never floats.
-    fn copy_beneath(&mut self, from: &[String], to: &[String]) {
+    ///
+    /// `full_fold` is whether the segments are compared in the full case fold, which joins
+    /// `class` with `cla\u{df}`. A rule that restricts is matched that way on a volume that folds
+    /// case, so its copy is made for every checkout it applies to. A rule that grants is compared
+    /// as it is stored, in the fold that leaves such a letter alone, since a copy of a grant under
+    /// a checkout of another file would grant a place nobody approved.
+    fn copy_beneath(&mut self, from: &[String], to: &[String], full_fold: bool) {
         let copies: Vec<Pattern> = std::iter::once(&self.pattern)
             .chain(&self.landed)
             .filter_map(|pattern| match pattern {
-                Pattern::Absolute(pattern) if pattern.segments.starts_with(from) => {
+                Pattern::Absolute(pattern) if is_under(&pattern.segments, from, full_fold) => {
                     let mut segments = to.to_vec();
                     segments.extend_from_slice(&pattern.segments[from.len()..]);
                     Some(Pattern::Absolute(PathPattern {
@@ -827,13 +833,14 @@ impl Permissions {
         let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
         let from = split(&key_of(from, backslash_separates, folds_case));
         let to = split(&key_of(to, backslash_separates, folds_case));
-        for rule in self
-            .deny
-            .iter_mut()
-            .chain(self.ask.iter_mut())
-            .chain(self.allow.iter_mut())
-        {
-            rule.copy_beneath(&from, &to);
+        // A rule that restricts is matched in the full fold where the volume folds case, as
+        // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
+        let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
+        for rule in restricting {
+            rule.copy_beneath(&from, &to, folds_case);
+        }
+        for rule in &mut self.allow {
+            rule.copy_beneath(&from, &to, false);
         }
     }
 
@@ -1230,6 +1237,21 @@ fn fold(path: &str, folds: bool) -> String {
         .map(crate::trust::fold_simple)
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// Whether `segments` start with `from`, comparing each segment in the full case fold where
+/// `full_fold` says so and byte for byte otherwise.
+///
+/// Both are keyed, so each segment is already in the fold a grant is matched in, and the full fold
+/// is taken from there as [`PathPattern::canonical`] takes it for a path.
+fn is_under(segments: &[String], from: &[String], full_fold: bool) -> bool {
+    if !full_fold {
+        return segments.starts_with(from);
+    }
+    segments.len() >= from.len()
+        && segments.iter().zip(from).all(|(segment, name)| {
+            segment == name || crate::trust::fold_case(segment) == crate::trust::fold_case(name)
+        })
 }
 
 /// Whether a pattern's segments cover a path's, with `**` crossing directories and `*` not.
@@ -2906,6 +2928,37 @@ mod tests {
             Decision::Unmatched,
             "a copy was made for a checkout nobody asked for"
         );
+    }
+
+    /// CHECKOUT-9, PERM-3. A rule that restricts is copied from every name the full case fold
+    /// joins with the working directory, as a refusal is read, and a rule that grants only from a
+    /// name every volume that folds case joins with it, as a grant is read. A deny or ask rule
+    /// written with `class` therefore reaches a checkout of `cla\u{df}`, which APFS opens as the same
+    /// directory, and an allow rule for `class` does not, which NTFS holds apart.
+    #[test]
+    fn a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold() {
+        let mut permissions = rules_on_a_volume_that_folds_case(
+            true,
+            &["Read(//work/class/secrets/**)"],
+            &["Read(//work/class/asked/**)"],
+            &[
+                "Read(//work/class/granted/**)",
+                "Read(//work/cla\u{df}/own/**)",
+            ],
+        );
+        permissions.copy_beneath("/work/cla\u{df}", "/state/c1");
+        for (path, decision) in [
+            ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+            ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+            ("/state/c1/own/file", Decision::Ruled(Ruling::Allow)),
+            ("/state/c1/granted/file", Decision::Unmatched),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                decision,
+                "{path} was ruled wrongly under a copy for a checkout of /work/cla\u{df}"
+            );
+        }
     }
 
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a
