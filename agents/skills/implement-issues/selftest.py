@@ -135,6 +135,10 @@ class ImplementIssues(unittest.TestCase):
             FAKE_LOG=str(self.log_path),
             FAKE_SESSION=str(self.session_path),
         )
+        # The Makefile target runs the client the environment names in place of the one on PATH, so a
+        # person with BRAVEBOT exported would have their real client opened on the test's terminal
+        # (brave/bravebot#3591).
+        self.env.pop("BRAVEBOT", None)
 
     def start(self, argument, tty=True, client=None, notes=None):
         command = [
@@ -145,15 +149,20 @@ class ImplementIssues(unittest.TestCase):
 
     def spawn(self, command, cwd, tty=True):
         self.world_path.write_text(json.dumps(self.world))
+        # A session of its own, so the command and everything it starts are one process group that
+        # `reap` can end. In the test's group, a command that hung would outlive the run.
         if not tty:
             process = subprocess.Popen(
                 command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env=self.env, cwd=cwd, text=True,
+                env=self.env, cwd=cwd, text=True, start_new_session=True,
             )
-            return SimpleNamespace(process=process, master=None, seen=bytearray(), reader=None)
+            running = SimpleNamespace(process=process, master=None, seen=bytearray(), reader=None)
+            self.addCleanup(self.reap, running)
+            return running
         master, slave = pty.openpty()
         process = subprocess.Popen(
             command, stdin=slave, stdout=slave, stderr=subprocess.PIPE, env=self.env, cwd=cwd, text=True,
+            start_new_session=True,
         )
         os.close(slave)
         seen = bytearray()
@@ -171,13 +180,42 @@ class ImplementIssues(unittest.TestCase):
 
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
-        return SimpleNamespace(process=process, master=master, seen=seen, reader=reader)
+        running = SimpleNamespace(process=process, master=master, seen=seen, reader=reader)
+        self.addCleanup(self.reap, running)
+        return running
 
-    def finish(self, running):
-        piped, err = running.process.communicate(timeout=60)
+    def reap(self, running):
+        """End the command and everything it started, and let go of its terminal.
+
+        `communicate` raises when the time is up and leaves the child running, and what a recipe starts
+        is not the child. A client left on a terminal nobody holds any more reads it for ever and takes
+        a core until it is killed."""
+        if running.process.poll() is None:
+            try:
+                os.killpg(running.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                running.process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                # Held open by something that left the group, which is not this method's to end.
+                pass
+        if running.master is not None:
+            if running.reader:
+                running.reader.join(10)
+            os.close(running.master)
+            running.master = None
+
+    def finish(self, running, timeout=60):
+        try:
+            piped, err = running.process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.reap(running)
+            raise
         if running.reader:
             running.reader.join(10)
             os.close(running.master)
+            running.master = None
         out = bytes(running.seen) + (piped or "").encode()
         return SimpleNamespace(code=running.process.returncode, out=out.decode(errors="replace"), err=err)
 
@@ -482,6 +520,41 @@ class ImplementIssues(unittest.TestCase):
             result = self.finish(running)
             self.assertEqual(result.code, 0, result.err)
             self.assertEqual(self.session()["argv"], ["-i", passed])
+
+    def test_a_client_the_environment_names_is_not_the_one_the_make_target_runs(self):
+        """brave/bravebot#3591: the recipe takes BRAVEBOT from the environment, so the notes test opened a
+        person's real client on its terminal and waited for it for the full minute."""
+        done = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "ImplementIssues.test_the_make_target_passes_the_notes_through"],
+            env=dict(os.environ, BRAVEBOT=str(self.root / "no-such-client")),
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_command_that_runs_past_its_time_is_ended_with_everything_it_started(self):
+        """A recipe's children are not the child `communicate` gives up on, and a hang that left them
+        running was the whole of what kept thirty clients spinning for a day and a half."""
+        started = self.root / "grandchild"
+        running = self.spawn(["sh", "-c", f"sleep 300 & echo $! > '{started}'; wait"], self.root, tty=False)
+        until = time.monotonic() + 10
+        while time.monotonic() < until and not (started.exists() and started.read_text().strip()):
+            time.sleep(0.05)
+        grandchild = int(started.read_text())
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.finish(running, timeout=1)
+        until = time.monotonic() + 10
+        while time.monotonic() < until and self.alive(grandchild):
+            time.sleep(0.05)
+        self.assertFalse(self.alive(grandchild), "what the command started outlived the run")
+        self.assertIsNotNone(running.process.poll())
+
+    @staticmethod
+    def alive(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
 
     def test_a_word_that_is_no_ledger_is_a_query(self):
         self.world["search"] = {"repo:brave/bravebot fix-i18n-gaps is:open": [10]}
