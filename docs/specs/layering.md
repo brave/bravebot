@@ -276,11 +276,13 @@ turn it is the context that turn worked from.
 `verified-by: bravebot_agent::conversation::a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut`
 `verified-by: bravebot_ui_bridge::wire::a_message_the_agent_composed_crosses_as_a_tag_and_no_prose`
 `verified-by: bravebot_ui_bridge::wire::a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose`
+`verified-by: bravebot_ui_bridge::wire::a_plan_mode_notice_crosses_as_plain_text_and_takes_no_ordinal`
 `verified-by: bravebot_ui_bridge::wire::a_front_end_may_name_its_own_tag_and_none_of_the_agents`
 `verified-by: bravebot_tui::state::a_replayed_composed_message_is_drawn_as_the_message_it_was`
 `verified-by: bravebot_ui_bridge::fork::a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt`
 `verified-by: bravebot_ui_bridge::fork::a_prompt_that_reads_like_a_composed_message_is_still_where_the_cut_lands`
 `verified-by: bravebot_ui_bridge::fork::a_typed_prompt_that_opens_like_a_note_is_a_fork_point`
+`verified-by: bravebot_ui_bridge::fork::a_plan_mode_notice_is_not_a_fork_point`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one, the app's own house-keeping included, is drawn as the prompt somebody typed and keeps the ordinal a fork of it cuts on, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; make check-ui and the Front end CI job both run it, while the governs list above holds the file's existence to make check-spec)`
 
 ## Open questions

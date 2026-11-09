@@ -23078,6 +23078,116 @@ fn a_turn_started_in_another_mode_than_the_last_one_outside_plan_mode_is_told_no
     }
 }
 
+/// Four exchanges the server has said are large, with a plan-mode notice in the `n`th. The notice
+/// is tagged as the turn tags the one it pushes.
+fn a_long_conversation_with_a_plan_notice_in(n: usize) -> bravebot_agent::Conversation {
+    let mut conversation = bravebot_agent::Conversation::new();
+    for (index, (prompt, answer)) in [
+        ("port the parser to the new lexer", "started on it"),
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("carry on", "carrying on"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        if index + 1 == n {
+            conversation.push_composed(
+                bravebot_aichat::protocol::Message::user("PLAN-NOTICE: plan mode is on"),
+                bravebot_agent::conversation::Composed::ModeNotice { plan: true },
+            );
+        }
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    conversation.measured(50_000);
+    conversation
+}
+
+/// Compacts `conversation` as an earlier turn would have, then takes a turn in asking mode over it.
+/// Returns the planner's request.
+///
+/// The compaction is done first and not left to the turn: a turn pushes its mode notice before it
+/// compacts, so a turn that summarises on its first request has already said what it is going to
+/// say.
+fn planner_request_after_compacting(
+    name: &str,
+    conversation: &mut bravebot_agent::Conversation,
+) -> String {
+    let boundary = conversation
+        .compaction_boundary()
+        .expect("something to compact");
+    conversation.compacted(
+        boundary,
+        "they are porting the parser and widened the error type",
+    );
+    assert!(
+        !conversation
+            .messages()
+            .iter()
+            .any(|stored| format!("{:?}", stored.message).contains("port the parser to the new")),
+        "the first exchange stayed in the request, so this says nothing"
+    );
+
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    take_a_turn(
+        &config_for(&endpoint),
+        &workspace,
+        conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_permission_mode(live),
+    )
+    .expect("turn runs");
+    received.recv().expect("the planner's request")
+}
+
+/// MODE-8, COMPACT-6: a turn that starts outside plan mode over a conversation whose plan-mode
+/// notice a compaction removed from the request does not say plan mode has ended.
+///
+/// The request no longer holds a notice that plan mode is on, so there is nothing to retract. The
+/// fault this rejects: the end of plan mode said whenever an earlier turn pushed a plan-mode
+/// notice, whether or not the notice is still in the request.
+#[test]
+fn a_turn_after_a_compaction_that_removed_the_plan_notice_is_not_told_it_ended() {
+    let mut conversation = a_long_conversation_with_a_plan_notice_in(1);
+    assert!(conversation.plan_mode_told());
+
+    let planning =
+        planner_request_after_compacting("plan-notice-compacted-away", &mut conversation);
+
+    assert!(
+        !planning.contains("PLAN-NOTICE"),
+        "the compaction left the notice in the request, so this says nothing: {planning}"
+    );
+    assert!(
+        !planning.contains("Plan mode has ended"),
+        "plan mode was said to have ended with no notice of it in the request: {planning}"
+    );
+}
+
+/// MODE-8: a compaction that keeps the plan-mode notice leaves the turn to retract it.
+///
+/// The fault this rejects: an end notice withheld after any compaction.
+#[test]
+fn a_turn_after_a_compaction_that_kept_the_plan_notice_is_told_it_ended() {
+    let mut conversation = a_long_conversation_with_a_plan_notice_in(4);
+
+    let planning =
+        planner_request_after_compacting("plan-notice-compacted-around", &mut conversation);
+
+    assert!(
+        planning.contains("PLAN-NOTICE"),
+        "the compaction removed the notice, so this says nothing: {planning}"
+    );
+    assert!(
+        planning.contains("Plan mode has ended"),
+        "a plan-mode notice still in the request was not retracted: {planning}"
+    );
+}
+
 /// A turn continuing one that was stopped after a write is not told that nothing is written yet.
 ///
 /// A stop is usually not the end of the task. The next prompt is `continue`, and the change the

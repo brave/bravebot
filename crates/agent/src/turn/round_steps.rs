@@ -209,14 +209,16 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // says nothing for a mode other than plan.
     let chosen = task.permission_mode.get();
     if let Some(notice) = state.told_mode.change_notice(chosen) {
+        // A notice is only ever into plan mode or out of it, so the conversation now says plan
+        // mode is on exactly when the mode chosen is plan. The tag carries that, so the record is
+        // dropped with the notice.
         conversation.push_composed_from(
             Message::user(&notice),
-            Composed::Notice,
+            Composed::ModeNotice {
+                plan: chosen == crate::permission_mode::PermissionMode::Plan,
+            },
             Provenance::Driver,
         );
-        // A notice is only ever into plan mode or out of it, so the conversation now says plan
-        // mode is on exactly when the mode chosen is plan.
-        conversation.plan_mode_noticed(chosen == crate::permission_mode::PermissionMode::Plan);
     }
     state.told_mode = chosen;
 

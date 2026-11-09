@@ -580,6 +580,26 @@ fn a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose() {
     );
 }
 
+/// LAYER-6: a plan-mode notice has no row of its own, so it crosses as a plain message and takes no
+/// prompt ordinal, which keeps the prompts after it numbered as `fork::cut` counts them.
+#[test]
+fn a_plan_mode_notice_crosses_as_plain_text_and_takes_no_ordinal() {
+    let said = wire::recounted(&[
+        Said::User("first".into(), None),
+        Said::Composed {
+            why: Composed::ModeNotice { plan: true },
+            text: "Plan mode is on".into(),
+        },
+        Said::User("second".into(), None),
+    ]);
+    assert_eq!(
+        said[1],
+        json!({ "kind": "user", "text": "Plan mode is on" })
+    );
+    assert_eq!(said[0]["prompt"], json!(0));
+    assert_eq!(said[2]["prompt"], json!(1));
+}
+
 /// LAYER-6: a request may say the front end composed its own prompt, and may not say the agent
 /// composed one.
 ///

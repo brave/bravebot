@@ -1582,6 +1582,16 @@ stay behind because they were given for work that the brief describes only in wo
 
 ## Known costs
 
+- **A record holding a plan-mode notice is not read by an earlier build.** The driver tags the
+  notice that says plan mode is on or has ended with `{"kind":"mode_notice","plan":true}`, or
+  `"plan":false` when it says plan mode ended ([MODE-8](permission-modes.md#MODE-8)).
+  A build that has not heard of the tag refuses the record, so a session that went into or out of
+  plan mode with this build cannot be resumed by an earlier one.
+- **A fork of a record written before plan-mode notices were tagged is not told that plan mode
+  ended when it is cut between an untagged plan-on notice and a later tagged one.** Once a tagged
+  notice follows the untagged one, the record's flag holds the answer of the tagged notice and the
+  untagged notice's answer is no longer stored. The child keeps the untagged plan-on notice and no
+  tagged notice, and has nothing that retracts it ([MODE-8](permission-modes.md#MODE-8)).
 - **Listing the turns addressed to a definition reads every record.** `session.addressed` with no
   directory, and a terminal session opened under a definition, read each record whole
   ([SESSION-39](#SESSION-39)), so a directory with many long sessions is slow to list.

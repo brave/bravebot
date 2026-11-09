@@ -447,6 +447,7 @@ fn said(said: &Said) -> Value {
                 | Composed::SkillNamed { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
+                | Composed::ModeNotice { .. }
                 | Composed::MessageSent { .. }
                 | Composed::Written,
             text,
