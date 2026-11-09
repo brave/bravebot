@@ -651,14 +651,16 @@ failed request.
   up yet, since `std` reports the lookup's own error code as a kind that cannot be matched, and a
   machine without a network can fail a lookup the way it fails one for a name that does not exist.
   So a mistyped host is sent again, after pauses that double from one second to a minute, until
-  the window of [BACKEND-55](backends.md#BACKEND-55) has passed, five minutes where none is
-  stated, before it is reported. A lookup that failed for a cause of its own, a descriptor limit for example, is reported
-  as a host that could not be found, and so is a proxy that does not resolve, since ureq resolves
-  its host through the same lookup. `NetworkUnreachable` and `HostUnreachable` name one route as well
-  as a whole network, and the transport stops at the first address that fails other than by being
-  refused, so a name whose first address is IPv6, on a network with no IPv6 route, fails the same way
-  on each attempt. A request that fails for any of these reasons ends when the window does, with the
-  same failure it would have ended with on the first attempt.
+  the window of [BACKEND-55](backends.md#BACKEND-55) has passed, and is then reported. The window
+  is five minutes where neither it nor a count is stated, and where only a count is stated the
+  count alone decides. A lookup that failed for a cause of its own, a descriptor limit for example,
+  is reported as a host that could not be found, and so is a proxy that does not resolve, since
+  ureq resolves its host through the same lookup. `NetworkUnreachable` and `HostUnreachable` name
+  one route as well as a whole network, and the transport stops at the first address that fails
+  other than by being refused, so a name whose first address is IPv6, on a network with no IPv6
+  route, fails the same way on each attempt. A request that fails for any of these reasons ends
+  when the window does, or when the count does where only a count is stated, with the same failure
+  it would have ended with on the first attempt.
 
 - **The pair is checked with the TLS library's own key check, which refuses a kind of key it cannot sign
   with.** Whether the key belongs to the certificate is asked of `CertifiedKey::keys_match`, which
