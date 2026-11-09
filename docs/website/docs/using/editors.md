@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: Using Brave Bot in an editor
-description: Run a session from an editor that speaks the Agent Client Protocol, and what it is asked to approve there.
+description: Run Brave Bot through the Agent Client Protocol in an editor, send prompts and attachments, use multiple workspace roots, and handle approvals and permission settings.
 ---
 
 # Using Brave Bot in an editor

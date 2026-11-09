@@ -1665,6 +1665,8 @@ fn command_for(
         &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
         inherits,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // The line is the person's, run in the confinement chosen for it (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     // The vector, never a string. Nothing here builds a command line, so nothing has to
     // unbuild one.

@@ -202,3 +202,35 @@ count: [repo-map.md](repo-map.md).
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter`
 `verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
 `verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
+
+<a id="LIST-7"></a>
+### LIST-7: a listing whose pattern selected no file says so, and names syntax the matcher lacks
+
+A call with a `pattern` whose result holds no file says that no file matched the pattern and that
+this says nothing about whether such a file exists. The sentence also says that matching is
+case-sensitive and that a brace group such as `{r,R}eadme*` covers both cases. It is written when
+the result is empty and when it holds only the directories a bounded walk stopped at
+([LIST-5](#LIST-5)), which the pattern does not apply to and which would otherwise read as a listing
+in which the pattern worked. A call with no pattern words its empty result as before.
+
+When the pattern holds a character class, an extended glob or a leading `!`, the sentence adds the
+advice `search` gives for an `include` ([SEARCH-5](search.md#SEARCH-5)), from the same function. The
+advice is decided from the pattern the planner typed and reads nothing in the tree. Whether a file
+was selected is the count of files in the result, which is released with the entry count and the
+directory count of [LIST-5](#LIST-5) and adds no use of `declassify`. Like the link count of
+[LIST-6](#LIST-6) the sentence travels beside the references when the listing is quarantined, since
+a sentence inside that body reaches nobody.
+
+The tool description says that matching is case-sensitive and that `{r,R}eadme*` matches both
+cases, in the same words as the `include` of `search`. `list_files` has no switch for case. The
+`case_sensitive` argument of `search` applies to its pattern and not to its `include`, so the
+description of `include` carries the same statement.
+
+**Why.** `readme*` does not list `README.md`, and the answer was empty or only subdirectories. The
+planner took that for a directory with no readme, or retried with a character class that fails the
+same way. An unreadable pattern must not come back looking like a fact about the tree.
+
+`verified-by: bravebot_agent::tools::a_pattern_that_selects_no_file_says_so_and_says_matching_is_case_sensitive`
+`verified-by: bravebot_agent::tools::a_pattern_leaning_on_missing_syntax_is_named_even_when_directories_are_listed`
+`verified-by: bravebot_agent::tools::the_glob_arguments_say_matching_is_case_sensitive`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_when_its_pattern_selected_no_file`

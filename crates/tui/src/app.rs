@@ -20068,6 +20068,26 @@ mod tests {
         assert!(!will_look_again(&helped, Wrote::ThePerson));
     }
 
+    /// CMD-24: only the question contributes a person's file names. The driver-written flag
+    /// suppresses later looks without suppressing those names at the submission boundary.
+    #[test]
+    fn a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers() {
+        let mut session = Session::new("none");
+        let Action::Submit(prompt) = enter_line(
+            &mut session,
+            "/help explain file mentions using @crates/core/src/policy.rs",
+        ) else {
+            panic!("the question did not start a turn");
+        };
+        assert_eq!(
+            files_named_in(&prompt, Wrote::ThePerson, std::path::Path::new("."), &[]),
+            vec!["crates/core/src/policy.rs".to_string()]
+        );
+        assert!(!will_look_again(&session, Wrote::ThePerson));
+        assert!(session.take_driver_prompt());
+        assert!(!crate::help_command::prompt("").contains('@'));
+    }
+
     /// CMD-24: asked nothing, `/help` says what it takes and starts no turn, so no request is made
     /// about no question.
     #[test]

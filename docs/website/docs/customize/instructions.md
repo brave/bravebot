@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Instructions
-description: AGENTS.md holds standing instructions for a project or for every project.
+description: AGENTS.md and other instruction sources, precedence, linked files and @path includes, command-line instructions, size limits, workspace facts, scratch directories and trust.
 ---
 
 # Instructions

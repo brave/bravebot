@@ -1449,7 +1449,7 @@ the typed line itself is never sent (CMD-4).
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::help_command::the_prompt_names_the_help_skill_and_carries_the_question_as_typed`
 `verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
-`verified-by: by-construction (the command returns Action::Submit like any typed line, and the one place a submitted line is run reads it as the person's; nothing in the command marks the question as anything else)`
+`verified-by: bravebot_tui::app::a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers`
 
 <a id="CMD-25"></a>
 ### CMD-25: `/changelog` shows the release notes this program carries, and starts no turn

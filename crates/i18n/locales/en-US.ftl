@@ -3996,6 +3996,9 @@ failure-conceded-thinking = shown thinking
 failure-transport = the request did not get through
 failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read
+# A failure the service reported that this build has no name for (BACKEND-37). Said with the next
+# step of failure-refused-next, and holds nothing the service wrote.
+failure-unrecognised = the service answered with a failure this build does not recognise
 failure-too-long = the model reached its output limit
 failure-too-long-at = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises
 failure-too-long-in-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a call to { $tool }, so the call was not made

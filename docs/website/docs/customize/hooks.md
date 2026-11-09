@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a session starts or ends, when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
+description: Declare hooks for session, turn, tool, approval, delegate-checkout and compaction events; configure arguments, input, execution reach, timeouts and failure handling.
 ---
 
 # Hooks

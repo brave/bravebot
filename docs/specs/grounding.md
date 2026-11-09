@@ -68,6 +68,8 @@ A delegate in the turn's workspace adds its whole record. One in a checkout give
 `verified-by: bravebot_agent::turn::a_file_a_delegate_in_a_checkout_changed_through_a_run_line_is_not_a_write_of_the_turn`
 `verified-by: bravebot_agent::turn::a_turns_outcome_carries_the_summary_of_its_work`
 `verified-by: bravebot_agent::turn::a_run_line_that_changes_a_file_is_recorded_as_a_write`
+`verified-by: bravebot_agent::turn::the_record_of_a_turn_that_delivers_its_change_through_run_lines_counts_those_writes`
+`verified-by: bravebot_agent::turn::a_run_line_started_in_the_background_is_a_command_and_no_write`
 `verified-by: bravebot_agent::turn::a_run_line_that_writes_only_build_output_is_not_a_write`
 `verified-by: bravebot_agent::turn::a_run_line_that_changes_nothing_is_not_a_write`
 `verified-by: bravebot_agent::turn::a_run_line_that_writes_and_then_exits_nonzero_is_recorded_as_a_write`

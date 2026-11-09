@@ -1905,6 +1905,7 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -1936,6 +1937,7 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             })
         );
     }

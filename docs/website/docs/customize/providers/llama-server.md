@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: llama-server
-description: Reach a model served by llama-server with no key, what the first run writes for you, and the block to write yourself.
+description: Connect a local llama-server without an API key, use first-run discovery or manual gateway configuration, and set the context window.
 ---
 
 # Reaching a model through llama-server

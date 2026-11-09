@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Google Vertex AI
-description: Reach Gemini models through Vertex AI with an API key or Google Cloud credentials, with or without a project, and what express mode is.
+description: Configure Gemini through Google Vertex AI using an API key or Google Cloud credentials, with project-based access or project-free express mode.
 ---
 
 # Reaching Google Vertex AI
@@ -62,7 +62,11 @@ With no block, exporting `GOOGLE_CLOUD_PROJECT` and no `GOOGLE_API_KEY` is the s
 found, bravebot runs `gcloud auth application-default print-access-token` and sends the result as a
 bearer token. If `gcloud` gives no token, bravebot runs `gcloud auth application-default login` before
 the first request of a turn and shows the address and code it prints. `GOOGLE_APPLICATION_CREDENTIALS`
-and impersonation are read by `gcloud` and not by bravebot. The token goes only to Google's Vertex
+and impersonation are read by `gcloud` and not by bravebot. bravebot does not pass `gcloud` a
+`GOOGLE_APPLICATION_CREDENTIALS` that names a file in a directory a stage may write, or a relative
+or missing path, since a credential file of type `external_account` runs a command. It leaves off
+the other variables `gcloud` and Python read to choose code to run under the same rule, such as
+`PYTHONPATH` and `CLOUDSDK_PYTHON_ARGS`. The token goes only to Google's Vertex
 host: an entry with a `baseURL` that names another host, or with an `authorization` header of its own,
 is never sent one. A key that is found is used and `gcloud` is not started. bravebot runs `gcloud` for
 each request, since the command states no expiry to keep an answer until.

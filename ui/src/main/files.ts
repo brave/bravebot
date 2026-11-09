@@ -22,7 +22,8 @@ import { isAttachableProjectFile, readProjectText } from './project-files'
  * prompt at `turn.send` and confines to the session's workspace itself.
  */
 
-import { shell, dialog, type BrowserWindow } from 'electron'
+import { dialog, type BrowserWindow } from 'electron'
+import { openPath, showItemInFolder } from './external-open'
 import { randomUUID } from 'node:crypto'
 import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
@@ -303,11 +304,11 @@ export async function open(handle: string, subpath: string, parent?: BrowserWind
     }
     const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
     if (options.buttons[response] === SHOW_IN_FOLDER) {
-      shell.showItemInFolder(target)
+      showItemInFolder(target)
       return { status: 'revealed' }
     }
     if (options.buttons[response] !== OPEN) return { status: 'cancelled' }
   }
-  const failure = await shell.openPath(target)
+  const failure = await openPath(target)
   return failure === '' ? { status: 'opened' } : { status: 'failed', message: failure }
 }

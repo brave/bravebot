@@ -1,7 +1,7 @@
 ---
 sidebar_position: 15
 title: Settings pinned by an administrator
-description: A file on the machine that pins where requests go and which models, servers and actions a session may use, above every other source.
+description: Administrator-managed settings, configuration precedence, pinned request destinations, model and MCP server restrictions, and action policy.
 ---
 
 # Settings pinned by an administrator

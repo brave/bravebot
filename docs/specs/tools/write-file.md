@@ -62,6 +62,19 @@ anybody is asked ([DELEGATE-31](../delegation.md#DELEGATE-31)).
 
 **Why.** The wrong file destroys work rather than wasting a step.
 
+**What the planner is told.** The description says a write inside a directory the user vouched
+for is applied without a prompt ([TRUST-4](../trust-map.md#TRUST-4): trusted data to a trusted
+path), and that elsewhere the user approves each write unless a permission rule or mode answers for
+them. It does not say every write is put to the user, which is untrue in a vouched directory. It
+also says that a write to a path that already holds a file replaces it whole, and that the path is
+read or listed first when the file may exist, since a replacement made without a prompt is the only
+moment the old contents could have been seen. `edit_file` says the same of its edits
+([EDIT-3](edit-file.md#EDIT-3)). The planner's system prompt says the same of writes in general:
+a write inside a directory the user vouched for is applied without a prompt, and any other write
+is shown to the user for approval first.
+
+`verified-by: bravebot_agent::tools::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
+`verified-by: bravebot_agent::turn::prompts::the_planner_is_told_when_a_write_is_shown_and_when_it_is_applied_unasked`
 `verified-by: bravebot_agent::turn::an_approved_write_is_recorded_as_endorsed`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_refused_overwrite_leaves_the_original`

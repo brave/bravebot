@@ -792,7 +792,7 @@ fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
 #[cfg(unix)]
 #[test]
 fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
-    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath, start};
+    use bravebot_sandbox::programs::{CodeSelectors, Inherits, Resolved, SearchPath, start};
     use std::os::unix::fs::PermissionsExt;
     if !can_confine() {
         return;
@@ -826,7 +826,13 @@ fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
 
         let found = Resolved::find_on(OsStr::new("probe"), bin.as_os_str());
         if let Some(program) = &found {
-            let _ = start(program, Inherits::All, SearchPath::Reduced).status();
+            let _ = start(
+                program,
+                Inherits::All,
+                SearchPath::Reduced,
+                CodeSelectors::Kept,
+            )
+            .status();
         }
 
         // A read-only tree cannot be removed by the next run of this test, so it is opened again

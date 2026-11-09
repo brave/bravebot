@@ -19,7 +19,7 @@
 
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{self, ConfinedChild, Environment, Streams};
-use crate::programs::{Inherits, Resolved, SearchPath};
+use crate::programs::{CodeSelectors, Inherits, Resolved, SearchPath};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, OsString};
 use std::process::Output;
@@ -152,8 +152,12 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command =
-        crate::programs::start(cli, Inherits::Only(CLI_INHERITS), SearchPath::Reduced);
+    let mut command = crate::programs::start(
+        cli,
+        Inherits::Only(CLI_INHERITS),
+        SearchPath::Reduced,
+        CodeSelectors::Checked(&[]),
+    );
     command.args(args);
     output_of(command, within)
 }
@@ -476,8 +480,12 @@ impl Sandbox for OpenShell {
             )));
         }
         self.prepare(program)?;
-        let mut command =
-            crate::programs::start(&self.cli, Inherits::Only(CLI_INHERITS), SearchPath::Reduced);
+        let mut command = crate::programs::start(
+            &self.cli,
+            Inherits::Only(CLI_INHERITS),
+            SearchPath::Reduced,
+            CodeSelectors::Checked(&[]),
+        );
         command
             .args([
                 "sandbox", "exec", "-n", &self.name, "--no-tty", "--color", "never", "--",
@@ -849,7 +857,13 @@ fn machine_id() -> Option<String> {
         // Named by its path, since a minimal PATH, as cron or a launched application gives, would
         // otherwise leave this process naming the machine differently from the others.
         let sysctl = Resolved::written_in_source("/usr/sbin/sysctl");
-        let mut command = crate::programs::start(&sysctl, Inherits::Only(&[]), SearchPath::Reduced);
+        let mut command = crate::programs::start(
+            &sysctl,
+            Inherits::Only(&[]),
+            SearchPath::Reduced,
+            // A fixed system program with an empty environment; no variable reaches it (SANDBOX-30).
+            CodeSelectors::Kept,
+        );
         command.args(["-n", "kern.uuid"]);
         let output = output_of(command, Duration::from_secs(5)).ok()?;
         return output
@@ -1183,6 +1197,7 @@ mod tests {
                 &Resolved::find(OsStr::new(name)).expect(name),
                 Inherits::Only(&[]),
                 SearchPath::Reduced,
+                CodeSelectors::Kept,
             )
         };
         let mut sleeping = program("sleep");
@@ -1224,6 +1239,7 @@ mod tests {
             &Resolved::find(OsStr::new("true")).expect("true"),
             Inherits::Only(&[]),
             SearchPath::Reduced,
+            CodeSelectors::Kept,
         )
         .spawn()
         .expect("a child");

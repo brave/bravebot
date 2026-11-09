@@ -21,6 +21,7 @@ export function failureSummary(category: string, cutOff?: CutOff | null, account
     transport: ['The model service could not be reached', 'Check the connection, proxy and certificate settings in Agent settings.'],
     incomplete: ['The model reply was interrupted', 'Your conversation is preserved. Review completed work before continuing.'],
     undecodable: ['The model returned an unusable reply', 'Try again or choose another model.'],
+    unrecognised: ['The service reported a failure this version does not recognise', 'Choose another model, or run bravebot doctor to see the endpoint and the diagnostic log.'],
     'too-long': ['The reply reached its output limit', 'Ask for a smaller next step or choose another model.'],
     'model-unconfigured': ['Choose a model from your configured service', 'The selected model uses a service that is not configured. Choose another model from your gateway or AWS Bedrock in the model picker. Your existing API key does not configure the Brave service.'],
     unconfigured: ['The selected model needs configuration', 'Check the selected model and its service credentials in Agent settings, or choose another available model.'],

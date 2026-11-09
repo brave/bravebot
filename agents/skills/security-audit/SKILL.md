@@ -3,7 +3,7 @@ name: security-audit
 description:
   'Audit this repository against the rule that untrusted content never enters the
   driver or the planner. Enumerates the label surface mechanically, then reads the
-  code in fourteen lanes, tries to disprove every candidate, and files one issue per
+  code in fifteen lanes, tries to disprove every candidate, and files one issue per
   finding that survives, through the issue-poster definition, skipping anything the tracker
   already holds.
   Triggers on: security audit, /security-audit, make check-security, find security
@@ -20,7 +20,7 @@ untrusted content in their context.** The driver is `bravebot-core` and `bravebo
 The planner is the model. This skill answers one question about that: **does the guarantee
 hold?**
 
-- **Full run** (default): all fourteen lanes.
+- **Full run** (default): all fifteen lanes.
 - **Scoped run** (`/security-audit laundering gates`): named lanes only.
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
   one to run before asking for review on a diff that touches a label.
@@ -274,7 +274,7 @@ deliverable.
 
 ---
 
-## The fourteen lanes
+## The fifteen lanes
 
 Each is a prompt file with the sites it starts from already filled in, so no lane is a vague
 instruction to go and look at things. The first four are the four shapes a violation takes in a
@@ -299,6 +299,7 @@ written from), so run it occasionally and not with every audit.
 | `checkout-controls` | what can a cloned repository's files set, and does any of it decide a destination, a credential, a permission, a program that starts or a printed string? | `layered_since`, `unread_keys` and `rule_texts`, `Settings::names`, the fields of `Settings`, and the BACKEND-24 and BACKEND-33 clauses |
 | `output-sinks` | does text from an untrusted or checkout-supplied source reach a terminal, a window or a file another program reads with control characters or invisible characters left in? | every `println!`-family macro, `t!` and `say` call with a non-literal argument in `crates/cli`, `crates/tui` and `crates/approval`, and the `<pre>`, `innerHTML` and `dangerouslySetInnerHTML` sites in `ui/` |
 | `tooling` | what does a maintainer's tool run, from where, on whose files and with which credentials? | `agents/*.py`, `agents/skills/*/*.py`, `contrib/`, `.githooks`, the skill and agent definitions, and the `Makefile` lines that set git configuration |
+| `inherited-environment` | for each program bravebot starts by name, which variables does its launcher read to choose code to run, and does the start withhold them, with the program's own names in the list it passes and every such name in `CODE_SELECTORS`? | every `programs::start` call, the selectors each passes, and `CODE_SELECTORS` and `CODE_SELECTOR_PREFIXES` in `crates/sandbox/src/programs.rs` |
 
 ---
 
@@ -336,6 +337,7 @@ written from), so run it occasionally and not with every audit.
 | A value a cloned repository's files set that decides a destination, a credential, a permission, a program or a printed string | lane, then verifier | error |
 | Untrusted text written to a terminal, a window or a file with control or invisible characters left in | lane, then verifier | error |
 | A tool a maintainer runs that executes a branch's files with the maintainer's credentials | lane, then verifier | error |
+| A variable in the person's inherited environment that makes a program bravebot starts run code, and that the start passes on | lane, then verifier | error |
 | A lane that returned nothing usable | mechanical | error |
 
 ---

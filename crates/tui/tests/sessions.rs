@@ -97,6 +97,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 tools_ms: 500,
                 stalled_ms: 0,
                 file_wait_ms: 0,
+                ..Default::default()
             },
         ),
         (
@@ -107,6 +108,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 tools_ms: 37_000,
                 stalled_ms: 0,
                 file_wait_ms: 0,
+                ..Default::default()
             },
         ),
         (
@@ -117,6 +119,7 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 tools_ms: 1_000,
                 stalled_ms: 294_000,
                 file_wait_ms: 0,
+                ..Default::default()
             },
         ),
     ])
@@ -2453,6 +2456,7 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
                 inference_ms: 8 * factor,
                 tools_ms: 3 * factor,
                 stalled_ms: 2 * factor,
+                activity: counted_in(factor),
                 ..Default::default()
             },
             ..spent
@@ -2486,6 +2490,9 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
             (timing.inference_ms, timing.tools_ms, timing.stalled_ms),
             (8 * factor, 3 * factor, 2 * factor)
         );
+        // Each ending charges its counts once, and each turn keeps its own: a turn that failed or
+        // was stopped has no messages from which they could be read back.
+        assert_eq!(timing.activity, counted_in(factor), "turn {turn}");
     }
     let conversation = a_conversation();
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
@@ -2516,6 +2523,25 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
     assert_eq!(record.tokens, 720);
     assert_eq!(&record.spend, session.spend_by_turn());
     assert_eq!(&record.timing, session.timing_by_turn());
+    for turn in 1..=3 {
+        assert_eq!(
+            record.timing[&turn].activity,
+            counted_in(turn as u64),
+            "turn {turn} after a reload"
+        );
+    }
+}
+
+/// What a turn did, different in each count and in each turn so a charge that took one turn's
+/// counts for another's, or one count for another, could not pass.
+fn counted_in(factor: u64) -> bravebot_agent::timing::Activity {
+    bravebot_agent::timing::Activity {
+        requests: 2 * factor,
+        written_tokens: 5 * factor,
+        cache_read_tokens: 7 * factor,
+        cache_written_tokens: 11 * factor,
+        compactions: factor - 1,
+    }
 }
 
 mod completed_usage {

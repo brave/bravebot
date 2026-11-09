@@ -134,6 +134,12 @@ build. A call that ran a program is already a command for TURN-4, so a turn whos
 through `run` is not told that files changed and nothing was run. A worker delegate that asked for
 such a line has delivered, and the parent counts it when it takes the delegate back.
 
+The line is the same whatever the program is and however the turn is shaped: a turn that makes a
+worktree, applies a patch with `git apply` and copies files with `cp`, with lines that only read
+between them, is not told after eight rounds that nothing is written, because `git` and `cp` are
+not in the table. A turn whose every `run` line the table proves read-only is told, and the work
+record counts no write for it.
+
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
@@ -148,6 +154,9 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 `verified-by: bravebot_agent::turn::a_turn_whose_run_line_may_change_files_is_not_told_nothing_is_written`
 `verified-by: bravebot_agent::turn::a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_whose_background_run_line_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_that_delivers_its_change_through_run_lines_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_only_git_apply_changed_nothing_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_that_only_reads_through_run_lines_is_told_nothing_is_written`
 `verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_ran_a_line_that_may_change_files_is_not_told_nothing_is_written`
 `verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_ran_a_writing_line_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_after_a_completed_turn_that_ran_a_writing_line_is_still_told_to_write`

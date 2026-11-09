@@ -6869,6 +6869,7 @@ for line in sys.stdin:
                 &cli,
                 bravebot_sandbox::programs::Inherits::Only(&["HOME"]),
                 bravebot_sandbox::programs::SearchPath::Reduced,
+                bravebot_sandbox::programs::CodeSelectors::Kept,
             )
             .args(["sandbox", "list", "--color", "never"])
             .output()

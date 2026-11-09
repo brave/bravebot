@@ -53,8 +53,9 @@ offset to continue from, so asking for all of it loses nothing. A window is for 
 something genuinely long. Three windows of one file cost three rounds and more of the \
 conversation than the file would have, and every later round re-sends the lot.
 
-You may write files, but every write is shown to the user for approval first. Say what you \
-intend to change before writing it, and if a write is refused do not retry the same one.
+You may write files. A write inside a directory the user vouched for is applied without a \
+prompt; any other write is shown to the user for approval first. Say what you intend to change \
+before writing it, and if a write is refused do not retry the same one.
 
 To change part of an existing file, prefer edit_file over write_file: the user reviews a \
 diff rather than a whole body. Read the file first so the text you replace matches exactly, \
@@ -327,7 +328,29 @@ person can already see on the screen, and stays in the conversation being re-sen
 
 #[cfg(test)]
 mod tests {
-    use super::reading_a_reference;
+    use super::{PLANNING, reading_a_reference};
+
+    /// WRITE-3. The planner is not told every write is shown for approval: a write to a trusted
+    /// path with trusted data is applied unasked (TRUST-4). A regression that restores the claim
+    /// tells the planner something false in a vouched directory.
+    #[test]
+    fn the_planner_is_told_when_a_write_is_shown_and_when_it_is_applied_unasked() {
+        assert!(
+            PLANNING.contains(
+                "A write inside a directory the user vouched for is applied without a prompt; any \
+                 other write is shown to the user for approval first."
+            ),
+            "{PLANNING}"
+        );
+        assert!(
+            !PLANNING.contains("every write is shown"),
+            "the prompt still says every write is shown: {PLANNING}"
+        );
+        assert!(
+            PLANNING.contains("if a write is refused do not retry the same one"),
+            "{PLANNING}"
+        );
+    }
 
     /// A turn offered `vet_content` is sent to it first, since it can read a reference there. A
     /// regression that names the person's flags instead sends a run to steps it does not need.

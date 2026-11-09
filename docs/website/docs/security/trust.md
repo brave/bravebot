@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Trusted directories
-description: The question at startup, every other way a path comes to be trusted, and how long an answer lasts.
+description: Workspace trust prompts, path matching, trust changes after writes, quarantined-read grants, /add-dir and /cd, scratch directories, remembered answers and trust-map inspection.
 ---
 
 # Trusted directories

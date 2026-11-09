@@ -16820,6 +16820,15 @@ fn a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them() {
                            "cache": {"read_tokens": 12, "written_tokens": 4}}),
         "{second}"
     );
+
+    // The same figures are kept for each turn on its own, beside its time: the continued run adds
+    // a second turn's and leaves the first's as it was, where the split above is the session's.
+    let one_request = serde_json::json!({"requests": 1, "written_tokens": 1,
+                                         "cache_read_tokens": 6, "cache_written_tokens": 2,
+                             "compactions": 0});
+    assert_eq!(first["timing"]["1"]["activity"], one_request, "{first}");
+    assert_eq!(second["timing"]["1"]["activity"], one_request, "{second}");
+    assert_eq!(second["timing"]["2"]["activity"], one_request, "{second}");
 }
 
 /// CLI-25 and SESSION-19: a continued task leaves a point to rewind it to, behind the points the

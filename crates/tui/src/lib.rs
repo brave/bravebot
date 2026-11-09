@@ -64,6 +64,7 @@ pub mod opener;
 pub mod panel;
 pub mod picking;
 mod pointer;
+mod powershell;
 pub mod preview;
 pub mod prompt_files;
 pub mod reasoning;

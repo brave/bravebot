@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Sandbox settings
-description: Withhold variables from a program the agent runs, close its network or hold it to a list of hosts, and move the paths it reads and writes.
+description: Configure run.scrubEnv, run.network, sandbox.network and sandbox.filesystem to withhold environment variables, restrict hosts and paths, and hold back the temporary directory.
 ---
 
 # Sandbox settings

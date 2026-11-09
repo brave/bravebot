@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Connecting Google Calendar
-description: Read Google Calendar from a session through Google's Workspace MCP server, with every other Google service switched off.
+description: Connect Google Calendar through Google's Workspace MCP server for calendar reads, with other Google services disabled.
 ---
 
 # Connecting Google Calendar

@@ -337,6 +337,7 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
                 &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
                 crate::programs::Inherits::All,
                 crate::programs::SearchPath::Inherited,
+                crate::programs::CodeSelectors::Checked(&[]),
             );
             command
                 .arg("-p")
@@ -512,6 +513,8 @@ impl SeatbeltSandbox {
             &crate::programs::Resolved::written_in_source(SANDBOX_EXEC),
             crate::programs::Inherits::All,
             crate::programs::SearchPath::Inherited,
+            // The program it confines runs under the profile, and `sandbox-exec` is the system's.
+            crate::programs::CodeSelectors::Kept,
         );
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(

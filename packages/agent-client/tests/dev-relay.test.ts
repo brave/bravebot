@@ -210,6 +210,24 @@ test('the app closing its connection ends the relay and not the host, and the ho
   await assert.rejects(second.client.describe())
 })
 
+// A host that quits stops its relay itself, so this host is killed and cannot.
+test('the host being killed before any app connects ends the relay, which then takes no connection', async () => {
+  const host = await startHost({})
+  const launch = await host.launch()
+  const exited = new Promise<void>((resolve) => (host.child.exitCode === null ? host.child.once('exit', () => resolve()) : resolve()))
+  host.child.kill('SIGKILL')
+  await within(exited, 'the host to stop', 10_000)
+  await within(
+    new Promise<void>((resolve) => {
+      const look = () => (host.stderr().includes('the host ended the connection; the relay is ending') ? resolve() : setTimeout(look, 20))
+      look()
+    }),
+    'the relay to end',
+    10_000,
+  )
+  await assert.rejects(connect(launch, sockets().open), (error: unknown) => error instanceof RelayRefusedError && !error.wrongCode)
+})
+
 test('a port or code that cannot be right is refused before anything is opened', async () => {
   const made = sockets()
   await assert.rejects(connect({ port: 0, code: '123456' }, made.open), RangeError)

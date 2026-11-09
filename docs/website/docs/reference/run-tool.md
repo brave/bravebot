@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: The run tool
-description: How a command line is compiled, approved and run, what each answer grants, and how its output is labelled.
+description: Run command grammar, directories, approvals and remembered commands, globbing, redirections, output trust and filtering, inherited environment, deadlines and background jobs.
 ---
 
 # The run tool

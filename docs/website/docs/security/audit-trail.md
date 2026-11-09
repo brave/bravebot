@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: The audit trail
-description: What is recorded about every decision the system makes, and how to read it.
+description: Read gate decisions and audit records for compaction, limits, plans, permission modes, network hosts, delegates, checkouts and processors; inspect model requests and on-disk storage.
 ---
 
 # The audit trail
