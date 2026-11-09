@@ -1025,10 +1025,14 @@ mod tests {
     /// The script holds fifty failures, so a driver that ignores the window runs it out (the fake
     /// panics) and one that stops at the count sends three. Every pause taken fits the window,
     /// so a driver that lets one run past it is rejected by the sum.
+    ///
+    /// The window is ten pauses, so a machine that stalls a test for a few hundred milliseconds
+    /// costs some attempts and not the extension past the count. The pauses are slept for real,
+    /// since the window is measured on the clock.
     #[test]
     fn a_failed_connection_is_sent_again_past_the_count_while_the_window_holds() {
-        let window = Duration::from_millis(200);
-        let pause = Duration::from_millis(20);
+        let window = Duration::from_secs(1);
+        let pause = Duration::from_millis(100);
         let mut client = Fake::ending(vec![Ended::Throttled(pause); 50]);
         client.window = Some(window);
         let mut seen = Seen::new();
