@@ -190,6 +190,25 @@ fn said(output: &Output) -> (String, String) {
     )
 }
 
+/// Whether the binary under test was built with any Brave configuration baked in.
+///
+/// A baked value outlasts the environment the tests clear, and a blank exported value falls back to
+/// it, so a test of a build that reaches no Brave backend has nothing to run against here. CI builds
+/// with nothing baked in. Read from the same variables the build script reads, in the same cargo
+/// invocation, so it describes the binary under test. Only whether each is set is kept.
+const BUILT_WITH_BRAVE_CONFIGURATION: bool = set(option_env!("SERVICES_KEY_AICHAT"))
+    || set(option_env!("BRAVE_SERVICES_KEY_ID"))
+    || set(option_env!("BRAVE_AI_CHAT_ENDPOINT"))
+    || set(option_env!("BRAVE_AI_CHAT_PREMIUM_ENDPOINT"));
+
+/// Whether a build-time variable holds a value, which is how the build script decides to bake it.
+const fn set(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => !value.trim_ascii().is_empty(),
+        None => false,
+    }
+}
+
 /// A configuration this build cannot use stops the run, and the status is what says so. A script
 /// reads the reply off stdout and has nothing else to go on, so a failure explained there and
 /// exited successfully from is one it cannot see at all.
@@ -4015,14 +4034,18 @@ fn doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at() {
     );
     assert!(with.contains("with a premium key"), "{with}");
 
-    let nowhere_to_go = Scratch::new("cli-running-premium-key-no-backend")
-        .with_state("brave-key.json", &a_stored_premium_key());
-    let (_, dropped, _) = report(&nowhere_to_go, &bedrock_only);
-    assert_eq!(
-        account_of_the_key(&dropped),
-        None,
-        "a key with no Brave backend to go to is accounted for: {dropped}"
-    );
+    if BUILT_WITH_BRAVE_CONFIGURATION {
+        eprintln!("not checked: this build reaches a Brave backend, so no home can lack one");
+    } else {
+        let nowhere_to_go = Scratch::new("cli-running-premium-key-no-backend")
+            .with_state("brave-key.json", &a_stored_premium_key());
+        let (_, dropped, _) = report(&nowhere_to_go, &bedrock_only);
+        assert_eq!(
+            account_of_the_key(&dropped),
+            None,
+            "a key with no Brave backend to go to is accounted for: {dropped}"
+        );
+    }
 
     let garbled =
         Scratch::new("cli-running-premium-key-garbled").with_state("brave-key.json", "not a key");
@@ -9746,16 +9769,31 @@ fn auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable() {
 /// CLI-23 and CLI-6: a configuration that cannot be read leaves the question without an answer,
 /// which is the configuration ending rather than a plain failure, and a ChatGPT sign-in that is not
 /// stored does not need the configuration to be told apart.
+///
+/// Two configurations that cannot be read: an exported endpoint with no scheme, which replaces any
+/// value the build baked in, and nothing at all, which only a build with nothing baked in has.
 #[test]
-fn auth_status_in_an_unconfigured_build_is_a_configuration_failure() {
+fn auth_status_where_the_configuration_cannot_be_read_is_a_configuration_failure() {
     let scratch = Scratch::new("cli-running-auth-status-unconfigured");
+    let unusable: &[(&str, &str)] = &[
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+    ];
+    let mut environments = vec![unusable];
+    match BUILT_WITH_BRAVE_CONFIGURATION {
+        true => eprintln!("not checked: this build has configuration baked in, so none is missing"),
+        false => environments.push(&[]),
+    }
 
-    let (code, stdout, stderr) = status_of(&scratch, &[], &["gateway"]);
-    assert_eq!(code, Some(3), "{stdout}{stderr}");
-    assert!(stderr.starts_with("BB1003: "), "{stderr}");
+    for environment in environments {
+        let (code, stdout, stderr) = status_of(&scratch, environment, &["gateway"]);
+        assert_eq!(code, Some(3), "{environment:?}: {stdout}{stderr}");
+        assert!(stderr.starts_with("BB1003: "), "{environment:?}: {stderr}");
 
-    let (code, stdout, _) = status_of(&scratch, &[], &["chatgpt"]);
-    assert_eq!(code, Some(1), "{stdout}");
+        let (code, stdout, _) = status_of(&scratch, environment, &["chatgpt"]);
+        assert_eq!(code, Some(1), "{environment:?}: {stdout}");
+    }
 }
 
 /// CLI-23: what names no sign-in to ask about is an argument refusal, and the forms the refusal

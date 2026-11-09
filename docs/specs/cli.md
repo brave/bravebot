@@ -1515,7 +1515,7 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it`
 `verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable`
-`verified-by: bravebot_cli::running::auth_status_in_an_unconfigured_build_is_a_configuration_failure`
+`verified-by: bravebot_cli::running::auth_status_where_the_configuration_cannot_be_read_is_a_configuration_failure`
 `verified-by: bravebot_cli::running::auth_status_refuses_what_asks_about_no_sign_in`
 `verified-by: bravebot_cli::running::auth_status_bedrock_asks_the_aws_cli_without_signing_in`
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
