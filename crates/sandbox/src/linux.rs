@@ -1409,6 +1409,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temporary_directory);
     }
 
+    /// A granted row whose name is later replaced by a link to a directory outside the grants.
+    /// Landlock opens a row with a handle that follows links, so a row opened after the name was
+    /// relinked is attached to the link's target. SANDBOX-28 judges the row when the policy is
+    /// built and relies on this being the only window; this records what the kernel does with a
+    /// name that leads elsewhere by the time it is opened. The control is the same row left as the
+    /// directory, which is read and written, so the refusals mean something.
+    #[test]
+    fn a_granted_row_replaced_by_a_link_is_attached_to_what_the_name_leads_to_when_opened() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-row-relinked");
+        let top = top.canonicalize().expect("the scratch directory is there");
+        for name in ["kept", "outside"] {
+            std::fs::create_dir_all(top.join(name)).expect("the directory is creatable");
+        }
+        std::fs::write(top.join("kept").join("file"), "kept").expect("writable");
+        std::fs::write(top.join("outside").join("file"), "outside").expect("writable");
+        std::os::unix::fs::symlink(top.join("outside"), top.join("shared"))
+            .expect("the link is creatable");
+        let policy = loadable_policy()
+            .allow_read(top.join("kept"))
+            .allow_write(top.join("kept"))
+            .allow_read(top.join("shared"))
+            .allow_write(top.join("shared"));
+        let succeeds = |program: &str, path: PathBuf| {
+            sandbox
+                .spawn(
+                    OsStr::new(program),
+                    &[path.into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .success()
+        };
+
+        assert!(
+            succeeds("/usr/bin/cat", top.join("kept").join("file")),
+            "a granted directory was not read, so the result below means nothing"
+        );
+        // The row named a link at the open, so it was attached to the target: the widening the
+        // spec describes for the window after the policy is built. The fresh judgement of the
+        // row at that point is what keeps a link from reaching here.
+        assert!(
+            succeeds("/usr/bin/cat", top.join("outside").join("file")),
+            "a row opened through a link did not attach to the link's target"
+        );
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
     /// The run base under the kernel: each credential location is refused, each file a program
     /// reads by name is read, the three kinds of file in `~/.ssh` that hold no secret are read
     /// beside the private key that is not, a link to a credential is judged by where it leads,

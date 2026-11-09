@@ -1186,10 +1186,7 @@ session was opened on is the usual cause.
 You are shown the path as it resolves, whether it is to be read or written, and the planner's reason, and you
 answer yes or no. The grant and the record of it hold the resolved path, and the result the planner reads
 back, a success as much as a refusal, names the path as the planner typed it, so the name of what a link
-points at does not reach the planner. The path is judged when you answer and not again when a line starts,
-so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link keeps
-its row, and what the sandbox then does with that row, including whether it widens to the link's target,
-has not been tested on either backend ([#2914](https://github.com/brave/bravebot/issues/2914)). A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
+points at does not reach the planner. The path is judged when you answer and again each time a line starts: the grant keeps the directory you approved, so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link, by another directory or by a link to a refused place is given no row when a stage starts, and the grant is still listed. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
 `list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed

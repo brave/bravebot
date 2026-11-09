@@ -1832,6 +1832,83 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// A granted row whose name is later replaced by a link to a directory outside the grants:
+    /// Seatbelt matches the path a process ends up opening, so the row gives the link's target
+    /// nothing. SANDBOX-28 relies on this for the window between a stage's policy being built and
+    /// its program opening the row. The control is the same row left as the directory, which is
+    /// read and written, so the refusals mean something. The regression it rejects is a profile
+    /// that resolves the row's name when the program starts and so attaches the grant to the
+    /// target.
+    #[test]
+    fn a_granted_row_replaced_by_a_link_gives_its_target_nothing() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let scratch = crate::testutil::scratch_dir("bravebot-sandbox-row-relinked");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("kept")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(scratch.join("shared"))
+            .expect("the scratch directory is creatable");
+        std::fs::create_dir_all(scratch.join("outside"))
+            .expect("the scratch directory is creatable");
+        let scratch = scratch
+            .canonicalize()
+            .expect("the scratch directory is there");
+        std::fs::write(scratch.join("kept").join("file"), "kept").expect("writable");
+        std::fs::write(scratch.join("outside").join("file"), "outside").expect("writable");
+        // The name is made to lead elsewhere after the policy names it.
+        std::fs::remove_dir_all(scratch.join("shared")).expect("removable");
+        std::os::unix::fs::symlink(scratch.join("outside"), scratch.join("shared"))
+            .expect("the scratch link is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(scratch.join("kept"))
+            .allow_read(scratch.join("shared"))
+            .allow_write(scratch.join("kept"))
+            .allow_write(scratch.join("shared"));
+        let run = |program: &str, path: PathBuf| {
+            sandbox
+                .spawn(
+                    OsStr::new(program),
+                    &[path.into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .success()
+        };
+
+        assert!(
+            run("/bin/cat", scratch.join("kept").join("file")),
+            "a granted directory was not read, so the refusals below mean nothing"
+        );
+        assert!(
+            run("/usr/bin/touch", scratch.join("kept").join("new")),
+            "a granted directory was not written, so the refusals below mean nothing"
+        );
+        assert!(
+            !run("/bin/cat", scratch.join("shared").join("file")),
+            "a row replaced by a link read the link's target"
+        );
+        assert!(
+            !run("/usr/bin/touch", scratch.join("shared").join("new")),
+            "a row replaced by a link wrote the link's target"
+        );
+        assert!(
+            !scratch.join("outside").join("new").exists(),
+            "the target was written"
+        );
+        assert!(
+            !run("/bin/cat", scratch.join("outside").join("file")),
+            "the target was read by its own name"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// A confined process stops a child it started, so a test runner or a `timeout` that gives up
     /// on a child does not wait on it until it ends by itself.
     #[test]

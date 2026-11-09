@@ -263,6 +263,7 @@ KEY_FUNCTIONS = (
     ("crates/core/src/trust.rs", "normalise"),
     ("crates/core/src/trust.rs", "key"),
     ("crates/core/src/trust.rs", "fold_case"),
+    ("crates/core/src/trust.rs", "fold_simple"),
     ("crates/core/src/trust.rs", "canonical_form"),
     ("crates/core/src/file_authority.rs", "key"),
     ("crates/core/src/permissions.rs", "key_of"),
@@ -278,11 +279,11 @@ JOINING_NAMES = (
     "trim|trim_start|trim_end|trim_left|trim_right|trim_matches|trim_start_matches"
     "|trim_end_matches|to_lowercase|to_uppercase|to_ascii_lowercase|to_ascii_uppercase"
     "|make_ascii_lowercase|make_ascii_uppercase|eq_ignore_ascii_case|to_string_lossy"
-    "|from_utf8_lossy|fold_case|decompose|canonical_form|nfc|nfd|nfkc|nfkd"
+    "|from_utf8_lossy|fold_case|fold_simple|decompose|canonical_form|nfc|nfd|nfkc|nfkd"
 )
 JOINING_CONSTRUCT = re.compile(
     rf"(?:\.|::)({JOINING_NAMES})\b"
-    r"|(?<![.\w:])(?<!fn )(fold_case|fold|from_utf8_lossy|decompose|canonical_form)\s*\("
+    r"|(?<![.\w:])(?<!fn )(fold_case|fold_simple|fold|from_utf8_lossy|decompose|canonical_form)\s*\("
 )
 CHAR_LITERAL = re.compile(r"'(?:[^'\\]|\\.)'")
 # A construct a key function is allowed to keep, each with the reason a reader checks: a `path::fn

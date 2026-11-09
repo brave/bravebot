@@ -123,6 +123,74 @@ pub struct PathReach {
     pub write: bool,
     /// What the planner said it was for.
     pub why: String,
+    /// The device and inode `path` had when the grant was made, read without following a link.
+    /// None where nothing was at the path or the platform reports none, and then only the
+    /// judgement of [`PathReach::stands`] applies.
+    pub identity: Option<(u64, u64)>,
+}
+
+/// The device and inode of whatever is at `path`, without following a link.
+fn identity_of(found: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((found.dev(), found.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = found;
+        None
+    }
+}
+
+impl PathReach {
+    /// A grant of `path`, with the identity it has now.
+    pub fn new(path: PathBuf, write: bool, why: String) -> Self {
+        let identity = std::fs::symlink_metadata(&path)
+            .ok()
+            .and_then(|found| identity_of(&found));
+        Self {
+            path,
+            write,
+            why,
+            identity,
+        }
+    }
+
+    /// Whether the name still leads to what the person approved, judged as each stage starts
+    /// (SANDBOX-28).
+    ///
+    /// A name with nothing at it holds, since a row opens nothing. Where something is at it, the
+    /// name must not be a link, none of its parents may be one, it must be the device and inode
+    /// approved, and with a `home` the request is judged again as a new one for the same access
+    /// would be: it may not lead to a credential or persistence location, `~/.ssh` or the state
+    /// directory, or a place above the home directory. Decided from file system metadata and the
+    /// path alone.
+    pub fn stands(&self, home: Option<&Path>) -> bool {
+        let Ok(found) = std::fs::symlink_metadata(&self.path) else {
+            return true;
+        };
+        if found.file_type().is_symlink() {
+            return false;
+        }
+        if let Some(approved) = self.identity
+            && identity_of(&found) != Some(approved)
+        {
+            return false;
+        }
+        if bravebot_sandbox::rules::resolved(&self.path) != self.path {
+            return false;
+        }
+        home.is_none_or(|home| {
+            bravebot_sandbox::rules::judged_request(
+                &self.path,
+                self.write,
+                Some(home),
+                &bravebot_sandbox::rules::Rules::none(),
+            )
+            .is_ok_and(|judged| judged == self.path)
+        })
+    }
 }
 
 /// The hosts a person answered a prompt about for the session (SANDBOX-24).
@@ -353,10 +421,12 @@ impl Workspace {
         let mut held = locked(&self.path_reach);
         match held.iter_mut().find(|row| row.path == path) {
             Some(row) => {
-                row.write |= write;
-                row.why = why;
+                let again = PathReach::new(path, write, why);
+                row.write |= again.write;
+                row.why = again.why;
+                row.identity = again.identity;
             }
-            None => held.push(PathReach { path, write, why }),
+            None => held.push(PathReach::new(path, write, why)),
         }
     }
 

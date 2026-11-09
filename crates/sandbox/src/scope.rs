@@ -359,6 +359,31 @@ pub fn judged_directory(named: &Path, home: &Path, write: bool) -> Option<PathBu
         .filter(|path| !crate::rules::inside_a_credential_location_for(path, home, write))
 }
 
+/// The socket a stage's `SSH_AUTH_SOCK` names, as the sandbox will be told it, or `None` where the
+/// row is refused (SANDBOX-18).
+///
+/// The name is resolved through its links, and the row is the path it leads to. It is refused where
+/// that path is not a socket (a file, a directory or nothing), where it is, or lies inside, a
+/// credential location or a persistence location, and wherever [`judged`] refuses a written path
+/// (`~/.ssh`, the state directory, the home directory or above it). Landlock opens a row by its
+/// name and follows a link, so a name relinked to a key would otherwise be granted as the key. The
+/// check is made as each stage starts. A name relinked between the check and the sandbox opening
+/// the row is not caught. Where there are no unix sockets (Windows) the type is not checked, since
+/// the agent there is a named pipe.
+pub fn judged_socket(named: &Path, home: &Path) -> Option<PathBuf> {
+    let resolved = judged(named, false, home, false)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if !std::fs::metadata(&resolved).is_ok_and(|held| held.file_type().is_socket()) {
+            return None;
+        }
+    }
+    (!crate::rules::inside_a_credential_location_for(&resolved, home, true)
+        && !crate::rules::inside_a_persistence_location(&resolved, home))
+    .then_some(resolved)
+}
+
 /// `named` as the sandbox will be told it, or `None` where it is refused. `state_read` says the
 /// path is read and not written, so an entry of the state directory that a stage reads is not
 /// refused for being inside it.
