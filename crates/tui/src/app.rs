@@ -1891,6 +1891,9 @@ pub fn run(
     prompts: bravebot_agent::turn::SystemPrompts,
     moments: &mut bravebot_agent::hooks::SessionMoments,
 ) -> io::Result<Ended> {
+    // First, because the questions the terminal is asked on the way in read from it, and a terminal
+    // that has gone is where they would spin.
+    crate::hangup::end_with_the_terminal();
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
     crate::theme::sense_no_color();
