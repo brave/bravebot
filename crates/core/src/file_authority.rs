@@ -41,8 +41,17 @@ impl State {
     /// Equivalent spellings share a slot whatever the volume does with them, because the slot only
     /// refuses a second writer and stales an approval. Reaching a file the volume holds apart costs
     /// a refusal of a write that could have gone ahead, never a write that should have been refused.
+    ///
+    /// Where case is folded the key goes through the one-letter fold first, which joins `\u{df}`
+    /// with `\u{1e9e}`: the map reads a refusal about either as about the other, so a writer to
+    /// one is a second writer to the other.
     fn slot(&self, key: &str) -> String {
-        crate::trust::canonical_form(key, self.trust.folds_case()).into_owned()
+        match self.trust.folds_case() {
+            true => {
+                crate::trust::canonical_form(&crate::trust::fold_simple(key), true).into_owned()
+            }
+            false => crate::trust::canonical_form(key, false).into_owned(),
+        }
     }
 
     /// Look up only whole-segment ancestors, including the special root rules.
@@ -766,6 +775,28 @@ mod tests {
             drop(second);
             first.complete(Integrity::Trusted);
             assert!(authority.capture().begin("docs/a.md").is_some());
+        }
+    }
+
+    /// `\u{df}` and `\u{1e9e}` are one name to the one-letter fold the map decides a trust and a
+    /// refusal by, and two to the full fold alone. Where the volume folds case a writer through one
+    /// is a second writer to the other (TRUST-4); where it keeps names apart they are two files.
+    #[test]
+    fn a_second_writer_through_the_other_sharp_s_is_refused_while_the_first_is_open() {
+        for folds in [true, false] {
+            for (first, second) in [
+                ("docs/cla\u{1e9e}.md", "docs/cla\u{df}.md"),
+                ("docs/cla\u{df}.md", "docs/cla\u{1e9e}.md"),
+            ] {
+                let authority = FileAuthority::new(TrustStore::new("/ws").folding_case(folds));
+                let open = authority.capture().begin(first).unwrap();
+                let refused = authority.capture().begin(second).is_none();
+                assert_eq!(
+                    refused, folds,
+                    "folds case: {folds}, a second writer through {second} while {first} is open"
+                );
+                open.complete(Integrity::Trusted);
+            }
         }
     }
 

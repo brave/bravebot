@@ -262,10 +262,15 @@ asks the pair the same questions without a volume, once with the map folding cas
 The copy of the map and of the rules for a checkout is pinned by
 `bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`:
 a refusal is copied under both spellings and a trust only under the one it was written about.
+A refusal is copied where either fold joins its name with the checkout's, since `ẞ` and `ß` are one
+name to the one-letter fold a refusal is read by and two to the full fold:
+`bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins` pins a
+distrust and an undecided boundary at `claẞ` copied under a checkout of `claß` and the reverse. The
+same pair is one writer slot, one root a refusal names and one rule copied for a checkout.
 A checkout withdrawn drops a trust that either fold joins with its name: `ẞ` and `ß` are one name to
 the one-letter fold a trust is decided by and two to the full fold, and a trust under either still
 decides a path beneath the checkout, so a withdrawal by the full fold alone would leave it. A
-distrust stays, as before.
+distrust stays.
 
 A pair is two files when a write through the second name leaves the first as it was, so no host
 needs a file identity to say so. A Windows host leaves out the names of `AWKWARD_NAMES` it cannot
@@ -307,6 +312,9 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::the_sharp_s_pair_is_one_group_for_a_refusal_and_two_names_for_a_trust`
 `verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`
 `verified-by: bravebot_core::trust::a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length`
+`verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins`
+`verified-by: bravebot_core::trust::a_refusal_under_a_name_only_the_simple_fold_joins_narrows_a_read_beneath`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_full_fold`
@@ -446,6 +454,7 @@ name may be refused, and on one that does not, no second writer to the one file 
 `verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
 `verified-by: bravebot_core::file_authority::an_untrusted_write_through_another_spelling_is_read_untrusted_under_both`
 `verified-by: bravebot_core::file_authority::a_second_writer_through_another_spelling_is_refused_while_the_first_is_open`
+`verified-by: bravebot_core::file_authority::a_second_writer_through_the_other_sharp_s_is_refused_while_the_first_is_open`
 `verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
 `verified-by: bravebot_core::file_authority::readers_hold_the_boundary_at_the_same_time`
 `verified-by: bravebot_core::file_authority::an_effect_cannot_enter_while_a_reader_holds_the_boundary`

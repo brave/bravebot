@@ -2961,6 +2961,34 @@ mod tests {
         }
     }
 
+    /// A deny or ask rule written with `\u{1e9e}` is a rule about `\u{df}` as well: the rules are
+    /// keyed in the one-letter fold, which joins the two, so the copy for a checkout of either
+    /// carries a rule recorded under the other, and an allow rule is copied across the pair for
+    /// the same reason (CHECKOUT-9, PERM-3).
+    #[test]
+    fn a_rule_is_copied_across_the_pair_the_simple_fold_joins() {
+        for (written, checked_out) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")] {
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                true,
+                &[&format!("Read(//work/{written}/secrets/**)")],
+                &[&format!("Read(//work/{written}/asked/**)")],
+                &[&format!("Read(//work/{written}/granted/**)")],
+            );
+            permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+            for (path, decision) in [
+                ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+                ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+                ("/state/c1/granted/file", Decision::Ruled(Ruling::Allow)),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    decision,
+                    "{path} was ruled wrongly under a copy for a checkout of /work/{checked_out} of rules written with {written}"
+                );
+            }
+        }
+    }
+
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a
     /// canonical name with backslashes and a drive prefix, or in the case a folding volume stores,
     /// reaches the same file as the spelling a gate asks about.

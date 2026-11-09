@@ -1460,8 +1460,7 @@ machine is read. A local MCP server, which is not a stage, also reads the instal
 program's `bin` directory when that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)).
 Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
 own environment is a write row ([SANDBOX-3](#SANDBOX-3)), and the row is the path the name leads
-to once its links are followed, so a name that was relinked is not granted as the file it now
-leads to. The row is made only where that path is a socket, is not or inside a credential
+to once its links are followed, so a name is granted as the file it leads to when the row is made. The row is made only where that path is a socket, is not or inside a credential
 location or a persistence location, and passes the refusals a path in a variable gets (not
 `~/.ssh` or the state directory, and not the home directory or above it). Where it is refused the
 stage still starts, with no row, and its profile line says no agent was lent. The same judgement

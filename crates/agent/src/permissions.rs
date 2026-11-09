@@ -284,19 +284,25 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
 /// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
 /// folding takes text.
 ///
-/// The fold is the full one ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with
-/// `class`. That is the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given
-/// to [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root
-/// spelled `class`, and nothing is granted by it.
+/// Two names are one where either fold joins them: the full one
+/// ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with `class`, and the one-letter
+/// one ([`bravebot_core::trust::fold_simple`]), which joins `cla\u{df}` with `cla\u{1e9e}`. That is
+/// the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given to
+/// [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root spelled
+/// `class` or `cla\u{1e9e}`, and nothing is granted by it.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
     if !folds_case {
         let relative = path.strip_prefix(root).ok()?;
         return Some(tail(relative.components()));
     }
-    let fold = |name: &std::ffi::OsStr| bravebot_core::trust::fold_case(&name.to_string_lossy());
+    let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| {
+        let (one, other) = (one.to_string_lossy(), other.to_string_lossy());
+        bravebot_core::trust::fold_case(&one) == bravebot_core::trust::fold_case(&other)
+            || bravebot_core::trust::fold_simple(&one) == bravebot_core::trust::fold_simple(&other)
+    };
     let mut names = path.components();
     for held in root.components() {
-        if fold(names.next()?.as_os_str()) != fold(held.as_os_str()) {
+        if !same(names.next()?.as_os_str(), held.as_os_str()) {
             return None;
         }
     }
@@ -1497,6 +1503,38 @@ mod tests {
         );
         assert_eq!(
             beneath(Path::new("/p/cla\u{df}/a/b"), Path::new("/p/class"), false),
+            None
+        );
+    }
+
+    /// A root spelled `\u{1e9e}` is the root a refusal about `\u{df}` names, and the other way
+    /// round, since the one-letter fold the map decides by joins them and the full fold does not
+    /// (TRUST-2, PERM-7). A volume that does not fold keeps them apart.
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold() {
+        use std::path::Path;
+        assert_eq!(
+            beneath(
+                Path::new("/p/cla\u{df}/a/b"),
+                Path::new("/p/cla\u{1e9e}"),
+                true
+            ),
+            Some("a/b".to_string())
+        );
+        assert_eq!(
+            beneath(
+                Path::new("/p/cla\u{1e9e}/a"),
+                Path::new("/p/cla\u{df}"),
+                true
+            ),
+            Some("a".to_string())
+        );
+        assert_eq!(
+            beneath(
+                Path::new("/p/cla\u{df}/a"),
+                Path::new("/p/cla\u{1e9e}"),
+                false
+            ),
             None
         );
     }

@@ -619,6 +619,7 @@ Removing a checkout withdraws its rules except those that distrust a path.
 `verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
 `verified-by: bravebot_core::trust::a_copied_subtree_answers_as_the_original_does`
 `verified-by: bravebot_core::trust::a_copy_of_an_undecided_root_is_not_answered_by_a_broader_rule`
+`verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_keeps_what_distrusts_a_path`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not`
 `verified-by: bravebot_core::file_authority::a_rooted_handle_files_a_relative_name_under_its_root`
@@ -665,6 +666,7 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
+`verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
 
 <a id="CHECKOUT-10"></a>
 ### CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout
