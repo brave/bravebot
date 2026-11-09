@@ -131,12 +131,13 @@ A check over a picture has no string to encode: the picture goes in a part of it
 `verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
 
 <a id="CHECK-3"></a>
-### CHECK-3: what the planner says it expects is a prompt, must not be private, and is often absent
+### CHECK-3: what the planner says it expects is a prompt, may be private, and is often absent
 
 The planner says what it thinks the slot holds, and the check is told. Those are the planner's own
 words on the footing a processor's instruction sits on: not content anybody read, but the sentence
-the driver is about to send. Private is refused, since the user's own data must not become another
-model's prompt.
+the driver is about to send. A private sentence is sent like a public one. The check is a request
+to the model the session runs on, and the slot it is shown whole is the private content, so the
+sentence adds nothing to what that model is sent.
 
 Only the planner asking for a check carries one. A check run before a prompt the planner did not
 ask for has nowhere to get an expectation from: it asked to read a file, or to be shown what a
@@ -144,7 +145,7 @@ command printed, and said nothing about the contents. There the key is **left ou
 entirely** rather than written empty, because an empty string would tell the reader the planner
 expected nothing, where the truth is that nothing claimed anything.
 
-`verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
+`verified-by: bravebot_core::policy::a_private_expectation_is_put_to_the_check`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 <a id="CHECK-4"></a>

@@ -16733,16 +16733,15 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
     }
 }
 
-/// A planner shown private content writes private words, so the instruction it gives a processor
-/// is refused before any processor is asked (`processors.md` PROC-4). Let through, what the person
-/// let the planner read reaches another model call, and the answer comes back labelled by taint
-/// over the slots it read, which says nothing about what the instruction carried.
+/// A planner shown private content writes private words, and the instruction it gives a processor
+/// is let through all the same (`processors.md` PROC-4): the processor is a request to the
+/// session's own model over a slot it is given whole. The regression it rejects is a processor
+/// refused for the rest of the conversation once the planner has read a command's output.
 ///
 /// The control is the same turn with the read refused: the context stays public and the same call
-/// reaches a processor, so the refusal follows from what the planner was shown and from nothing
-/// else about the call.
+/// reaches a processor, so the two differ in what the planner holds and in nothing the call does.
 #[test]
-fn a_planner_shown_private_content_cannot_instruct_a_processor() {
+fn a_planner_shown_private_content_can_instruct_a_processor() {
     for shown in [false, true] {
         let scratch = Scratch::new(if shown {
             "processor-after-a-read"
@@ -16805,46 +16804,128 @@ fn a_planner_shown_private_content_cannot_instruct_a_processor() {
                 "the planner read the output and its context stayed public, so nothing here was \
                  tested"
             );
-            assert!(
-                processors.is_empty(),
-                "a planner holding private content directed a processor: {processors:?}"
-            );
-            assert!(
-                told.contains("private content must not become one"),
-                "the planner was not told why its instruction was refused: {told}"
-            );
-            // Rewording cannot make the instruction public, so the planner is told no processor
-            // can be started rather than sent round again to reword it.
-            assert!(
-                told.contains("no processor can be started in this conversation")
-                    && !told.contains("rather than pasting what was read"),
-                "the planner was told to reword an instruction no wording could make public: \
-                 {told}"
-            );
         } else {
             assert_eq!(
                 conversation.holds(),
                 bravebot_core::label::Confidentiality::Public,
                 "the read was refused and the planner's context became private anyway"
             );
-            assert_eq!(
-                processors.len(),
-                1,
-                "a planner holding nothing private was not given a processor: {told}"
-            );
         }
+        assert_eq!(
+            processors.len(),
+            1,
+            "the planner holding {:?} was not given a processor: {told}",
+            conversation.holds()
+        );
+        assert!(
+            processors[0].contains("say that the mail reads SENTINEL-MAIL"),
+            "the processor was not sent the planner's instruction: {}",
+            processors[0]
+        );
+        assert!(
+            !told.contains("private content must not become one")
+                && !told.contains("no processor can be started"),
+            "the planner was told no processor can be started: {told}"
+        );
     }
 }
 
-/// Once a planner holds private content every processor call is refused (`processors.md`
-/// PROC-4), so a quarantined result that arrives after that must not tell it to give the
-/// reference to one, and the refusal it earns anyway names the route that works: a filter run over
-/// the reference with `stdin_ref`, whose printed result `read_output` then shows.
+/// A private instruction reaches the model `processorModel` names, though that model was shown
+/// nothing the planner holds (`processors.md` PROC-4, PROC-13). The person who named it chose to send
+/// it what the planner writes into the instruction. The regression it rejects is a call refused, or
+/// sent to the turn's own model, because the context holds private content and the setting names
+/// another model.
 ///
-/// The control is the same turn with the first read refused. The context stays public, the second
-/// result names a processor, and the call reaches one.
+/// The context is private by the read of a command's output, as in the test above, and the
+/// instruction quotes what was read.
 #[test]
-fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
+fn a_private_instruction_is_sent_to_the_model_processor_model_names() {
+    let scratch = Scratch::new("processor-private-other-model");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("mail.txt"), "SENTINEL-MAIL\n").unwrap();
+
+    let mut planner = vec![
+        tool_request("run", r#"{"command":"sed -n p mail.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"say that the mail reads SENTINEL-MAIL"}"#,
+        ),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        if body.contains("You are an isolated processor") {
+            Some(Some(
+                processor_reply("PROCESSED").replace("test-model", "a-cheap-processor-model"),
+            ))
+        } else {
+            planner.next().map(Some)
+        }
+    });
+    let mut config = config_for(&endpoint);
+    config.processor_model = Some("a-cheap-processor-model".to_string());
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what does the mail say").with_model(Some("the-planners-model".to_string())),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(
+        conversation.holds(),
+        bravebot_core::label::Confidentiality::Private,
+        "the planner read the output and its context stayed public, so nothing here was tested"
+    );
+    let sent = every_request(&received);
+    let processors: Vec<&String> = sent
+        .iter()
+        .filter(|body| !body.contains(A_CHECK_ASKING))
+        .filter(|body| body.contains("You are an isolated processor"))
+        .collect();
+    assert_eq!(
+        processors.len(),
+        1,
+        "the planner holding private content was not given a processor: {sent:?}"
+    );
+    let request: serde_json::Value =
+        serde_json::from_str(processors[0]).expect("the processor request is JSON");
+    assert_eq!(
+        request["model"], "a-cheap-processor-model",
+        "the processor ran on a model other than the one the setting named: {}",
+        processors[0]
+    );
+    assert!(
+        processors[0].contains("say that the mail reads SENTINEL-MAIL"),
+        "the processor was not sent the planner's instruction: {}",
+        processors[0]
+    );
+}
+
+/// A planner that holds private content is pointed at a processor by a quarantined result, as one
+/// that holds none is, and the call reaches one (`processors.md` PROC-4). The regression it rejects
+/// is a result that leaves the move out, or a call refused, because the planner read an earlier
+/// command's output.
+///
+/// The control is the same turn with the first read refused. The context stays public and the
+/// result and the call are the same.
+#[test]
+fn a_planner_that_holds_private_content_is_pointed_at_a_processor_and_gets_one() {
     for shown in [false, true] {
         let scratch = Scratch::new(if shown {
             "processor-not-offered-after-a-read"
@@ -16861,7 +16942,7 @@ fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
 
         // The references a run hands back are numbered by how many slots the turn has used, so
         // each call names the one the last result reported rather than a number fixed here.
-        let (mut round, mut log_ref) = (0, String::new());
+        let mut round = 0;
         let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
             if body.contains("You are an isolated processor") {
                 return Some(Some(processor_reply("PROCESSED")));
@@ -16880,7 +16961,7 @@ fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
                 2 => tool_request("read_output", &format!(r#"{{"ref":"{}"}}"#, reported())),
                 3 => tool_request("run", r#"{"command":"sed -n p tests.log"}"#),
                 4 => {
-                    log_ref = reported();
+                    let log_ref = reported();
                     tool_request(
                         "spawn_processor",
                         &format!(
@@ -16888,11 +16969,6 @@ fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
                         ),
                     )
                 }
-                5 => tool_request(
-                    "run",
-                    &format!(r#"{{"command":"grep FAILED","stdin_ref":"{log_ref}"}}"#),
-                ),
-                6 => tool_request("read_output", &format!(r#"{{"ref":"{}"}}"#, reported())),
                 _ => reply_with("done"),
             }))
         });
@@ -16920,11 +16996,10 @@ fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
         .expect("the turn runs");
 
         let sent = every_request(&received);
-        let planners: Vec<&String> = sent
+        let (processors, planners): (Vec<&String>, Vec<&String>) = sent
             .iter()
             .filter(|body| !body.contains(A_CHECK_ASKING))
-            .filter(|body| !body.contains("You are an isolated processor"))
-            .collect();
+            .partition(|body| body.contains("You are an isolated processor"));
         let told = planners.last().expect("the planner's last round");
         let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
             .expect("a request")["messages"]
@@ -16945,52 +17020,38 @@ fn a_planner_that_cannot_start_a_processor_is_not_pointed_at_one() {
              {second_run}"
         );
 
-        if shown {
-            assert_eq!(
-                conversation.holds(),
-                bravebot_core::label::Confidentiality::Private,
-                "the planner read the output and its context stayed public, so nothing here was \
-                 tested"
-            );
-            assert!(
-                !second_run.contains("spawn_processor"),
-                "a planner holding private content was told to use a processor: {second_run}"
-            );
-            assert!(
-                second_run.contains("contents_ref") && second_run.contains("vet_content"),
-                "the moves that remain were not offered: {second_run}"
-            );
-            let refused = &results[3];
-            assert!(
-                refused.contains("stdin_ref") && refused.contains("read_output"),
-                "the refusal named no route that works: {refused}"
-            );
-            // The route the refusal names does work: the filter runs over the reference, and what
-            // it printed is a new reference that read_output shows.
-            assert!(
-                results.len() >= 6 && results[5].contains("FAILED SENTINEL-TWO"),
-                "the filtered result was not shown by read_output: {results:?}"
-            );
-        } else {
-            assert_eq!(
-                conversation.holds(),
-                bravebot_core::label::Confidentiality::Public,
-                "the read was refused and the planner's context became private anyway"
-            );
-            assert!(
-                second_run.contains("spawn_processor"),
-                "a planner holding nothing private was not told it could use a processor: \
-                 {second_run}"
-            );
-        }
+        assert_eq!(
+            conversation.holds(),
+            match shown {
+                true => bravebot_core::label::Confidentiality::Private,
+                false => bravebot_core::label::Confidentiality::Public,
+            },
+            "the first read did not decide what the planner held, so nothing here was tested"
+        );
+        assert!(
+            second_run.contains("spawn_processor"),
+            "a planner holding {:?} was not told it could use a processor: {second_run}",
+            conversation.holds()
+        );
+        assert_eq!(
+            processors.len(),
+            1,
+            "the call did not reach a processor for a planner holding {:?}",
+            conversation.holds()
+        );
+        let started = &results[3];
+        assert!(
+            !started.contains("refused") && !started.contains("no processor can be started"),
+            "the processor call was refused: {started}"
+        );
     }
 }
 
 /// The note a planner gets for reading a reference to a file it may not read is built by hand
-/// rather than from the reference, so it has to leave out the processor on its own account once
-/// the context holds private content. The control is the same turn with the first read refused.
+/// rather than from the reference, so it names a processor on its own account, and names one
+/// whatever the context holds. The control is the same turn with the first read refused.
 #[test]
-fn reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_context() {
+fn reading_a_quarantined_file_by_reference_names_a_processor_whatever_the_context_holds() {
     for shown in [false, true] {
         let scratch = Scratch::new(if shown {
             "read-by-reference-after-a-read"
@@ -17061,12 +17122,10 @@ fn reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_conte
             "the read was not answered with the note about a reference to a file, so nothing \
              here was tested: {note}"
         );
-        assert_eq!(
+        assert!(
             note.contains("spawn_processor"),
-            !shown,
-            "a planner that {} private content was {} to use a processor: {note}",
-            if shown { "holds" } else { "holds no" },
-            if shown { "told" } else { "not told" }
+            "a planner that {} private content was not told to use a processor: {note}",
+            if shown { "holds" } else { "holds no" }
         );
         if shown {
             assert_eq!(
@@ -17075,382 +17134,6 @@ fn reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_conte
                 "the planner read the output and its context stayed public, so nothing here was \
                  tested"
             );
-        }
-    }
-}
-
-/// A response asking for any number of tool calls in one round, in order.
-fn tool_requests_in_one_round(calls: &[(&str, &str)]) -> String {
-    let escape = |a: &str| a.replace('\\', "\\\\").replace('"', "\\\"");
-    let calls: Vec<String> = calls
-        .iter()
-        .enumerate()
-        .map(|(at, (tool, arguments))| {
-            format!(
-                r#"{{"id":"c{}","type":"function","function":{{"name":"{tool}","arguments":"{}"}}}}"#,
-                at + 1,
-                escape(arguments)
-            )
-        })
-        .collect();
-    format!(
-        r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{}]}}}}]}}"#,
-        calls.join(",")
-    )
-}
-
-/// A result that comes back as a reference names a processor only while one can still be started
-/// (`processors.md` PROC-4). A later call in the same round can release output, which makes the
-/// context private and closes every processor, so the results of the round's earlier calls must
-/// not tell the planner to use one: it would follow the advice and be refused.
-///
-/// The round has the long output first, which the cap turns into a reference, and a short
-/// `read: true` run after it that the check lets through. The controls are the orders and mixes in
-/// which nothing in the round closes processors, or the close comes before the reference is made.
-#[test]
-fn a_reference_made_before_a_later_call_in_the_round_closes_processors_names_none() {
-    const LONG: &str = r#"{"command":"sed -n p long.txt","read":true}"#;
-    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
-    let cases: [(&str, &[&str], bool); 4] = [
-        ("released-after", &[LONG, SHORT], true),
-        ("released-last-of-three", &[LONG, LONG, SHORT], true),
-        ("released-first", &[SHORT, LONG], true),
-        ("nothing-released", &[LONG, LONG], false),
-    ];
-    for mode in EVERY_MODE {
-        for (name, arguments, closed) in cases {
-            let scratch = Scratch::new(&format!("same-round-close-{name}-{mode:?}"));
-            let workspace = Workspace::new(&scratch.path).expect("workspace");
-            std::fs::write(
-                scratch.path.join("long.txt"),
-                format!("LONG-SENTINEL {}\n", "x".repeat(200)),
-            )
-            .unwrap();
-            std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
-
-            let calls: Vec<(&str, &str)> = arguments.iter().map(|each| ("run", *each)).collect();
-            let (endpoint, received) = serve_sequence_answering_checks_with(
-                vec![
-                    reply_with(r#"{"verdict": "safe", "reason": "a single path"}"#);
-                    arguments.iter().filter(|each| **each == SHORT).count()
-                ],
-                vec![tool_requests_in_one_round(&calls), reply_with("done")],
-            );
-            let config = config_for(&endpoint);
-            let egress = bravebot_net::Egress::new();
-            let mut sink = RecordingSink::new();
-            let mut conversation = bravebot_agent::Conversation::new();
-            let mut reading = ReadsWhatItRan::new(false);
-            let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
-
-            turn::resume(
-                &config,
-                &egress,
-                &workspace,
-                &Task::new("find out")
-                    .with_permission_mode(mode)
-                    .with_auto_vetting(true)
-                    .with_output_cap(Some(64)),
-                &mut conversation,
-                &mut confirmer,
-                &mut bravebot_agent::report::RecordingReporter::default(),
-                &mut sink,
-                trusting_the_workspace(),
-                bravebot_core::programs::TrustedPrograms::new(),
-                None,
-                &bravebot_core::cancel::Cancel::new(),
-            )
-            .outcome
-            .expect("the turn runs");
-
-            let sent = every_request(&received);
-            let told = sent
-                .iter()
-                .rfind(|body| !body.contains(A_CHECK_ASKING))
-                .expect("the planner's last round");
-            let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
-                .expect("a request")["messages"]
-                .as_array()
-                .expect("messages")
-                .iter()
-                .filter(|message| message["role"] == "tool")
-                .map(|message| message["content"].to_string())
-                .collect();
-            assert_eq!(
-                results.len(),
-                arguments.len(),
-                "{mode:?} {name}: not every call of the round was answered: {results:?}"
-            );
-            assert_eq!(
-                conversation.holds(),
-                if closed {
-                    bravebot_core::label::Confidentiality::Private
-                } else {
-                    bravebot_core::label::Confidentiality::Public
-                },
-                "{mode:?} {name}: the round did not leave the context as the case needs, so \
-                 nothing here was tested"
-            );
-            let mut references = 0;
-            for (result, each) in results.iter().zip(arguments) {
-                if *each == SHORT {
-                    assert!(
-                        result.contains("SHORT-SENTINEL"),
-                        "{mode:?} {name}: the short output was not released: {result}"
-                    );
-                    continue;
-                }
-                references += 1;
-                assert!(
-                    result.contains("could not be shown to you")
-                        && !result.contains("LONG-SENTINEL"),
-                    "{mode:?} {name}: the long output was not a reference: {result}"
-                );
-                assert_eq!(
-                    result.contains("spawn_processor"),
-                    !closed,
-                    "{mode:?} {name}: a round that {} processors left a result that {} one: \
-                     {result}",
-                    if closed { "closed" } else { "left open" },
-                    if closed { "names" } else { "does not name" }
-                );
-                if closed {
-                    assert!(
-                        result.contains("contents_ref"),
-                        "{mode:?} {name}: the moves that remain were not offered: {result}"
-                    );
-                }
-            }
-            assert!(references > 0, "{mode:?} {name}: no reference was made");
-        }
-    }
-}
-
-/// The reword also runs where a round stops early. A turn cancelled after a `read: true` call
-/// released output, and before the next call runs, keeps its conversation for the next turn, so the
-/// reference made before the release must already say no processor can be started
-/// (`processors.md` PROC-4).
-#[test]
-fn a_round_cancelled_after_a_release_leaves_its_earlier_reference_naming_no_processor() {
-    struct CancelsOnceTheSecondCallPrinted {
-        cancel: bravebot_core::cancel::Cancel,
-        started: usize,
-    }
-
-    impl bravebot_agent::report::Reporter for CancelsOnceTheSecondCallPrinted {
-        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
-
-        fn printed(&mut self, _output: bravebot_agent::report::Printed) {
-            self.started += 1;
-            if self.started == 2 {
-                self.cancel.cancel();
-            }
-        }
-    }
-
-    const LONG: &str = r#"{"command":"sed -n p long.txt","read":true}"#;
-    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
-    for mode in EVERY_MODE {
-        let scratch = Scratch::new(&format!("same-round-close-cancelled-{mode:?}"));
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
-        std::fs::write(
-            scratch.path.join("long.txt"),
-            format!("LONG-SENTINEL {}\n", "x".repeat(200)),
-        )
-        .unwrap();
-        std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
-
-        let (endpoint, _received) = serve_sequence_answering_checks_with(
-            vec![reply_with(
-                r#"{"verdict": "safe", "reason": "a single path"}"#,
-            )],
-            vec![
-                tool_requests_in_one_round(&[("run", LONG), ("run", SHORT), ("run", LONG)]),
-                reply_with("never reached"),
-            ],
-        );
-        let config = config_for(&endpoint);
-        let egress = bravebot_net::Egress::new();
-        let mut sink = RecordingSink::new();
-        let mut conversation = bravebot_agent::Conversation::new();
-        let mut reading = ReadsWhatItRan::new(false);
-        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
-        let cancel = bravebot_core::cancel::Cancel::new();
-        let mut reporter = CancelsOnceTheSecondCallPrinted {
-            cancel: cancel.clone(),
-            started: 0,
-        };
-
-        let round = turn::resume(
-            &config,
-            &egress,
-            &workspace,
-            &Task::new("find out")
-                .with_permission_mode(mode)
-                .with_auto_vetting(true)
-                .with_output_cap(Some(64)),
-            &mut conversation,
-            &mut confirmer,
-            &mut reporter,
-            &mut sink,
-            trusting_the_workspace(),
-            bravebot_core::programs::TrustedPrograms::new(),
-            None,
-            &cancel,
-        );
-        assert!(
-            matches!(round.outcome, Err(turn::TurnError::Cancelled { .. })),
-            "{mode:?}: the round was not cancelled, so nothing here was tested"
-        );
-        let stored = conversation
-            .messages()
-            .iter()
-            .map(|each| each.message.content.text())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            stored.contains("SHORT-SENTINEL"),
-            "{mode:?}: the release did not happen before the stop, so nothing here was tested: \
-             {stored}"
-        );
-        assert!(
-            stored.contains("could not be shown to you") && !stored.contains("LONG-SENTINEL"),
-            "{mode:?}: the earlier output was not kept as a reference: {stored}"
-        );
-        assert!(
-            !stored.contains("spawn_processor"),
-            "{mode:?}: the stopped round left a result naming a processor: {stored}"
-        );
-    }
-}
-
-/// A result the planner could read but a cap cut short carries a reference to the whole output, and
-/// that reference names a processor only while one can still be started (`processors.md` PROC-4).
-/// A later call in the same round can release output and close every processor, so the reference
-/// in the earlier, visible result must not tell the planner to use one.
-///
-/// The round has a vouched `cat` of a file longer than the output cap, whose output the planner may
-/// read and the cap cuts short, and a short `read: true` run after it that the check lets through.
-/// The control is the same round with a second vouched `cat` in place of that run, which closes
-/// nothing.
-#[test]
-fn a_capped_visible_result_made_before_a_later_call_closes_processors_names_none() {
-    const SHORT: &str = r#"{"command":"sed -n p short.txt","read":true}"#;
-    const CAT_LONG: &str = r#"{"command":"cat long.txt"}"#;
-    const CAT_OTHER: &str = r#"{"command":"cat other.txt"}"#;
-    /// A round: its name, its calls as (tool, arguments), and whether it closes processors.
-    type Round<'a> = (&'a str, &'a [(&'a str, &'a str)], bool);
-    let cases: [Round; 2] = [
-        ("released-after", &[("run", CAT_LONG), ("run", SHORT)], true),
-        (
-            "nothing-released",
-            &[("run", CAT_LONG), ("run", CAT_OTHER)],
-            false,
-        ),
-    ];
-    for mode in EVERY_MODE {
-        for (name, calls, closed) in cases {
-            let scratch = Scratch::new(&format!("same-round-close-visible-{name}-{mode:?}"));
-            let workspace = Workspace::new(&scratch.path).expect("workspace");
-            for file in ["long.txt", "other.txt"] {
-                std::fs::write(
-                    scratch.path.join(file),
-                    format!("LONG-SENTINEL {}\n", "x".repeat(200)),
-                )
-                .unwrap();
-            }
-            std::fs::write(scratch.path.join("short.txt"), "SHORT-SENTINEL\n").unwrap();
-
-            let programs = bravebot_core::programs::TrustedPrograms::from_iter([
-                vouched_in("cat", &["long.txt"], &scratch.path),
-                vouched_in("cat", &["other.txt"], &scratch.path),
-            ]);
-            let (endpoint, received) = serve_sequence_answering_checks_with(
-                vec![
-                    reply_with(r#"{"verdict": "safe", "reason": "a single path"}"#);
-                    calls.iter().filter(|(_, each)| *each == SHORT).count()
-                ],
-                vec![tool_requests_in_one_round(calls), reply_with("done")],
-            );
-            let config = config_for(&endpoint);
-            let egress = bravebot_net::Egress::new();
-            let mut sink = RecordingSink::new();
-            let mut conversation = bravebot_agent::Conversation::new();
-            let mut reading = ReadsWhatItRan::new(false);
-            let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
-
-            turn::resume(
-                &config,
-                &egress,
-                &workspace,
-                &Task::new("find out")
-                    .with_permission_mode(mode)
-                    .with_auto_vetting(true)
-                    .with_output_cap(Some(64)),
-                &mut conversation,
-                &mut confirmer,
-                &mut bravebot_agent::report::RecordingReporter::default(),
-                &mut sink,
-                trusting_the_workspace(),
-                programs,
-                None,
-                &bravebot_core::cancel::Cancel::new(),
-            )
-            .outcome
-            .expect("the turn runs");
-
-            let sent = every_request(&received);
-            let told = sent
-                .iter()
-                .rfind(|body| !body.contains(A_CHECK_ASKING))
-                .expect("the planner's last round");
-            let results: Vec<String> = serde_json::from_str::<serde_json::Value>(told)
-                .expect("a request")["messages"]
-                .as_array()
-                .expect("messages")
-                .iter()
-                .filter(|message| message["role"] == "tool")
-                .map(|message| message["content"].to_string())
-                .collect();
-            assert_eq!(
-                results.len(),
-                calls.len(),
-                "{mode:?} {name}: not every call of the round was answered: {results:?}"
-            );
-            assert_eq!(
-                conversation.holds(),
-                if closed {
-                    bravebot_core::label::Confidentiality::Private
-                } else {
-                    bravebot_core::label::Confidentiality::Public
-                },
-                "{mode:?} {name}: the round did not leave the context as the case needs, so \
-                 nothing here was tested"
-            );
-            let mut capped = 0;
-            for (result, (_, each)) in results.iter().zip(calls) {
-                if *each == SHORT {
-                    assert!(
-                        result.contains("SHORT-SENTINEL"),
-                        "{mode:?} {name}: the short output was not released: {result}"
-                    );
-                    continue;
-                }
-                capped += 1;
-                assert!(
-                    result.contains("The whole of this output, middle included, is a reference"),
-                    "{mode:?} {name}: the read was not a capped visible result: {result}"
-                );
-                assert_eq!(
-                    result.contains("spawn_processor"),
-                    !closed,
-                    "{mode:?} {name}: a round that {} processors left a result that {} one: \
-                     {result}",
-                    if closed { "closed" } else { "left open" },
-                    if closed { "names" } else { "does not name" }
-                );
-            }
-            assert!(capped > 0, "{mode:?} {name}: no capped result was made");
         }
     }
 }
@@ -46503,12 +46186,12 @@ fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
 }
 
 /// DELEGATE-8, PROC-4. A delegate started by a planner that holds private content holds it from
-/// its first request, so every processor call it made would be refused. It is not offered
-/// `spawn_processor`, is not told it may hand files to processors, and is told why. A delegate
-/// started by a planner that holds nothing private keeps all three, so the first half cannot
-/// pass by removing the tool from every delegate.
+/// its first request, and it is offered `spawn_processor` and told it may hand files to processors
+/// as a delegate started by a planner that holds nothing private is. The regression it rejects is
+/// a delegate that loses the tool, or is told it inherited a closed state, because of what its
+/// parent was shown.
 #[test]
-fn a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why() {
+fn a_delegate_started_under_private_content_is_offered_processors_like_any_other() {
     /// The requests a delegate sent: those that do not carry the parent's own prompt.
     fn the_delegates_requests(received: &MockRequests, parent: &str, task: &str) -> Vec<String> {
         let delegates: Vec<String> = every_request(received)
@@ -46564,17 +46247,14 @@ fn a_delegate_started_under_private_content_is_not_offered_processors_and_is_tol
     for body in the_delegates_requests(&received, "START-UNDER-PRIVATE", "LOOK-AT-THE-PICTURE") {
         let request: serde_json::Value = serde_json::from_str(&body).expect("a request");
         assert!(
-            !the_tools_in(&request).contains(&"spawn_processor".to_string()),
-            "a delegate that starts out private was offered spawn_processor"
+            the_tools_in(&request).contains(&"spawn_processor".to_string()),
+            "a delegate that starts out private lost spawn_processor"
         );
         let prompt = system_prompt_of(&body);
         assert!(
-            !prompt.contains("hand quarantined files to processors"),
-            "a delegate that starts out private was told it may use processors: {prompt}"
-        );
-        assert!(
-            prompt.contains("You were started holding the private content"),
-            "the delegate was not told why it has no processors: {prompt}"
+            prompt.contains("hand quarantined files to processors")
+                && !prompt.contains("You were started holding the private content"),
+            "a delegate that starts out private was told it may not use processors: {prompt}"
         );
     }
 
@@ -65567,8 +65247,9 @@ fn a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_
 /// The descriptions of the tools that name others follow the list a turn was offered. A turn
 /// addressed to a definition that leaves out `vet_content`, `write_file`, `run` or `read_output` is
 /// not told by `spawn_processor` or `read_output` to use it, and the one it is offered is still
-/// named. The processor's route to a program that sends text it wrote is `stdin_ref` and is said
-/// where the turn holds `run`, with or without `write_file`.
+/// named (`spawn_processor` names `write_file` and `run`, and `read_output` names `vet_content`).
+/// The processor's route to a program that sends text it wrote is `stdin_ref` and is said where
+/// the turn holds `run`, with or without `write_file`.
 #[test]
 fn the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered() {
     let all = ["vet_content", "write_file", "read_output", "run"];
@@ -65602,7 +65283,7 @@ fn the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_
             definition,
         );
         let processor = description_in(&last, "spawn_processor");
-        for tool in all {
+        for tool in ["write_file", "run"] {
             assert_eq!(
                 names(&processor, tool),
                 offered.contains(&tool),
@@ -65700,11 +65381,6 @@ fn a_delegate_is_not_told_to_use_a_tool_it_is_not_offered() {
             "{kind}: {processor}"
         );
         assert_eq!(names(&processor, "run"), shell, "{kind}: {processor}");
-        assert_eq!(
-            names(&processor, "read_output"),
-            shell,
-            "{kind}: {processor}"
-        );
         if shell {
             let read_output = description_in(last, "read_output");
             assert!(!names(&read_output, "vet_content"), "{kind}: {read_output}");
@@ -65712,10 +65388,11 @@ fn a_delegate_is_not_told_to_use_a_tool_it_is_not_offered() {
 
         // The session in the same turn is offered everything, and is told so.
         let first = session.first().expect("the session made requests");
-        assert!(names(
-            &description_in(first, "spawn_processor"),
-            "vet_content"
-        ));
+        let session_processor = description_in(first, "spawn_processor");
+        assert!(
+            names(&session_processor, "write_file") && names(&session_processor, "run"),
+            "{session_processor}"
+        );
         assert!(names(&description_in(first, "read_output"), "vet_content"));
 
         // The planner writing the task is told what the delegate cannot call. The delegate, which
@@ -93182,103 +92859,6 @@ fn the_note_of_a_moved_line_names_job_output_only_where_the_turn_is_offered_it()
         assert!(
             told.contains("Do not run it again.") && told.contains("It no longer has a deadline."),
             "{tag}: the note lost what it says to a planner whose line was moved: {told}"
-        );
-    }
-}
-
-/// PROC-4. Once a planner holds private content no processor can be started, and the refusal says
-/// what can still be done with the tools the turn was offered: a filter whose result `read_output`
-/// shows, and `vet_content`. A definition whose tools line holds `run`, `read_output` and
-/// `spawn_processor` but not `vet_content` is told the filter and not `vet_content`.
-///
-/// The control is the same turn with no definition, offered every tool, which reads the text it
-/// always did.
-#[test]
-fn the_refusal_of_a_processor_names_only_the_tools_the_turn_was_offered() {
-    for (tag, definition, whole) in [
-        ("every", None, true),
-        (
-            "no-vetting",
-            Some("kind: worker\ntools: run, read_output, spawn_processor\n"),
-            false,
-        ),
-    ] {
-        let scratch = Scratch::new(&format!("processor-refusal-{tag}"));
-        let home = Scratch::new(&format!("processor-refusal-{tag}-home"));
-        if let Some(fields) = definition {
-            define(&home, "runner", fields, "RUN-IT");
-        }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
-        std::fs::write(scratch.path.join("mail.txt"), "SENTINEL-MAIL\n").unwrap();
-
-        let mut planner = vec![
-            tool_request("run", r#"{"command":"sed -n p mail.txt"}"#),
-            tool_request("read_output", r#"{"ref":"ref:1"}"#),
-            tool_request(
-                "spawn_processor",
-                r#"{"reads":["ref:1"],"instruction":"say that the mail reads SENTINEL-MAIL"}"#,
-            ),
-            reply_with("done"),
-        ]
-        .into_iter();
-        let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
-            if body.contains("You are an isolated processor") {
-                Some(Some(processor_reply("PROCESSED")))
-            } else {
-                planner.next().map(Some)
-            }
-        });
-        let config = config_for(&endpoint);
-        let task = match definition {
-            Some(_) => addressed("what does the mail say", &home, "runner"),
-            None => Task::new("what does the mail say"),
-        };
-        let mut conversation = bravebot_agent::Conversation::new();
-        turn::resume(
-            &config,
-            &bravebot_net::Egress::new(),
-            &workspace,
-            &task,
-            &mut conversation,
-            &mut ReadsWhatItRan::new(true),
-            &mut bravebot_agent::report::RecordingReporter::default(),
-            &mut RecordingSink::new(),
-            trusting_the_workspace(),
-            bravebot_core::programs::TrustedPrograms::new(),
-            None,
-            &bravebot_core::cancel::Cancel::new(),
-        )
-        .outcome
-        .expect("the turn runs");
-
-        assert_eq!(
-            conversation.holds(),
-            bravebot_core::label::Confidentiality::Private,
-            "{tag}: the planner read the output and its context stayed public, so nothing here \
-             was tested"
-        );
-        let sent = every_request(&received);
-        let planners: Vec<&String> = sent
-            .iter()
-            .filter(|body| {
-                !body.contains(A_CHECK_ASKING) && !body.contains("You are an isolated processor")
-            })
-            .collect();
-        let told = tool_results(planners.last().expect("the planner's last round"));
-        assert!(
-            told.contains("no processor can be started in this conversation"),
-            "{tag}: the planner was not told no processor can be started: {told}"
-        );
-        assert!(
-            told.contains("run a filter such as grep or tail with stdin_ref")
-                && told.contains("call read_output on what that prints"),
-            "{tag}: the planner was not told the route its list holds: {told}"
-        );
-        assert_eq!(
-            told.contains("vet_content"),
-            whole,
-            "{tag}: the refusal and the tools the turn was offered disagree about vet_content: \
-             {told}"
         );
     }
 }

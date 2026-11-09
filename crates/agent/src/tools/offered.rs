@@ -252,22 +252,6 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
         "You are not shown its output."
     };
 
-    // What puts private content into the context, and so ends every later call. A tool is named
-    // only where the run has it, and the last two are true of every run.
-    let shows = match (beside("read_output"), beside("vet_content")) {
-        (true, true) => "after read_output or vet_content shows you some, ",
-        (true, false) => "after read_output shows you some, ",
-        (false, true) => "after vet_content shows you some, ",
-        (false, false) => "",
-    };
-    // The tools that keep working, which always include the file tools.
-    let working = match (beside("run"), beside("read_output")) {
-        (true, true) => "run, read_output and the file tools",
-        (true, false) => "run and the file tools",
-        (false, true) => "read_output and the file tools",
-        (false, false) => "The file tools",
-    };
-
     // What it says about a summary, a translation or other text made from content the planner was
     // not shown, which a processor writes (SPAWN-6). The route to the program that sends it names
     // `run`, so it is said only where the list holds one. A list without `run` is told who writes
@@ -309,12 +293,7 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
          instruction and its output is quarantined as a new reference. {changing} What the change \
          should be is its decision, not yours. It reads the whole document, so it can work out \
          what is wrong and where the fix goes, and leave a file alone if it turns out not to be \
-         the one you are after. {derived_text} Once your context holds private content, as it does {shows}after \
-         a delegate reports some, in a conversation resumed with some, and in a delegate started \
-         while its parent's context held some, every later \
-         spawn_processor call is refused for the rest of the conversation: what you write is \
-         private from then on, and a processor takes no private instruction. {working} keep \
-         working."
+         the one you are after. {derived_text}"
     )
 }
 
@@ -356,12 +335,6 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     } else {
         ""
     };
-    let closes_processors = if beside("spawn_processor") {
-        "Being shown output closes spawn_processor for you and for every delegate you start \
-         afterwards. "
-    } else {
-        ""
-    };
     let filter = if beside("run") {
         ", and a filter such as tail or grep run on it with the reference as stdin_ref and \
          read: true reads part of it instead"
@@ -374,7 +347,7 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          output is quarantined by default, so `which`, `find`, `uname` and the like tell you \
          nothing until you ask for the result. Ask for the errors too when a run fails, or you \
          will not know why it failed and must not claim it succeeded. Only for output from run; \
-         a quarantined file is not readable this way. {closes_processors}{anything_else}Output you were shown the \
+         a quarantined file is not readable this way. {anything_else}Output you were shown the \
          beginning and end of, because the whole was too long for one result, is the exception: \
          you may read all of it, so nobody is asked, and it comes back a page at a time from the \
          offset you give. A pattern searches that output instead of paging it: you get the \
@@ -1948,10 +1921,7 @@ fn table(
                  task to delegates of its own, though not without end: the tree stops a few \
                  levels down, and one turn starts only so many however they are arranged. Its \
                  writes, its runs and its calls to an MCP server's tools are still shown to the \
-                 user for approval, so this saves you context and never an approval. A delegate \
-                 started after you have been shown output from read_output, content from \
-                 vet_content or a delegate's report cannot run processors, so start a task that \
-                 needs a picture or a file looked at before then, or leave it to the person.\
+                 user for approval, so this saves you context and never an approval.\
                  {lacks} Do not use it for something one read would answer: it is a whole second \
                  agent and costs like one.",
                 lacks = spawn_agent_lacks(&|_| true)
@@ -1962,8 +1932,7 @@ fn table(
                     "kind": {
                         "type": "string",
                         "description": "Which kind of agent, narrowest first. \"reader\" reads, \
-                                        lists, searches and, while the context that started it \
-                                        holds nothing private, runs processors: use it to find \
+                                        lists, searches and runs processors: use it to find \
                                         something out. \"checker\" also runs programs and asks \
                                         a language server, so it can build, test and lint, but \
                                         writes nothing: use it to \
