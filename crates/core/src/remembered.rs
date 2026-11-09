@@ -874,6 +874,91 @@ mod tests {
         );
     }
 
+    /// A step as `step` builds it with `NAME=$VAR` written in front, the shape bypass mode compiles
+    /// `TOKEN=$SECRET prog` to.
+    fn expanding(program: &str, args: &[&str]) -> Step {
+        Step {
+            expansions: vec![crate::command::Expansion {
+                name: "TOKEN".to_string(),
+                parts: vec![crate::command::ValuePart::Variable("SECRET".to_string())],
+            }],
+            ..step(program, args)
+        }
+    }
+
+    /// CMDLINE-17: an entry holds no expansion, and what one works out is a value nobody was shown,
+    /// so a step carrying one is not the step that was recorded, and an entry made from one (which
+    /// the gates refuse before this is reached) does not match it either.
+    #[test]
+    fn a_step_carrying_an_expansion_is_not_covered_by_an_entry() {
+        let held = RememberedStep::of(&step("make", &["check"]));
+        assert!(
+            held.matches(&step("make", &["check"])),
+            "the entry did not match the step it was recorded from"
+        );
+        assert!(
+            !held.matches(&expanding("make", &["check"])),
+            "an entry for `make check` matched the same step with an expansion in front"
+        );
+
+        let from_expanding = RememberedStep::of(&expanding("make", &["check"]));
+        assert!(
+            !from_expanding.matches(&expanding("make", &["check"])),
+            "an entry made from a step with an expansion matched it"
+        );
+    }
+
+    /// CMDLINE-17: the same through a whole line, so a recorded line and a scope cover the plain
+    /// line and neither covers it with an expansion in front of any stage.
+    #[test]
+    fn a_line_carrying_an_expansion_is_covered_by_no_entry_and_no_scope() {
+        let plain = plan_of(Steps::Pipeline(vec![
+            step("git", &["log"]),
+            step("head", &["-20"]),
+        ]));
+        let expanding_second = plan_of(Steps::Pipeline(vec![
+            step("git", &["log"]),
+            expanding("head", &["-20"]),
+        ]));
+        let record = remembering(&plain);
+        assert!(record.covers(&plain), "the recorded line was not covered");
+        assert!(
+            !record.covers(&expanding_second),
+            "an expansion in front of one stage of a recorded line was covered"
+        );
+
+        let scoped = scope(&view("1081"));
+        let with_expansion = |number: &str| {
+            plan_of(Steps::Pipeline(vec![expanding(
+                "gh",
+                &["pr", "view", number, "--repo", "brave/bravebot"],
+            )]))
+        };
+        assert!(scoped.covers(&view("1082")), "the control was not covered");
+        assert!(
+            !scoped.covers(&with_expansion("1082")),
+            "a scope covered a line carrying an expansion"
+        );
+    }
+
+    /// CMDLINE-17: a line carrying an expansion is offered no scope, so the key that would record
+    /// a group of lines is not drawn for it, however much it looks like a listed line.
+    #[test]
+    fn a_line_carrying_an_expansion_is_offered_no_scope() {
+        assert!(
+            scopes::offered_for(&view("1081")).is_some(),
+            "the control line is in no scope"
+        );
+        let expanding_view = plan_of(Steps::Pipeline(vec![expanding(
+            "gh",
+            &["pr", "view", "1081", "--repo", "brave/bravebot"],
+        )]));
+        assert!(
+            scopes::offered_for(&expanding_view).is_none(),
+            "a line carrying an expansion was offered a scope"
+        );
+    }
+
     /// RUN-19: where the output went is part of the key, for the reason RUN-6 gives about a
     /// redirection being in neither the program nor the arguments.
     #[test]

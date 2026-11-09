@@ -13786,6 +13786,165 @@ five
         plan_of(vec![step])
     }
 
+    /// The vouched line of [`a_plan`] with `TOKEN=$SECRET` written in front of it, which is the
+    /// shape the compiler produces under bypass for `TOKEN=$SECRET git log` (CMDLINE-17).
+    fn with_an_expansion() -> crate::command::Plan {
+        let mut step = step_named("git", &["log"]);
+        step.expansions = vec![crate::command::Expansion {
+            name: "TOKEN".to_string(),
+            parts: vec![crate::command::ValuePart::Variable("SECRET".to_string())],
+        }];
+        plan_of(vec![step])
+    }
+
+    /// CMDLINE-17: an expansion decides what a program loads from a value nobody was shown, and a
+    /// vouched entry holds a program and its arguments only, so it covers the bare line and not
+    /// the same line with an expansion in front.
+    #[test]
+    fn a_vouched_line_carrying_an_expansion_is_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the vouched entry did not cover the command it was made for"
+        );
+        assert!(
+            policy.plan_needs_approval(&with_an_expansion()),
+            "a program ran under an expansion nobody saw the value of, behind a command somebody \
+             said yes to"
+        );
+    }
+
+    /// CMDLINE-17: what a vouched line prints under an expansion is not a function of the line, so
+    /// it is not labelled trusted. Asked of the label against a control, because the prompt has
+    /// another reason to ask about the same plan.
+    #[test]
+    fn output_of_a_vouched_line_carrying_an_expansion_is_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+
+        let bare = a_plan();
+        policy.endorse_plan(&bare);
+        assert!(
+            policy
+                .before_plan(&bare)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the vouched road is shut for the line this test contrasts with"
+        );
+
+        let expanding = with_an_expansion();
+        policy.endorse_plan(&expanding);
+        assert!(
+            !policy
+                .before_plan(&expanding)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "output from a program run under an expansion was labelled trusted"
+        );
+    }
+
+    /// CMDLINE-17: a rule is matched against the program and its arguments, and an expansion is in
+    /// neither, so `Bash(git log)` allows the bare line and not the line with an expansion.
+    #[test]
+    fn an_expansion_asks_even_for_a_line_a_rule_allows() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git log)"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the rule did not cover the line it was written for"
+        );
+        assert!(
+            policy.plan_needs_approval(&with_an_expansion()),
+            "a settings-file rule ran a program under an expansion it cannot name, unasked"
+        );
+    }
+
+    /// CMDLINE-17: a line remembered past the session is not matched against one carrying an
+    /// expansion, and the keys that remember a line are not offered for it, nor is the advice that
+    /// a rule would stop the asking.
+    #[test]
+    fn a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the remembered line did not cover the line it was recorded from"
+        );
+        assert!(
+            policy.plan_needs_approval(&with_an_expansion()),
+            "a remembered line covered the same line with an expansion in front"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&with_an_expansion()));
+        assert!(policy.plan_needs_approval(&with_an_expansion()));
+
+        assert!(
+            policy.may_remember(&a_plan()),
+            "the control was not offered"
+        );
+        assert!(
+            !policy.may_remember(&with_an_expansion()),
+            "the key was offered for a line carrying an expansion"
+        );
+        assert!(policy.a_rule_could_answer(&a_plan()));
+        assert!(
+            !policy.a_rule_could_answer(&with_an_expansion()),
+            "a rule was suggested for a line carrying an expansion"
+        );
+        assert!(
+            policy.plan_needs_approval(&with_an_expansion()),
+            "a rule-less policy let a line carrying an expansion run unasked"
+        );
+    }
+
+    /// CMDLINE-17: an audit of an option surface says nothing about what a program does under an
+    /// expansion, so the step is unproven. Asked of the label against a control, as
+    /// [`an_environment_assignment_leaves_a_step_unproven`] is.
+    #[test]
+    fn an_expansion_leaves_a_step_unproven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let audited = plan_of(vec![step_named("wc", &["-l", "Cargo.toml"])]);
+        policy.endorse_plan(&audited);
+        assert!(
+            policy
+                .before_plan(&audited)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
+        let mut step = step_named("wc", &["-l", "Cargo.toml"]);
+        step.expansions = vec![crate::command::Expansion {
+            name: "LD_PRELOAD".to_string(),
+            parts: vec![crate::command::ValuePart::Variable("LIB".to_string())],
+        }];
+        let carrying = plan_of(vec![step]);
+        assert!(
+            policy.plan_needs_approval(&carrying),
+            "a line carrying an expansion ran unasked"
+        );
+        policy.endorse_plan(&carrying);
+        assert!(
+            !policy
+                .before_plan(&carrying)
+                .expect("an endorsed plan runs")
+                .is_trusted(),
+            "the audited table proved a call whose program loads what an expansion chose"
+        );
+    }
+
     /// Without a root there is nothing to check an answer about a directory against, so the vouched
     /// road is closed rather than open. The gate is strongest where it was told least.
     #[test]

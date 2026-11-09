@@ -577,6 +577,10 @@ struct Running<'a> {
     started: Instant,
     limit: Duration,
     stdout: String,
+    /// The last stage's standard output as the bytes the pipe delivered, kept only where the caller
+    /// has to decide from them before they are decoded: a substitution, whose value must reach a
+    /// program exactly as printed or not at all. `None` for every other run.
+    raw_stdout: Option<Vec<u8>>,
     stderr: String,
     codes: Vec<Option<i32>>,
     stopped: Option<Duration>,
@@ -625,6 +629,7 @@ impl<'a> Running<'a> {
             started: Instant::now(),
             limit,
             stdout: String::new(),
+            raw_stdout: None,
             stderr: String::new(),
             codes: Vec::new(),
             stopped: None,
@@ -692,6 +697,7 @@ impl<'a> Running<'a> {
         };
         let remaining = self.limit.saturating_sub(self.started.elapsed());
         let mut inner = Running::new(self.directory, self.cancel, remaining, self.scratch, None);
+        inner.raw_stdout = Some(Vec::new());
         inner.confinement = self.confinement;
         inner.entering = self.entering.take();
         inner.reading = self.reading.take();
@@ -714,21 +720,28 @@ impl<'a> Running<'a> {
             };
             return Err(failed(&detail));
         }
-        let mut value = std::mem::take(&mut inner.stdout);
-        if value.len() > SUBSTITUTION_LIMIT {
+        // The bytes the pipe delivered, not the text `Drain::text` makes of them: that is lossy, so
+        // a program printing `\xff` would otherwise hand the next program U+FFFD and the line would
+        // run on a value nobody printed. A value that is not valid UTF-8 is refused, as a variable
+        // that is not is ([`variable_value`]), with the source and nothing of the output.
+        let raw = inner.raw_stdout.take().unwrap_or_default();
+        if raw.len() > SUBSTITUTION_LIMIT {
             return Err(failed(&format!(
                 "it printed more than {SUBSTITUTION_LIMIT} bytes"
             )));
         }
+        // `FromUtf8Error` holds the bytes, so it is dropped here rather than formatted.
+        let mut value =
+            String::from_utf8(raw).map_err(|_| failed("its output is not valid UTF-8"))?;
         while value.ends_with('\n') {
             value.pop();
             if value.ends_with('\r') {
                 value.pop();
             }
         }
-        if value.contains('\0') {
-            return Err(failed("its output holds a NUL byte"));
-        }
+        // A NUL in the value is not looked for: `Command::env` cannot hold one, so the step that
+        // would receive it fails to start, and that error names the program and the operating
+        // system's words, never the value.
         Ok(Secret(value))
     }
 
@@ -942,6 +955,9 @@ impl<'a> Running<'a> {
         }
 
         if let Some(tail) = &tail {
+            if let Some(raw) = self.raw_stdout.as_mut() {
+                raw.extend_from_slice(&tail.bytes());
+            }
             self.stdout.push_str(&tail.text());
         }
         for drain in &draining {
@@ -1319,6 +1335,11 @@ impl Drain {
     fn text(&self) -> String {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
         String::from_utf8_lossy(&read).into_owned()
+    }
+
+    /// The bytes the pipe has delivered so far, undecoded.
+    fn bytes(&self) -> Vec<u8> {
+        self.read.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// How many bytes the pipe has delivered so far.
@@ -1870,22 +1891,46 @@ fn command_for(
 /// is what [`crate::tools`] refuses anything else for. Every step's own environment is applied, as
 /// it is in the foreground, and so is the session's own directory: a program left running is one
 /// with more reason to want somewhere to write, not less.
+///
+/// For a caller with no turn behind it: a substitution in a step's assignments runs under the
+/// built-in [`LIMIT`] and a token nobody holds. The `run` tool calls [`start_steps_within`].
 pub fn start_steps(
     steps: &[Step],
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
     confinement: Option<&Confinement>,
 ) -> Result<Background, ExecError> {
+    start_steps_within(
+        steps,
+        directory,
+        scratch,
+        confinement,
+        &Cancel::new(),
+        LIMIT,
+    )
+}
+
+/// [`start_steps`] with the call's own cancellation and deadline for the substitutions in the
+/// steps' assignments, which are run before the first step starts and so while the call is still
+/// in progress. A cancelled call ends the substitution and starts nothing; one that outlasts
+/// `limit` is refused with its source and no output. The job that is started is not bound by
+/// `limit`: it outlives the call.
+pub fn start_steps_within(
+    steps: &[Step],
+    directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
+    confinement: Option<&Confinement>,
+    cancel: &Cancel,
+    limit: Duration,
+) -> Result<Background, ExecError> {
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
     the_directory_exists(directory)?;
     still_approved(steps)?;
-    // Worked out before the first step starts, as in the foreground. Nothing can be moved or
-    // cancelled from here, so a substitution is held to the built-in limit and a token nobody
-    // holds.
-    let nobody = Cancel::new();
-    let mut resolving = Running::new(directory, &nobody, LIMIT, scratch, None);
+    // Worked out before the first step starts, as in the foreground, under the caller's
+    // cancellation and deadline.
+    let mut resolving = Running::new(directory, cancel, limit, scratch, None);
     resolving.confinement = confinement;
     let expanded = resolving.expand_all(steps)?;
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());

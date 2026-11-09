@@ -11052,11 +11052,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
-        return match crate::exec::start_steps(
+        return match crate::exec::start_steps_within(
             steps,
             &plan.directory,
             tools.workspace.scratch(),
             confinement.as_ref(),
+            tools.cancel,
+            limit,
         ) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
@@ -28217,6 +28219,59 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+
+        /// CMDLINE-17: only bypass mode lets `NAME=$VAR` in front of a program through `run`. The
+        /// regressions it rejects: the choice inverted (bypass refused, the others let through) and
+        /// the choice made once for every mode (the line always accepted, or always refused). The
+        /// program leaves a file when it starts, so "accepted" is the program having run and not
+        /// only a plan having compiled.
+        #[cfg(unix)]
+        #[test]
+        fn a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Bypass, Plan};
+            use std::os::unix::fs::PermissionsExt;
+
+            for (mode, runs) in [
+                (Bypass, true),
+                (Ask, false),
+                (AcceptEdits, false),
+                (Plan, false),
+            ] {
+                let scratch = Scratch::new("run-assignment-by-mode");
+                let program = scratch.path.join("probe.sh");
+                std::fs::write(&program, "#!/bin/sh\ntouch ran\n").expect("a program");
+                std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                    .expect("executable");
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+
+                let produced = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(mode);
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"command": "BRAVEBOT_TEST_ASSIGNED=$PATH ./probe.sh"}),
+                    )
+                });
+                let said = told(&mut policy, &produced.text);
+
+                assert_eq!(
+                    scratch.path.join("ran").exists(),
+                    runs,
+                    "{mode:?}: the program's having run is not what the mode allows: {said}"
+                );
+                assert_eq!(produced.ran_a_program, runs, "{mode:?}: {said}");
+                let refusal = crate::cmdline::Reason::Variable.to_string();
+                assert_eq!(
+                    said.contains(&refusal),
+                    !runs,
+                    "{mode:?}: the `$` refusal is not what the mode allows: {said}"
+                );
             }
         }
 

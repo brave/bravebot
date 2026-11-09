@@ -3369,7 +3369,7 @@ fn a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_ou
 }
 
 #[test]
-fn a_substitution_printing_a_nul_byte_is_refused_naming_only_its_source() {
+fn a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value() {
     let scratch = Scratch::new("expand-nul");
     let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
     let emit = script(&scratch.path, "emit.sh", "#!/bin/sh\nprintf 'a\\000b'\n");
@@ -3384,11 +3384,199 @@ fn a_substitution_printing_a_nul_byte_is_refused_naming_only_its_source() {
             )],
         )],
     );
-    let error = run_expanding(&plan).expect_err("a NUL was accepted");
+    // The line is not refused for what the command printed: nothing here looks at the output. The
+    // environment cannot hold a NUL, so the step that would receive it does not start, and the
+    // error is the operating system's words about the program, with no part of the value.
+    let error = run_expanding(&plan).expect_err("a NUL reached a program's environment");
     assert!(
-        matches!(&error, ExecError::Substitution { source, .. } if source == "emit-nul"),
+        matches!(&error, ExecError::NotStarted { program, .. } if program == "print.sh"),
         "{error}"
     );
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(!text.contains('\0'), "{text:?}");
+        assert!(
+            !text.contains("a\0b") && !text.contains("emit-nul"),
+            "{text:?}"
+        );
+    }
+}
+
+/// Set `name` to `bytes` for the life of the guard `with_env` returned for it.
+#[cfg(unix)]
+fn set_raw(name: &str, bytes: &[u8]) {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: the caller holds the guard from `with_env`, which serialises these tests and
+    // restores the variable.
+    unsafe { std::env::set_var(name, std::ffi::OsStr::from_bytes(bytes)) };
+}
+
+/// A step printing the variable `BRAVEBOT_TEST_TARGET` after `parts` were put in it.
+fn printing(print: &std::path::Path, parts: Vec<ValuePart>) -> Step {
+    expanding(
+        print,
+        &["BRAVEBOT_TEST_TARGET"],
+        vec![expansion("BRAVEBOT_TEST_TARGET", parts)],
+    )
+}
+
+/// A variable that is not valid text is refused and nothing starts, and one holding the
+/// replacement character, which is valid text, reaches the program as it is.
+#[cfg(unix)]
+#[test]
+fn a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not() {
+    let scratch = Scratch::new("expand-variable-utf8");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let name = "BRAVEBOT_TEST_SOURCE_VAR";
+    let _env = with_env(&[(name, None)]);
+
+    set_raw(name, b"v-\xff");
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![ValuePart::Variable(name.into())],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("a variable that is not text was expanded");
+    assert!(
+        matches!(&error, ExecError::Variable { name: named, problem }
+            if named == name && *problem == exec::VariableProblem::NotUnicode),
+        "{error}"
+    );
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+
+    set_raw(name, "v-\u{FFFD}".as_bytes());
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(&print, vec![ValuePart::Variable(name.into())])],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    assert_eq!(ran.stdout, "v-\u{FFFD}");
+}
+
+/// The same pair for a command's output. `\xff` is not valid text and is refused, naming the
+/// source and nothing printed, before the step that uses it starts; the replacement character
+/// itself is valid text and arrives unchanged. The regression it rejects is the lossy decoding of
+/// the pipe turning the first into the second.
+#[cfg(unix)]
+#[test]
+fn a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not()
+ {
+    let scratch = Scratch::new("expand-substitution-utf8");
+    let print = script(&scratch.path, "print.sh", PRINT_VARIABLE);
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let bad = script(&scratch.path, "bad.sh", "#!/bin/sh\nprintf 'v-\\377'\n");
+    let good = script(
+        &scratch.path,
+        "good.sh",
+        "#!/bin/sh\nprintf 'v-\\357\\277\\275'\n",
+    );
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![expanding(
+            &touch,
+            &[],
+            vec![expansion(
+                "BRAVEBOT_TEST_TARGET",
+                vec![substitution("emit-bad", expanding(&bad, &[], Vec::new()))],
+            )],
+        )],
+    );
+    let error = run_expanding(&plan).expect_err("output that is not text was accepted");
+    assert!(
+        matches!(&error, ExecError::Substitution { source, .. } if source == "emit-bad"),
+        "{error}"
+    );
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(!text.contains('\u{FFFD}') && !text.contains("v-"), "{text}");
+    }
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(
+            &print,
+            vec![substitution("emit-good", expanding(&good, &[], Vec::new()))],
+        )],
+    );
+    let ran = run_expanding(&plan).expect("the line runs");
+    assert_eq!(ran.stdout, "v-\u{FFFD}");
+}
+
+/// CMDLINE-17: a job started in the background works its substitutions out under the call's own
+/// cancellation. A cancel that arrives while one is running ends it, and the step that would have
+/// used the value never starts.
+#[cfg(unix)]
+#[test]
+fn a_background_start_is_cancelled_while_its_substitution_runs() {
+    let scratch = Scratch::new("expand-background-cancel");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let slow = script(&scratch.path, "slow.sh", "#!/bin/sh\nsleep 30\n");
+    let steps = vec![printing(
+        &touch,
+        vec![substitution("slow", expanding(&slow, &[], Vec::new()))],
+    )];
+    let cancel = Cancel::new();
+    let started = std::time::Instant::now();
+    let outcome = std::thread::scope(|scope| {
+        let stopper = cancel.clone();
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            stopper.cancel();
+        });
+        past_text_file_busy(|| {
+            exec::start_steps_within(&steps, &scratch.path, None, None, &cancel, exec::LIMIT)
+        })
+    });
+    assert!(
+        matches!(outcome, Err(ExecError::Cancelled)),
+        "a cancelled background start was not reported as cancelled"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the cancel did not end the substitution"
+    );
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
+/// CMDLINE-17: and under the call's deadline, so a substitution that outlasts it is refused naming
+/// its source, rather than held to the built-in five minutes.
+#[cfg(unix)]
+#[test]
+fn a_background_start_holds_its_substitution_to_the_calls_deadline() {
+    let scratch = Scratch::new("expand-background-deadline");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let slow = script(&scratch.path, "slow.sh", "#!/bin/sh\nsleep 30\n");
+    let steps = vec![printing(
+        &touch,
+        vec![substitution("slow", expanding(&slow, &[], Vec::new()))],
+    )];
+    let started = std::time::Instant::now();
+    let outcome = past_text_file_busy(|| {
+        exec::start_steps_within(
+            &steps,
+            &scratch.path,
+            None,
+            None,
+            &Cancel::new(),
+            Duration::from_millis(500),
+        )
+    });
+    assert!(
+        matches!(&outcome, Err(ExecError::Substitution { source, .. }) if source == "slow"),
+        "a slow substitution was not refused at the call's deadline"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the deadline did not end the substitution"
+    );
+    assert!(!scratch.path.join("ran").exists(), "the step started");
 }
 
 #[test]

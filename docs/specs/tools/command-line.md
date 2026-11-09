@@ -977,18 +977,26 @@ brought back. It is held in no structure that is written or printed.
 permission checks, redirection and write-set handling as any stage, and what it reads and writes is
 in the plan's sets. It runs as an earlier stage, in the same directory, under the same deadline,
 cancellation, confinement and scrubbed environment as the stage that uses it, with no standard
-input. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
+input. A job started in the background works its substitutions out before its first stage starts,
+under the `run` call's own cancellation and deadline: a cancel ends the substitution and starts
+nothing, and one that outlasts the deadline is refused naming its source. The job it starts is not
+held to that deadline. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
 `cmd` is reported as that refusal.
 
 **A variable that is withheld is refused.** A name `bravebot_config::scrub::withheld()` returns,
 which includes this agent's own credentials and the names in `run.scrubEnv`, is refused when the
 line is compiled and again when the step is spawned. A variable that is unset, or whose value is not
-valid Unicode, is refused when the step is spawned, naming the variable and nothing else.
+valid Unicode, is refused when the step is spawned, naming the variable and nothing else. A
+variable set to `v-\xff` is refused as not valid text; one set to `v-\u{FFFD}` is valid text and
+reaches the program unchanged.
 
 **A failure says what ran and how it ended, not what it printed.** A substitution that fails to
-start, is stopped, exits non-zero or prints a NUL byte fails the line before the stage that uses it,
-naming the source text and the exit status. Neither its standard output nor its standard error is
-in the message.
+start, is stopped, exits non-zero or prints bytes that are not valid Unicode fails the line before
+the stage that uses it, naming the source text and the exit status. Neither its standard output nor
+its standard error is in the message. What it printed is judged as the bytes the pipe delivered, so
+a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text holding a NUL
+byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
+start, and that error names the program and the operating system's words, never the value.
 
 **Nothing remembered covers such a line.** A line carrying an expansion is treated as a line with an
 environment assignment is: a remembered answer, a grant or an allow rule is not matched against it,
@@ -1012,9 +1020,23 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::an_expansion_reaches_a_job_started_in_the_background`
 `verified-by: bravebot_agent::exec::an_unset_variable_is_refused_naming_the_variable_and_nothing_runs`
 `verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
-`verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_is_refused_naming_only_its_source`
+`verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
+`verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_background_start_is_cancelled_while_its_substitution_runs`
+`verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
+`verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
 `verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
+`verified-by: bravebot_core::remembered::a_step_carrying_an_expansion_is_not_covered_by_an_entry`
+`verified-by: bravebot_core::remembered::a_line_carrying_an_expansion_is_covered_by_no_entry_and_no_scope`
+`verified-by: bravebot_core::remembered::a_line_carrying_an_expansion_is_offered_no_scope`
+`verified-by: bravebot_core::command::an_expansion_counts_as_an_assignment_and_keeps_a_line_from_being_remembered`
+`verified-by: bravebot_core::policy::a_vouched_line_carrying_an_expansion_is_asked_about`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_expansion_is_untrusted`
+`verified-by: bravebot_core::policy::an_expansion_asks_even_for_a_line_a_rule_allows`
+`verified-by: bravebot_core::policy::a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key`
+`verified-by: bravebot_core::policy::an_expansion_leaves_a_step_unproven`
 
 ## Amendments to existing specs
 

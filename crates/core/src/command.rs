@@ -1132,6 +1132,35 @@ mod tests {
         );
     }
 
+    /// CMDLINE-17: an expansion is an assignment written in front of a program, so the step and the
+    /// plan carry one, and a line carrying one is not a line an entry could record.
+    #[test]
+    fn an_expansion_counts_as_an_assignment_and_keeps_a_line_from_being_remembered() {
+        let expanding = || Step {
+            expansions: vec![Expansion {
+                name: "TOKEN".to_string(),
+                parts: vec![ValuePart::Variable("SECRET".to_string())],
+            }],
+            ..step("prog", &[])
+        };
+        assert!(!step("prog", &[]).carries_an_assignment());
+        assert!(expanding().carries_an_assignment());
+
+        let bare = plan(Steps::Pipeline(vec![step("prog", &[])]));
+        assert!(!bare.carries_an_assignment());
+        assert!(bare.can_be_remembered(), "the control cannot be remembered");
+
+        let later_stage = plan(Steps::Pipeline(vec![step("a", &[]), expanding()]));
+        assert!(
+            later_stage.carries_an_assignment(),
+            "an expansion on a later stage was not seen"
+        );
+        assert!(
+            !later_stage.can_be_remembered(),
+            "a line carrying an expansion could be remembered"
+        );
+    }
+
     /// The directory decides what a relative path in the plan means, so it is part of the plan.
     #[test]
     fn the_directory_a_plan_runs_in_is_part_of_what_it_encodes() {
