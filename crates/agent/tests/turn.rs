@@ -50364,7 +50364,7 @@ fn a_delegate_that_could_not_finish_is_reported_as_a_failure() {
             reply_with("it could not be done"),
         ],
     )]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
@@ -51639,7 +51639,9 @@ fn a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent() {
             (false, false) => None,
         }
     });
-    let config = config_for(&endpoint);
+    // The hang-up the delegate meets is a failed connection, which the window would send again for
+    // minutes; the count ends it (BACKEND-55).
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -51805,7 +51807,8 @@ fn run_budgeted_delegate(
             (false, false) => None,
         }
     });
-    let config = config_for(&endpoint);
+    // As in the bound test: the count ends a delegate whose connection is hung up on.
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -52285,7 +52288,7 @@ fn a_delegate_that_stopped_after_a_person_vouched_still_brings_the_answer_home()
             vec![tool_request("run", r#"{"command":"touch vouched.txt"}"#)],
         ),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
@@ -57663,7 +57666,7 @@ fn a_delegate_that_failed_gives_its_place_back() {
         ),
         ("ANSWERED-LATER", vec![reply_with("second")]),
     ]);
-    let mut config = config_for(&endpoint);
+    let mut config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     config.max_running_delegates = Some(1);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -70276,7 +70279,7 @@ fn a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said() {
             vec![tool_request("read_file", r#"{"path":"a.txt"}"#)],
         ),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
