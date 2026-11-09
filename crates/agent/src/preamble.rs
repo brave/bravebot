@@ -67,7 +67,10 @@ pub(crate) fn lists_entry_named(directory: &Path, name: &str) -> bool {
 }
 
 /// Whether one of `listed`, the entry names a directory listing gave, is `name` byte for byte.
-fn names_include(listed: impl IntoIterator<Item = std::ffi::OsString>, name: &str) -> bool {
+pub(crate) fn names_include(
+    listed: impl IntoIterator<Item = std::ffi::OsString>,
+    name: &str,
+) -> bool {
     listed
         .into_iter()
         .any(|entry| entry.as_encoded_bytes() == name.as_bytes())

@@ -1809,14 +1809,69 @@ fn skill_entries(root: &Path) -> impl Iterator<Item = std::fs::DirEntry> {
         .filter(|entry| is_skill_directory(&entry.path()))
 }
 
-/// Only a directory can have a `SKILL.md` beneath it, so the one lookup also says it is a directory.
+/// Whether `directory` holds a file spelled exactly `SKILL.md` (INSTR-1). Only a directory can have
+/// one beneath it, so the one lookup also says it is a directory.
+///
+/// On a volume that folds case, `skill.md` opens as `SKILL.md`, so a lookup that only tried to open
+/// the name would offer a differently spelled file as a skill. The directory's own listing is
+/// compared with the fixed name and nothing a file holds is consulted.
 fn is_skill_directory(directory: &Path) -> bool {
-    directory.join(SKILL_FILE).is_file()
+    crate::preamble::holds_file_named(directory, SKILL_FILE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SKILL-1, INSTR-1: a directory is a skill directory only when its own entry is spelled
+    /// `SKILL.md`. Where the volume folds case `skill.md` opens as `SKILL.md`, so a lookup that only
+    /// opens the name offers it as a skill. The fault this rejects is `directory.join(name).is_file()`
+    /// standing for the lookup. Where the volume tells the two names apart `skill.md` is not
+    /// `SKILL.md` either way, and the exact one beside it is still a skill.
+    #[test]
+    fn a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory() {
+        let root = crate::testutil::scratch_dir("skill-directory-cased");
+        let _ = std::fs::remove_dir_all(&root);
+        let lower = root.join("lower");
+        let exact = root.join("exact");
+        std::fs::create_dir_all(&lower).unwrap();
+        std::fs::create_dir_all(&exact).unwrap();
+        std::fs::write(
+            lower.join("skill.md"),
+            "---\nname: lower\ndescription: d\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            exact.join(SKILL_FILE),
+            "---\nname: exact\ndescription: d\n---\n",
+        )
+        .unwrap();
+        assert!(!is_skill_directory(&lower));
+        assert!(is_skill_directory(&exact));
+        assert_eq!(skill_directories(&root), vec!["exact".to_string()]);
+        assert_eq!(skill_entries(&root).count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// SKILL-1, INSTR-1: a listing that holds `skill.md` does not hold `SKILL.md`. Decided on the
+    /// names alone, so it holds on a host whose volume tells the two apart as well as on one that
+    /// folds case. The fault this rejects is the skill file compared ignoring case, which is what a
+    /// folding volume does to an open.
+    #[test]
+    fn a_listing_holding_skill_md_in_another_case_does_not_hold_the_skill_file() {
+        let names = |listed: &[&str]| {
+            listed
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+        let holds = |listed: &[&str]| crate::preamble::names_include(names(listed), SKILL_FILE);
+
+        assert!(!holds(&["skill.md"]));
+        assert!(!holds(&["Skill.MD", "notes.md"]));
+        assert!(holds(&["skill.md", "SKILL.md"]));
+        assert!(!holds(&[]));
+    }
 
     /// The planner chooses a skill from its name and description alone, so a file declaring only
     /// one of them offers nothing to choose on and must not be advertised at all.

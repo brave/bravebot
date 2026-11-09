@@ -86,6 +86,14 @@ The lookup lists the directory and compares entry names byte for byte, for the p
 file. A differently spelled file is an ordinary file. Only entry names are compared and nothing a
 file holds is consulted.
 
+The same holds for a skill: a directory is a skill only when it has an entry spelled exactly
+`SKILL.md` ([SKILL-1](skills.md#SKILL-1)). A directory holding `skill.md` is not listed, not
+loaded and not counted as a skill in a root nobody vouched for ([SKILL-6](skills.md#SKILL-6)).
+The home rules file is read as the person's only in the exact spelling, and `/undo` of a rule
+matches it exactly, while the file tools refuse every spelling of it, so a differently spelled
+link cannot lead them to the person's rules ([RECALL-3](recall.md#RECALL-3),
+[RECALL-8](recall.md#RECALL-8)).
+
 A definition's memory, `<workspace>/.bravebot/memory/<name>.md`, is one of those ordinary files.
 [MEMORY-4](definition-memory.md#MEMORY-4) has the driver tell a run under the definition where it
 is, and puts none of it in the prompt.
@@ -98,6 +106,12 @@ next machine.
 `verified-by: bravebot_agent::preamble::the_project_file_may_be_named_claude_md`
 `verified-by: bravebot_agent::preamble::only_the_first_project_file_that_exists_is_read`
 `verified-by: bravebot_agent::preamble::a_root_file_spelled_in_another_case_is_not_the_projects_file`
+`verified-by: bravebot_agent::skills::a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_in_another_case_does_not_hold_the_skill_file`
+`verified-by: bravebot_agent::skills::a_project_directory_holding_skill_md_in_another_case_is_not_offered`
+`verified-by: bravebot_agent::skills::discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelling`
+`verified-by: bravebot_agent::skills::an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted`
+`verified-by: bravebot_agent::skills::a_home_directory_holding_skill_md_in_another_case_is_not_offered`
 `verified-by: bravebot_agent::preamble::a_home_file_spelled_in_another_case_is_not_the_persons_agents_file`
 `verified-by: bravebot_agent::skills::a_workspace_skill_shadows_a_home_skill_of_the_same_name`
 `verified-by: bravebot_agent::skills::a_skill_in_a_foreign_project_directory_is_offered`
@@ -867,6 +881,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   `~/.bravebot/AGENTS.md` lists the home directory once. There is no cache, because one would
   have to be invalidated when a file appears or changes mid-session. A directory only listed,
   searched or named in a shell command is not recorded: only a read or a write is.
+- **Each skill directory costs one more directory listing each time skills are discovered**, to
+  check it has an entry spelled exactly `SKILL.md` ([INSTR-1](#INSTR-1)).
 - **Every rule file is read and gated on every turn, whether it applies to every turn or is held
   for a path.** Its `paths` are in the file, so there is no knowing which to read without reading
   them all, and a cache would have to be invalidated by a write nobody tells this about

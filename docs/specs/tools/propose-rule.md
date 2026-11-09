@@ -31,7 +31,7 @@ Putting one standing rule to the person on the planner's own judgement, and writ
 <a id="RULE-2"></a>
 ### RULE-2: a rule is one line, appended after a backup, and an answer is never reused
 
-The line is `- <text> (<date>) why: <reason>`, with the text and the reason each flattened to one line, so no newline in either can start a second rule line. It is appended to `~/.bravebot/AGENTS.md` for `home` and to the project's `rules.md` for `project`, which makes the project's directory and its `id` file as a fact's first write does. A file that ends mid-line is not run on to. Each file is backed up before the write, so the session's undo takes the rule back; `AGENTS.md` is the one file outside the fact and rule stores that undo will put back, and only that name in the state directory itself. Each question is asked afresh, so a yes is never answered from an earlier one ([ASK-8](ask-user.md#ASK-8)).
+The line is `- <text> (<date>) why: <reason>`, with the text and the reason each flattened to one line, so no newline in either can start a second rule line. It is appended to `~/.bravebot/AGENTS.md` for `home` and to the project's `rules.md` for `project`, which makes the project's directory and its `id` file as a fact's first write does. A file that ends mid-line is not run on to. Each file is backed up before the write, so the session's undo takes the rule back; `AGENTS.md` is the one file outside the fact and rule stores that undo will put back, and only that name in the state directory itself, compared letter for letter. Each question is asked afresh, so a yes is never answered from an earlier one ([ASK-8](ask-user.md#ASK-8)).
 
 `verified-by: bravebot_agent::tools::an_approved_rule_is_appended_with_date_and_why`
 `verified-by: bravebot_agent::tools::a_project_rule_goes_to_the_projects_rules_file_beside_its_id`
@@ -40,6 +40,9 @@ The line is `- <text> (<date>) why: <reason>`, with the text and the reason each
 `verified-by: bravebot_agent::tools::saving_a_rule_asks_the_workspace_to_keep_what_it_replaces`
 `verified-by: bravebot_agent::tools::a_rule_answer_is_never_reused`
 `verified-by: bravebot_agent::rewind::undo_takes_back_a_rule_appended_to_the_home_agents_file`
+`verified-by: bravebot_agent::rewind::undo_does_not_remove_a_home_rules_file_spelled_in_another_case`
+`verified-by: bravebot_agent::rewind::undo_removes_a_home_rules_file_spelled_exactly_that_a_rule_made`
+`verified-by: bravebot_agent::rewind::undo_does_not_write_over_a_home_rules_file_spelled_in_another_case`
 `verified-by: bravebot_agent::rewind::no_other_file_under_the_state_directory_is_put_back_beside_the_home_agents_file`
 
 <a id="RULE-3"></a>
