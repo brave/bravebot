@@ -3191,6 +3191,9 @@ fn run_expanding(plan: &Plan) -> Result<exec::Ran, ExecError> {
 /// Prints the variable named by its first argument, without a newline.
 const PRINT_VARIABLE: &str = "#!/bin/sh\nprintenv \"$1\" | tr -d '\\n'\n";
 
+/// The point of the relaxation: a variable named in an assignment must arrive in the one
+/// process's environment, joined to the literal text around it. Without it the line would run with
+/// the unexpanded `$NAME` or with nothing, and the program would act on the wrong value.
 #[test]
 fn an_expanded_variable_reaches_the_spawned_program() {
     let scratch = Scratch::new("expand-variable");
@@ -3216,6 +3219,9 @@ fn an_expanded_variable_reaches_the_spawned_program() {
     assert!(ran.succeeded());
 }
 
+/// A command's output is delivered the way a shell would deliver it: trailing newlines trimmed,
+/// interior ones kept. A value that kept its trailing newline would differ from what the person
+/// wrote the line expecting, and the program would compare or open the wrong string.
 #[test]
 fn an_expanded_substitution_reaches_the_spawned_program_with_trailing_newlines_trimmed() {
     let scratch = Scratch::new("expand-substitution");
@@ -3260,6 +3266,9 @@ fn an_expanded_substitution_reaches_the_spawned_program_with_trailing_newlines_t
     assert_eq!(run_expanding(&plan).expect("the line runs").stdout, "17");
 }
 
+/// A background start has its own path to the spawn, separate from the foreground run. If only the
+/// foreground resolved assignments, a job started with `background` would get no value, or the
+/// literal `$NAME`, and nothing else in the foreground tests would notice.
 #[test]
 fn an_expansion_reaches_a_job_started_in_the_background() {
     let scratch = Scratch::new("expand-background");
@@ -3309,6 +3318,9 @@ fn an_expansion_reaches_a_job_started_in_the_background() {
     assert_eq!(job.printed().trim(), "bg-valuefrom-sub");
 }
 
+/// An unset variable must not become an empty string: the program would run on a value nobody
+/// chose. The refusal names the variable so the planner can fix the line, and the step never
+/// starts, so no side effect happens on a guess.
 #[test]
 fn an_unset_variable_is_refused_naming_the_variable_and_nothing_runs() {
     let scratch = Scratch::new("expand-unset");
@@ -3335,6 +3347,10 @@ fn an_unset_variable_is_refused_naming_the_variable_and_nothing_runs() {
     assert!(!scratch.path.join("ran").exists(), "the step started");
 }
 
+/// A command that fails has no value to hand on, so the line is refused before the using step
+/// starts. The error says which command and how it ended, but never what it printed, because the
+/// output of a command that exists to produce a value is likely to hold that value or a secret,
+/// and the error goes to the planner and into the trail.
 #[test]
 fn a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output() {
     let scratch = Scratch::new("expand-failing");
@@ -3368,6 +3384,10 @@ fn a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_ou
     }
 }
 
+/// An environment cannot hold a NUL. The line is not refused by looking at what the command
+/// printed, since the output is untrusted and must not steer a decision or a message; the step that
+/// would receive it fails to start instead, and the error is the operating system's words about the
+/// program, with no part of the value in it.
 #[test]
 fn a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value() {
     let scratch = Scratch::new("expand-nul");
@@ -3642,6 +3662,9 @@ fn a_background_start_holds_its_substitution_to_the_calls_deadline() {
     assert!(!scratch.path.join("ran").exists(), "the step started");
 }
 
+/// The variables the subprocess scrub withholds hold credentials. Letting `NAME=$TOKEN` copy one
+/// into a child's environment would undo the scrub, so the line is refused; and the refusal names
+/// the variable but never its value, since the error reaches the planner and the trail.
 #[test]
 fn a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error() {
     let scratch = Scratch::new("expand-withheld");
@@ -3676,6 +3699,9 @@ fn a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error() {
     assert!(!scratch.path.join("ran").exists(), "the step started");
 }
 
+/// The feature exists to pass a secret to one program, so the secret must stay out of everything
+/// bravebot shows or writes: the plan's text, its `Debug` and canonical forms, errors, and the
+/// result of the run. One leak in any of them would put the value in front of the model or on disk.
 #[test]
 fn an_expanded_secret_appears_in_no_plan_text_error_or_result() {
     let scratch = Scratch::new("expand-leak");
