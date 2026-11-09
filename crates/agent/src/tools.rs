@@ -539,6 +539,9 @@ pub struct Tools<'a> {
     /// How many lines ran with a sandbox in this turn and did not exit zero, which a request for
     /// a line with no sandbox is accepted after and not before (SANDBOX-29).
     pub confined_failures: &'a mut ConfinedFailures,
+    /// The slots a check has already said `unsafe` about in this turn, so `read_output` and
+    /// `vet_content` do not check them again (OUTPUT-3).
+    pub objections: &'a mut Objections,
     /// The session whose run prompts may have their answers remembered past it.
     ///
     /// `None` for a turn with nobody to put a prompt to, which reads no record and writes none:
@@ -752,6 +755,33 @@ impl ConfinedFailures {
                 true
             }
         }
+    }
+}
+
+/// The slots a check said `unsafe` about in this turn, which `read_output` and `vet_content` do
+/// not check again (OUTPUT-3).
+///
+/// Holds the slot and nothing else: the word is `unsafe` by being here, the reason the check wrote
+/// is never kept, and a check that could not be made or was stopped leaves nothing, because those
+/// say nothing about the content and the next ask has to check. Filled by the check a `run`,
+/// `fetch_url` or a server's tool makes for `read: true` and read by `read_output` and
+/// `vet_content` before either would make one of its own. Held by the turn, so it ends with it.
+#[derive(Debug, Default)]
+pub struct Objections(std::collections::BTreeSet<SlotId>);
+
+impl Objections {
+    fn note(&mut self, slot: &SlotId) {
+        self.0.insert(slot.clone());
+    }
+
+    /// Whether a check in this turn already said `unsafe` about `slot`, in which case the trail
+    /// says the word was reused and the caller makes no check of its own.
+    fn reuse<S: Sink>(&self, policy: &mut Policy<'_, S>, slot: &SlotId) -> bool {
+        let held = self.0.contains(slot);
+        if held {
+            policy.record_reused_verdict(slot, Verdict::Unsafe);
+        }
+        held
     }
 }
 
@@ -7696,21 +7726,29 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // Skipped only where nothing would read the word: bypassing with no screening asked for answers
     // this question yes without showing anybody anything, so a check there is a model call nobody
     // reads. A verdict is still filled in, and it is the one that claims nothing.
+    //
+    // Not made again for a slot a check in this turn already said `unsafe` about: the run's read
+    // made it, and a second look at the same bytes costs a model request to hear the same word
+    // (OUTPUT-3). The reason that check wrote was not kept, so the prompt is drawn with the word
+    // alone. Only `unsafe` is kept, because a check that could not be made says nothing about the
+    // content.
     let mut spent = Usage::default();
     let mut waited = None;
     let mut unanswered = false;
-    let spec = match tools
+    let checks = tools
         .permission_mode
         .get()
-        .checks_before_promoting(tools.auto_vetting)
-    {
-        false => None,
-        true => match policy.before_vetting(&slot, None, tools.slots) {
+        .checks_before_promoting(tools.auto_vetting);
+    let objected = checks && tools.objections.reuse(policy, &slot);
+    let spec = match (checks, objected) {
+        (false, _) | (true, true) => None,
+        (true, false) => match policy.before_vetting(&slot, None, tools.slots) {
             Ok(spec) => Some(spec),
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
     };
     let (verdict, said) = match &spec {
+        None if objected => (Verdict::Unsafe, (None, None)),
         None => (
             Verdict::Inconclusive("the check was not made"),
             (None, None),
@@ -8072,6 +8110,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     chat: &mut Chat<'_>,
     reporter: &mut R,
+    objections: &mut Objections,
     slot: &SlotId,
 ) -> ReadInTheResult {
     let nothing = |text| ReadInTheResult {
@@ -8122,6 +8161,11 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     };
     let usage = checked.usage;
     let completed = checked.completed;
+    // The word, and only when it is `unsafe`, is kept for `read_output` to reuse. A check that
+    // could not be made is not kept: it says nothing about the content.
+    if checked.verdict == Verdict::Unsafe {
+        objections.note(slot);
+    }
     // Before `release_output`, which would put anything but `safe` to the person: nobody is
     // shown this output here.
     let text = if checked.verdict.is_safe() {
@@ -8472,6 +8516,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     chat: &mut Chat<'_>,
     reporter: &mut R,
+    objections: &mut Objections,
     slot: &SlotId,
     beside: Beside,
 ) -> ReadInTheResult {
@@ -8534,6 +8579,10 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     };
     let usage = checked.usage;
     let completed = checked.completed;
+    // Kept for `vet_content` to reuse, as `read_in_the_result` keeps it for `read_output`.
+    if checked.verdict == Verdict::Unsafe {
+        objections.note(slot);
+    }
     // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
     // shown this result here.
     let text = if checked.verdict.is_safe() {
@@ -8638,9 +8687,15 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // `read_output` carries, and the exemption `docs/specs/permission-modes.md` MODE-4 states from
     // the other side. The vouch offer in `read_file` keeps the plain one: no screening answers it,
     // so under bypass nothing reads that word whatever was asked for.
-    let spec = match mode.checks_before_promoting(tools.auto_vetting) {
-        false => None,
-        true => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
+    //
+    // Not made again for a slot a check in this turn already said `unsafe` about, which is the
+    // check a `fetch_url` or a server's tool made for `read: true` (OUTPUT-3). The reason that
+    // check wrote was not kept, so the prompt is drawn with the word alone.
+    let checks = mode.checks_before_promoting(tools.auto_vetting);
+    let objected = checks && tools.objections.reuse(policy, &slot);
+    let spec = match (checks, objected) {
+        (false, _) | (true, true) => None,
+        (true, false) => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
             Ok(spec) => Some(spec),
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
@@ -8651,6 +8706,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     let mut unanswered = false;
     let mut said = None;
     let verdict = match &spec {
+        None if objected => Verdict::Unsafe,
         None => Verdict::Inconclusive("the check was not made"),
         Some(spec) => {
             let asked_at = std::time::Instant::now();
@@ -26936,6 +26992,7 @@ mod tests {
             let mut jobs = Jobs::default();
             let mut run_directory = RunDirectory::at(workspace.root());
             let mut confined_failures = ConfinedFailures::default();
+            let mut objections = Objections::default();
             body(&mut Tools {
                 workspace,
                 output_cap: OUTPUT_CAP,
@@ -26965,6 +27022,7 @@ mod tests {
                 auto_vetting: false,
                 run_directory: &mut run_directory,
                 confined_failures: &mut confined_failures,
+                objections: &mut objections,
                 confine_runs: false,
                 sandbox: bravebot_sandbox::SandboxMode::default(),
                 asks_about_unconfined: false,

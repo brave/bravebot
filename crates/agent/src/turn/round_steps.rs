@@ -1690,6 +1690,7 @@ pub(super) fn tools_for_a_call<'a>(
         auto_vetting: task.auto_vetting,
         run_directory: &mut state.run_directory,
         confined_failures: &mut state.confined_failures,
+        objections: &mut state.objections,
         confine_runs: task.confine_runs,
         // Read as the call is built, so a mode the person chose while the turn ran is the one this
         // call is decided under, in every one of its decisions (SANDBOX-22).

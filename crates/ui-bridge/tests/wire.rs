@@ -1748,6 +1748,25 @@ fn approval_evidence_is_kept_beside_the_decision() {
         },
     );
     assert_eq!(output["vetting"]["detail"], "offline");
+    // A word reused from an earlier check carries no sentence: the field is null, not missing, and
+    // the verdict is still the word.
+    let reused = wire::output_request(
+        8,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: "content".into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 0,
+            reference: "1".into(),
+            verdict: Verdict::Unsafe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(reused["vetting"]["verdict"], "unsafe");
+    assert!(reused["vetting"]["reason"].is_null());
+    assert!(reused["vetting"]["label"].is_null());
     let vouch = wire::vouch_request(
         9,
         &VouchRequest {

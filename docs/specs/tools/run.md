@@ -1887,6 +1887,9 @@ setting lifts that. The notice is drawn from the mode and the setting and never 
 word other than `safe` and a check that could not be made read alike. In a mode that asks nothing is
 added.
 
+A check that said `unsafe` is not made again for the same slot in the turn. `read_output` on that
+slot uses the word ([OUTPUT-3](read-output.md#OUTPUT-3), [CHECK-12](../vetting.md#CHECK-12)).
+
 A check the person stops is neither of those ([CHECK-16](../vetting.md#CHECK-16)). The turn ends as
 stopped once the run's result is recorded, the output stays quarantined and is not refused, and
 `read_output` can be called for it in a later turn.
@@ -1952,6 +1955,9 @@ decide it.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
+`verified-by: bravebot_agent::turn::read_output_does_not_check_again_a_slot_the_runs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::read_output_checks_a_slot_the_runs_check_could_not_judge`
+`verified-by: bravebot_agent::turn::a_run_check_the_person_stopped_leaves_nothing_for_read_output_to_reuse`
 `verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_a_person_still_answers_for_it`
 `verified-by: bravebot_agent::turn::a_background_line_cannot_ask_to_read_what_it_printed`
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`

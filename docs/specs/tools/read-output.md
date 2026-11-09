@@ -114,7 +114,8 @@ what it said, and it is [vetting.md](../vetting.md).
 A confined check reads the slot before this prompt is drawn, and the word it gave and the sentence
 it wrote are on the screen with the bytes. This is [CHECK-10](../vetting.md#CHECK-10) and the
 reasoning is there; what is here is that a `read_output` prompt is one of the three it covers, and
-that the check runs before the question rather than after the answer.
+that the check runs before the question rather than after the answer, except that an `unsafe` word
+from an earlier check on the same slot in the same turn is reused and no second check is made (below).
 
 No expectation is sent with it. The planner asked for the output to be read, not for it to be
 checked, and it has said nothing about what the command printed.
@@ -130,6 +131,14 @@ A check the person stopped is neither a refusal nor an inconclusive check ([CHEC
 The turn ends as stopped, nobody is asked, and the result tells the planner the turn was stopped
 before the check finished, so nothing was decided about the output. The slot is not refused and
 stays readable by a later `read_output`.
+
+A check that said `unsafe` for this slot earlier in the turn, as a `run` that passed `read: true`
+([RUN-22](run.md#RUN-22)) or a `fetch_url` or server's tool that did ([VET-6](vet-content.md#VET-6))
+had it made, is not made again. The prompt is drawn with that word and no sentence, since the sentence
+is not kept ([CHECK-9](../vetting.md#CHECK-9)), and where nobody is asked the output stays refused. The
+trail says the word was reused. A `safe` word is not kept because the output was released with it, and
+a check that could not be made or was stopped is not kept because it said nothing about the content, so
+`read_output` makes its own check after those. [CHECK-12](../vetting.md#CHECK-12) has the rule.
 
 A run bypassing permissions draws none, and there the verdict is the whole of the answer: nothing
 found releases the output and every other verdict keeps it back, the refusal being what the screening
@@ -148,6 +157,12 @@ the mode and the setting and never from the verdict. Where a person was asked an
 added.
 
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
+`verified-by: bravebot_agent::turn::read_output_does_not_check_again_a_slot_the_runs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::read_output_asks_with_the_earlier_unsafe_word_and_makes_no_second_check`
+`verified-by: bravebot_agent::turn::read_output_checks_a_slot_the_runs_check_could_not_judge`
+`verified-by: bravebot_agent::turn::a_run_check_the_person_stopped_leaves_nothing_for_read_output_to_reuse`
+`verified-by: bravebot_tui::confirm::vet::the_output_prompt_draws_an_unsafe_word_that_has_no_sentence`
+`verified-by: bravebot_ui_bridge::wire::approval_evidence_is_kept_beside_the_decision`
 `verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
 `verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_started_after_private_content_has_no_processors`

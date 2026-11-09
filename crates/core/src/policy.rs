@@ -8178,6 +8178,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a read used the word an earlier check in the turn gave for this slot instead of
+    /// asking for another (CHECK-12, OUTPUT-3).
+    ///
+    /// The word is from a fixed set and the slot is a reference the planner was shown, so the line
+    /// holds nothing a check wrote. It is the entry a reader finds in place of a second `vetting`
+    /// line.
+    pub fn record_reused_verdict(&mut self, slot: &SlotId, verdict: crate::vetting::Verdict) {
+        self.allow(
+            "vetting",
+            format!("{slot}: an earlier check in this turn said {verdict}, so none was made again"),
+        );
+    }
+
     /// The note [`Policy::record_note`] kept, once.
     pub fn take_note(&mut self) -> Option<Labelled<String>> {
         self.told.take()
