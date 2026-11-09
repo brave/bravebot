@@ -16830,6 +16830,93 @@ fn a_planner_shown_private_content_can_instruct_a_processor() {
     }
 }
 
+/// A private instruction reaches the model `processorModel` names, though that model was shown
+/// nothing the planner holds (`processors.md` PROC-4, PROC-13). The person who named it chose to send
+/// it what the planner writes into the instruction. The regression it rejects is a call refused, or
+/// sent to the turn's own model, because the context holds private content and the setting names
+/// another model.
+///
+/// The context is private by the read of a command's output, as in the test above, and the
+/// instruction quotes what was read.
+#[test]
+fn a_private_instruction_is_sent_to_the_model_processor_model_names() {
+    let scratch = Scratch::new("processor-private-other-model");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("mail.txt"), "SENTINEL-MAIL\n").unwrap();
+
+    let mut planner = vec![
+        tool_request("run", r#"{"command":"sed -n p mail.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"say that the mail reads SENTINEL-MAIL"}"#,
+        ),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        if body.contains("You are an isolated processor") {
+            Some(Some(
+                processor_reply("PROCESSED").replace("test-model", "a-cheap-processor-model"),
+            ))
+        } else {
+            planner.next().map(Some)
+        }
+    });
+    let mut config = config_for(&endpoint);
+    config.processor_model = Some("a-cheap-processor-model".to_string());
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what does the mail say").with_model(Some("the-planners-model".to_string())),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(
+        conversation.holds(),
+        bravebot_core::label::Confidentiality::Private,
+        "the planner read the output and its context stayed public, so nothing here was tested"
+    );
+    let sent = every_request(&received);
+    let processors: Vec<&String> = sent
+        .iter()
+        .filter(|body| !body.contains(A_CHECK_ASKING))
+        .filter(|body| body.contains("You are an isolated processor"))
+        .collect();
+    assert_eq!(
+        processors.len(),
+        1,
+        "the planner holding private content was not given a processor: {sent:?}"
+    );
+    let request: serde_json::Value =
+        serde_json::from_str(processors[0]).expect("the processor request is JSON");
+    assert_eq!(
+        request["model"], "a-cheap-processor-model",
+        "the processor ran on a model other than the one the setting named: {}",
+        processors[0]
+    );
+    assert!(
+        processors[0].contains("say that the mail reads SENTINEL-MAIL"),
+        "the processor was not sent the planner's instruction: {}",
+        processors[0]
+    );
+}
+
 /// A planner that holds private content is pointed at a processor by a quarantined result, as one
 /// that holds none is, and the call reaches one (`processors.md` PROC-4). The regression it rejects
 /// is a result that leaves the move out, or a call refused, because the planner read an earlier

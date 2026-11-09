@@ -90,10 +90,12 @@ What the planner writes is private once its context holds private content, which
 a delegate, the private content its parent's context held when it was started
 ([DELEGATE-8](delegation.md#DELEGATE-8)). A processor is started all the same, in a delegate as in
 the session. The instruction goes to the model the turn runs on, or to the one the person named in
-`processorModel` ([PROC-13](#PROC-13)), together with the slots it reads whole, so a private
-instruction sends that model nothing it is not already given. The instruction's label is part of
-the output's ([PROC-3](#PROC-3)), which keeps an instruction that quotes private content from
-making a public-looking answer. A reference made in a context that holds private content is
+`processorModel` ([PROC-13](#PROC-13)), together with the slots it reads whole. The turn's own model
+is sent nothing by a private instruction that it was not already given. A model `processorModel`
+names was not necessarily shown what the planner was, and the instruction may quote it, so a person
+who names one has chosen to send that model what the planner writes into an instruction. The
+instruction's label is part of the output's ([PROC-3](#PROC-3)), which keeps an instruction that
+quotes private content from making a public-looking answer. A reference made in a context that holds private content is
 described as any other is, and the tool's description says nothing of the context.
 
 **Why.** A processor is the way to work on a long output without reading it. A planner refused one
@@ -102,6 +104,7 @@ reads the whole output with `read_output` instead, or runs a filter on it, which
 about every time ([RUN-6](tools/run.md#RUN-6)).
 
 `verified-by: bravebot_agent::turn::a_planner_shown_private_content_can_instruct_a_processor`
+`verified-by: bravebot_agent::turn::a_private_instruction_is_sent_to_the_model_processor_model_names`
 `verified-by: bravebot_core::policy::a_planner_that_holds_private_content_can_instruct_a_processor`
 `verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_answer_over_a_public_page`
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
@@ -305,8 +308,11 @@ The name is configuration, not content. It is read from the person's own setting
 file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
 a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
 file content chooses it, so the destination of a processor's input stays the one the person
-configured. `--processor-model` ([CLI-34](cli.md#CLI-34)) names it for one run from the person's own
-command line and outranks the file.
+configured. A private instruction is sent to that model as any other is ([PROC-4](#PROC-4)): the
+model may not have been shown what the planner was and the instruction may quote it, so naming a
+model other than the turn's is choosing to send it that text. `--processor-model`
+([CLI-34](cli.md#CLI-34)) names it for one run from the person's own command line and outranks the
+file.
 
 A model that needs a sign-in this machine has not made, that the managed layer refuses
 ([BACKEND-48](backends.md#BACKEND-48)), or that no configured service answers for is not swapped
@@ -336,6 +342,7 @@ bytes ([PROC-12](#PROC-12)).
 `verified-by: bravebot_agent::turn::a_processor_with_no_configured_model_runs_on_the_turns_own`
 `verified-by: bravebot_agent::turn::a_processor_model_needing_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::a_processor_answered_by_another_model_than_the_configured_one_says_so`
+`verified-by: bravebot_agent::turn::a_private_instruction_is_sent_to_the_model_processor_model_names`
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed`
 
 <a id="PROC-14"></a>
