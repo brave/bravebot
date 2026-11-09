@@ -3138,7 +3138,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     );
 }
 
-// --- NAME=$VAR and NAME="$(cmd)" in front of a step, worked out when the step starts ---------
+// --- NAME=$VAR and NAME="$(cmd)" in front of a step, worked out before the pipeline starts ---
 
 use bravebot_core::command::{Expansion, Plan, Step, Steps, ValuePart};
 
@@ -3404,9 +3404,6 @@ fn a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not
             )],
         )],
     );
-    // The line is not refused for what the command printed: nothing here looks at the output. The
-    // environment cannot hold a NUL, so the step that would receive it does not start, and the
-    // error is the operating system's words about the program, with no part of the value.
     let error = run_expanding(&plan).expect_err("a NUL reached a program's environment");
     assert!(
         matches!(&error, ExecError::NotStarted { program, .. } if program == "print.sh"),
