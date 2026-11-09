@@ -955,6 +955,11 @@ A delegate started after the planner has been shown private content (by `read_ou
 not offered `spawn_processor`. Start a task that needs a picture or a file looked at before then, or
 leave it to the person. A delegate that is told it cannot say so in its report.
 
+A delegate is never offered `vet_content`, `ask_user`, `fetch_url` or `download_url`, and the
+description of `spawn_agent` tells the planner so. Work that needs one of them, such as reading a
+reference whole with `vet_content`, is done by the planner before it delegates or instead of
+delegating. A tool the session does not offer is not named in that sentence.
+
 A call that names a kind the run was not offered because it does not hold what the kind needs is
 still answered by the same rules. A delegate started that way is narrowed to what the run holds, and
 the message that says it has started names what it was started without, for example "It was started

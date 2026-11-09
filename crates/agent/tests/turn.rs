@@ -65432,6 +65432,25 @@ fn a_delegate_is_not_told_to_use_a_tool_it_is_not_offered() {
             "vet_content"
         ));
         assert!(names(&description_in(first, "read_output"), "vet_content"));
+
+        // The planner writing the task is told what the delegate cannot call. The delegate, which
+        // holds none of the four, is told nothing of them where it is offered the tool at all.
+        let told_the_planner = description_in(first, "spawn_agent");
+        for tool in ["vet_content", "ask_user", "fetch_url", "download_url"] {
+            assert!(names(&told_the_planner, tool), "{kind}: {told_the_planner}");
+        }
+        let parsed: serde_json::Value = serde_json::from_str(last).expect("a request");
+        for offered in parsed["tools"].as_array().expect("tools offered") {
+            let name = offered["function"]["name"].as_str().expect("a name");
+            assert!(
+                !["vet_content", "ask_user", "fetch_url", "download_url"].contains(&name),
+                "{kind}: the delegate was offered {name}"
+            );
+            if name == "spawn_agent" {
+                let said = offered["function"]["description"].as_str().expect("text");
+                assert!(!said.contains("A delegate cannot call"), "{kind}: {said}");
+            }
+        }
     }
 }
 

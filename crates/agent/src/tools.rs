@@ -16852,6 +16852,98 @@ mod tests {
         );
     }
 
+    /// A planner writes a delegate's task, so the description of `spawn_agent` tells it, beside the
+    /// sentence about processors, that a delegate cannot call `vet_content`, `ask_user`, `fetch_url`
+    /// or `download_url` and that work needing one is the planner's own to do before delegating or
+    /// instead. Each of the four is named only where the turn's list holds it (TOOL-6), and a
+    /// delegate's own list, which holds none, is told nothing of it.
+    ///
+    /// Rejects: a description silent about the tools, one that names them but gives no way on, one
+    /// that names all four in every list, and one that is written for the planner's list and left
+    /// as it was on a delegate's.
+    #[test]
+    fn the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch() {
+        use bravebot_core::delegate::{Definition, Definitions, Kind};
+
+        // What follows the sentence about processors, up to the sentence on cost.
+        fn lacks(description: &str) -> String {
+            let (_, after) = description
+                .split_once("or leave it to the person.")
+                .expect("the processors sentence is in the description");
+            let (lacks, _) = after
+                .split_once(" Do not use it for something one read would answer")
+                .expect("the sentence on cost is in the description");
+            lacks.to_string()
+        }
+
+        let everything = lacks(&description_of(&the_table_without(&[]), "spawn_agent"));
+        assert_eq!(
+            everything,
+            " A delegate cannot call vet_content, ask_user, fetch_url or download_url, so do \
+             work that needs one of them yourself, before you delegate or instead of \
+             delegating. A reference that has to be read whole is read by you with vet_content."
+        );
+
+        let four = ["vet_content", "ask_user", "fetch_url", "download_url"];
+        for gone in four {
+            let said = lacks(&description_of(&the_table_without(&[gone]), "spawn_agent"));
+            assert!(
+                !names_the_tool(&said, gone),
+                "{gone} is not on the list: {said}"
+            );
+            for kept in four.iter().filter(|kept| **kept != gone) {
+                assert!(
+                    names_the_tool(&said, kept),
+                    "taking {gone} off the list dropped {kept}: {said}"
+                );
+            }
+            assert_eq!(
+                names_the_tool(&said, "vet_content"),
+                gone != "vet_content",
+                "{said}"
+            );
+            assert_eq!(
+                said.contains("read by you with vet_content"),
+                gone != "vet_content",
+                "{said}"
+            );
+        }
+        let one = lacks(&description_of(
+            &the_table_without(&["ask_user", "fetch_url", "download_url"]),
+            "spawn_agent",
+        ));
+        assert_eq!(
+            one,
+            " A delegate cannot call vet_content, so do work that needs it yourself, before you \
+             delegate or instead of delegating. A reference that has to be read whole is read by \
+             you with vet_content."
+        );
+        let none = description_of(&the_table_without(&four), "spawn_agent");
+        assert!(!none.contains("A delegate cannot call"), "{none}");
+        assert_eq!(lacks(&none), "");
+
+        // A delegate that may delegate is offered none of the four, so it is told nothing of them.
+        let mut delegates = Definitions::default();
+        delegates.insert(Definition::from_file(
+            "rule-reviewer",
+            "Checks a diff against the rule.",
+            Kind::Reader,
+            None,
+            "",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+        let mut held = for_delegate(
+            &Kind::Worker.capabilities(),
+            None,
+            Some(&delegates),
+            Deadlines::BUILT_IN,
+        );
+        state_what_is_beside(&mut held);
+        let delegate = description_of(&held, "spawn_agent");
+        assert!(!delegate.contains("A delegate cannot call"), "{delegate}");
+        assert_eq!(lacks(&delegate), "");
+    }
+
     /// A planner is told before it starts a delegate that one started after private content was
     /// shown cannot run processors, that being shown output is what closes them for it and for
     /// its delegates, and that a task needing a picture or a file looked at goes first or to the

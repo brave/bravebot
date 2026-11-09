@@ -36,7 +36,14 @@ is not offered the kind that writes ([DELEGATE-32](../delegation.md#DELEGATE-32)
 advisory, and a name outside the resolved set is refused ([DELEGATE-3](../delegation.md#DELEGATE-3)).
 
 The description says that a delegate started after the planner was shown private content cannot run
-processors, and that a task needing a picture or a file looked at goes first or to the person. The
+processors, and that a task needing a picture or a file looked at goes first or to the person. It
+also says that a delegate cannot call `vet_content`, `ask_user`, `fetch_url` or `download_url`, so
+work that needs one of them is done by the planner before it delegates or instead of delegating, and
+that a reference which has to be read whole is read by the planner with `vet_content`
+([DELEGATE-12](../delegation.md#DELEGATE-12), [VET-2](vet-content.md#VET-2)). Each of the four is
+named only where the turn's list holds it, and the sentence is left out of a list that holds none of
+them, which a delegate's list does ([TOOL-6](tool-surface.md#TOOL-6)). The `kind` parameter's lines
+do not repeat it: a kind is what a delegate may hold, and these four are left out of every kind. The
 `reader` kind text does not promise processors without condition
 ([DELEGATE-8](../delegation.md#DELEGATE-8)).
 
@@ -44,6 +51,8 @@ processors, and that a task needing a picture or a file looked at goes first or 
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
 `verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
 
 <a id="AGENT-2"></a>
 ### AGENT-2: `task` is the whole of what the delegate is told, and it may not be private

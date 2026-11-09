@@ -76,7 +76,9 @@ a reference names `vet_content` only to a run whose list of tools holds it, so a
 definition or command line left it out is not sent to it either. The refusal of `read_output` for
 a reference no program printed names `vet_content` on the same condition, and the description of
 `vet_content` names `spawn_processor` only where the list holds it
-([TOOL-6](tool-surface.md#TOOL-6)).
+([TOOL-6](tool-surface.md#TOOL-6)). The planner is told in the `spawn_agent` description that a
+delegate cannot call `vet_content`, so a reference that has to be read whole is read by the planner
+and not left to a task ([AGENT-1](spawn-agent.md#AGENT-1)).
 
 `verified-by: bravebot_core::policy::a_check_over_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_picture_is_never_promoted_as_text_whoever_endorsed_it`
@@ -91,6 +93,7 @@ a reference no program printed names `vet_content` on the same condition, and th
 `verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
 `verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
 `verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
 <a id="VET-3"></a>
 ### VET-3: the result is the bytes, or a refusal that says to work without them

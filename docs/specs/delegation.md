@@ -144,7 +144,9 @@ that cannot think.
 
 A delegate naming a tool that reaches the network anyway is answered the way any other unknown
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
-tool list is written out a second time as a refusal.
+tool list is written out a second time as a refusal. The planner is told in the `spawn_agent`
+description that a delegate cannot call `fetch_url` or `download_url`
+([AGENT-1](tools/spawn-agent.md#AGENT-1)).
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
@@ -154,6 +156,7 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 `verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
@@ -682,6 +685,12 @@ a rule resting on the tool list alone rests on the model reading it.
 
 What it could not settle goes in the report, and the parent asks.
 
+The planner is told this when it writes the task: the `spawn_agent` description says a delegate
+cannot call `ask_user`, `vet_content`, `fetch_url` or `download_url`, and that work needing one is
+done by the planner before it delegates or instead of delegating
+([AGENT-1](tools/spawn-agent.md#AGENT-1)). Without it, a task that says to call one of them sends
+the delegate to a name it is never offered.
+
 It needs no way to ask for reach to a path where its parent's turn is in bypass: the mode it is
 lent reaches a path outside the workspace for its file tools, its redirections and its `run`
 directory ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), and its programs are given what a
@@ -692,6 +701,7 @@ ask for each path, a delegate's program that writes outside the session's direct
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
 <a id="DELEGATE-13"></a>
 ### DELEGATE-13: one trail records both runs

@@ -232,7 +232,10 @@ paragraph on watching a program, and `read_output` in its `read` argument, each 
 holds it. `read_file` names `spawn_processor` for a picture, a PDF and the saved outputs of a
 notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_processor` in its
 `contents_ref` argument, `edit_file` names `write_file`, `repo_map` and `lsp` name `read_file`, and
-`vet_content` names `spawn_processor`, each only where the list holds it.
+`vet_content` names `spawn_processor`, each only where the list holds it. The description of
+`spawn_agent` names `vet_content`, `ask_user`, `fetch_url` and `download_url`, as the tools a
+delegate cannot call, each only where the list holds it, and says nothing of them where it holds
+none ([AGENT-1](spawn-agent.md#AGENT-1)).
 
 Two refusals are written from the list rather than from the policy's general denial. That denial
 ends "Use a reference to it instead", which neither tool can follow: neither returns a reference at
@@ -294,6 +297,7 @@ tool as the control.
 `verified-by: bravebot_agent::turn::a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_only_if_offered`
 `verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had`
 `verified-by: bravebot_agent::tools::the_processor_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::tools::the_write_to_a_file_is_described_only_where_the_list_holds_write_file`
 `verified-by: bravebot_agent::tools::the_read_output_description_names_vet_content_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered`
