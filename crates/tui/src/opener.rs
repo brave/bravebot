@@ -468,10 +468,12 @@ mod tests {
     /// leaves `gio open` with no handler and starts nothing.
     ///
     /// In generic mode `xdg-open` asks `xdg-mime` for the handler of `https` only when it sees a
-    /// display (`has_display` in `xdg-open.in`: `DISPLAY` or `WAYLAND_DISPLAY` not empty), so the
-    /// generic run sets `WAYLAND_DISPLAY` to a name no socket has and removes `DISPLAY`. Nothing
-    /// connects to a display on that path: the only programs that could, `xprop` in `detectDE` and
-    /// an X client, read `DISPLAY`. `DBUS_SESSION_BUS_ADDRESS` is removed in that mode so the
+    /// display (`has_display` in `xdg-open.in`: `DISPLAY` or `WAYLAND_DISPLAY` not empty), so a
+    /// generic run that gives no display sets `WAYLAND_DISPLAY` to a name no socket has, and the
+    /// generic-mode test gives `DISPLAY` set to `:9999`, which no X server answers. Nothing
+    /// connects to a real display on that path: the only programs that could, `xprop` in `detectDE`
+    /// and an X client, read `DISPLAY`. `DBUS_SESSION_BUS_ADDRESS` is removed in every run that
+    /// sets no `XDG_CURRENT_DESKTOP` so the
     /// `dbus-send` probe in `detectDE` cannot name GNOME. `BROWSER` names an installed stand-in
     /// that records `fallback-ran`, which the generic path runs after the handler lookup finds
     /// nothing; with `BROWSER` unset and a display it would try `x-www-browser`, `firefox` and
@@ -606,10 +608,17 @@ mod tests {
                 for (name, set) in desktop {
                     command.env(name, set);
                 }
-                if desktop.is_empty() {
-                    command
-                        .env("WAYLAND_DISPLAY", "bravebot-test-no-such-display")
-                        .env_remove("DBUS_SESSION_BUS_ADDRESS");
+                // Generic mode is a run that sets no desktop environment of its own. It must not
+                // see the runner's session bus, whose `dbus-send` probe in `detectDE` could name
+                // GNOME, and it needs a display variable for `has_display`.
+                if !desktop
+                    .iter()
+                    .any(|(name, _)| *name == "XDG_CURRENT_DESKTOP")
+                {
+                    command.env_remove("DBUS_SESSION_BUS_ADDRESS");
+                    if !desktop.iter().any(|(name, _)| *name == "DISPLAY") {
+                        command.env("WAYLAND_DISPLAY", "bravebot-test-no-such-display");
+                    }
                 }
                 command
                     .env("XDG_UTILS_DEBUG_LEVEL", "3")
@@ -740,8 +749,8 @@ mod tests {
     ///
     /// The run removes every variable that names a desktop environment and `DBUS_SESSION_BUS_ADDRESS`,
     /// so `xdg-open` takes its generic path. That path asks `xdg-mime` for the handler of `https` only
-    /// when a display is set (`has_display` in `xdg-open.in`), so the run names a `WAYLAND_DISPLAY`
-    /// no socket has ([`handler_run_by`] says why that starts nothing). It also skips where
+    /// when a display is set (`has_display` in `xdg-open.in`), so the run sets `DISPLAY` to a number no
+    /// X server answers ([`handler_run_by`] says why that starts nothing). It also skips where
     /// `/etc/xdg/mimeapps.list` exists, since a removed `XDG_CONFIG_DIRS` falls back to it and it could
     /// name a real browser.
     #[cfg(unix)]
@@ -772,11 +781,12 @@ mod tests {
             "XDG_DATA_DIRS",
         ] {
             // `xdg-open` 1.2.1 looks up a scheme handler in generic mode only when `DISPLAY` or
-            // `WAYLAND_DISPLAY` is set. The handlers are scripts that connect to nothing.
+            // `WAYLAND_DISPLAY` is set. `DISPLAY` names a number no X server answers, so `xprop`
+            // in `detectDE` cannot reach a real one. The handlers are scripts that connect to nothing.
             let ran = handler_run_by(
                 "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode",
                 variable,
-                &[("DISPLAY", ":0")],
+                &[("DISPLAY", ":9999")],
                 &opener,
             );
             match ran {
