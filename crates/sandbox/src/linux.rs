@@ -2558,15 +2558,91 @@ mod tests {
                     &Environment::Inherited,
                 )
                 .expect("every row is there when the policy is opened");
+            let untouched = sandbox
+                .command(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    &Environment::Inherited,
+                )
+                .expect("every row is there when the policy is opened")
+                .stdin(std::process::Stdio::null())
+                .status();
+            if !matches!(&untouched, Ok(status) if status.success()) {
+                wrong.push(format!(
+                    "{case}: did not start while the row was untouched: {untouched:?}"
+                ));
+                continue;
+            }
             std::fs::remove_dir(&row).expect("the row is removable");
             std::fs::create_dir(&row).expect("the replacement is creatable");
             let after = command.stdin(std::process::Stdio::null()).status();
-            if after.is_ok() {
-                wrong.push(format!(
-                    "{case}: started after the row was replaced: {after:?}"
-                ));
+            match &after {
+                Err(error) if error.raw_os_error() == Some(libc::ESTALE) => {}
+                other => wrong.push(format!(
+                    "{case}: the exec after the row was replaced was not refused with ESTALE: {other:?}"
+                )),
             }
             std::fs::remove_dir(&row).expect("the replacement is removable");
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A named row is looked up again at the exec by its path bytes, so one whose name is not
+    /// UTF-8 has to lead to the directory that was opened for it, and must not be mistaken for the
+    /// directory a lossy conversion of its name would lead to (PATH-003).
+    ///
+    /// The regression it rejects: an exec-time look-up built from the lossy form of the name. It
+    /// would find the lookalike `row-\u{FFFD}`, which is a different directory (ESTALE), where the
+    /// name that was opened is gone (ENOENT).
+    #[test]
+    fn a_named_row_whose_name_is_not_text_starts_and_is_kept_apart_from_its_lossy_lookalike() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-named-row-not-text");
+        let row = top.join(OsStr::from_bytes(b"row-\xff"));
+        let lookalike = top.join("row-\u{FFFD}");
+        std::fs::create_dir_all(&row).expect("the directory is creatable");
+        std::fs::create_dir_all(&lookalike).expect("the lookalike is creatable");
+        let start = |policy: &SandboxPolicy| {
+            sandbox
+                .command(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    &Environment::Inherited,
+                )
+                .expect("every row is there when the policy is opened")
+                .stdin(std::process::Stdio::null())
+                .status()
+        };
+
+        let mut wrong = Vec::new();
+        let untouched = start(&loadable_policy().allow_read(&row));
+        if !matches!(&untouched, Ok(status) if status.success()) {
+            wrong.push(format!(
+                "did not start while the row was there: {untouched:?}"
+            ));
+        }
+
+        let mut command = sandbox
+            .command(
+                OsStr::new("/bin/true"),
+                &[],
+                &loadable_policy().allow_read(&row),
+                &Environment::Inherited,
+            )
+            .expect("every row is there when the policy is opened");
+        std::fs::remove_dir(&row).expect("the row is removable");
+        let after = command.stdin(std::process::Stdio::null()).status();
+        match &after {
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {}
+            other => wrong.push(format!(
+                "the exec after the row went was not refused with ENOENT, though its lossy lookalike is there: {other:?}"
+            )),
         }
 
         let _ = std::fs::remove_dir_all(&top);
