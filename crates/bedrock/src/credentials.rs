@@ -1333,6 +1333,29 @@ mod tests {
         assert!(!withheld("BROWSER", &genuine, &session));
     }
 
+    /// SANDBOX-30. A list in `XDG_DATA_DIRS` or `XDG_CONFIG_DIRS` is judged entry by entry on the
+    /// disk. The regression it rejects: a list judged as one path, which names no directory, so a
+    /// person's list of installed directories is removed from the sign-in.
+    #[test]
+    fn an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept() {
+        let (session, planted, _genuine, safe) = planted_and_genuine("credentials-xdg-list");
+        let inner = safe.join("share");
+        std::fs::create_dir_all(&inner).unwrap();
+        let genuine_list = std::env::join_paths([&inner, &safe]).unwrap();
+        let mixed_list = std::env::join_paths([&inner, planted.parent().unwrap()]).unwrap();
+
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(
+                !withheld(name, Path::new(&genuine_list), &session),
+                "{name}: a genuine list"
+            );
+            assert!(
+                withheld(name, Path::new(&mixed_list), &session),
+                "{name}: a list with a directory a stage may write"
+            );
+        }
+    }
+
     /// The directories the CLI's bundled OpenSSL loads engines, providers and included
     /// configuration from are held to the same check as the file that names them.
     #[test]

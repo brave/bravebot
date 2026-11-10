@@ -614,6 +614,11 @@ mod tests {
         assert!(!withheld("XDG_DATA_DIRS", genuine_dir, &session));
         assert!(withheld("XDG_CONFIG_DIRS", Path::new(&mixed), &session));
         assert!(!withheld("XDG_CONFIG_DIRS", genuine_dir, &session));
+        // A list whose every entry is outside the directories a stage may write is kept. The
+        // regression it rejects: a list judged as one path, which names no directory.
+        let genuine_list = joined(&[genuine_dir, genuine_dir.parent().unwrap()]);
+        assert!(!withheld("XDG_DATA_DIRS", &genuine_list, &session));
+        assert!(!withheld("XDG_CONFIG_DIRS", &genuine_list, &session));
     }
 
     /// A `BROWSER` entry that is not text is judged as the bytes it is: a lossy rendering would

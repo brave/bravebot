@@ -592,24 +592,32 @@ mod tests {
         let outside = |path: &Path| {
             bravebot_sandbox::programs::outside_stage_writable_with(path, &writable, &[])
         };
-        let removed = |value: &Path| {
+        let removed_for = |name: &str, value: &OsStr| {
             opening_against(
                 &Resolved::found_earlier("/usr/bin/open"),
                 &[],
-                [(
-                    OsString::from("XDG_DATA_HOME"),
-                    value.as_os_str().to_os_string(),
-                )],
+                [(OsString::from(name), value.to_os_string())],
                 &outside,
             )
             .get_envs()
-            .any(|(set, now)| set == OsStr::new("XDG_DATA_HOME") && now.is_none())
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
         };
+        let removed = |value: &Path| removed_for("XDG_DATA_HOME", value.as_os_str());
 
         assert!(removed(&planted));
         assert!(removed(&link));
         assert!(removed(&safe.join("missing")));
         assert!(!removed(&genuine));
+
+        // A list is judged entry by entry. The regression it rejects: a list judged as one path,
+        // which names no directory on the disk, so a person's list of installed directories is
+        // removed.
+        let genuine_list = std::env::join_paths([&genuine, &safe]).unwrap();
+        let mixed_list = std::env::join_paths([&genuine, &link]).unwrap();
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(!removed_for(name, &genuine_list), "{name}: a genuine list");
+            assert!(removed_for(name, &mixed_list), "{name}: a list with a link");
+        }
     }
 
     /// What a command was told to unset, which is how `env_remove` reads back.

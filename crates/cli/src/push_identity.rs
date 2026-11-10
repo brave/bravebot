@@ -842,6 +842,30 @@ mod tests {
         (session, safe, planted, genuine)
     }
 
+    /// SANDBOX-30. A list in `XDG_DATA_DIRS` or `XDG_CONFIG_DIRS` is judged entry by entry on the
+    /// disk. The regression it rejects: a list judged as one path, which names no directory, so a
+    /// person's list of installed directories is removed from the programs started here.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here()
+     {
+        let (session, safe, planted, _genuine) = planted_and_genuine("xdg-list");
+        let inner = safe.path.join(".venv");
+        let genuine_list = std::env::join_paths([&inner, &safe.path]).unwrap();
+        let mixed_list = std::env::join_paths([&inner, planted.parent().unwrap()]).unwrap();
+
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(
+                !withheld(name, Path::new(&genuine_list), &session.path),
+                "{name}: a genuine list"
+            );
+            assert!(
+                withheld(name, Path::new(&mixed_list), &session.path),
+                "{name}: a list with a directory a stage may write"
+            );
+        }
+    }
+
     /// The regression it rejects: starting `ssh` with `SSH_ASKPASS` as the person set it, so a
     /// program a stage wrote is run to ask for a passphrase, outside confinement. The variable
     /// names a program this command has no use for, so it is taken off whatever it holds.
