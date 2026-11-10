@@ -11,8 +11,7 @@ state for everything after it.
 The clauses are `LAYER-3` in `docs/specs/layering.md`, which has the presentation crates show
 quarantined content with its control characters replaced, `VIEW-3` and `VIEW-4` in
 `docs/specs/terminal-transcript.md`, `PROMPT-1` in `docs/specs/prompting.md` and `OUTPUT-1` in
-`docs/specs/tools/read-output.md`. The functions that make text safe to draw are `printable` in
-`crates/tui/src/render.rs` and in `crates/approval/src/lib.rs`, which replace control characters,
+`docs/specs/tools/read-output.md`. The functions that make text safe to draw are `printable` and `printable_with_tab_pictured` in `crates/agent/src/confirm.rs`, which replace control characters (`crates/tui/src/render.rs` and `crates/cli/src/progress.rs` name them `printable` too),
 `draws_as_nothing` and `spelled` in `crates/core/src/invisible.rs`, which list and write out the
 characters that draw as nothing, `shown_name` in `crates/agent/src/confirm.rs` and `pictured` in
 `crates/ui-bridge/src/acp.rs`. Read what each one replaces before you judge a site. A site that

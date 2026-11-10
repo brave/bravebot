@@ -601,12 +601,15 @@ fn template(plan: &Manifest) -> String {
 /// question that has to be answered before anything runs, and the record left behind. A step
 /// described one way in the question and another in the record leaves nobody able to say afterwards
 /// what was approved.
+///
+/// The files a step names are drawn through [`crate::confirm::shown_name`], as every other prompt
+/// draws a file. Which fields those are is the tool's contract, never the value.
 fn numbered(plan: &Manifest, index: usize) -> String {
     format!(
         "{}. [{}] {}",
         index + 1,
         plan.steps()[index].tier(),
-        plan.describe_step(index)
+        plan.describe_step_spelled(index, &crate::confirm::shown_name)
     )
 }
 
@@ -1401,9 +1404,14 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 step.tool()
             )));
         };
-        let activity = Activity::running(entry.capability, step.describe())
-            .for_call(crate::report::CallId::next())
-            .of_tool(step.tool());
+        // Spelled as the summary, the question and the record spell it. The activity does not say
+        // it names a file, so its screen does not spell the line a second time.
+        let activity = Activity::running(
+            entry.capability,
+            plan.describe_step_spelled(index, &crate::confirm::shown_name),
+        )
+        .for_call(crate::report::CallId::next())
+        .of_tool(step.tool());
         reporter.tool_started(activity.clone());
 
         // Wrapped per step for the same reason the turn loop wraps per call: the borrow has to go
@@ -2446,6 +2454,94 @@ fn write<S: Sink, C: Confirmer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::confirm::shown_name;
+
+    /// A plan whose only file-naming steps use `names` as the path of a read and a write.
+    fn plan_naming(names: &[&str]) -> Manifest {
+        let mut steps = Vec::new();
+        for (index, name) in names.iter().enumerate() {
+            steps.push(
+                DraftStep::new("read_file")
+                    .with_text("path", *name)
+                    .with_text("out_slot", format!("s{index}")),
+            );
+        }
+        steps.push(
+            DraftStep::new("write_file")
+                .with_text("path", names[0])
+                .with_text("contents", "body"),
+        );
+        adopted(Draft::new(steps))
+    }
+
+    /// A draft the policy accepts as a plan, trusted as a test's own words are.
+    fn adopted(draft: Draft) -> Manifest {
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+        policy
+            .adopt_manifest(&Labelled::trusted(draft))
+            .expect("a plan that validates")
+    }
+
+    /// PROMPT-1, MANIFEST-10: a step that names a file draws it as every other prompt does, so a
+    /// name with a space at its end, or with a bidirectional control in it, does not read as the
+    /// name it resembles, and an ordinary name reads as it always did. The spelling follows the
+    /// contract's `path` field, so the step's other words are drawn as they were.
+    #[test]
+    fn a_plan_step_draws_a_file_name_spelled() {
+        let plan = plan_naming(&["note.md ", "\u{202e}md.eton", "README.md"]);
+        let lines: Vec<String> = (0..plan.len())
+            .map(|index| numbered(&plan, index))
+            .collect();
+        assert_eq!(
+            lines[0],
+            format!("1. [fetch] read {} into s0", shown_name("note.md "))
+        );
+        assert!(lines[0].contains("\"note.md"), "{}", lines[0]);
+        assert!(!lines[0].contains("note.md "), "{}", lines[0]);
+        assert!(lines[1].contains("\\u{202e}"), "{}", lines[1]);
+        assert!(!lines[1].contains('\u{202e}'), "{}", lines[1]);
+        assert_eq!(lines[2], "3. [fetch] read README.md into s2");
+        assert!(
+            lines[3].contains(&shown_name("note.md ")) && lines[3].starts_with("4. [act] write "),
+            "{}",
+            lines[3]
+        );
+        assert_ne!(
+            numbered(&plan_naming(&["note.md "]), 0),
+            numbered(&plan_naming(&["note.md"]), 0)
+        );
+        assert_ne!(
+            numbered(&plan_naming(&["a  b.md"]), 0),
+            numbered(&plan_naming(&["a b.md"]), 0)
+        );
+        assert!(
+            numbered(&plan_naming(&["a  b.md"]), 0).contains("a  b.md"),
+            "{}",
+            numbered(&plan_naming(&["a  b.md"]), 0)
+        );
+    }
+
+    /// MANIFEST-10: the summary, the question and the record show a step alike, spelled the same,
+    /// so nobody can say afterwards that the line they were asked is not the line that was kept.
+    #[test]
+    fn the_summary_the_question_and_the_record_spell_a_step_alike() {
+        let plan = plan_naming(&["note.md "]);
+        let line = numbered(&plan, 0);
+        assert!(template(&plan).contains(&format!("  {line}\n")));
+        let mut attempt = Attempt::default();
+        attempt.stepped(&plan, 0, "read");
+        assert_eq!(attempt.steps, vec![format!("{line}: read")]);
+        assert!(line.contains(&shown_name("note.md ")), "{line}");
+    }
 
     /// The registry advertises what the schema validates. A capability offered here but unknown
     /// there would be refused after the planner had already used it, and a tool the schema knows
@@ -2715,19 +2811,7 @@ mod tests {
                 .with_text("out_slot", "b"),
             fetch("gmail", "c"),
         ]);
-        let mut sink = bravebot_core::event::RecordingSink::new();
-        let mut routing = bravebot_core::policy::Routing::new();
-        routing.insert_trusted("task", "test");
-        let mut policy = Policy::begin(
-            routing,
-            ReleasePlan::new(),
-            CapabilitySet::none(),
-            &mut sink,
-        )
-        .expect("policy");
-        let plan = policy
-            .adopt_manifest(&Labelled::trusted(draft))
-            .expect("a plan");
+        let plan = adopted(draft);
         assert_eq!(
             connector_grants(&plan),
             vec![

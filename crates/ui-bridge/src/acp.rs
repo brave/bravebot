@@ -507,7 +507,7 @@ fn options(remember: bool, allow: &str, reject: &str) -> Value {
 fn pictured(text: &str) -> String {
     text.replace("\r\n", "\n")
         .split('\n')
-        .map(bravebot_approval::printable)
+        .map(bravebot_agent::confirm::printable)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1019,7 +1019,7 @@ fn run_text(data: &Value) -> Option<String> {
         let confined = &data["confinement"];
         bravebot_approval::Confinement {
             heading: text_of(confined, "heading").to_string(),
-            directories: strings(&confined["directories"]),
+            directories: strings(&confined["shownDirectories"]),
             sentences: strings(&confined["sentences"]),
         }
     });
@@ -1027,7 +1027,7 @@ fn run_text(data: &Value) -> Option<String> {
         bravebot_approval::run_lines(&bravebot_approval::Run {
             summary: text_of(data, "summary"),
             steps: &steps,
-            writes: &strings(&data["writes"]),
+            writes: &strings(&data["shownWrites"]),
             confinement: confinement.as_ref(),
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
@@ -1383,6 +1383,50 @@ mod tests {
         }
     }
 
+    /// PROMPT-1, PATH-003: the editor is read a written file and a confined directory whose name
+    /// holds a byte that is not text as `\xNN`, as the terminal draws it, and not as the U+FFFD the
+    /// wire's lossy `writes` and `directories` hold.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_is_not_text_to_the_editor() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        use std::os::unix::ffi::OsStrExt;
+        let drawn = |written: &std::ffi::OsStr, directory: &std::ffi::OsStr| {
+            let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+            let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+            run.plan.writes = vec![written.into()];
+            run.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_text(&crate::wire::run_request(1, &run)).expect("text")
+        };
+        let plain = std::ffi::OsStr::new("/work");
+        let written = drawn(std::ffi::OsStr::from_bytes(b"out-\xff.txt"), plain);
+        assert!(
+            written.lines().any(|line| line == "  \"out-\\xff.txt\""),
+            "{written}"
+        );
+        assert_ne!(
+            written,
+            drawn(std::ffi::OsStr::new("out-\u{FFFD}.txt"), plain)
+        );
+        let note = std::ffi::OsStr::new("note.md");
+        let confined = drawn(note, std::ffi::OsStr::from_bytes(b"/w-\xff"));
+        assert!(
+            confined.lines().any(|line| line == "  \"/w-\\xff\""),
+            "{confined}"
+        );
+        assert_ne!(confined, drawn(note, std::ffi::OsStr::new("/w-\u{FFFD}")));
+    }
+
     /// PROMPT-1: the editor is read the directory a line runs in and the file each step runs
     /// spelled as the terminal spells them, so a binary ending in a space is not read as the one
     /// without it.
@@ -1425,7 +1469,7 @@ mod tests {
                 .plan
                 .writes
                 .iter()
-                .map(|path| path.to_string_lossy().into_owned())
+                .map(|path| bravebot_agent::confirm::shown_path(path))
                 .collect();
             let confinement =
                 run.confined
@@ -1435,7 +1479,7 @@ mod tests {
                         directories: confined
                             .directories
                             .iter()
-                            .map(|directory| directory.to_string_lossy().into_owned())
+                            .map(|directory| bravebot_agent::confirm::shown_path(directory))
                             .collect(),
                         sentences: confined.sentences(),
                     });
@@ -1869,9 +1913,11 @@ mod tests {
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
                     {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls",
                      "shownBinary": "/bin/ls"}],
-                    "writes": ["out"], "stdin": "file", "releasesPrivate": true,
+                    "writes": ["raw-out"], "shownWrites": ["out"], "stdin": "file",
+                    "releasesPrivate": true,
                     "requestedScopes": ["aws"], "confinement": {"heading": "confined",
-                    "directories": ["/w"], "sentences": ["it reads /w"]},
+                    "directories": ["/raw"], "shownDirectories": ["/w"],
+                    "sentences": ["it reads /w"]},
                     "ambient": [{"authority": "container-daemon", "named": "docker"}]}),
             ),
             (
@@ -1947,6 +1993,28 @@ mod tests {
             }
         }
         assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
+    }
+
+    /// PROMPT-1: a `run` question draws the files it writes and the directories it is confined to
+    /// from the `shownWrites` and `shownDirectories` the wire sends, one row each. The regression
+    /// it rejects: reading `writes` or `directories`, or no field, so the rows are not drawn.
+    #[test]
+    fn a_run_question_draws_the_written_files_and_directories_from_the_shown_fields() {
+        let (_, data) = every_question()
+            .into_iter()
+            .find(|(stem, _)| *stem == "run")
+            .expect("a run fixture");
+        let (_, _, text) = shown("run", data);
+        let rows: Vec<&str> = text.lines().collect();
+        let position = |row: &str| rows.iter().position(|line| line.trim() == row);
+        let written = position("out").unwrap_or_else(|| panic!("no row for the file: {text}"));
+        let directory =
+            position("/w").unwrap_or_else(|| panic!("no row for the directory: {text}"));
+        assert!(written < directory, "{text}");
+        assert!(
+            !text.contains("raw-out") && !text.contains("/raw"),
+            "{text}"
+        );
     }
 
     /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file

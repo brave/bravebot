@@ -5,7 +5,7 @@
 //! bridge method `schedule.command`, which the host's allowlist does not offer, and nothing a turn
 //! writes is a request. The lines it answers are drawn in the transcript and are never sent to the
 //! model: they are not in the conversation the agent keeps. Each is pictured with
-//! [`bravebot_approval::printable`] first, because a line can hold text a program chose.
+//! [`bravebot_agent::confirm::printable`] first, because a line can hold text a program chose.
 
 use crate::emit::Emitter;
 use crate::protocol::{ErrorCode, Event, Failure};
@@ -73,7 +73,7 @@ fn of_reply(reply: &Reply) -> Value {
 fn shown(lines: &[String], refused: bool, running: bool) -> Value {
     let pictured: Vec<String> = lines
         .iter()
-        .map(|line| bravebot_approval::printable(line))
+        .map(|line| bravebot_agent::confirm::printable(line))
         .collect();
     json!({ "lines": pictured, "refused": refused, "running": running })
 }

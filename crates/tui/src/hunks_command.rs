@@ -6,6 +6,7 @@
 //! the numbers a list is read by, and the rows it is drawn in.
 
 use crate::state::{Entry, Session};
+use bravebot_agent::confirm::{shown_name, shown_path};
 use bravebot_agent::hunks::{self, Left, Listing, Refused};
 use bravebot_agent::lsp::LanguageServers;
 use bravebot_agent::report::Activity;
@@ -96,11 +97,21 @@ pub fn list<S: Sink>(
     }
 }
 
-/// The path as the list names it: as the workspace names it, and with a control character in a
-/// file name made visible, since the transcript draws a note and a call's heading as they are and
-/// a name the turn chose could otherwise move the cursor.
+/// The path as the list names it: as the workspace names it, spelled as every prompt spells a file
+/// name (PROMPT-1), since a name the turn chose can end in a space, hold a character that draws as
+/// nothing, a control character or a byte that is not text, and the transcript draws a note and a
+/// call's heading as they are.
+///
+/// The row is spelled here and not by [`Activity::shown_target`], which would spell the number in
+/// front of the name along with it, so the `Hunk` activity does not name a file and is drawn as it
+/// is. A name that is text goes through [`shown_name`] as the workspace names it; one that is not
+/// goes through [`shown_path`], which spells the byte. The choice is made from the path's own
+/// encoding, never from what a file holds, and nothing is decided from the result.
 fn named(workspace: &Workspace, path: &Path) -> String {
-    crate::render::printable(&workspace.relative_display(path))
+    match path.to_str() {
+        Some(_) => shown_name(&workspace.relative_display(path)),
+        None => shown_path(path.strip_prefix(workspace.root()).unwrap_or(path)),
+    }
 }
 
 /// Draw a list: what was found, one row for each hunk, and a line for each path with none.
@@ -286,8 +297,55 @@ mod tests {
 
         let drawn = named(&workspace, &path);
 
-        assert_eq!(drawn, "a\u{241b}[2Jb.txt");
+        assert_eq!(drawn, "\"a\u{241b}[2Jb.txt\"");
         assert!(!drawn.chars().any(char::is_control));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// PROMPT-1: a name that ends in a space, or holds a character that draws as nothing, is not
+    /// drawn as the name without it. An ordinary name is drawn as it always was.
+    #[test]
+    fn a_file_name_the_eye_cannot_tell_from_another_is_drawn_spelled() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("hunks-spelled-name");
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let drawn = |name: &str| named(&workspace, &workspace.root().join(name));
+
+        assert_eq!(drawn("note.md"), "note.md");
+        assert_eq!(drawn("src/main.rs"), "src/main.rs");
+        assert_eq!(drawn("note.md "), "\"note.md\u{2423}\"");
+        assert_eq!(drawn("a\u{202e}b.txt"), "\"a\\u{202e}b.txt\"");
+        assert_eq!(drawn("a\u{200b}b.txt"), "\"a\\u{200b}b.txt\"");
+        for plain in ["note.md", "ab.txt"] {
+            for name in ["note.md ", "a\u{202e}b.txt", "a\u{200b}b.txt"] {
+                assert_ne!(drawn(name), drawn(plain), "{name:?}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A byte that is not text is drawn as the byte, so two names that differ only in such bytes,
+    /// or one and its lossy lookalike, do not draw alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_name_that_is_not_text_is_drawn_as_its_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("hunks-bytes-name");
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let drawn =
+            |name: &[u8]| named(&workspace, &workspace.root().join(OsStr::from_bytes(name)));
+
+        assert_eq!(drawn(b"tool-\xff"), "\"tool-\\xff\"");
+        assert_ne!(drawn(b"tool-\xff"), drawn(b"tool-\xfe"));
+        assert_ne!(drawn(b"tool-\xff"), drawn("tool-\u{fffd}".as_bytes()));
         let _ = std::fs::remove_dir_all(root);
     }
 

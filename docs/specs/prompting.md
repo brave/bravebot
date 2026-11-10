@@ -104,7 +104,15 @@ from.
 These prompts draw the path they ask about through one function, `shown_name`, which every front end
 uses: the write, overwrite and edit prompts, the credential-read prompt, the prompt about a path
 programs may reach, the questions about a directory, the names a checkout's removal would delete,
-the vouch prompt, and the files a run would write and the directories it is confined to. The run
+the vouch prompt, and the files a run would write and the directories it is confined to. A run
+question in `--plain` and in an editor draws a written file or a confined directory whose name holds
+a byte that is not UTF-8 as `\xNN` too: the question is built from names already spelled, so two
+names that differ only in such a byte do not draw as the same U+FFFD. The plan prompt draws the file
+each step names the same way, wherever the tool's contract says the field is a path, so a step
+reading `note.md ` is not drawn as `note.md`. The rows of the `/hunks` list and the lines that say a
+hunk went back, or that a file has no hunk to take, draw the file each names the same way, with
+the hunk number kept apart from the name, so the activity that carries the row is drawn as it is and
+the desktop window and the mobile app do not spell the name a second time. The run
 prompt also draws the directory the line runs in, in its header, on the summary line and beside each
 command `a` would vouch for, and the file each step runs (the path that starts it and the file it
 leads to, each spelled on its own), the same way, and so do the rows that say which file a yes is
@@ -203,6 +211,14 @@ bound to the arguments as held.
 `verified-by: bravebot_cli::plain::a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::the_question_in_lines_spells_the_file_a_yes_is_kept_in`
 `verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_is_not_text_to_the_editor`
+`verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_is_not_text`
+`verified-by: bravebot_agent::manifest::a_plan_step_draws_a_file_name_spelled`
+`verified-by: bravebot_agent::manifest::the_summary_the_question_and_the_record_spell_a_step_alike`
+`verified-by: bravebot_tui::hunks_command::a_file_name_the_eye_cannot_tell_from_another_is_drawn_spelled`
+`verified-by: bravebot_tui::hunks_command::a_file_name_that_is_not_text_is_drawn_as_its_bytes`
+`verified-by: bravebot_tui::undo_tests::the_list_and_its_notes_draw_a_file_name_spelled`
+`verified-by: bravebot_tui::undo_tests::a_hunk_row_is_not_spelled_a_second_time_by_the_activity`
 `verified-by: bravebot_ui_bridge::acp::the_editor_is_read_the_directory_and_the_binary_spelled`
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_the_written_files_and_directories_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_the_directory_and_the_binary_spelled_for_a_person`
@@ -217,6 +233,7 @@ bound to the arguments as held.
 `verified-by: bravebot_agent::confirm::a_path_holding_only_the_hosts_own_separator_is_shown_unquoted`
 `verified-by: bravebot_agent::confirm::a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
+`verified-by: bravebot_ui_bridge::acp::a_run_question_draws_the_written_files_and_directories_from_the_shown_fields`
 `verified-by: bravebot_core::invisible::only_the_blank_braille_pattern_is_a_cell_with_no_mark`
 `verified-by: bravebot_tui::confirm::run::the_run_prompt_draws_a_path_that_is_not_text_as_the_bytes_it_holds`
 `verified-by: bravebot_tui::confirm::run::the_run_prompt_draws_a_directory_binary_and_record_that_are_not_text_as_their_bytes`

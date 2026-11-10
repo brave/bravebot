@@ -39,7 +39,7 @@ const BLOCK_WIDTH: usize = 80;
 ///
 /// A map from characters to characters: no branch is taken on the text.
 pub(crate) fn printable(text: &str) -> String {
-    bravebot_core::invisible::spelled(bravebot_approval::printable(text)).text
+    bravebot_core::invisible::spelled(bravebot_agent::confirm::printable(text)).text
 }
 
 /// The lines a session opened with `--dangerously-skip-permissions` says before its first prompt,
