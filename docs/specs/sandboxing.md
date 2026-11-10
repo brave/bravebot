@@ -4320,7 +4320,9 @@ shown by running the program, or not entirely:
     name matters when `pyenv` itself is started), `PYENV_VERSION=../../../evil` (resolved to
     `$PYENV_ROOT/versions/../../../evil/bin/python3`, which ran; an absolute path did not).
     `HOME` selects `$HOME/.pyenv` when `PYENV_ROOT` is unset, and a hook under it ran with
-    `pyenv exec`. Nothing ran under `PYENV_DIR`, `_PYENV_SHIM_PATH`, `PYENV_NATIVE_EXT` or `PYTHONPATH` (the planted Python never
+    `pyenv exec`. A shim for a program other than `aws` is started with `HOME` unchanged, which is
+    tracked by #3915. Nothing ran under `PYENV_DIR`, `_PYENV_SHIM_PATH`, `PYENV_NATIVE_EXT` or
+    `PYTHONPATH` (the planted Python never
     started). `PYENV_DEBUG` was run only together with a `PS4` that holds a command substitution,
     which ran it, as the `PS4` row above does. A plug-in under
     `PYENV_ROOT/plugins/*/bin` was not run by `pyenv version-name` and is not claimed.
@@ -4333,7 +4335,7 @@ shown by running the program, or not entirely:
     ran under `ASDF_DIR`, `ASDF_CONCURRENCY` or `ASDF_TOOL_VERSIONS_FILENAME`. `HOME` is in
     the AWS CLI's list and the opener's and in no other, because gcloud, `ssh` and `git` need it, so
     an asdf or pyenv shim that stands for another program is run with the `HOME` it was given.
-    That gap is not closed here.
+    That is tracked by #3915.
   - **`aws` script**: the names, and the versions, are in the AWS table above. Run: Homebrew
     `awscli` 2.39.7 and pip `awscli` 1.46.3 (scripts), and the frozen 2.37.12 executable. Version
     2.39.7 was also read from source.
@@ -4460,7 +4462,8 @@ shown by running the program, or not entirely:
   mirror of the KDE repositories. Those files read `PATH` directly, reference no `BROWSER`, and
   read no `XDG_*` or `KDE_*` variable. The terminal emulator comes from the KDE configuration file
   and not from the environment.
-  `HOME` is in the opener's list. With `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
+  `HOME` is in the opener's list and is removed when it names a directory a stage may write. With
+  `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
   `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
   started the planted handler through `gio open`.
   `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs that, and
