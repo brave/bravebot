@@ -106,9 +106,10 @@ const SERVER_SHAPE: &str = "\n\
 It can also call the tools of servers a person has vouched for, listed below as alias:tool. A step \
 may call one tool with arguments written out in the plan. What a call returns is shown to the \
 person and is not available to later steps, so nothing a call returns can be an argument of \
-another. Every call is put to the person as it comes up. The plan is fixed before anything is \
-read, so a wrong name cannot be recovered from: never guess the name of a folder, file or other \
-thing the task does not give. Where it gives none, use a tool that needs no name, or leave an \
+another. Approving the plan, whose line shows each call in full, approves the call, though a rule \
+or the server's declaration may still put it to the person as it comes up. The plan is fixed \
+before anything is read, so a wrong name cannot be recovered from: never guess the name of a \
+folder, file or other thing the task does not give. Where it gives none, use a tool that needs no name, or leave an \
 optional name out so the tool uses its own default. The tools:";
 
 /// Added to [`SERVER_SHAPE`] where a listed tool lets a row of an apply step fill an argument.
@@ -325,8 +326,8 @@ const REGISTRY: &[Advertised] = &[
         // The capability names the server, which only the step says, so the handler asks for it.
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for. The arguments are \
-                  written out in full here and fixed; the call is put to the person as it comes up, \
-                  and what it returns is shown to them",
+                  written out in full here and fixed, so approving the plan approves the call, \
+                  and what it returns is shown to the person",
         args: "server* (an alias from the list below), tool*, arguments (a JSON object; nothing \
                a step read can be named in it)",
     },
@@ -337,7 +338,7 @@ const REGISTRY: &[Advertised] = &[
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for that is marked \
                   read-only, and put what it returns in a slot. The arguments are written out in \
-                  full here and fixed; the call is put to the person as it comes up",
+                  full here and fixed, so approving the plan approves the call",
         args: "server* (an alias from the list below), tool* (one marked read-only), out_slot*, \
                arguments (a JSON object; nothing a step read can be named in it)",
     },
