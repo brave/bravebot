@@ -5028,10 +5028,9 @@ reported as what it is.
   inherited by what the junction leads to. The test
   `bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_a_stage_made` reads the
   target's access list while a second stage runs, prints `junction grant crossed` or `junction
-  grant did not cross`, and fails if the second stage can read the target. On the Windows runner the
-  first stage was refused `mklink /J` with "Access is denied", so the test ends there and the
-  observation is still not made. A clause is not claimed from it until it has been. Where the grant
-  crosses, `set_entry`
+  grant did not cross`, and fails if the second stage can read the target. The stage of that test
+  cannot create the junction on the Windows runner, so the test ends before the observation and
+  no clause is claimed from it. Where the grant crosses, `set_entry`
   has to skip reparse points. The session's own `temp` directory, which a stage can replace by a
   link, is checked by name as the scratch directory is, and the junction case of that check is
   reasoned and not run on Windows.

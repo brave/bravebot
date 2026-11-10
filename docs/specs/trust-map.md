@@ -241,8 +241,8 @@ and `AR_x86_64_pc_windows_gnu=true` where no Windows C compiler is installed, si
 which is a Known cost.
 
 **Whitespace is out of scope for the identity lookup.** The identity lookup finds names that are
-one file by device and inode. A volume that folds `note.md ` and `note.md` into one file, such as
-the case in PR 2766, is a volume that holds one name, so the file system never offers the second
+one file by device and inode. A volume that folds `note.md ` and `note.md` into one file
+is a volume that holds one name, so the file system never offers the second
 spelling as a separate entry for the lookup to find, and no name is built for it that an index
 could be asked about. Where a volume holds them as two files, each has its own rule and
 reservation (row above). Joining them by trimming would key a rule about one file onto another on
