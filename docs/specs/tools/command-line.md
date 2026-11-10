@@ -405,6 +405,12 @@ no effect and changes no decision. A failed attempt to open a destination is con
 its possible effects; an approval alone changes nothing.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
+`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
+`verified-by: bravebot_agent::tools::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
+`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it`
+`verified-by: bravebot_agent::tools::a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
 
 **What the one direction costs.** A destination a vouched-for line overwrote stays untrusted until
 a person says otherwise, so reading it back is quarantined and costs a prompt. Recording a path as
@@ -980,11 +986,20 @@ written or printed.
 permission checks, redirection and write-set handling as any stage, and what it reads and writes is
 in the plan's sets. It runs as an earlier stage, in the same directory, under the same deadline,
 cancellation, confinement and scrubbed environment as the stage that uses it, with no standard
-input. A job started in the background works its substitutions out before its first stage starts,
-under the `run` call's own cancellation and deadline: a cancel ends the substitution and starts
-nothing, and one that outlasts the deadline is refused naming its source. The job it starts is not
-held to that deadline. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
+input. A job started in the background, where the line may be one ([RUN-15](run.md#RUN-15)), works
+its substitutions out before its first stage starts, under the `run` call's own cancellation and
+deadline: a cancel ends the substitution and starts nothing, and one that outlasts the deadline is
+refused naming its source. The job it starts is not held to that deadline. It is one level deep: a `$VAR`, `$(…)` or backtick inside `cmd` is refused. A refusal inside
 `cmd` is reported as that refusal.
+
+**A redirection inside a substitution is a redirection of the line.** `cmd` opens its destinations
+and sources at the same moment the line's own stages do. The checks made when one is opened
+([CMDLINE-5](#CMDLINE-5)), the refusal to read a store ([RECALL-8](../recall.md#RECALL-8)) and the
+trust map's entry for a destination are made on the path a foreground line takes when it cannot be
+moved, and the path of a background job and of a movable line does not make them. A line with a `>`,
+`>>`, `<` or `2>&1` inside a substitution is therefore refused with `background: true` like a line
+with one of its own, and it is not offered to be moved to the background
+([RUN-25](run.md#RUN-25)). A substitution with no redirection changes neither answer.
 
 **A variable that is withheld is refused.** A name `bravebot_config::scrub::withheld()` returns,
 which includes this agent's own credentials and the names in `run.scrubEnv`, is refused when the
@@ -1032,6 +1047,11 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
 `verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
 `verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
 `verified-by: bravebot_core::remembered::a_step_carrying_an_expansion_is_not_covered_by_an_entry`

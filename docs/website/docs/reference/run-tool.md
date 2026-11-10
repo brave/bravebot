@@ -651,7 +651,8 @@ result lists, which is every earlier look at the job, so a line printed before a
 
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting on
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
-Both are refused rather than half-honoured.
+Both are refused rather than half-honoured. A redirection inside a `NAME="$(...)"` assignment value
+counts too, so such a line cannot be started in the background.
 
 **In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
 started in one turn is still running when you ask the next question, and the model is told at the
@@ -682,7 +683,8 @@ seconds, and under which job name. Nothing it printed is in that result, includi
 before the move: [`job_output`](tools.md#job_output) returns it, in the first look at the job.
 
 **Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
-`background: true` accepts. A line that reads its input from an earlier result and one a delegate is
+`background: true` accepts. A redirection inside a `NAME="$(...)"` assignment value counts, so a
+line with one is not offered. A line that reads its input from an earlier result and one a delegate is
 running are waited for to the end, and the hint does not name the key while they run. A line that
 asked for its output with `read: true` can be moved: the result for the call is then the move, and
 [`job_output`](tools.md#job_output) returns the output.

@@ -11133,7 +11133,9 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
 
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
-        // all, including `2>&1`, which names nothing for anybody to endorse.
+        // all, including `2>&1`, which names nothing for anybody to endorse. A route on a step
+        // inside a `$(...)` of the line is one as well, since start_steps opens it with none of
+        // the checks a foreground line makes when it opens a route.
         let Some(steps) = plan.steps.unrouted_pipeline() else {
             return Produced::problem(
                 "error: a background command must be one pipeline with no redirection, \
@@ -28659,6 +28661,600 @@ mod tests {
                 assert!(
                     !scratch.path.join("ran").exists(),
                     "cancelled={cancelled}: the program started"
+                );
+            }
+        }
+
+        /// A workspace `project` beside a state directory `state` that holds the three stores, and
+        /// an executable `gen.sh` nobody vouched for in the project, for the tests of a
+        /// `background: true` line whose `NAME="$(...)"` carries a redirection.
+        #[cfg(unix)]
+        fn background_fixture(name: &str) -> (Scratch, std::path::PathBuf, std::path::PathBuf) {
+            use std::os::unix::fs::PermissionsExt;
+
+            let scratch = Scratch::new(name);
+            let state = scratch.path.join("state");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(state.join("facts")).expect("facts");
+            std::fs::create_dir_all(state.join("sessions")).expect("sessions");
+            std::fs::create_dir_all(&project).expect("project");
+            std::fs::write(state.join("facts/x.md"), "secret fact").expect("fact");
+            std::fs::write(state.join("AGENTS.md"), "secret rule").expect("rules");
+            std::fs::write(state.join("sessions/s.json"), "secret record").expect("record");
+            let program = project.join("gen.sh");
+            std::fs::write(&program, "#!/bin/sh\necho generated\n").expect("a program");
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+            (scratch, state, project)
+        }
+
+        /// What a `background: true` run of `command` answers in bypass mode, approved, and whether
+        /// a program ran before it answered. `delegated` is the turn a delegate's `run` is in.
+        #[cfg(unix)]
+        fn background_in_bypass(
+            workspace: &Workspace,
+            command: &str,
+            delegated: bool,
+        ) -> (String, bool) {
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let produced = with_tools(workspace, |tools| {
+                tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+                tools.delegated = delegated;
+                run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveRuns,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"command": command, "background": true}),
+                )
+            });
+            (told(&mut policy, &produced.text), produced.ran_a_program)
+        }
+
+        /// CMDLINE-5 and CMDLINE-17 on the background path: a redirection inside `NAME="$(...)"`
+        /// is a redirection of the line, so a `background: true` request for it is refused before
+        /// anything runs. Here the first substitution links the state directory into the project
+        /// and the second writes the home rules file through the link, which only a recheck of
+        /// the destination when it is opened could refuse. The regression it rejects is the
+        /// background gate reading only the routes of the top-level steps, which starts the line
+        /// and writes `AGENTS.md` with no recheck. Asserted on the refusal and on what it
+        /// prevents: no program ran, the link does not exist and the rules file is unchanged.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused() {
+            let (_scratch, state, project) = background_fixture("run-background-link-write");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_state(&state);
+            let command = format!(
+                "A=\"$(ln -s {} link)\" B=\"$(echo x > link/AGENTS.md)\" echo done",
+                state.display()
+            );
+
+            let (said, ran) = background_in_bypass(&workspace, &command, false);
+
+            assert!(
+                said.contains("a background command must be one pipeline with no redirection"),
+                "the line was not refused for its redirection: {said}"
+            );
+            assert!(!ran, "a program ran before the refusal: {said}");
+            assert!(
+                std::fs::symlink_metadata(project.join("link")).is_err(),
+                "the first substitution ran and left a link: {said}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(state.join("AGENTS.md")).unwrap(),
+                "secret rule",
+                "the home rules file was written through the link: {said}"
+            );
+        }
+
+        /// RECALL-8 on the background path: a `<` inside `NAME="$(...)"`, through a link an
+        /// earlier substitution of the line makes, is a read of the stores that only the recheck
+        /// when the source is opened can refuse. Each of the three stores is tried. The regression
+        /// it rejects is the background gate seeing no route in the line, so that the line starts,
+        /// the link is made and the store's bytes are read with no refusal. Asserted on the
+        /// refusal, on no program having run and no link existing, and on nothing of the store's
+        /// file being in the answer.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused() {
+            let (_scratch, state, project) = background_fixture("run-background-link-read");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_state(&state);
+
+            for file in ["facts/x.md", "AGENTS.md", "sessions/s.json"] {
+                let command = format!(
+                    "A=\"$(ln -sf {} through)\" B=\"$(cat < through)\" echo done",
+                    state.join(file).display()
+                );
+
+                let (said, ran) = background_in_bypass(&workspace, &command, false);
+
+                assert!(
+                    said.contains("a background command must be one pipeline with no redirection"),
+                    "{file}: the line was not refused for its redirection: {said}"
+                );
+                assert!(!said.contains("secret"), "{file}: {said}");
+                assert!(!ran, "{file}: a program ran before the refusal: {said}");
+                assert!(
+                    std::fs::symlink_metadata(project.join("through")).is_err(),
+                    "{file}: the first substitution ran and left a link: {said}"
+                );
+            }
+        }
+
+        /// CMDLINE-5 on the background path: the destination of a redirection inside
+        /// `NAME="$(...)"` is entered in the trust map as untrusted before it is opened, and a
+        /// background job cannot do that, so the line is refused and creates nothing. The script
+        /// is not vouched for. The regression it rejects is the line starting with no entry, which
+        /// leaves `out.txt` with whatever the map says of its directory, trusted in a trusted
+        /// project. Asserted on the refusal, on no program having run and on `out.txt` not existing.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_line_whose_substitution_redirects_a_script_s_output_is_refused() {
+            let (_scratch, state, project) = background_fixture("run-background-trust-entry");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_state(&state);
+
+            let (said, ran) =
+                background_in_bypass(&workspace, "FOO=\"$(./gen.sh > out.txt)\" echo done", false);
+
+            assert!(
+                said.contains("a background command must be one pipeline with no redirection"),
+                "the line was not refused for its redirection: {said}"
+            );
+            assert!(!ran, "a program ran before the refusal: {said}");
+            assert!(
+                !project.join("out.txt").exists(),
+                "the script ran and its output was written: {said}"
+            );
+        }
+
+        /// CMDLINE-5: the foreground form the background refusal sends the planner to. The same
+        /// substitution with `&& echo ok` after it is not a line a job can hold, so it takes the
+        /// path that enters the destination in the trust map as untrusted before it is opened.
+        /// The project is trusted, as a person's usually is, and a control file shows the read
+        /// below would show a trusted file. The regression it rejects is the destination left
+        /// with the project's trust, so that `read_file out.txt` after leaving bypass hands the
+        /// script's output to the planner with no question. The plain form without `&& echo ok`
+        /// is a movable line, which is the other fix's test and not this one's.
+        #[cfg(unix)]
+        #[test]
+        fn a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted() {
+            let (_scratch, state, project) = background_fixture("run-foreground-trust-entry");
+            std::fs::write(project.join("plain.txt"), "visible").expect("a control file");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_state(&state);
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            trust.trust(".");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([
+                    Capability::ShellExec,
+                    Capability::FileRead,
+                    Capability::FileWrite,
+                ]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+
+            let (ran, out, plain) = with_tools(&workspace, |tools| {
+                tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+                let ran = run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveRuns,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"command": "FOO=\"$(./gen.sh > out.txt)\" echo done && echo ok"}),
+                );
+                tools.permission_mode.set(crate::PermissionMode::Ask);
+                let mut read = |path: &str| {
+                    read_file(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"path": path}),
+                    )
+                };
+                (ran.ran_a_program, read("out.txt"), read("plain.txt"))
+            });
+            let out = told(&mut policy, &out.text);
+            let plain = told(&mut policy, &plain.text);
+
+            assert!(ran, "the line did not run");
+            assert_eq!(
+                std::fs::read_to_string(project.join("out.txt")).unwrap(),
+                "generated\n"
+            );
+            assert!(
+                plain.contains("visible"),
+                "the project's files are not trusted, so this test shows nothing: {plain}"
+            );
+            assert!(
+                !out.contains("generated"),
+                "the script's output reached the planner from a destination left trusted: {out}"
+            );
+        }
+
+        /// CMDLINE-17 for a delegate: its `run` reads `background` with no condition on being a
+        /// delegate, so the refusal holds for it too, for the link write and for the redirected
+        /// script. The regression it rejects is the delegate path starting the line, which the
+        /// tests above do not reach with `tools.delegated` set. The same turn, with no redirection
+        /// in the substitution, still starts.
+        #[cfg(unix)]
+        #[test]
+        fn a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused() {
+            let (_scratch, state, project) = background_fixture("run-background-delegated");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_state(&state);
+            let link_write = format!(
+                "A=\"$(ln -s {} link)\" B=\"$(echo x > link/AGENTS.md)\" echo done",
+                state.display()
+            );
+
+            for command in [
+                link_write.as_str(),
+                "FOO=\"$(./gen.sh > out.txt)\" echo done",
+            ] {
+                let (said, ran) = background_in_bypass(&workspace, command, true);
+
+                assert!(
+                    said.contains("a background command must be one pipeline with no redirection"),
+                    "{command}: the delegate's line was not refused for its redirection: {said}"
+                );
+                assert!(!ran, "{command}: a program ran before the refusal: {said}");
+            }
+            assert!(std::fs::symlink_metadata(project.join("link")).is_err());
+            assert!(!project.join("out.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(state.join("AGENTS.md")).unwrap(),
+                "secret rule"
+            );
+
+            let (said, ran) = background_in_bypass(&workspace, "A=\"$(echo hi)\" echo done", true);
+            assert!(
+                said.contains("started in the background") && ran,
+                "the delegate's line with no redirection did not start: {said}"
+            );
+        }
+
+        /// CMDLINE-17: a substitution with no redirection still lets a line start in the
+        /// background, in bypass mode, for a person's turn and for a delegate's. The regression it
+        /// rejects is a fix that refuses every background line holding a substitution, which the
+        /// refusal tests above would accept.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_line_whose_substitution_has_no_redirection_still_starts() {
+            let (_scratch, state, project) = background_fixture("run-background-no-route");
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_state(&state);
+
+            for delegated in [false, true] {
+                let (said, ran) =
+                    background_in_bypass(&workspace, "A=\"$(echo hi)\" echo done", delegated);
+
+                assert!(
+                    said.contains("started in the background") && ran,
+                    "delegated {delegated}: the line did not start: {said}"
+                );
+                assert!(
+                    !said.contains("must be one pipeline with no redirection"),
+                    "delegated {delegated}: {said}"
+                );
+            }
+        }
+
+        /// What a foreground `run` of `command` answers in bypass mode, approved, and whether a
+        /// program ran before it answered. `reporter` is told what the line is offered for.
+        #[cfg(unix)]
+        fn foreground_in_bypass(
+            workspace: &Workspace,
+            command: &str,
+            reporter: &mut crate::report::RecordingReporter,
+        ) -> (String, bool) {
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let produced = with_tools(workspace, |tools| {
+                tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+                run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveRuns,
+                    reporter,
+                    &json!({ "command": command }),
+                )
+            });
+            (told(&mut policy, &produced.text), produced.ran_a_program)
+        }
+
+        /// Both spellings of one line: as typed, which a job can hold, and with ` && echo ok`
+        /// after it, which it cannot. The second has always taken the path that rechecks every
+        /// open, so a test over both pins that the two give one answer.
+        #[cfg(unix)]
+        fn both_spellings(line: &str) -> [String; 2] {
+            [line.to_string(), format!("{line} && echo ok")]
+        }
+
+        /// CMDLINE-5 on the foreground path: the destination of a redirection inside
+        /// `NAME="$(...)"` is confined again immediately before it is opened, so a link an earlier
+        /// substitution of the line made into the state directory is not followed. The check
+        /// before the line cannot see the link, which does not exist yet. Asserted for the line as
+        /// typed and with ` && echo ok` after it. The regression it rejects is the movable path
+        /// running the line with no recheck, which writes the home rules file through the link.
+        /// Asserted on the refusal and on what it prevents: `AGENTS.md` and the other stores are
+        /// unchanged and nothing of them is in the answer.
+        #[cfg(unix)]
+        #[test]
+        fn a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused() {
+            for line in both_spellings(
+                "A=\"$(ln -s STATE link)\" B=\"$(echo x > link/AGENTS.md)\" echo done",
+            ) {
+                let (_scratch, state, project) = background_fixture("run-foreground-link-write");
+                let workspace = Workspace::new(&project)
+                    .expect("workspace")
+                    .with_state(&state);
+                let line = line.replace("STATE", &state.display().to_string());
+
+                let (said, _) = foreground_in_bypass(
+                    &workspace,
+                    &line,
+                    &mut crate::report::RecordingReporter::default(),
+                );
+
+                assert!(
+                    said.contains("resolves outside the workspace"),
+                    "{line}: the write through the link was not refused when it was opened: {said}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(state.join("AGENTS.md")).unwrap(),
+                    "secret rule",
+                    "{line}: the home rules file was written through the link: {said}"
+                );
+                assert!(!said.contains("secret"), "{line}: {said}");
+            }
+        }
+
+        /// RECALL-8 on the foreground path: a `<` inside `NAME="$(...)"`, through a link an earlier
+        /// substitution made, is refused where it lands in the stores when it is opened, with the
+        /// text that names the stores. Each store is tried, as the line as typed and with
+        /// ` && echo ok` after it. The regression it rejects is the movable path having no read
+        /// recheck, which prints the store's file to the planner through `printenv`. Asserted on
+        /// the refusal and on nothing of the file being in the answer.
+        #[cfg(unix)]
+        #[test]
+        fn a_foreground_line_whose_substitution_reads_the_stores_through_a_link_is_refused() {
+            for file in ["facts/x.md", "AGENTS.md", "sessions/s.json"] {
+                let template =
+                    format!("A=\"$(ln -s STATE link)\" B=\"$(cat < link/{file})\" printenv B");
+                for line in both_spellings(&template) {
+                    let (_scratch, state, project) = background_fixture("run-foreground-link-read");
+                    let workspace = Workspace::new(&project)
+                        .expect("workspace")
+                        .with_state(&state);
+                    let line = line.replace("STATE", &state.display().to_string());
+
+                    let (said, _) = foreground_in_bypass(
+                        &workspace,
+                        &line,
+                        &mut crate::report::RecordingReporter::default(),
+                    );
+
+                    assert!(
+                        said.contains(
+                            "kept facts, rules and session records are not read by a command line"
+                        ),
+                        "{line}: the read through the link was not refused as one of the stores: {said}"
+                    );
+                    assert!(!said.contains("secret"), "{line}: {said}");
+                }
+            }
+        }
+
+        /// CMDLINE-5 and TRUST-6 on the foreground path: the destination of a redirection inside
+        /// `NAME="$(...)"` is entered in the trust map as untrusted before it is opened, so after
+        /// leaving bypass `read_file out.txt` is quarantined for the line as typed exactly as for
+        /// the same line with ` && echo ok` after it. The project is trusted, and a control file
+        /// shows that the same read of a trusted file is visible. The regression it rejects is the
+        /// movable path entering nothing, which leaves `out.txt` with the project's trust. The
+        /// label is observed through the read, and what `out.txt` holds is not looked at.
+        #[cfg(unix)]
+        #[test]
+        fn a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted() {
+            let mut answers = Vec::new();
+            for line in both_spellings("FOO=\"$(./gen.sh > out.txt)\" echo done") {
+                let (_scratch, state, project) = background_fixture("run-foreground-untrusted");
+                std::fs::write(project.join("plain.txt"), "visible").expect("a control file");
+                let workspace = Workspace::new(&project)
+                    .expect("workspace")
+                    .with_state(&state);
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([
+                        Capability::ShellExec,
+                        Capability::FileRead,
+                        Capability::FileWrite,
+                    ]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_trust(trust);
+
+                let (ran, out, plain) = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Bypass);
+                    let ran = run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &json!({ "command": line }),
+                    );
+                    tools.permission_mode.set(crate::PermissionMode::Ask);
+                    let mut read = |path: &str| {
+                        read_file(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::Unattended,
+                            &mut crate::report::IgnoreReports,
+                            &json!({"path": path}),
+                        )
+                    };
+                    (ran.ran_a_program, read("out.txt"), read("plain.txt"))
+                });
+                let out = told(&mut policy, &out.text);
+                let plain = told(&mut policy, &plain.text);
+
+                assert!(ran, "{line}: the line did not run");
+                assert!(
+                    plain.contains("visible"),
+                    "{line}: the project's files are not trusted, so this test shows nothing: {plain}"
+                );
+                assert!(
+                    !out.contains("generated"),
+                    "{line}: the script's output reached the planner from a destination left trusted: {out}"
+                );
+                answers.push(out);
+            }
+            assert_eq!(
+                answers[0], answers[1],
+                "the line as typed and the line with `&& echo ok` give different answers"
+            );
+        }
+
+        /// CMDLINE-5 and PATHREQ-7: a destination outside the workspace, in a directory the
+        /// session opened beside it, is still written by a redirection inside `NAME="$(...)"`
+        /// under bypass, as the line as typed and with ` && echo ok` after it. The regression it
+        /// rejects is a fix that refuses a substitution's destination for leaving the workspace,
+        /// or that turns the open-time recheck into a refusal of every destination outside the
+        /// root. Asserted on the file in the other directory holding what the line copied.
+        #[cfg(unix)]
+        #[test]
+        fn a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it() {
+            for line in both_spellings("FOO=\"$(cat input.txt > BESIDE/out.txt)\" echo done") {
+                let (_scratch, state, project) = background_fixture("run-foreground-beside");
+                let beside = Scratch::new("run-foreground-beside-dir");
+                std::fs::write(project.join("input.txt"), "copied").expect("an input");
+                let mut workspace = Workspace::new(&project)
+                    .expect("workspace")
+                    .with_state(&state);
+                let opened = workspace
+                    .add_directory(beside.path.to_str().expect("a UTF-8 scratch path"))
+                    .expect("directory added");
+                let line = line.replace("BESIDE", &opened.display().to_string());
+
+                let (said, ran) = foreground_in_bypass(
+                    &workspace,
+                    &line,
+                    &mut crate::report::RecordingReporter::default(),
+                );
+
+                assert!(ran, "{line}: {said}");
+                assert_eq!(
+                    std::fs::read_to_string(opened.join("out.txt"))
+                        .ok()
+                        .as_deref(),
+                    Some("copied"),
+                    "{line}: the destination in the opened directory was not written: {said}"
+                );
+            }
+        }
+
+        /// CMDLINE-5 and RECALL-8: the checks made before anything runs still refuse a store
+        /// written or read by the same text spelled directly, in a substitution or not, and
+        /// through a link that exists when the line is checked. Each line is tried as typed and
+        /// with ` && echo ok` after it. The regression it rejects is a fix that moves these
+        /// refusals to the open, after the first substitution has run. Asserted on the refusal, on
+        /// no program having run, and on the store being unchanged.
+        #[cfg(unix)]
+        #[test]
+        fn a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs()
+        {
+            let templates = [
+                "echo x > STATE/AGENTS.md",
+                "B=\"$(echo x > STATE/AGENTS.md)\" echo done",
+                "B=\"$(cat < STATE/AGENTS.md)\" printenv B",
+                "B=\"$(echo x > link/AGENTS.md)\" echo done",
+                "B=\"$(cat < link/AGENTS.md)\" printenv B",
+            ];
+            for template in templates {
+                for line in both_spellings(template) {
+                    let (_scratch, state, project) = background_fixture("run-foreground-direct");
+                    std::os::unix::fs::symlink(&state, project.join("link")).expect("a link");
+                    let workspace = Workspace::new(&project)
+                        .expect("workspace")
+                        .with_state(&state);
+                    let line = line.replace("STATE", &state.display().to_string());
+
+                    let (said, ran) = foreground_in_bypass(
+                        &workspace,
+                        &line,
+                        &mut crate::report::RecordingReporter::default(),
+                    );
+
+                    assert!(said.contains("refused"), "{line}: {said}");
+                    assert!(!ran, "{line}: a program ran before the refusal: {said}");
+                    assert!(!said.contains("secret"), "{line}: {said}");
+                    assert_eq!(
+                        std::fs::read_to_string(state.join("AGENTS.md")).unwrap(),
+                        "secret rule",
+                        "{line}: {said}"
+                    );
+                }
+            }
+        }
+
+        /// RUN-25 and CMDLINE-17: a line is offered to be moved to the background only if a job
+        /// can hold it, and a redirection inside `NAME="$(...)"` is a route a job cannot honour,
+        /// whichever operator it uses. A substitution with no redirection, and a plain line, are
+        /// still offered, and a line with a redirection of its own is not. The regression it
+        /// rejects is the offer reading only the routes of the top-level steps, which offers a
+        /// line that then runs with no hooks, and a fix that withdraws the offer for every
+        /// substitution. Asserted on the handoffs the reporter was given for each line.
+        #[cfg(unix)]
+        #[test]
+        fn a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved() {
+            for (line, offered) in [
+                ("echo done", true),
+                ("A=\"$(echo hi)\" echo done", true),
+                ("A=\"$(echo hi 2>/dev/null)\" echo done", false),
+                ("A=\"$(echo hi > out.txt)\" echo done", false),
+                ("A=\"$(echo hi >> out.txt)\" echo done", false),
+                ("A=\"$(cat < input.txt)\" echo done", false),
+                ("A=\"$(echo hi 2>&1)\" echo done", false),
+                ("echo hi > out.txt", false),
+            ] {
+                let (_scratch, state, project) = background_fixture("run-foreground-movable");
+                std::fs::write(project.join("input.txt"), "in").expect("an input");
+                let workspace = Workspace::new(&project)
+                    .expect("workspace")
+                    .with_state(&state);
+                let mut reporter = crate::report::RecordingReporter::default();
+
+                let (said, ran) = foreground_in_bypass(&workspace, line, &mut reporter);
+
+                assert!(
+                    ran,
+                    "{line}: the line did not run, so nothing was offered: {said}"
+                );
+                assert_eq!(
+                    reporter.movable.len(),
+                    usize::from(offered),
+                    "{line}: offered to be moved: {}, expected {offered}",
+                    reporter.movable.len()
                 );
             }
         }
