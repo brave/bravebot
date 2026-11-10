@@ -13,8 +13,11 @@ documented-by:
 
 Fetching the body of a skill named in the system prompt or returned by
 [`search_skills`](search-skills.md). `name` is routing; there are no content arguments. The result
-is the skill's text, followed by the files kept beside it where it keeps any. Where skills come
-from and what they are trusted for is [skills.md](../skills.md).
+is the skill's text, followed by the files kept beside it where it keeps any. Built-in help also
+accepts the exact compiled page, headings and section names described in [skills.md](../skills.md).
+Those selectors apply only while the built-in help is in the turn's catalogue and select no
+filesystem path or ordinary skill's section. Where skills come from and what they are trusted for
+is [skills.md](../skills.md).
 
 ## Clauses
 
@@ -33,6 +36,7 @@ nothing.
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 `verified-by: bravebot_agent::turn::a_skill_kept_from_the_planner_is_unreachable_in_a_turn_that_does_not_name_it`
 `verified-by: bravebot_agent::turn::a_skill_the_person_named_cannot_also_be_loaded_by_the_planner`
+`verified-by: bravebot_agent::tools::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
 
 <a id="LOAD-2"></a>
 ### LOAD-2: a name close to a real one is refused, not guessed at
@@ -43,6 +47,7 @@ prefix, a case-insensitive comparison or a nearest match.
 **Why.** Guessing would load instructions nobody asked for.
 
 `verified-by: bravebot_agent::skills::a_name_one_character_off_selects_no_skill`
+`verified-by: bravebot_agent::tools::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 
 <a id="LOAD-3"></a>

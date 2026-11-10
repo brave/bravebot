@@ -2858,3 +2858,127 @@ fn a_catalogue_of_kept_skills_alone_advertises_nothing() {
     assert_eq!(kept_alone.describe_for_prompt(), "");
     assert!(with_an_ordinary_one.advertises_any());
 }
+
+/// Write a skill under `root/skills/<dir>` whose file is spelled `file`, which need not be
+/// `SKILL.md`. The skill's name is the directory's.
+fn write_skill_spelled(root: &Path, dir: &str, file: &str) {
+    let at = root.join("skills").join(dir);
+    std::fs::create_dir_all(&at).expect("create skill directory");
+    std::fs::write(
+        at.join(file),
+        format!("---\nname: {dir}\ndescription: when to use it\n---\n\nbody\n"),
+    )
+    .expect("write skill");
+}
+
+/// SKILL-1, INSTR-1: a project directory whose file is `skill.md` is not a skill, and the exact
+/// `SKILL.md` beside it still is. Each skill is in a directory of its own, so the fixture runs on
+/// a volume that tells the two spellings apart and on one that folds them. It rejects the file
+/// opened by name only where the volume folds case. On a case-sensitive host it passes with either
+/// lookup, and the unit test `a_listing_holding_skill_md_does_not_hold_the_skill_file` in
+/// `crates/agent/src/skills.rs` pins the lookup there.
+#[test]
+fn a_project_directory_holding_skill_md_in_another_case_is_not_offered() {
+    let scratch = Scratch::new("project-skill-other-case");
+    let project = scratch.workspace();
+    write_skill_spelled(&project.join(".bravebot"), "lowercase", "skill.md");
+    write_skill_spelled(&project.join(".bravebot"), "exact", "SKILL.md");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(from_disk(&catalogue), ["exact"]);
+    assert!(
+        catalogue.get("lowercase").is_none(),
+        "a directory holding skill.md was offered"
+    );
+    assert!(
+        !catalogue.describe_for_prompt().contains("lowercase"),
+        "its name reached what the prompt advertises"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert!(told.is_empty(), "{told:?}");
+}
+
+/// SKILL-1, INSTR-1: a skill directory whose only file is `skill.md` is not offered by discovery.
+/// The test asks the volume whether `skill.md` opens as `SKILL.md`. Where it does, the fault this
+/// rejects, `directory.join("SKILL.md").is_file()` standing for the lookup, would offer the skill,
+/// and the failure message says so. Where the volume tells the names apart the absence holds with
+/// either lookup, so the test does not pin the lookup on a case-sensitive host. The unit test
+/// `a_listing_holding_skill_md_does_not_hold_the_skill_file` in `crates/agent/src/skills.rs` does.
+#[test]
+fn discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelling() {
+    let scratch = Scratch::new("skill-only-lowercase");
+    let project = scratch.workspace();
+    write_skill_spelled(&project.join(".bravebot"), "only-lower", "skill.md");
+    let opens_as_exact = project
+        .join(".bravebot/skills/only-lower")
+        .join("SKILL.md")
+        .is_file();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a directory whose file opens as SKILL.md ({opens_as_exact}) was offered"
+    );
+}
+
+/// SKILL-6, INSTR-1: in a project nobody vouched for, a directory holding `skill.md` is not counted
+/// as a skill that was not loaded, so the person is told about the one `SKILL.md` and no more. Its
+/// name is repeated nowhere. Only a volume that folds case separates the lookups here; the unit test
+/// `a_listing_holding_skill_md_does_not_hold_the_skill_file` in `crates/agent/src/skills.rs` pins
+/// the lookup on a case-sensitive host.
+#[test]
+fn an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted() {
+    let scratch = Scratch::new("untrusted-skill-other-case");
+    let project = scratch.workspace();
+    write_skill_spelled(&project.join(".bravebot"), "lowercase", "skill.md");
+    write_skill_spelled(&project.join(".bravebot"), "exact", "SKILL.md");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert!(from_disk(&catalogue).is_empty());
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in .bravebot/skills was not loaded: this directory is not trusted"]
+    );
+}
+
+/// SKILL-1, INSTR-1: the same holds for the person's own `~/.bravebot/skills`. A directory holding
+/// `skill.md` there is not offered, and nothing is said of it as a skill left out. Only a volume
+/// that folds case separates the lookups here; the unit test
+/// `a_listing_holding_skill_md_does_not_hold_the_skill_file` in `crates/agent/src/skills.rs` pins
+/// the lookup on a case-sensitive host.
+#[test]
+fn a_home_directory_holding_skill_md_in_another_case_is_not_offered() {
+    let scratch = Scratch::new("home-skill-other-case");
+    let home = scratch.home();
+    write_skill_spelled(&home, "lowercase", "skill.md");
+    write_skill_spelled(&home, "exact", "SKILL.md");
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    assert_eq!(from_disk(&catalogue), ["exact"]);
+    assert!(
+        catalogue.get("lowercase").is_none(),
+        "a directory holding skill.md was offered"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert!(told.is_empty(), "{told:?}");
+}

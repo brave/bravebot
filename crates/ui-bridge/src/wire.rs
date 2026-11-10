@@ -63,7 +63,26 @@ pub fn phase(phase: Phase) -> &'static str {
         Phase::Planning => "planning",
         Phase::Thinking => "thinking",
         Phase::Compacting => "compacting",
-        Phase::Reconnecting => "reconnecting",
+        Phase::Reconnecting(_) => "reconnecting",
+    }
+}
+
+/// When a request waiting to be sent again will be sent, or `null` for every other phase and for
+/// an attempt that is already out.
+///
+/// Milliseconds from the moment the event is sent, because the two ends do not share a clock: the
+/// front end adds them to the time it received the event. The numbers are the driver's own,
+/// worked out from a count and a timer, and `gives_up_in_ms` is `null` where a count and not a
+/// window decides how long the request goes on.
+pub fn retry(phase: Phase) -> Value {
+    let millis = |span: std::time::Duration| u64::try_from(span.as_millis()).unwrap_or(u64::MAX);
+    match phase {
+        Phase::Reconnecting(Some(retry)) => json!({
+            "attempt": retry.attempt,
+            "in_ms": millis(retry.pause),
+            "gives_up_in_ms": retry.gives_up_in.map(millis),
+        }),
+        _ => Value::Null,
     }
 }
 
@@ -447,6 +466,7 @@ fn said(said: &Said) -> Value {
                 | Composed::SkillNamed { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
+                | Composed::ModeNotice { .. }
                 | Composed::MessageSent { .. }
                 | Composed::Written,
             text,
@@ -471,6 +491,33 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
         Some(Value::String(word)) if word == "consolidation" => Ok(Some(Composed::Consolidation)),
         Some(other) => Err(Failure::bad_request(format!(
             "`composed` may only say `consolidation`, not {other}"
+        ))),
+    }
+}
+
+/// The longest `messageId` a `turn.send` may carry.
+pub const MESSAGE_ID_LENGTH: usize = 64;
+
+/// The id a client gave a `turn.send`
+/// ([RPCVIEW-10](../../../docs/specs/session-view.md#RPCVIEW-10)).
+///
+/// Every send from a client carries one, new for each Send action, so a send repeated after a lost
+/// answer can be told from a new one. It is required rather than optional: a client that left it
+/// out would lose that protection, and nothing would notice. It is 1 to [`MESSAGE_ID_LENGTH`]
+/// ASCII letters, digits, `-` or `_`, which a UUID is, so it is short and holds nothing that needs
+/// escaping in a log.
+pub fn message_id(value: Option<&Value>) -> Result<String, Failure> {
+    match value {
+        Some(Value::String(id))
+            if (1..=MESSAGE_ID_LENGTH).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') =>
+        {
+            Ok(id.clone())
+        }
+        _ => Err(Failure::bad_request(format!(
+            "`messageId` must be 1 to {MESSAGE_ID_LENGTH} ASCII letters, digits, `-` or `_`"
         ))),
     }
 }

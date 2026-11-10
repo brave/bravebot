@@ -26,7 +26,9 @@
 //! worked out somewhere else, so a person shown the line has not been shown the plan. Quoting
 //! makes every one of them ordinary text, because a quoted `$` is a dollar sign and nothing more.
 
-use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
+use bravebot_core::command::{
+    Expansion, Joiner, Plan, Route, Step, Steps, ValuePart, is_the_null_device,
+};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -44,6 +46,17 @@ impl Span {
     fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+}
+
+/// Whether a line may carry a value that is worked out when its step starts.
+///
+/// [`Expansions::Refused`] is every mode but bypass, and is the grammar as it has always been.
+/// [`Expansions::Assignments`] is bypass mode alone, and admits `$NAME`, `${NAME}` and `$(cmd)` in
+/// the value of a `NAME=value` written in front of a program, and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expansions {
+    Refused,
+    Assignments,
 }
 
 /// One part of a word.
@@ -72,6 +85,13 @@ pub enum Piece {
     Range { from: i64, to: i64, width: usize },
     /// A leading unquoted `~`.
     Home,
+    /// `$NAME` or `${NAME}` in the value of an assignment in front of a program. Only produced
+    /// under [`Expansions::Assignments`], and only the name is held.
+    Variable(String),
+    /// `$(source)` in the value of an assignment in front of a program, with the text between the
+    /// parentheses and the byte offset in the line where that text begins. Only produced under
+    /// [`Expansions::Assignments`].
+    Substitution { source: String, offset: usize },
 }
 
 /// One word of a command: its program, an operand, or a redirection's target.
@@ -105,7 +125,11 @@ impl Word {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
     pub name: String,
+    /// The value where it is literal text, and empty where `computed` holds it.
     pub value: String,
+    /// The value as text, variables and substitutions, where it is not all literal. Only under
+    /// [`Expansions::Assignments`]; holds sources and never a value.
+    pub computed: Option<Vec<Piece>>,
     pub span: Span,
 }
 
@@ -247,6 +271,8 @@ pub enum Reason {
     Unclosed(char),
     /// A `NAME=` whose value is not literal text.
     AssignmentValue,
+    /// A `$NAME` naming a variable that is withheld from programs this agent starts.
+    WithheldVariable(String),
     /// A word standing for more arguments than a person can be shown at one prompt.
     TooMany { found: usize, cap: usize },
     /// A walk that read more directories than the ceiling allows.
@@ -358,7 +384,11 @@ impl fmt::Display for Reason {
             }
             Self::Unclosed(c) => write!(f, "`{c}` is never closed"),
             Self::AssignmentValue => f.write_str(
-                "an assignment's value must be literal text, so that the plan shows what the program will see",
+                "an assignment's value must be literal text, so that the plan shows what the program will see. In bypass mode only, `NAME=$VAR cmd`, `NAME=${VAR} cmd` and `NAME=\"$(cmd)\" cmd` are accepted in the assignment prefix in front of a program, and nowhere else",
+            ),
+            Self::WithheldVariable(name) => write!(
+                f,
+                "`{name}` is withheld from the programs this agent starts, so its value cannot be put in a command's environment"
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -489,6 +519,12 @@ const CONTROL_FLOW: [&str; 5] = ["if", "while", "for", "case", "function"];
 ///
 /// Everything else is a [`Refused`], and a refusal yields no tree at all.
 pub fn parse(line: &str) -> Result<Node, Refused> {
+    parse_with(line, Expansions::Refused)
+}
+
+/// [`parse`], with `expansions` saying whether the assignment prefix may hold a value that is
+/// worked out when its step starts. Everything outside that prefix is refused either way.
+pub fn parse_with(line: &str, expansions: Expansions) -> Result<Node, Refused> {
     // Trailing space is not part of anything, and trimming only the end leaves every offset in
     // the line where a caller would find it.
     let line = line.trim_end();
@@ -506,7 +542,7 @@ pub fn parse(line: &str) -> Result<Node, Refused> {
             Reason::TooLong { cap: MAX_LINE },
         ));
     }
-    let tokens = Scan::new(line).tokens()?;
+    let tokens = Scan::new(line, expansions).tokens()?;
     let mut parser = Parser {
         line,
         tokens,
@@ -656,6 +692,11 @@ struct Scan<'a> {
     line: &'a str,
     chars: Vec<(usize, char)>,
     at: usize,
+    expansions: Expansions,
+    /// Whether the word being scanned is a `NAME=value` in the assignment prefix of a command,
+    /// the one place a value may be worked out at spawn. Only ever set under
+    /// [`Expansions::Assignments`].
+    assign_word: bool,
     /// How deep inside `{ … }` the scan is, which is what stops one brace from costing more than
     /// the line it is in.
     brace_depth: usize,
@@ -666,12 +707,14 @@ struct Scan<'a> {
 }
 
 impl<'a> Scan<'a> {
-    fn new(line: &'a str) -> Self {
+    fn new(line: &'a str, expansions: Expansions) -> Self {
         Self {
             chars: line.char_indices().collect(),
             failed_braces: vec![0; line.char_indices().count()],
             brace_depth: 0,
             at: 0,
+            expansions,
+            assign_word: false,
             line,
         }
     }
@@ -705,6 +748,10 @@ impl<'a> Scan<'a> {
 
     fn tokens(mut self) -> Result<Vec<Tok>, Refused> {
         let mut out = Vec::new();
+        // Whether every word since the last separator has been an assignment, which is where a
+        // value may be computed, and whether the next word is a redirection's target.
+        let mut prefix = true;
+        let mut target = false;
         loop {
             // Every whitespace `ends_word` counts separates words here too, line breaks aside:
             // those are refused just below, as more than one line.
@@ -717,6 +764,7 @@ impl<'a> Scan<'a> {
             let start = self.offset();
             let Some(c) = self.peek() else { break };
             let single = Span::new(start, start + c.len_utf8());
+            let before = out.len();
             match c {
                 // A line, not a script. A newline in a shell separates commands, and admitting it
                 // would mean the thing being endorsed is no longer one line long.
@@ -812,10 +860,54 @@ impl<'a> Scan<'a> {
                     let token = self.io_redirect(start)?;
                     out.push(token);
                 }
-                _ => out.push(Tok::Word(self.word()?)),
+                _ => {
+                    let shaped = self.starts_assignment();
+                    self.assign_word =
+                        self.expansions == Expansions::Assignments && prefix && !target && shaped;
+                    let word = self.word();
+                    self.assign_word = false;
+                    out.push(Tok::Word(word?));
+                    if target {
+                        target = false;
+                    } else {
+                        prefix = prefix && shaped;
+                    }
+                }
+            }
+            if out.len() > before {
+                match out.last() {
+                    Some(
+                        Tok::Pipe(_) | Tok::AndIf(_) | Tok::OrIf(_) | Tok::Semi(_) | Tok::Open(_),
+                    ) => {
+                        prefix = true;
+                        target = false;
+                    }
+                    Some(Tok::Close(_)) => {
+                        prefix = false;
+                        target = false;
+                    }
+                    Some(Tok::Redirect(op, _)) => target = *op != Op::ErrToOut,
+                    _ => {}
+                }
             }
         }
         Ok(out)
+    }
+
+    /// Whether the word at the cursor begins `NAME=`, as written, with nothing quoted in the name.
+    fn starts_assignment(&self) -> bool {
+        let mut n = 0;
+        match self.ahead(0) {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => n += 1,
+            _ => return false,
+        }
+        while self
+            .ahead(n)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            n += 1;
+        }
+        self.ahead(n) == Some('=')
     }
 
     /// Whether the digits at the cursor are a redirection's descriptor.
@@ -927,8 +1019,14 @@ impl<'a> Scan<'a> {
                                 break;
                             }
                             // Expansion inside double quotes is still expansion, so the same
-                            // refusal applies as outside them.
+                            // refusal applies as outside them, except for the value of an
+                            // assignment in front of a program where bypass mode allows it.
                             Some('$') if self.opens_expansion(true) => {
+                                if let Some(piece) = self.assigned_expansion()? {
+                                    flush!();
+                                    pieces.push(piece);
+                                    continue;
+                                }
                                 return Err(self.dollar());
                             }
                             Some('$') => {
@@ -979,7 +1077,14 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
-                '$' if self.opens_expansion(false) => return Err(self.dollar()),
+                '$' if self.opens_expansion(false) => {
+                    if let Some(piece) = self.assigned_expansion()? {
+                        flush!();
+                        pieces.push(piece);
+                        continue;
+                    }
+                    return Err(self.dollar());
+                }
                 '$' => {
                     text.push('$');
                     self.bump();
@@ -1052,6 +1157,102 @@ impl<'a> Scan<'a> {
             pieces.push(Piece::Text(String::new()));
         }
         Ok(pieces)
+    }
+
+    /// The `$NAME`, `${NAME}` or `$(source)` at the cursor, where the word is the value of an
+    /// assignment in front of a program and the line was compiled to allow it. The cursor is left
+    /// after it. `None` leaves the cursor where it was, and the caller refuses the `$` as ever.
+    ///
+    /// Only a plain name or a brace holding exactly one, and a single-parenthesis substitution:
+    /// `$1`, `${X:-y}`, `${#X}`, `$((…))` and the rest are not this and stay refused.
+    fn assigned_expansion(&mut self) -> Result<Option<Piece>, Refused> {
+        if !self.assign_word || self.expansions != Expansions::Assignments {
+            return Ok(None);
+        }
+        let name_at = |scan: &Self, from: usize| {
+            let mut n = from;
+            if !scan
+                .ahead(n)
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            {
+                return None;
+            }
+            let mut name = String::new();
+            while let Some(c) = scan
+                .ahead(n)
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            {
+                name.push(c);
+                n += 1;
+            }
+            Some((name, n))
+        };
+        match self.ahead(1) {
+            Some('{') => {
+                let Some((name, n)) = name_at(self, 2) else {
+                    return Ok(None);
+                };
+                if self.ahead(n) != Some('}') {
+                    return Ok(None);
+                }
+                self.at += n + 1;
+                Ok(Some(Piece::Variable(name)))
+            }
+            Some('(') if self.ahead(2) != Some('(') => {
+                let start = self.offset();
+                self.at += 2;
+                let from = self.offset();
+                let mut depth = 1usize;
+                loop {
+                    let at = self.offset();
+                    match self.bump() {
+                        None => {
+                            return Err(
+                                self.refuse(Span::new(start, self.offset()), Reason::Unclosed('('))
+                            );
+                        }
+                        Some('\\') => {
+                            self.bump();
+                        }
+                        Some(quote @ ('\'' | '"')) => loop {
+                            match self.bump() {
+                                None => {
+                                    return Err(self.refuse(
+                                        Span::new(start, self.offset()),
+                                        Reason::Unclosed(quote),
+                                    ));
+                                }
+                                Some('\\') if quote == '"' => {
+                                    self.bump();
+                                }
+                                Some(c) if c == quote => break,
+                                Some(_) => {}
+                            }
+                        },
+                        Some('(') => depth += 1,
+                        Some(')') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let source =
+                                    self.line.get(from..at).unwrap_or_default().to_string();
+                                return Ok(Some(Piece::Substitution {
+                                    source,
+                                    offset: from,
+                                }));
+                            }
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            _ => match name_at(self, 1) {
+                Some((name, n)) => {
+                    self.at += n;
+                    Ok(Some(Piece::Variable(name)))
+                }
+                None => Ok(None),
+            },
+        }
     }
 
     /// Whether the `$` at the cursor begins an expansion, as a POSIX shell reads it.
@@ -1405,11 +1606,30 @@ impl<'a> Parser<'a> {
                     if words.is_empty()
                         && let Some((name, value)) = split_assignment(&word)
                     {
-                        let value = literal_of(&value)
-                            .ok_or_else(|| self.refuse(word.span, Reason::AssignmentValue))?;
+                        let (value, computed) = match literal_of(&value) {
+                            Some(value) => (value, None),
+                            // Only a scan that allowed it holds a variable or a substitution,
+                            // and only beside text and one another: a pattern, a brace or a `~`
+                            // in the value is refused as it always was.
+                            None if value.iter().all(|piece| {
+                                matches!(
+                                    piece,
+                                    Piece::Text(_)
+                                        | Piece::Variable(_)
+                                        | Piece::Substitution { .. }
+                                )
+                            }) =>
+                            {
+                                (String::new(), Some(value))
+                            }
+                            None => {
+                                return Err(self.refuse(word.span, Reason::AssignmentValue));
+                            }
+                        };
                         assignments.push(Assignment {
                             name,
                             value,
+                            computed,
                             span: word.span,
                         });
                         continue;
@@ -1528,6 +1748,16 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         reason,
     };
 
+    // A value worked out at spawn belongs to an assignment and to nothing a word can be expanded
+    // for: no scan puts one anywhere else, and this is the stop if one ever arrives.
+    if word
+        .pieces
+        .iter()
+        .any(|piece| matches!(piece, Piece::Variable(_) | Piece::Substitution { .. }))
+    {
+        return Err(refused(Reason::AssignmentValue));
+    }
+
     // Counted before anything is built, so the bound limits the work rather than only the answer.
     let count = alternative_count(&word.pieces);
     if count > MAX_ARGUMENTS {
@@ -1594,6 +1824,9 @@ fn is_pattern(piece: &Piece) -> bool {
         // check further down instead of by the rule that means to hold them.
         Piece::Alternatives(branches) => branches.iter().flatten().any(is_pattern),
         Piece::Text(_) | Piece::Range { .. } | Piece::Home => false,
+        // Neither is looked up on disk; the compile refuses one outside an assignment before a
+        // walk could be asked about it.
+        Piece::Variable(_) | Piece::Substitution { .. } => false,
     }
 }
 
@@ -1631,6 +1864,16 @@ fn render(pieces: &[Piece]) -> String {
                 out.push('}');
             }
             Piece::Home => out.push('~'),
+            Piece::Variable(name) => {
+                out.push_str("${");
+                out.push_str(name);
+                out.push('}');
+            }
+            Piece::Substitution { source, .. } => {
+                out.push_str("$(");
+                out.push_str(source);
+                out.push(')');
+            }
         }
     }
     out
@@ -1922,7 +2165,11 @@ fn atoms(part: &[Piece]) -> Vec<Atom<'_>> {
             Piece::Any | Piece::Tree => out.push(Atom::Star),
             Piece::Class(body) => out.push(Atom::Class(body)),
             // Braces are gone before a pattern is walked, and a `~` is a path by then.
-            Piece::Alternatives(_) | Piece::Range { .. } | Piece::Home => {}
+            Piece::Alternatives(_)
+            | Piece::Range { .. }
+            | Piece::Home
+            | Piece::Variable(_)
+            | Piece::Substitution { .. } => {}
         }
     }
     out
@@ -2026,7 +2273,19 @@ pub fn compile(
     home: Option<&Path>,
     rules: &mut Rules<'_>,
 ) -> Result<Plan, Stopped> {
-    let node = parse(line)?;
+    compile_with(line, directory, home, rules, Expansions::Refused)
+}
+
+/// [`compile`], with `expansions` saying whether the assignment prefix may hold a variable or a
+/// substitution. Only bypass mode passes [`Expansions::Assignments`].
+pub fn compile_with(
+    line: &str,
+    directory: &Path,
+    home: Option<&Path>,
+    rules: &mut Rules<'_>,
+    expansions: Expansions,
+) -> Result<Plan, Stopped> {
+    let node = parse_with(line, expansions)?;
     let mut compiler = Compiler {
         directory,
         home,
@@ -2057,7 +2316,9 @@ pub fn compile(
 ///
 /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
 pub fn display_as_written(plan: &Plan) -> String {
-    let Ok(node) = parse(&plan.line) else {
+    // The plan was compiled from this line, so a value worked out at spawn is there to be read
+    // past, whichever mode compiled it. Nothing here runs it.
+    let Ok(node) = parse_with(&plan.line, Expansions::Assignments) else {
         return plan.line.clone();
     };
     let mut written = Vec::new();
@@ -2075,7 +2336,7 @@ pub fn display_as_written(plan: &Plan) -> String {
 /// whose steps this walk cannot pair with the line's commands comes back as `None`, and the caller
 /// answers for a plan nothing is known about. Not a plan to run.
 pub fn plan_as_written(plan: &Plan, home: Option<&Path>) -> Option<Plan> {
-    let node = parse(&plan.line).ok()?;
+    let node = parse_with(&plan.line, Expansions::Assignments).ok()?;
     let mut written = Vec::new();
     unexpanded_operands(&node, &plan.directory, home, &mut written)?;
     Some(Plan {
@@ -2268,17 +2529,86 @@ impl Compiler<'_, '_> {
             routes.push(self.route(redirection)?);
         }
 
+        let mut environment = Vec::new();
+        let mut expansions = Vec::new();
+        for assignment in &command.assignments {
+            match &assignment.computed {
+                None => environment.push((assignment.name.clone(), assignment.value.clone())),
+                Some(pieces) => expansions.push(self.expansion(assignment, pieces)?),
+            }
+        }
+
         Ok(Step {
             program: program.clone(),
             resolved,
             started_as,
             args,
-            environment: command
-                .assignments
-                .iter()
-                .map(|assignment| (assignment.name.clone(), assignment.value.clone()))
-                .collect(),
+            environment,
+            expansions,
             routes,
+        })
+    }
+
+    /// An assignment whose value is worked out when its step starts, as its source.
+    ///
+    /// A variable the run withholds from programs is refused here, by name. A substitution is
+    /// parsed and compiled as any line is, with its own redirections, rules and program lookup, and
+    /// with expansions refused so that one inside it is the refusal it always was. Its steps run
+    /// before the step that uses it. Nothing here reads a variable or runs anything.
+    fn expansion(
+        &mut self,
+        assignment: &Assignment,
+        pieces: &[Piece],
+    ) -> Result<Expansion, Stopped> {
+        let mut parts: Vec<ValuePart> = Vec::new();
+        for piece in pieces {
+            match piece {
+                Piece::Text(text) => match parts.last_mut() {
+                    Some(ValuePart::Text(last)) => last.push_str(text),
+                    _ => parts.push(ValuePart::Text(text.clone())),
+                },
+                Piece::Variable(name) => {
+                    if bravebot_config::scrub::withheld()
+                        .iter()
+                        .any(|withheld| withheld.eq_ignore_ascii_case(name))
+                    {
+                        return Err(Refused {
+                            span: assignment.span,
+                            text: format!("${name}"),
+                            reason: Reason::WithheldVariable(name.clone()),
+                        }
+                        .into());
+                    }
+                    parts.push(ValuePart::Variable(name.clone()));
+                }
+                Piece::Substitution { source, offset } => {
+                    let node = parse_with(source, Expansions::Refused).map_err(|inner| {
+                        // The inner line's offsets are its own; the outer line's are what a
+                        // reader can point at.
+                        Refused {
+                            span: Span::new(inner.span.start + offset, inner.span.end + offset),
+                            ..inner
+                        }
+                    })?;
+                    let steps = self.node(&node)?;
+                    parts.push(ValuePart::Substitution {
+                        source: source.clone(),
+                        steps: Box::new(steps),
+                    });
+                }
+                _ => {
+                    return Err(Refused {
+                        span: assignment.span,
+                        text: render(pieces),
+                        reason: Reason::AssignmentValue,
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(Expansion {
+            name: assignment.name.clone(),
+            parts,
         })
     }
 
@@ -3713,6 +4043,263 @@ mod tests {
         match compile(line, at, None, &mut without_rules).expect_err("should have been refused") {
             Stopped::Compile(refused) => refused,
             Stopped::Rule(denial) => panic!("`{line}` was refused by a rule: {denial}"),
+        }
+    }
+
+    /// A compile as bypass mode does it, where an assignment's value may be worked out at spawn.
+    fn bypass_compile(line: &str, at: &Path) -> Result<Plan, Stopped> {
+        compile_with(line, at, None, &mut without_rules, Expansions::Assignments)
+    }
+
+    fn bypass_compiled(line: &str, at: &Path) -> Plan {
+        bypass_compile(line, at)
+            .unwrap_or_else(|e| panic!("`{line}` should compile in bypass, and was refused: {e}"))
+    }
+
+    fn bypass_refused(line: &str, at: &Path) -> Refused {
+        match bypass_compile(line, at).expect_err("should have been refused in bypass") {
+            Stopped::Compile(refused) => refused,
+            Stopped::Rule(denial) => panic!("`{line}` was refused by a rule: {denial}"),
+        }
+    }
+
+    /// Outside bypass mode every spelling of a computed assignment value is the refusal it always
+    /// was, so the relaxation cannot leak into a mode that has not asked for it.
+    #[test]
+    fn bypass_expansions_are_refused_outside_bypass_mode() {
+        let tree = Tree::new("bypass-off");
+        tree.executable("bin/cmd");
+        for (line, reason) in [
+            ("FOO=$X ./bin/cmd", Reason::Variable),
+            ("FOO=${X} ./bin/cmd", Reason::Variable),
+            (
+                "FOO=\"$(./bin/cmd)\" ./bin/cmd",
+                Reason::CommandSubstitution,
+            ),
+            ("FOO=$(./bin/cmd) ./bin/cmd", Reason::CommandSubstitution),
+        ] {
+            assert_eq!(compile_refused(line, &tree.root).reason, reason, "{line}");
+        }
+    }
+
+    /// The accepted forms keep only the source in the plan: the variable's name or the inner
+    /// command, never a value, in the step, its Debug and its display.
+    #[test]
+    fn bypass_assignment_variables_are_kept_as_source() {
+        let tree = Tree::new("bypass-var");
+        tree.executable("bin/cmd");
+        for line in [
+            "FOO=$X ./bin/cmd",
+            "FOO=${X} ./bin/cmd",
+            "FOO=a-$X-b ./bin/cmd",
+            "FOO=\"a $X b\" ./bin/cmd",
+            "FOO=$X BAR=${Y} ./bin/cmd",
+        ] {
+            let plan = bypass_compiled(line, &tree.root);
+            let steps = plan.steps.steps();
+            assert_eq!(steps.len(), 1, "{line}");
+            assert!(steps[0].environment.is_empty(), "{line}");
+            assert!(!steps[0].expansions.is_empty(), "{line}");
+            let shown = plan.display();
+            assert!(
+                shown.contains("$X") || shown.contains("${X}"),
+                "{line}: {shown}"
+            );
+            assert!(format!("{plan:?}").contains("Variable(\"X\")"), "{line}");
+        }
+        let plan = bypass_compiled("FOO=a-$X-b ./bin/cmd", &tree.root);
+        assert_eq!(
+            plan.steps.steps()[0].expansions[0].parts,
+            [
+                ValuePart::Text("a-".to_string()),
+                ValuePart::Variable("X".to_string()),
+                ValuePart::Text("-b".to_string()),
+            ]
+        );
+        let two = bypass_compiled("FOO=$X BAR=${Y} LIT=plain ./bin/cmd", &tree.root);
+        let step = two.steps.steps()[0];
+        assert_eq!(step.expansions.len(), 2);
+        assert_eq!(step.environment, [("LIT".to_string(), "plain".to_string())]);
+    }
+
+    /// `NAME="$(cmd)"` and `NAME=$(cmd)` compile `cmd` as an earlier stage with the usual
+    /// resolution, so the plan holds its step, ahead of the step that uses it.
+    #[test]
+    fn bypass_assignment_substitution_runs_as_an_earlier_stage() {
+        let tree = Tree::new("bypass-sub");
+        tree.executable("bin/cmd").executable("bin/inner");
+        for line in [
+            "FOO=\"$(./bin/inner a 'b c')\" ./bin/cmd",
+            "FOO=$(./bin/inner a 'b c') ./bin/cmd",
+            "FOO=\"x-$(./bin/inner '(a)')-y\" ./bin/cmd",
+        ] {
+            let plan = bypass_compiled(line, &tree.root);
+            let programs: Vec<&str> = plan
+                .steps
+                .steps()
+                .iter()
+                .map(|step| step.program.as_str())
+                .collect();
+            assert_eq!(programs, ["./bin/inner", "./bin/cmd"], "{line}");
+        }
+        let plan = bypass_compiled("FOO=\"$(./bin/inner a)\" ./bin/cmd", &tree.root);
+        let ValuePart::Substitution { source, .. } = &plan.steps.steps()[1].expansions[0].parts[0]
+        else {
+            panic!("a substitution was expected");
+        };
+        assert_eq!(source, "./bin/inner a");
+        assert!(plan.display().contains("./bin/inner a"));
+    }
+
+    #[test]
+    fn bypass_assignment_may_precede_a_later_pipeline_stage_or_a_second_assignment() {
+        let tree = Tree::new("bypass-stage");
+        tree.executable("bin/a").executable("bin/b");
+        let plan = bypass_compiled("./bin/a | FOO=$X ./bin/b", &tree.root);
+        let steps = plan.steps.steps();
+        assert!(steps[0].expansions.is_empty());
+        assert_eq!(steps[1].expansions.len(), 1);
+        let plan = bypass_compiled("./bin/a && FOO=$X BAR=\"$(./bin/a)\" ./bin/b", &tree.root);
+        assert_eq!(plan.steps.steps().len(), 3);
+    }
+
+    /// Only the value of an assignment in front of a program is relaxed; every other `$` is the
+    /// refusal it was.
+    #[test]
+    fn bypass_leaves_every_other_expansion_refused() {
+        let tree = Tree::new("bypass-other");
+        tree.executable("bin/cmd");
+        for (line, reason) in [
+            ("./bin/cmd $X", Reason::Variable),
+            ("./bin/cmd ${X}", Reason::Variable),
+            ("./bin/cmd $(x)", Reason::CommandSubstitution),
+            ("./bin/cmd \"$X\"", Reason::Variable),
+            ("$X ./bin/cmd", Reason::Variable),
+            ("$(x) ./bin/cmd", Reason::CommandSubstitution),
+            ("FOO=$X $Y", Reason::Variable),
+            ("./bin/cmd FOO=$X", Reason::Variable),
+            ("./bin/cmd > $X", Reason::Variable),
+            ("FOO=$X ./bin/cmd > $Y", Reason::Variable),
+            ("FOO=*.rs ./bin/cmd", Reason::AssignmentValue),
+            ("FOO={a,b}$X ./bin/cmd", Reason::AssignmentValue),
+            ("FOO=$1 ./bin/cmd", Reason::Variable),
+            ("FOO=$? ./bin/cmd", Reason::ExitStatus),
+            ("FOO=$$ ./bin/cmd", Reason::SpecialParameter),
+            ("FOO=${X:-y} ./bin/cmd", Reason::Variable),
+            ("FOO=${#X} ./bin/cmd", Reason::Variable),
+            ("FOO=$((1+1)) ./bin/cmd", Reason::Arithmetic),
+            ("./bin/cmd; ./bin/cmd $X", Reason::Variable),
+        ] {
+            assert_eq!(bypass_refused(line, &tree.root).reason, reason, "{line}");
+        }
+    }
+
+    #[test]
+    fn bypass_refuses_backticks_everywhere_including_an_assignment_value() {
+        let tree = Tree::new("bypass-backtick");
+        tree.executable("bin/cmd");
+        for line in [
+            "FOO=`x` ./bin/cmd",
+            "FOO=\"`x`\" ./bin/cmd",
+            "./bin/cmd `x`",
+            "FOO=\"$(`x`)\" ./bin/cmd",
+        ] {
+            let refused = bypass_refused(line, &tree.root);
+            assert_eq!(refused.reason, Reason::CommandSubstitution, "{line}");
+        }
+    }
+
+    /// A variable the run withholds from programs is refused when the line compiles, by name.
+    #[test]
+    fn bypass_refuses_a_withheld_variable() {
+        let tree = Tree::new("bypass-withheld");
+        tree.executable("bin/cmd");
+        for line in [
+            "FOO=$SERVICES_KEY_AICHAT ./bin/cmd",
+            "FOO=\"${BRAVE_SERVICES_KEY_ID}\" ./bin/cmd",
+            "FOO=x$services_key_aichat ./bin/cmd",
+        ] {
+            let refused = bypass_refused(line, &tree.root);
+            assert!(
+                matches!(refused.reason, Reason::WithheldVariable(_)),
+                "{line}: {refused:?}"
+            );
+            assert!(refused.reason.to_string().contains("withheld"));
+        }
+    }
+
+    /// A substitution inside a substitution is refused, and an inner failure is the inner reason.
+    #[test]
+    fn bypass_substitution_is_one_level_deep_and_inner_refusals_propagate() {
+        let tree = Tree::new("bypass-nested");
+        tree.executable("bin/cmd").executable("bin/inner");
+        let nested = bypass_refused(
+            "FOO=\"$(./bin/inner $(./bin/inner x))\" ./bin/cmd",
+            &tree.root,
+        );
+        assert_eq!(nested.reason, Reason::CommandSubstitution);
+        let variable = bypass_refused("FOO=\"$(./bin/inner $X)\" ./bin/cmd", &tree.root);
+        assert_eq!(variable.reason, Reason::Variable);
+        let inner_assignment =
+            bypass_refused("FOO=\"$(BAR=$X ./bin/inner)\" ./bin/cmd", &tree.root);
+        assert_eq!(inner_assignment.reason, Reason::Variable);
+        let missing = bypass_refused("FOO=\"$(./bin/missing)\" ./bin/cmd", &tree.root);
+        assert_eq!(missing.reason, Reason::NotAtPath);
+        let unclosed = bypass_refused("FOO=\"$(./bin/inner\" ./bin/cmd", &tree.root);
+        assert!(
+            matches!(unclosed.reason, Reason::Unclosed(_)),
+            "{unclosed:?}"
+        );
+    }
+
+    /// A rule that denies the inner command stops the line, as it would for a step of its own.
+    #[test]
+    fn bypass_substitution_is_judged_by_the_rules_like_any_step() {
+        let tree = Tree::new("bypass-rules");
+        tree.executable("bin/cmd").executable("bin/inner");
+        let mut asked = Vec::new();
+        let stopped = compile_with(
+            "FOO=\"$(./bin/inner x)\" ./bin/cmd",
+            &tree.root,
+            None,
+            &mut |program, args| {
+                asked.push((program.to_string(), args.to_vec()));
+                if program == "./bin/inner" {
+                    return Err(bravebot_core::policy::Denial {
+                        principle: bravebot_core::event::Principle::Capability,
+                        message: "a deny rule covers it".to_string(),
+                    });
+                }
+                Ok(())
+            },
+            Expansions::Assignments,
+        )
+        .expect_err("a denied inner command should stop the line");
+        assert!(matches!(stopped, Stopped::Rule(_)), "{stopped:?}");
+        assert_eq!(
+            asked,
+            [
+                ("./bin/cmd".to_string(), Vec::new()),
+                ("./bin/inner".to_string(), vec!["x".to_string()])
+            ],
+            "the using step is asked first, then the inner command with its own argv"
+        );
+    }
+
+    /// Single quotes keep `$` as text in both modes; nothing is expanded.
+    #[test]
+    fn a_single_quoted_dollar_in_an_assignment_is_literal_text() {
+        let tree = Tree::new("bypass-single");
+        tree.executable("bin/cmd");
+        let off = compiled("FOO='$X $(y)' ./bin/cmd", &tree.root);
+        let on = bypass_compiled("FOO='$X $(y)' ./bin/cmd", &tree.root);
+        for plan in [off, on] {
+            let step = plan.steps.steps()[0];
+            assert_eq!(
+                step.environment,
+                [("FOO".to_string(), "$X $(y)".to_string())]
+            );
+            assert!(step.expansions.is_empty());
         }
     }
 

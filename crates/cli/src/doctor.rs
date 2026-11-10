@@ -44,7 +44,7 @@ pub(crate) fn sandbox_mode_line(
                 Source::File(path) | Source::Managed(path) => t!(
                     doctor_sandbox_from,
                     mode = choice.mode.name(),
-                    path = path.display().to_string()
+                    path = progress::printable_path(&path)
                 ),
             };
             Ok(aligned(label, detail, DETAIL))
@@ -104,7 +104,7 @@ fn report_mcp_declared(settings: &bravebot_config::Settings, ending: &mut Ending
             t!(
                 doctor_settings_mcp_declared,
                 key = mcp::shown(key),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             ),
         );
     }
@@ -234,7 +234,7 @@ fn each<T>(label: impl AsRef<str>, items: impl IntoIterator<Item = T>, say: impl
 /// `each` under `doctor_settings_ignored`, for the settings that name only the file that held them.
 fn ignored<'a>(paths: impl IntoIterator<Item = &'a Path>, say: impl Fn(String) -> String) {
     each(t!(doctor_settings_ignored), paths, |path| {
-        say(path.display().to_string())
+        say(progress::printable_path(path))
     });
 }
 
@@ -272,7 +272,7 @@ fn home_only_line(key: &str, path: String) -> String {
 fn home_only_lines(settings: &bravebot_config::Settings) -> Vec<String> {
     settings
         .not_obeyed_all()
-        .map(|(key, path)| home_only_line(key, path.display().to_string()))
+        .map(|(key, path)| home_only_line(key, progress::printable_path(path)))
         .collect()
 }
 
@@ -285,7 +285,10 @@ fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)
         .map(|path| {
             (
                 t!(doctor_retention).to_string(),
-                t!(doctor_retention_paused, path = path.display().to_string()),
+                t!(
+                    doctor_retention_paused,
+                    path = progress::printable_path(path)
+                ),
             )
         })
         .collect()
@@ -309,13 +312,18 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
         });
     let profile = bravebot_agent::home::profile();
     let directory = std::env::current_dir().unwrap_or_default();
-    let rules = bravebot_sandbox::rules::resolve(&settled.lists, profile.as_deref(), &directory);
+    let rules = bravebot_sandbox::rules::resolve(
+        &settled.lists,
+        profile.as_deref(),
+        bravebot_agent::home::directory().as_deref(),
+        &directory,
+    );
     let backend = bravebot_sandbox::for_current_platform().ok();
     let capabilities = backend.as_ref().map(|backend| backend.capabilities());
     for line in sandbox_filesystem_lines(&rules, &directory, capabilities.as_ref()) {
         fact(t!(doctor_sandbox_filesystem), line);
     }
-    let managed_file = bravebot_config::managed_file().display().to_string();
+    let managed_file = progress::printable_path(&bravebot_config::managed_file());
     each(
         t!(doctor_settings_ignored),
         &settled.unread,
@@ -335,7 +343,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_filesystem_ignored,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -346,7 +354,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_misshapen,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -357,7 +365,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_hosts_ignored,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -368,7 +376,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_hosts_misshapen,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -381,30 +389,34 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
         |(path, key)| {
             t!(
                 doctor_settings_git_identities_misshapen,
-                key = key,
-                path = path.display().to_string()
+                key = progress::printable(key),
+                path = progress::printable_path(path)
             )
         },
     );
     // Judged as a stage judges it, so a key a push would not be given is named before the push.
     if let Some(home) = bravebot_agent::home::profile() {
         for entry in &settings.git_identities().entries {
-            let lent = bravebot_sandbox::scope::identity_key(&entry.key, &home)
-                .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
+            let lent = bravebot_sandbox::scope::identity_key(
+                &entry.key,
+                &home,
+                bravebot_agent::home::directory().as_deref(),
+            )
+            .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
             if lent.is_none() {
                 fact(
                     t!(doctor_settings_ignored),
                     t!(
                         doctor_settings_git_identities_key_refused,
-                        key = format!(
+                        key = progress::printable(&format!(
                             "git.identities.{}/{}",
                             entry.address.host, entry.address.owner
-                        ),
-                        value = entry.key.clone(),
+                        )),
+                        value = progress::printable(&entry.key),
                         path = entry
                             .by
                             .as_deref()
-                            .map(|by| by.display().to_string())
+                            .map(progress::printable_path)
                             .unwrap_or_default()
                     ),
                 );
@@ -474,7 +486,7 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
     // something. A person reading a value they did not expect has three places it could have come
     // from, and the paths are the whole of what tells them which.
     each(t!(doctor_settings_layer), settings.layers(), |layer| {
-        layer.display().to_string()
+        progress::printable_path(layer)
     });
     each(
         t!(doctor_settings_override),
@@ -483,7 +495,7 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
             t!(
                 doctor_settings_overridden,
                 name = progress::printable(name),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -525,7 +537,7 @@ fn refused_region(refused: &bravebot_config::bedrock::RefusedRegion) -> String {
 /// Every setting that was read and not obeyed, or not read at all, from the vetting key through the
 /// narrowing keys. The network and filesystem ones follow in their own sections.
 fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Managed) {
-    let managed_file = bravebot_config::managed_file().display().to_string();
+    let managed_file = progress::printable_path(&bravebot_config::managed_file());
     // A key that looks like configuration and does nothing, which is the one worth saying out
     // loud: it is read from the home layer alone, so a checkout cannot stop whoever opened it being
     // asked, and somebody who wrote it into one has to be told rather than left wondering why the
@@ -573,7 +585,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             t!(
                 doctor_settings_sandbox_ignored,
                 mode = mode.name(),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -583,9 +595,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         |(path, mode, held)| {
             t!(
                 doctor_settings_sandbox_strict_ignored,
-                path = path.display().to_string(),
+                path = progress::printable_path(path),
                 mode = mode.name(),
-                held = held.display().to_string()
+                held = progress::printable_path(held)
             )
         },
     );
@@ -616,7 +628,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             t!(
                 doctor_settings_unread_key,
                 key = progress::printable(key),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -633,7 +645,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             t!(
                 doctor_settings_narrowing_ignored,
                 key = format!("permissions.{key}"),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -679,7 +691,7 @@ fn report_run_network(
         |()| {
             t!(
                 doctor_managed_network_unreadable,
-                path = bravebot_config::managed_file().display().to_string()
+                path = progress::printable_path(&bravebot_config::managed_file())
             )
         },
     );
@@ -809,7 +821,7 @@ fn report_backends(config: &Config, ending: &mut Ending) {
             t!(doctor_gateway_keys),
             t!(
                 doctor_gateway_keys_unreadable,
-                path = bravebot_config::keys::file(&directory).display()
+                path = progress::printable_path(&bravebot_config::keys::file(&directory))
             ),
         );
     }
@@ -824,7 +836,7 @@ fn report_backends(config: &Config, ending: &mut Ending) {
             t!(doctor_brave_key),
             t!(
                 brave_key_unreadable,
-                path = bravebot_config::brave_key::file(&directory).display()
+                path = progress::printable_path(&bravebot_config::brave_key::file(&directory))
             ),
         );
     }
@@ -1245,7 +1257,7 @@ pub(crate) fn development(
         return Vec::new();
     };
     vec![
-        t!(doctor_development, path = root.display().to_string()),
+        t!(doctor_development, path = progress::printable_path(root)),
         aligned("AGENTS.md", agent_discovery(root, windows), FACT),
         aligned(
             "direnv",
@@ -1428,22 +1440,38 @@ fn report_openshell(servers: &[String], ending: &mut Ending) {
 /// would get. Only the answer is printed: what the CLI exports to give it is a live AWS credential.
 /// The sign-in command is named only where a sign-in is what is missing.
 fn report_aws_session(profile: Option<&str>) {
-    use bravebot_agent::backend::{Backend, CredentialError};
+    use bravebot_agent::backend::Backend;
     fact(
         t!(doctor_aws_session),
-        match Backend::session_of(profile) {
-            Ok(()) => t!(doctor_aws_signed_in).to_string(),
-            Err(CredentialError::Refused { .. }) => t!(doctor_aws_signed_out).to_string(),
-            Err(CredentialError::NoSuchProfile { available, .. }) if available.is_empty() => {
-                t!(doctor_aws_no_profiles).to_string()
-            }
-            Err(CredentialError::NoSuchProfile { available, .. }) => {
-                t!(doctor_aws_no_profile, available = available.join(", "))
-            }
-            Err(CredentialError::NotInstalled) => t!(doctor_aws_no_cli).to_string(),
-            Err(CredentialError::Undecodable { .. }) => t!(doctor_aws_undecodable).to_string(),
-        },
+        aws_session_line(Backend::session_of(profile)),
     );
+}
+
+/// What the AWS session line says for the answer the AWS CLI gave.
+///
+/// The profile names the CLI lists come from a configuration file, so each is drawn by
+/// [`progress::printable`] (LAYER-3).
+fn aws_session_line(answer: Result<(), bravebot_agent::backend::CredentialError>) -> String {
+    use bravebot_agent::backend::CredentialError;
+    match answer {
+        Ok(()) => t!(doctor_aws_signed_in).to_string(),
+        Err(CredentialError::Refused { .. }) => t!(doctor_aws_signed_out).to_string(),
+        Err(CredentialError::NoSuchProfile { available, .. }) if available.is_empty() => {
+            t!(doctor_aws_no_profiles).to_string()
+        }
+        Err(CredentialError::NoSuchProfile { available, .. }) => {
+            t!(
+                doctor_aws_no_profile,
+                available = available
+                    .iter()
+                    .map(|name| progress::printable(name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        Err(CredentialError::NotInstalled) => t!(doctor_aws_no_cli).to_string(),
+        Err(CredentialError::Undecodable { .. }) => t!(doctor_aws_undecodable).to_string(),
+    }
 }
 
 /// The URL `doctor` gives for a gateway's endpoint for a reply, without the userinfo a `baseURL` may
@@ -1939,7 +1967,7 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
     let Some(path) = managed.path() else {
         return Vec::new();
     };
-    let path = path.display().to_string();
+    let path = progress::printable_path(path);
     let pinned: Vec<&str> = managed.pinned().collect();
     vec![aligned(
         t!(doctor_managed),
@@ -2015,12 +2043,12 @@ pub(crate) fn state_directory(
     };
     let mut lines = vec![t!(
         doctor_state_directory,
-        path = path.display().to_string(),
+        path = progress::printable_path(path),
         variable = variable
     )];
     lines.push(t!(
         doctor_state_directory_logs,
-        path = path.join(bravebot_diag::DIRECTORY).display().to_string()
+        path = progress::printable_path(&path.join(bravebot_diag::DIRECTORY))
     ));
     if !restricted {
         lines.push(aligned(
@@ -2071,7 +2099,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             paths = named
                 .paths()
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|path| progress::printable_path(path))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -2089,7 +2117,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
     for problem in transport.trust_problems() {
         lines.push(aligned(
             t!(doctor_trust_roots_unusable),
-            problem.to_string(),
+            progress::printable_lines(&problem.to_string()),
             DETAIL,
         ));
     }
@@ -2127,8 +2155,8 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             t!(doctor_client_certificate),
             t!(
                 doctor_client_certificate_loaded,
-                certificate = certificate.display().to_string(),
-                key = key.display().to_string()
+                certificate = progress::printable_path(certificate),
+                key = progress::printable_path(key)
             ),
             DETAIL,
         ));
@@ -2141,7 +2169,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         for problem in transport.client_problems() {
             lines.push(aligned(
                 t!(doctor_client_certificate_unusable),
-                problem.to_string(),
+                progress::printable_lines(&problem.to_string()),
                 DETAIL,
             ));
         }
@@ -2183,7 +2211,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
                 t!(
                     doctor_network_file_detail,
                     names = names.join(", "),
-                    path = file.display().to_string()
+                    path = progress::printable_path(file)
                 ),
                 DETAIL,
             ));
@@ -2197,7 +2225,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             t!(
                 doctor_network_file_ignored_detail,
                 name = name,
-                path = file.display().to_string()
+                path = progress::printable_path(file)
             ),
             DETAIL,
         ));
@@ -2303,6 +2331,26 @@ mod tests {
     use bravebot_sandbox::policy::Capabilities;
     use bravebot_sandbox::policy::ConfinementLevel;
     use std::path::PathBuf;
+
+    /// LAYER-3: the profile names the AWS CLI lists come from a configuration file, and `doctor`
+    /// draws them as pictures in the line that names the alternatives.
+    ///
+    /// Rejects joining the names as the CLI printed them.
+    #[test]
+    fn the_aws_profiles_the_cli_lists_are_drawn_as_pictures() {
+        use bravebot_agent::backend::CredentialError;
+        let line = aws_session_line(Err(CredentialError::NoSuchProfile {
+            profile: "work".into(),
+            available: vec!["dev\u{1b}[2J".into(), "ops\u{202e}".into()],
+        }));
+
+        assert!(
+            !line.chars().any(|c| c.is_control() && c != '\n'),
+            "a control character reached the line: {line:?}"
+        );
+        assert!(!line.contains('\u{202e}'), "{line:?}");
+        assert!(line.contains("dev\u{241b}[2J"), "{line:?}");
+    }
 
     /// The two facts about the network nothing else in the report carries. A machine behind a
     /// TLS-inspecting proxy refuses every connection over an authority its user already installed,
@@ -2628,6 +2676,57 @@ mod tests {
             &Default::default(),
         );
         assert!(!bare.join("\n").contains("client certificate"), "{bare:?}");
+    }
+
+    /// LAYER-3, CLI-7: the certificate and key a client presents are named by environment
+    /// variables, so the line that says they loaded draws both paths as pictures. The integration
+    /// test covers the lines for files that cannot be used, which come through the transport's own
+    /// error text; this pins the line for a pair that loaded, which needs a valid pair on disk.
+    ///
+    /// Rejects interpolating `Path::display` into the line.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_draws_the_paths_of_a_client_certificate_that_loaded_as_pictures() {
+        let (certificate, key) = client_files(
+            "doctor-client-hostile",
+            &armoured(
+                &format!("{} KEY", "PRIVATE"),
+                &[
+                    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNI5exiW0VUAX6Zlh",
+                    "2xpQpP9Ul/tkSYnXIk0Ew/P6G1qhRANCAAQvxnDQ3AYHDeZGt/rINkorQdR29nsI",
+                    "WLbY1tX9vPGoIPii3RoRH2ndnu4qv35pTOL5ZPoT6W8ZF4tEue2KzaW7",
+                ],
+            ),
+        );
+        let hostile = certificate
+            .parent()
+            .unwrap()
+            .join("dir\u{1b}[2J\u{202e}end");
+        std::fs::create_dir_all(&hostile).expect("a directory");
+        let moved_certificate = hostile.join("client.crt");
+        let moved_key = hostile.join("client.key");
+        std::fs::rename(&certificate, &moved_certificate).expect("move the certificate");
+        std::fs::rename(&key, &moved_key).expect("move the key");
+        let transport =
+            Transport::stated_with_client_pair(Some(&moved_certificate), Some(&moved_key));
+
+        let report = network(&transport, &Default::default()).join("\n");
+
+        assert!(
+            report.contains("loaded"),
+            "the pair did not load: {report:?}"
+        );
+        assert!(
+            !report.contains('\u{1b}') && !report.contains('\u{202e}'),
+            "the line holds a raw character: {report:?}"
+        );
+        assert_eq!(
+            report
+                .matches("\u{241b}[2J\u{2039}U+202E\u{203A}end")
+                .count(),
+            2,
+            "both paths are drawn: {report:?}"
+        );
     }
 
     /// NET-11: a named file that cannot be used is a line of its own, and ends the report on a
@@ -3859,6 +3958,83 @@ mod tests {
         assert!(!source.path.join("AGENTS.md").exists());
     }
 
+    /// LAYER-3, CLI-7: a managed file's path is drawn as pictures on the line that names it, in
+    /// both the line for a file that pinned nothing and the line for one that pinned names. The
+    /// path is a fixed machine location in a real install, so the binary cannot be made to print
+    /// one with control characters, and this is the only place the draw is pinned.
+    ///
+    /// Rejects interpolating `Path::display` into either line.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_draws_the_managed_files_path_as_pictures() {
+        let scratch = Scratch::new("doctor-managed-hostile\u{1b}[2J\u{202e}end");
+        let path = scratch.path.join("managed.json");
+        for (text, what) in [
+            (
+                r#"{"env": {"BRAVEBOT_CONTEXT_BUDGET": "4096"}}"#,
+                "pinned names",
+            ),
+            (r#"{"env": {}}"#, "pinned nothing"),
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+
+            let lines = managed_layer(&Managed::at(&path)).join("\n");
+
+            assert!(
+                !lines.contains('\u{1b}') && !lines.contains('\u{202e}'),
+                "the line for a file that {what} holds a raw character: {lines:?}"
+            );
+            assert!(
+                lines.contains("\u{241b}[2J\u{2039}U+202E\u{203A}end"),
+                "the line for a file that {what} does not draw the path: {lines:?}"
+            );
+        }
+    }
+
+    /// LAYER-3, CLI-7: the source tree a session runs in is found from the working directory, which
+    /// a checkout names, so its root is drawn as pictures on the development line.
+    ///
+    /// Rejects interpolating `Path::display` into the line.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_draws_the_development_root_as_pictures() {
+        let source = development_fixture("doctor-development-hostile\u{1b}[2J\u{202e}end");
+
+        let report = development(&source.path, None, false).join("\n");
+
+        assert!(
+            !report.contains('\u{1b}') && !report.contains('\u{202e}'),
+            "the development line holds a raw character: {report:?}"
+        );
+        assert!(
+            report.contains("\u{241b}[2J\u{2039}U+202E\u{203A}end"),
+            "the development line does not draw the root: {report:?}"
+        );
+    }
+
+    /// LAYER-3, CLI-7: the state directory is chosen by the environment, so the line that names it
+    /// and the line for its log directory draw its path as pictures.
+    ///
+    /// Rejects interpolating `Path::display` into either line.
+    #[test]
+    fn doctor_draws_the_state_directory_as_pictures() {
+        let path = Path::new("/home/\u{1b}[2J\u{202e}end/.bravebot");
+
+        let report = state_directory(Some(("HOME", path)), &["HOME"], false).join("\n");
+
+        assert!(
+            !report.contains('\u{1b}') && !report.contains('\u{202e}'),
+            "the state directory lines hold a raw character: {report:?}"
+        );
+        assert_eq!(
+            report
+                .matches("\u{241b}[2J\u{2039}U+202E\u{203A}end")
+                .count(),
+            2,
+            "both lines draw the path: {report:?}"
+        );
+    }
+
     /// A hand-written path must survive a diagnostic and must not look healthy.
     #[test]
     fn doctor_reports_agent_discovery_conflicts_without_changing_them() {
@@ -3985,7 +4161,7 @@ mod tests {
             deny_write: vec![entry("secret.env"), entry(outside)],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &directory);
+        let rules = resolve(&lists, None, None, &directory);
         let backend = |subtracts_from_a_grant| Capabilities {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["a mechanism"],

@@ -17,8 +17,10 @@ request until each has been read, so a single read drops approved, passing pull 
 saying so. A pull request that would be listed if it were `MERGEABLE` is pending: the list is read
 again every 3 seconds for up to `WAIT` seconds (30 by default) while any is pending, and stderr
 names them (`waiting for 2 pull requests GitHub has not computed as mergeable (UNKNOWN): #3, #4`).
-A draft, unapproved, failing or conflicting pull request is never waited for. Each pull request is
-printed as `<url>  <title>` on stdout once, as soon as a read shows it mergeable. Any still
+A draft, unapproved, failing or conflicting pull request is never waited for. The pull requests are
+printed as `<url>  <title>` on stdout once, after the last read, in the order they have waited: the
+one waiting longest first and the most recent last. A pull request waits from the reviewer's latest
+approval, or from when it was opened if that has no time, and a tie goes by number. Any still
 `UNKNOWN` when the wait ends are named on stderr as missing from the list. A failure of `gh` exits 1.
 
 ```sh
@@ -32,7 +34,8 @@ which serves scripted reads from a stand-in `gh` and runs the script and the mak
 ## review-ready-menubar
 
 A macOS menu bar app that shows the list `make review-ready` prints. The icon shows how many pull
-requests are listed, and choosing one in the menu opens it in the browser.
+requests are listed, and choosing one in the menu opens it in the browser. The menu keeps the order
+the make target prints: longest waiting at the top, most recent last.
 
 ```sh
 contrib/review-ready-menubar/install.sh [--interval SECONDS] [--make-args "REVIEWER=login"] [--login] [--dir DIRECTORY]
@@ -110,20 +113,35 @@ whose answer is known, and reads no catalog; `make check-locales` runs it first,
 
 ## check-code-selectors.py
 
-Fails while a variable in `CODE_SELECTORS` in `crates/agent/src/gcloud.rs` lacks a test.
+Fails while a call of `programs::start` or `programs::start_against` does not state
+`CodeSelectors`, or a variable in a `CODE_SELECTORS` list, in `crates/sandbox/src/programs.rs`,
+`crates/agent/src/gcloud.rs`, `crates/bedrock/src/credentials.rs`,
+`crates/cli/src/push_identity.rs`, `crates/tui/src/opener.rs`, `crates/tui/src/powershell.rs` or
+`crates/agent/src/usability.rs`,
+lacks a test.
 
-`gcloud` is started with the person's environment, and its launcher reads `CLOUDSDK_PYTHON` and
-`CLOUDSDK_CONFIG` to choose code to run. `command_for` takes such a variable off when its value
-names a path a stage may write. For each name in the list, this requires an
-`assert!(withheld("NAME", ...))` and an `assert!(!withheld("NAME", ...))` in the test module of the
-same file. A loop that keeps every value fails the first, and one that removes every value fails the
-second.
+A program bravebot starts for itself is started with the person's environment, and the programs
+can read variables that choose code to run, such as `CLOUDSDK_PYTHON` and `AWS_CONFIG_FILE`.
+`start` takes `CodeSelectors::Kept`, which leaves the environment as set, or
+`CodeSelectors::Checked(&NAME)`, which takes off each variable in the generic `CODE_SELECTORS`
+table in `crates/sandbox/src/programs.rs`, each `GIT_CONFIG_` variable and the names in `NAME`
+when the value names a path a stage may write. This requires every call of `start` and
+`start_against` in `crates/**/*.rs` to write one of the two at the call, and a `//` comment with
+every `Kept` outside a test. For each name in a list, it requires an
+`assert!(withheld("NAME", ...))` (or `checked`) and an `assert!(!withheld("NAME", ...))` in the test
+module of the same file. A loop over the whole table counts for every name in it. A loop that
+keeps every value fails the first, and one that removes every value fails the second. A name of
+the `Options` kind has no value to keep and needs only the first. A list may take an entry from
+`selectors::` in `crates/sandbox/src/programs.rs`, which this script reads as the variable the
+constant is named for.
 
 ```sh
 make check-code-selectors   # or contrib/check-code-selectors.py
 ```
 
-`make check` runs it and CI has a job for it. It compiles nothing and needs no toolchain. It cannot
+`make check` runs it and CI has a job for it. It compiles nothing and needs no toolchain. It also
+reads `LOADER_PREFIXES` and `HOST_VARIABLES`, which
+[checks.md](../docs/development/checks.md) describes. It cannot
 tell that the list is complete: a variable the launcher reads that is not listed is found by
 reading the launcher, which [PATH-008](../docs/best-practices/paths.md#PATH-008) asks a reviewer to
 do. `--selftest` checks the parse and the verdict against inputs whose answer is known and reads no

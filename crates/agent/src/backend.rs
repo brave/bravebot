@@ -74,6 +74,10 @@ pub enum BackendError {
         conceded: Conceded,
         /// The backend that sent the requests, where the caller said so.
         backend: Option<BackendKind>,
+        /// Whether the backend that sent the requests has a `provider` entry to state `maxRetries`
+        /// in, set from the variant that sent them and never from a reply
+        /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+        retry_setting: bool,
         cause: Box<BackendError>,
     },
 }
@@ -138,6 +142,7 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 backend,
+                retry_setting,
                 cause,
             } => Self::Attempted {
                 attempts: attempts.saturating_add(earlier),
@@ -145,6 +150,7 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 backend,
+                retry_setting,
                 cause,
             },
             other => other.counted(earlier, None, None),
@@ -164,6 +170,7 @@ impl BackendError {
             context_tokens,
             conceded: Conceded::default(),
             backend: None,
+            retry_setting: false,
             cause: Box::new(self),
         }
     }
@@ -177,6 +184,7 @@ impl BackendError {
                 usage,
                 context_tokens,
                 backend,
+                retry_setting,
                 cause,
                 ..
             } => Self::Attempted {
@@ -185,6 +193,7 @@ impl BackendError {
                 context_tokens,
                 conceded: given_up,
                 backend,
+                retry_setting,
                 cause,
             },
             other => other,
@@ -201,6 +210,7 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 cause,
+                retry_setting,
                 ..
             } => Self::Attempted {
                 attempts,
@@ -208,6 +218,34 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 backend: Some(kind),
+                retry_setting,
+                cause,
+            },
+            other => other,
+        }
+    }
+
+    /// This failure marked with whether the backend that sent the requests has a `provider` entry to
+    /// state `maxRetries` in, which is a fact about the variant and its configuration and never
+    /// anything a reply or an address said. A failure that counted no requests is returned as it
+    /// was.
+    pub(crate) fn with_retry_setting(self, entry: bool) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend,
+                cause,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend,
+                retry_setting: entry,
                 cause,
             },
             other => other,
@@ -237,10 +275,16 @@ impl BackendError {
                 attempts,
                 conceded,
                 backend,
+                retry_setting,
                 cause,
                 ..
             } => {
                 let diagnosis = cause.diagnosis().after(*attempts).with_conceded(*conceded);
+                let diagnosis = if *retry_setting {
+                    diagnosis.with_retry_setting()
+                } else {
+                    diagnosis
+                };
                 return match backend {
                     Some(kind) => diagnosis.on_backend(*kind),
                     None => diagnosis,
@@ -262,36 +306,7 @@ impl BackendError {
                     // commands (PREM-10) rather than told only that credentials were refused.
                     return Diagnosis::of(Category::Unauthorized).with_premium_key();
                 }
-                ChatError::Account(failure) => match failure {
-                    AccountFailure::NotSignedIn
-                    | AccountFailure::Ended
-                    | AccountFailure::Refused
-                    | AccountFailure::Unusable => Category::Unauthorized,
-                    // The service answered and said the account has reached a limit or may not be
-                    // used this way, which a new sign-in does not change, so it is no failure of the
-                    // credential. A refusal is a category no fallback model is used for, and the
-                    // account answers for every model it serves.
-                    AccountFailure::Named { .. } => Category::Refused,
-                    // The service answered and said the account does not offer this model, which
-                    // a new sign-in or another request does not change, so it is no failure of
-                    // the credential.
-                    AccountFailure::ModelNotOffered => Category::Refused,
-                    AccountFailure::Renewal(class) => category_of_renewal(*class),
-                    // The sign-in is what failed or what the service refused, which signing in again
-                    // mends, except for the renewal that was refused or could not be made, which is
-                    // told as the class of the request, as the ChatGPT account's is.
-                    AccountFailure::Xai(failure) => match failure {
-                        XaiFailure::NotSignedIn
-                        | XaiFailure::Ended
-                        | XaiFailure::Rejected
-                        | XaiFailure::Unusable => Category::Unauthorized,
-                        // The host answered and refused the request for this account, which a new
-                        // sign-in does not change, so it is no failure of the credential and no
-                        // fallback model answers for it, as for a refusal the ChatGPT account names.
-                        XaiFailure::NotPermitted => Category::Refused,
-                        XaiFailure::Renewal(class) => category_of_renewal(*class),
-                    },
-                },
+                ChatError::Account(failure) => category_of_account(failure),
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
                 ChatError::Incomplete => Category::Incomplete,
                 ChatError::Reported { failure } => match failure {
@@ -305,8 +320,10 @@ impl BackendError {
                     }
                     Failure::RateLimit => Category::RateLimited,
                     Failure::Api | Failure::Overloaded | Failure::Timeout => Category::Unavailable,
-                    // Unknown protocol names must not enter the diagnosis.
-                    Failure::Unknown => Category::Incomplete,
+                    // The fallback of the closed list of codes: a failure the service reported
+                    // and this build cannot name. Its own category, since it is not a reply that
+                    // stopped. The service's name for it never enters the diagnosis.
+                    Failure::Unknown => Category::Unrecognised,
                 },
                 ChatError::TooLong(cut_off) => {
                     return Diagnosis::of(Category::TooLong).at_ceiling(cut_off.ceiling);
@@ -526,7 +543,7 @@ pub(crate) mod scripted {
                 thinking: Labelled::new(&piece, Label::untrusted_public()),
                 counted_by_server: false,
                 prose: false,
-                attempt: 1,
+                ..Progress::quiet(1)
             });
         }
     }
@@ -557,6 +574,40 @@ pub(crate) mod scripted {
             });
             Some(reply)
         })
+    }
+}
+
+/// The category of an account's failure: a sign-in that failed or ended, a refusal the service
+/// named, or a renewal that failed.
+fn category_of_account(failure: &AccountFailure) -> Category {
+    match failure {
+        AccountFailure::NotSignedIn
+        | AccountFailure::Ended
+        | AccountFailure::Refused
+        | AccountFailure::Unusable => Category::Unauthorized,
+        // The service answered and said the account has reached a limit or may not be used this
+        // way, which a new sign-in does not change, so it is no failure of the credential. A
+        // refusal is a category no fallback model is used for, and the account answers for every
+        // model it serves.
+        AccountFailure::Named { .. } => Category::Refused,
+        // The service answered and said the account does not offer this model, which a new
+        // sign-in or another request does not change, so it is no failure of the credential.
+        AccountFailure::ModelNotOffered => Category::Refused,
+        AccountFailure::Renewal(class) => category_of_renewal(*class),
+        // The sign-in is what failed or what the service refused, which signing in again mends,
+        // except for the renewal that was refused or could not be made, which is told as the
+        // class of the request, as the ChatGPT account's is.
+        AccountFailure::Xai(failure) => match failure {
+            XaiFailure::NotSignedIn
+            | XaiFailure::Ended
+            | XaiFailure::Rejected
+            | XaiFailure::Unusable => Category::Unauthorized,
+            // The host answered and refused the request for this account, which a new sign-in
+            // does not change, so it is no failure of the credential and no fallback model
+            // answers for it, as for a refusal the ChatGPT account names.
+            XaiFailure::NotPermitted => Category::Refused,
+            XaiFailure::Renewal(class) => category_of_renewal(*class),
+        },
     }
 }
 
@@ -1385,6 +1436,20 @@ impl<'a> Backend<'a> {
         }
     }
 
+    /// Whether this backend is reached through a `provider` entry, which is where `maxRetries` is
+    /// stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    ///
+    /// Read from the configuration the backend was selected with. The Brave endpoint, a tier-variable
+    /// Bedrock account, the Vertex service the environment names and the two sign-in accounts have no
+    /// entry to put it in.
+    fn has_retry_setting(&self) -> bool {
+        match self {
+            Self::Bedrock { config, .. } => config.named_by_block(),
+            Self::Gateway { provider, .. } => provider.written_in_entry(),
+            Self::Aichat { .. } | Self::Account { .. } | Self::XaiAccount { .. } => false,
+        }
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
@@ -1392,8 +1457,9 @@ impl<'a> Backend<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
+        let entry = self.has_retry_setting();
         self.send(policy, request)
-            .map_err(|error| error.sent_by(kind))
+            .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
     }
 
     fn send<S: Sink>(
@@ -1473,8 +1539,9 @@ impl<'a> Backend<'a> {
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
+        let entry = self.has_retry_setting();
         self.send_streaming(policy, request, progress)
-            .map_err(|error| error.sent_by(kind))
+            .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
     }
 
     fn send_streaming<S: Sink>(
@@ -2481,6 +2548,36 @@ mod tests {
             Backend::select(&with_a_gateway(), &egress, "z-ai/glm-4.6"),
             Backend::Gateway { .. }
         ));
+    }
+
+    /// BACKEND-37: only a backend reached through a `provider` entry has a `maxRetries` to raise,
+    /// so only it is told to raise one. A gateway entry and an AWS entry have one; Brave's endpoint
+    /// and an AWS account reached through the tier variables have none.
+    ///
+    /// The faults this rejects: the flag true for every backend, false for every backend, and
+    /// decided by the variant alone, which would treat the two kinds of AWS account alike.
+    #[test]
+    fn only_a_backend_reached_through_a_provider_entry_has_a_retry_setting() {
+        let mut config = with_a_gateway();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "sso"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config
+            .providers
+            .extend(bravebot_config::provider::Provider::all(&root));
+        let egress = Egress::new();
+        let has = |model: &str| Backend::select(&config, &egress, model).has_retry_setting();
+
+        assert!(has("z-ai/glm-4.6"), "a gateway entry");
+        assert!(has("openai.gpt-5.6-sol"), "an AWS entry");
+        assert!(!has("opus-arn"), "an AWS account the tier variables name");
+        assert!(!has(DEFAULT_MODEL), "Brave's endpoint");
     }
 
     /// A `provider` block naming AWS reaches Bedrock, which signs, rather than the gateway client,
@@ -4826,6 +4923,7 @@ mod tests {
                 context_tokens,
                 conceded: _,
                 backend: _,
+                retry_setting: _,
                 cause,
             } = &error
             else {
@@ -4872,6 +4970,7 @@ mod tests {
                 context_tokens,
                 conceded: _,
                 backend: _,
+                retry_setting: _,
                 cause,
             } = &error
             else {
@@ -4952,6 +5051,7 @@ mod tests {
                 context_tokens,
                 conceded: _,
                 backend: _,
+                retry_setting: _,
                 cause,
             } = &error
             else {

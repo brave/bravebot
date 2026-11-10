@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Approvals and permissions
-description: Every prompt the system puts to you, and exactly what your answer grants.
+description: Approval prompts, editing proposed writes, vouching for commands and command families, saved answers, URL approvals, permission rules and modes, manifest approvals and unattended runs.
 ---
 
 # Approvals and permissions

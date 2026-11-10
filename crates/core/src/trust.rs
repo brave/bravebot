@@ -186,35 +186,77 @@ impl TrustStore {
     ///
     /// Each rule under `from` is copied to the same relative path under `to`, and `to` itself is
     /// given the decision in force at `from`, or an undecided boundary where no rule covers `from`,
-    /// so a broader rule over `to` does not answer for a path nobody has said anything about. A
-    /// rule already under `to` is replaced by its copy.
+    /// so a broader rule over `to` does not answer for a path nobody has said anything about.
+    ///
+    /// Two rules under `from` that land on one key under `to` (`claß/x` and `claẞ/x`, which the
+    /// one-letter fold joins, are both `x`) are copied as the weakest of them, a distrust before an
+    /// undecided boundary before a trust, which is how the lookup reads them under `from`. So is a
+    /// rule already at a key a copy lands on: no copy replaces a decision that withholds trust with
+    /// one that grants it.
     pub fn copy_beneath(&mut self, from: &str, to: &str) {
         let from = self.key(from);
         let to = self.key(to);
         let at_root = self.decision_at_key(&from).flatten();
-        let copies: Vec<(String, Option<Integrity>)> = self
+        // A trust is copied only from a name every volume that folds case joins with `from`, the
+        // way a trust is matched ([`fold_simple`]). A rule that withholds trust is copied from every
+        // name either fold joins with it, as a refusal is read: [`Name::is`] reads it by
+        // [`fold_simple`] and [`Name::is_equivalent`] by [`fold_case`], and the two joins differ
+        // (`\u{df}` and `\u{1e9e}` are one name to the first and two to the second). Copying a trust
+        // from a name only the full fold joins would trust a place under `to` that nobody vouched
+        // for.
+        let folds = self.folds_case;
+        let found: Vec<(String, Option<Integrity>)> = self
             .rules
             .iter()
-            .filter(|(key, _)| **key != from && covers(&from, key, self.folds_case))
-            .map(|(key, decision)| {
-                let tail = key[from.len()..].trim_start_matches('/');
-                (format!("{to}/{tail}"), *decision)
+            .filter_map(|(key, decision)| {
+                let covered = match decision {
+                    Some(Integrity::Trusted) => covers_by(&from, key, folds, fold_simple),
+                    _ => {
+                        covers_by(&from, key, folds, fold_case)
+                            || covers_by(&from, key, folds, fold_simple)
+                    }
+                };
+                if !covered {
+                    return None;
+                }
+                let tail = tail_beneath(&from, key);
+                // A rule about `from` itself, spelled another way, is what `at_root` already is.
+                (!tail.is_empty()).then(|| (format!("{to}/{tail}"), *decision))
             })
             .collect();
-        self.rules.insert(to, at_root);
-        self.rules.extend(copies);
+        let mut copies: BTreeMap<String, Option<Integrity>> = BTreeMap::new();
+        for (key, decision) in found.into_iter().chain([(to, at_root)]) {
+            let weakest = copies
+                .get(&key)
+                .map_or(decision, |&other| weaker(other, decision));
+            copies.insert(key, weakest);
+        }
+        for (key, decision) in copies {
+            let weakest = self
+                .rules
+                .get(&key)
+                .map_or(decision, |&held| weaker(held, decision));
+            self.rules.insert(key, weakest);
+        }
     }
 
     /// Drop every rule at or beneath `under` except those that distrust a path (CHECKOUT-8).
+    ///
+    /// A rule is at or beneath `under` where either [`fold_case`] or [`fold_simple`] joins its
+    /// segments with those of `under`. The two joins differ (`\u{df}` and `\u{1e9e}` are one name to
+    /// the simple fold and two to the full one), and a trust is decided by the simple fold, so a
+    /// withdrawal by the full fold alone would leave a trust that still decides a path beneath
+    /// `under`.
     ///
     /// Whether any rule was kept.
     pub fn withdraw_beneath(&mut self, under: &str) -> bool {
         let under = self.key(under);
         let folds = self.folds_case;
-        self.rules.retain(|key, decision| {
-            !covers(&under, key, folds) || *decision == Some(Integrity::Untrusted)
-        });
-        self.rules.keys().any(|key| covers(&under, key, folds))
+        let beneath =
+            |key: &str| covers(&under, key, folds) || covers_by(&under, key, folds, fold_simple);
+        self.rules
+            .retain(|key, decision| !beneath(key) || *decision == Some(Integrity::Untrusted));
+        self.rules.keys().any(|key| beneath(key))
     }
 
     /// Drop the rule at `path` if it trusts that path, and nothing else (TRUST-9).
@@ -359,11 +401,7 @@ impl TrustStore {
                     || (**decision != Some(Integrity::Trusted) && name.is_equivalent(rule))
             })
             .map(|(_, decision)| decision)
-            .min_by_key(|decision| match decision {
-                Some(Integrity::Untrusted) => 0,
-                None => 1,
-                Some(Integrity::Trusted) => 2,
-            })
+            .min_by_key(|decision| strength(**decision))
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -398,6 +436,7 @@ impl TrustStore {
             // it is the top of the meet. The case this exists for is a refusal beneath the
             // directory that was recorded under another form of its name.
             if covers(&path, prefix, self.folds_case)
+                || covers_by(&path, prefix, self.folds_case, fold_simple)
                 || covers_spelled(&beneath, &canonical_form(prefix, self.folds_case))
             {
                 answer = answer.meet(integrity.unwrap_or(Integrity::Untrusted));
@@ -514,6 +553,23 @@ impl TrustStore {
     }
 }
 
+/// How much a decision grants: a distrust least, then an undecided boundary, then a trust.
+fn strength(decision: Option<Integrity>) -> u8 {
+    match decision {
+        Some(Integrity::Untrusted) => 0,
+        None => 1,
+        Some(Integrity::Trusted) => 2,
+    }
+}
+
+/// The one of two decisions that grants less.
+fn weaker(a: Option<Integrity>, b: Option<Integrity>) -> Option<Integrity> {
+    match strength(b) < strength(a) {
+        true => b,
+        false => a,
+    }
+}
+
 /// Whether a name is a full path rather than one read under a working directory.
 ///
 /// A leading `/` is the whole of the test, and a name spelled any other way is relative. A drive
@@ -576,6 +632,30 @@ pub fn fold_case(key: &str) -> String {
         .collect()
 }
 
+/// `key` with its letter case folded out by the mapping that gives every letter exactly one letter,
+/// which is how NTFS compares names.
+///
+/// [`fold_case`] takes `\u{df}` to `ss`, so it joins `cla\u{df}.md` with `class.md`, which APFS opens
+/// as one file and NTFS holds apart. A letter whose upper or lower case is more than one character
+/// stays as it is here, so a trust, which the map cannot tell the volume's mapping of, reaches only
+/// the spelling it was written about and the spellings every volume that folds case joins with it.
+pub fn fold_simple(key: &str) -> String {
+    key.chars()
+        .map(|letter| {
+            let mut upper = letter.to_uppercase();
+            let upper = match (upper.next(), upper.next()) {
+                (Some(only), None) => only,
+                _ => letter,
+            };
+            let mut lower = upper.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(only), None) => only,
+                _ => upper,
+            }
+        })
+        .collect()
+}
+
 /// `key` in the one form every canonically equivalent spelling of it shares, with case folded out
 /// as well where `folds_case` says the volume folds it.
 ///
@@ -606,7 +686,7 @@ pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
 /// A name, held in the forms it is compared in, for a lookup that tests it against many rules.
 struct Name<'a> {
     key: &'a str,
-    /// The key with case folded, where the volume folds it.
+    /// The key with case folded one letter to one letter, where the volume folds it.
     folded: Option<String>,
     canonical: Cow<'a, str>,
     folds_case: bool,
@@ -616,24 +696,25 @@ impl<'a> Name<'a> {
     fn new(key: &'a str, folds_case: bool) -> Self {
         Self {
             key,
-            folded: folds_case.then(|| fold_case(key)),
+            folded: folds_case.then(|| fold_simple(key)),
             canonical: canonical_form(key, folds_case),
             folds_case,
         }
     }
 
-    /// Whether `rule` is this name as the volume reads it: the same bytes, or the same bytes with
-    /// case folded where the volume folds it. A rule of either polarity about such a name decides
-    /// it.
+    /// Whether `rule` is this name as every volume that folds case reads it: the same bytes, or the
+    /// same bytes with case folded one letter to one letter ([`fold_simple`]). A rule of either
+    /// polarity about such a name decides it. A name only [`fold_case`] joins, such as `cla\u{df}.md`
+    /// and `class.md`, is [`Name::is_equivalent`] and decides by a refusal only.
     fn is(&self, rule: &str) -> bool {
         match &self.folded {
-            Some(folded) => fold_case(rule) == *folded,
+            Some(folded) => fold_simple(rule) == *folded,
             None => rule == self.key,
         }
     }
 
-    /// Whether `rule` is a canonically equivalent spelling of this name, which only a rule that
-    /// withholds trust may decide it by.
+    /// Whether `rule` is a canonically equivalent spelling of this name, or one [`fold_case`] joins
+    /// with it where the volume folds case, which only a rule that withholds trust may decide it by.
     ///
     /// Asked after [`Name::is`], and two ASCII names are one in the two senses or neither, so that
     /// pair is not compared again: on a volume that folds case it would fold the rule a second time
@@ -657,11 +738,20 @@ impl<'a> Name<'a> {
 /// untrusted content past the rule, the same class of spelling bypass as git CVE-2014-9390. The
 /// caller says so only of a volume it has probed, and elsewhere the comparison stays byte-exact so
 /// that a rule about `Docs` never covers a different file called `docs`.
+///
+/// The comparison is in the full fold ([`fold_case`]), which joins every name a volume might, so a
+/// caller using it to narrow (a withdrawal, a meet with the rules beneath a path) reaches the most.
+/// A caller that widens uses [`covers_by`] with [`fold_simple`].
 pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
+    covers_by(prefix, path, folds_case, fold_case)
+}
+
+/// [`covers`] comparing in `fold` where the volume folds case.
+fn covers_by(prefix: &str, path: &str, folds_case: bool, fold: fn(&str) -> String) -> bool {
     let (prefix, path) = if folds_case {
         (
-            std::borrow::Cow::Owned(fold_case(prefix)),
-            std::borrow::Cow::Owned(fold_case(path)),
+            std::borrow::Cow::Owned(fold(prefix)),
+            std::borrow::Cow::Owned(fold(path)),
         )
     } else {
         (
@@ -670,6 +760,22 @@ pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
         )
     };
     covers_spelled(&prefix, &path)
+}
+
+/// What is left of `key` after the segments `prefix` has, in `key`'s own spelling.
+///
+/// Counts segments and not bytes, since a rule can be written in a spelling of a different length
+/// than the prefix it is under (`ss` under `\u{17f}\u{17f}`). `key` is a key [`covers_by`] found under
+/// `prefix`.
+fn tail_beneath<'k>(prefix: &str, key: &'k str) -> &'k str {
+    let skipped = prefix
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .count();
+    key.trim_start_matches('/')
+        .splitn(skipped + 1, '/')
+        .nth(skipped)
+        .unwrap_or("")
 }
 
 /// [`covers`] for two keys already in the form they are compared in.
@@ -1289,6 +1395,67 @@ mod tests {
         assert!(!covers("Docs", "docs/a.md", false));
     }
 
+    /// NTFS holds `cla\u{df}.md` and `class.md` apart, and APFS opens one as the other. The map is
+    /// not told which, so a trust is about the spelling it was written about and the spellings every
+    /// volume that folds case joins with it, and does not reach a name only full case folding joins.
+    #[test]
+    fn a_trust_does_not_reach_a_spelling_only_full_case_folding_joins() {
+        for (trusted, named) in [
+            ("cla\u{df}.md", "class.md"),
+            ("class.md", "cla\u{df}.md"),
+            ("cla\u{df}.md", "CLASS.md"),
+            ("cla\u{1e9e}.md", "class.md"),
+        ] {
+            let mut store = TrustStore::new("/work").folding_case(true);
+            store.trust(trusted);
+            assert_eq!(
+                store.integrity_of(named),
+                None,
+                "a trust of {trusted} was read for {named}"
+            );
+            assert_eq!(store.integrity_of(trusted), Some(Integrity::Trusted));
+        }
+        // What every folding volume joins is still one name, `\u{df}` in either case included.
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust("cla\u{df}.md");
+        assert_eq!(
+            store.integrity_of("CLA\u{1e9e}.md"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// A refusal about either name is read for the other: a volume that opens one as the other
+    /// (APFS) would otherwise read the bytes a distrust was recorded about as trusted, and one that
+    /// holds them apart is only asked a question.
+    #[test]
+    fn a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other() {
+        for (refused, named) in [("cla\u{df}.md", "class.md"), ("class.md", "cla\u{df}.md")] {
+            for decision in [Some(Integrity::Untrusted), None] {
+                let mut store = TrustStore::new("/work").folding_case(true);
+                store.trust(".");
+                match decision {
+                    Some(_) => store.distrust(refused),
+                    None => store.undecide(refused),
+                }
+                assert_eq!(
+                    store.integrity_of(named),
+                    decision,
+                    "a refusal of {refused} was not read for {named}"
+                );
+            }
+        }
+    }
+
+    /// Dropping a trust only narrows, so withdrawing the trust of one name drops it for the other.
+    #[test]
+    fn withdrawing_a_trust_reaches_a_spelling_only_full_case_folding_joins() {
+        let mut store = TrustStore::new("/work").folding_case(true);
+        store.trust(".");
+        store.trust("class.md");
+        assert!(store.withdraw_trust("cla\u{df}.md"));
+        assert_eq!(store.integrity_of("class.md"), None);
+    }
+
     /// Pairs of spellings that Unicode makes one name: an accent as a mark or as part of the
     /// letter, a sign that decomposes to a letter, two marks in either order, a Hangul syllable
     /// whole or as its jamo, and a sign whose canonical form is an ASCII character.
@@ -1821,6 +1988,257 @@ mod tests {
             map.integrity_of("/state/other/a.rs"),
             Some(Integrity::Trusted)
         );
+    }
+
+    /// A trust under `class` is not a trust under `cla\u{df}`, which NTFS holds apart from it, so
+    /// the copy made for a checkout of `cla\u{df}` does not carry it (CHECKOUT-8, TRUST-2). A refusal
+    /// under `class` is carried, since APFS opens the two as one directory.
+    #[test]
+    fn a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/class/vouched");
+        map.distrust("/data/class/refused");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+
+        assert_eq!(
+            map.integrity_of("/state/c1/vouched"),
+            None,
+            "a trust of /data/class/vouched was copied under a checkout of /data/cla\u{df}"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/refused"),
+            Some(Integrity::Untrusted)
+        );
+
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{df}");
+        map.distrust("/data/class/refused");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/refused"),
+            Some(Integrity::Untrusted),
+            "a refusal under /data/class did not reach the copy of /data/cla\u{df}"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/other"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// The tail of a copied key is the segments after the source's, whatever the fold did to the
+    /// length of the source's spelling.
+    #[test]
+    fn a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/\u{17f}\u{17f}");
+        map.distrust("/data/ss/ab");
+        map.copy_beneath("/data/\u{17f}\u{17f}", "/state/c1");
+
+        assert_eq!(
+            map.integrity_of("/state/c1/ab"),
+            Some(Integrity::Untrusted),
+            "the refusal was copied under the wrong name"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/b"),
+            Some(Integrity::Trusted),
+            "a name the refusal does not name was refused"
+        );
+    }
+
+    /// A refusal recorded under `\u{1e9e}` decides a path under `\u{df}` (the simple fold joins
+    /// them) though the full fold does not, so the copy for a checkout of either carries a refusal
+    /// recorded under the other. A trust under the other spelling is carried too, since the simple
+    /// fold joins the two. (CHECKOUT-8, TRUST-2).
+    #[test]
+    fn a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins() {
+        for (recorded, checked_out) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")]
+        {
+            let mut map = TrustStore::new("/work").folding_case(true);
+            map.trust(&format!("/data/{checked_out}"));
+            map.distrust(&format!("/data/{recorded}/refused"));
+            map.undecide(&format!("/data/{recorded}/open/inner"));
+            assert_eq!(
+                map.integrity_of(&format!("/data/{checked_out}/refused/a")),
+                Some(Integrity::Untrusted),
+                "the map does not read /data/{recorded}/refused as deciding /data/{checked_out}"
+            );
+            map.copy_beneath(&format!("/data/{checked_out}"), "/state/c1");
+            assert_eq!(
+                map.integrity_of("/state/c1/refused/a"),
+                Some(Integrity::Untrusted),
+                "a distrust under /data/{recorded} was not copied under a checkout of /data/{checked_out}"
+            );
+            assert_eq!(
+                map.integrity_of("/state/c1/open/inner/a"),
+                None,
+                "an undecided boundary under /data/{recorded} was not copied under a checkout of /data/{checked_out}"
+            );
+            assert_eq!(
+                map.integrity_of("/state/c1/other"),
+                Some(Integrity::Trusted)
+            );
+        }
+        // A trust is copied by the same fold it is decided by.
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{1e9e}/vouched");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/vouched/a"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// A distrust at `claß/x` and a trust at `claẞ/x` are one path to the one-letter fold, and the
+    /// source reads it as untrusted. The copy for a checkout of `claß` reads it so whichever of the
+    /// two spellings sorts later (CHECKOUT-8, TRUST-2).
+    #[test]
+    fn a_copy_of_a_distrust_and_a_trust_under_the_pair_the_simple_fold_joins_is_untrusted() {
+        for (distrusted, trusted) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            let mut map = TrustStore::new("/work").folding_case(true);
+            map.trust("/data/cla\u{df}");
+            map.distrust(&format!("/data/{distrusted}/x"));
+            map.trust(&format!("/data/{trusted}/x"));
+            assert_eq!(
+                map.integrity_of("/data/cla\u{df}/x"),
+                Some(Integrity::Untrusted)
+            );
+            map.copy_beneath("/data/cla\u{df}", "/state/c1");
+            assert_eq!(
+                map.integrity_of("/state/c1/x"),
+                Some(Integrity::Untrusted),
+                "a distrust at /data/{distrusted}/x was overwritten by a trust at /data/{trusted}/x in the copy"
+            );
+        }
+    }
+
+    /// Two rules the one-letter fold joins (`\u{df}` and `\u{1e9e}`) land on one path in the
+    /// checkout, and the copy says what the source says there: the weakest of them, a distrust before
+    /// an undecided boundary before a trust, whichever spelling sorts later (CHECKOUT-8, TRUST-2).
+    #[test]
+    fn a_copy_of_two_rules_that_share_a_destination_is_the_weakest_of_them() {
+        let decisions = [Some(Integrity::Untrusted), None, Some(Integrity::Trusted)];
+        let set = |map: &mut TrustStore, path: &str, decision: Option<Integrity>| match decision {
+            Some(Integrity::Trusted) => map.trust(path),
+            Some(Integrity::Untrusted) => map.distrust(path),
+            None => map.undecide(path),
+        };
+        for (first, second) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            for checked_out in ["cla\u{df}", "cla\u{1e9e}"] {
+                for at_first in decisions {
+                    for at_second in decisions {
+                        let mut map = TrustStore::new("/work").folding_case(true);
+                        map.trust(&format!("/data/{checked_out}"));
+                        set(&mut map, &format!("/data/{first}/x"), at_first);
+                        set(&mut map, &format!("/data/{second}/x"), at_second);
+                        let read = map.integrity_of(&format!("/data/{checked_out}/x/a"));
+                        let expected = if at_first == Some(Integrity::Untrusted)
+                            || at_second == Some(Integrity::Untrusted)
+                        {
+                            Some(Integrity::Untrusted)
+                        } else if at_first.is_none() || at_second.is_none() {
+                            None
+                        } else {
+                            Some(Integrity::Trusted)
+                        };
+                        assert_eq!(
+                            read, expected,
+                            "the source did not read the weakest of {at_first:?} at /data/{first}/x and {at_second:?} at /data/{second}/x"
+                        );
+                        map.copy_beneath(&format!("/data/{checked_out}"), "/state/c1");
+                        assert_eq!(
+                            map.integrity_of("/state/c1/x/a"),
+                            expected,
+                            "the copy for a checkout of /data/{checked_out} did not read the weakest of {at_first:?} at /data/{first}/x and {at_second:?} at /data/{second}/x"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A rule already at a key a copy lands on is weighed with the copy and not replaced by it, so
+    /// a copy never turns a refusal into a grant at the checkout's root or beneath it (CHECKOUT-8).
+    #[test]
+    fn a_copy_does_not_replace_a_refusal_already_at_its_destination() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{df}");
+        map.trust("/data/cla\u{df}/x");
+        map.distrust("/state/c1/x");
+        map.distrust("/state/c1");
+        map.copy_beneath("/data/cla\u{1e9e}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/x/a"),
+            Some(Integrity::Untrusted),
+            "a copied trust replaced a distrust already at /state/c1/x"
+        );
+        assert_eq!(
+            map.integrity_of("/state/c1/y"),
+            Some(Integrity::Untrusted),
+            "a copied trust replaced a distrust already at /state/c1"
+        );
+
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/data/cla\u{df}");
+        map.undecide("/data/cla\u{df}/x");
+        map.trust("/state/c1/x");
+        map.copy_beneath("/data/cla\u{df}", "/state/c1");
+        assert_eq!(
+            map.integrity_of("/state/c1/x/a"),
+            None,
+            "a trust already at /state/c1/x outlived the copy of an undecided boundary"
+        );
+    }
+
+    /// A refusal recorded under `\u{1e9e}` narrows what is read beneath `\u{df}`, as the lookup of a
+    /// path under it already does (TRUST-2).
+    #[test]
+    fn a_refusal_under_a_name_only_the_simple_fold_joins_narrows_a_read_beneath() {
+        for (recorded, read) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")] {
+            let mut map = TrustStore::new("/work").folding_case(true);
+            map.trust("/data");
+            map.distrust(&format!("/data/{recorded}/refused"));
+            assert_eq!(
+                map.integrity_beneath_or(&format!("/data/{read}"), Integrity::Trusted),
+                Integrity::Untrusted,
+                "a read beneath /data/{read} missed a refusal under /data/{recorded}"
+            );
+        }
+    }
+
+    /// Withdrawing a checkout drops every trust a fold joins with its name, the full fold included:
+    /// that leaves a question where a spelling is kept, and never a grant.
+    #[test]
+    fn withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.trust("/state/cla\u{df}/src");
+        map.trust("/state/class/src");
+        assert!(!map.withdraw_beneath("/state/cla\u{df}"));
+        assert_eq!(map.integrity_of("/state/class/src/a.rs"), None);
+        assert_eq!(map.integrity_of("/state/cla\u{df}/src/a.rs"), None);
+    }
+
+    /// Withdrawing a checkout drops a trust that either fold joins with its name. `\u{df}` and
+    /// `\u{1e9e}` are one name to the simple fold and so one trust, and two to the full fold, so a
+    /// withdrawal by the full fold alone leaves a trust that still decides a path beneath the
+    /// checkout (CHECKOUT-8).
+    #[test]
+    fn withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not() {
+        for (trusted, withdrawn) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")] {
+            let mut map = TrustStore::new("/work").folding_case(true);
+            map.trust(&format!("/state/{trusted}/src"));
+            assert_eq!(
+                map.integrity_of(&format!("/state/{withdrawn}/src/a.rs")),
+                Some(Integrity::Trusted),
+                "the simple fold no longer joins /state/{trusted} with /state/{withdrawn}"
+            );
+            assert!(!map.withdraw_beneath(&format!("/state/{withdrawn}")));
+            assert_eq!(
+                map.integrity_of(&format!("/state/{withdrawn}/src/a.rs")),
+                None,
+                "a trust at /state/{trusted}/src outlived a withdrawal at /state/{withdrawn}"
+            );
+        }
     }
 
     /// Only a rule that distrusts a path outlives the checkout it was made for (CHECKOUT-8).

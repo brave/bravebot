@@ -636,6 +636,17 @@ impl SlotStore {
         )
     }
 
+    /// The size in bytes this slot states for its reference, where it holds text.
+    ///
+    /// Metadata: the figure the planner is shown beside the reference, and no part of the text. A
+    /// slot still waiting on its file, and a name that holds nothing, state no size.
+    pub fn stated_bytes(&self, id: &SlotId) -> Option<usize> {
+        match self.slots.get(id) {
+            Some(Entry::Read { value, .. }) => Some(value.shape().bytes),
+            _ => None,
+        }
+    }
+
     /// Whether this slot's text is a decoding of a file in another encoding.
     ///
     /// Metadata, and the driver's own: a yes or a no, and no part of the text.

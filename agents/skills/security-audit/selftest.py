@@ -793,6 +793,158 @@ def test_labelled_impls():
     own = {Path("crates/core/src/value.rs"): ["impl<T> Labelled<T> {", "}"]}
     check("the type's own impl block is not a trait", list(audit.check_labelled_impls(own)) == [])
 
+    # The type's own functions are read too: an accessor added there reaches the content with no
+    # trait and no witness.
+    accessor = labelled(
+        "impl Labelled<String> {",
+        "    pub fn starts_with(&self, p: &str) -> bool { self.value.starts_with(p) }",
+        "}",
+    )
+    found = list(audit.check_labelled_impls(accessor))
+    check(
+        "an accessor in the type's own block is one error at its line",
+        kinds(found) == ["labelled-impl"]
+        and found[0]["impact"] == "high"
+        and found[0]["evidence"][0].startswith("crates/core/src/value.rs:2 ")
+        and "starts_with" in found[0]["title"],
+        str(found),
+    )
+
+    found = list(
+        audit.check_labelled_impls(
+            labelled(
+                "impl<T> Labelled<T> {",
+                "    pub fn new(value: T) -> Self { todo() }",
+                "    pub fn peek(&self) -> &T { &self.value }",
+                "    pub fn take(self) -> T { self.value }",
+                "}",
+            )
+        )
+    )
+    check(
+        "each function outside the allowed ones is its own error and an allowed one is not",
+        [f["evidence"][0].split()[0] for f in found]
+        == ["crates/core/src/value.rs:3", "crates/core/src/value.rs:4"],
+        str([f["evidence"] for f in found]),
+    )
+
+    for name, source in {
+        "an accessor in a block whose header wraps": labelled(
+            "impl<T>", "    Labelled<T>", "{", "    pub fn raw(&self) -> &T { &self.value }", "}"
+        ),
+        "an accessor on the line that opens the block": labelled(
+            "impl<T> Labelled<T> { pub fn raw(&self) -> &T { &self.value } }"
+        ),
+        "an accessor in a block with a bound": labelled(
+            "impl<T: Clone> Labelled<T> {", "    pub fn copy_out(&self) -> T { self.value.clone() }", "}"
+        ),
+        "an accessor in a block with a where clause": labelled(
+            "impl<T> Labelled<T>", "where", "    T: Clone,", "{", "    fn copy_out(&self) -> T {", "        self.value.clone()", "    }", "}"
+        ),
+        "an accessor after a string holding a brace": labelled(
+            "impl<T> Labelled<T> {",
+            '    fn label(&self) -> &\'static str { "}" }',
+            "    fn raw(&self) -> &T { &self.value }",
+            "}",
+        ),
+        "an accessor after a character literal holding a brace": labelled(
+            "impl<T> Labelled<T> {",
+            "    fn label(&self) -> char { '{' }",
+            "    fn raw(&self) -> &T { &self.value }",
+            "}",
+        ),
+        "an accessor after a function that takes a lifetime": labelled(
+            "impl<T> Labelled<T> {",
+            "    fn label<'a>(&'a self) -> &'a Label { &self.label }",
+            "    fn raw<'a>(&'a self) -> &'a T { &self.value }",
+            "}",
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str(found))
+
+    for name, source in {
+        "a conversion from a Labelled into another type": labelled(
+            "impl From<Labelled<String>> for String {",
+            "    fn from(l: Labelled<String>) -> String { l.value }",
+            "}",
+        ),
+        "a conversion from a reference to a Labelled": labelled(
+            "impl<'a> From<&'a Labelled<String>> for String {", "}"
+        ),
+        "a conversion whose header wraps": labelled(
+            "impl", "    TryFrom<Labelled<Vec<u8>>>", "    for Vec<u8>", "{", "}"
+        ),
+        "a trait for a reference to Labelled": labelled("impl<T> AsRef<T> for &Labelled<T> {", "}"),
+        "a trait for a mutable reference to Labelled": labelled(
+            "impl<T> DerefMut for &'a mut Labelled<T> {", "}"
+        ),
+        "a trait for a path to Labelled": labelled("impl<T> Deref for crate::value::Labelled<T> {", "}"),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str(found))
+
+    for name, source in {
+        "a block of only the type's own functions": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn new(value: T, label: Label) -> Self { Self { value, label } }",
+            "    pub fn trusted(value: T) -> Self { todo() }",
+            "    pub fn label(&self) -> Label { self.label }",
+            "    pub fn declassify(self, _proof: &Declassification) -> T { self.value }",
+            "    pub fn into_trusted(self) -> Result<T, Self> { todo() }",
+            "    pub fn relabel(self, to: Label) -> Option<Self> { todo() }",
+            "}",
+            "impl Labelled<String> {",
+            "    pub(crate) fn shape(&self) -> Shape { todo() }",
+            "}",
+        ),
+        "a function named in a comment inside the type's block": labelled(
+            "impl<T> Labelled<T> {",
+            "    // fn raw(&self) -> &T would let a caller read the content.",
+            "    /* fn peek(&self) -> &T */",
+            "    pub fn label(&self) -> Label { self.label }",
+            "}",
+        ),
+        "a function named in a string inside the type's block": labelled(
+            "impl<T> Labelled<T> {", '    fn label(&self) -> &str { "fn raw" }', "}"
+        ),
+        "a function nested in an allowed function": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn label(&self) -> Label {",
+            "        fn helper(l: Label) -> Label { l }",
+            "        helper(self.label)",
+            "    }",
+            "}",
+        ),
+        "a function of another type that follows the type's block": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn label(&self) -> Label { self.label }",
+            "}",
+            "impl Other {",
+            "    pub fn raw(&self) -> &str { &self.value }",
+            "}",
+        ),
+        "a conversion into another type from something else": labelled(
+            "impl From<String> for Wrapper {", "}"
+        ),
+        "a trait of another type with a Labelled bound in its generics": labelled(
+            "impl<T: Into<Labelled<String>>> Describe for Wrapper<T> {", "}"
+        ),
+        "a trait of another type with a Labelled bound in its where clause": labelled(
+            "impl<T> Describe for Wrapper<T>", "where", "    T: From<Labelled<String>>,", "{", "}"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is clean", found == [], str(found))
+
+    # The tree's own definition is the fixture that decides which names are the type's own, so a
+    # function it has that the list omits is an error here and not in some later change.
+    real = Path("crates/core/src/value.rs")
+    check(
+        "the functions of the real Labelled are all allowed",
+        list(audit.check_labelled_impls({real: real.read_text().splitlines()})) == [],
+    )
+
 
 PINNED_STEP = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
 
@@ -2214,6 +2366,9 @@ def key_tree(**bodies):
             "pub fn fold_case(key: &str) -> String {",
             "    key.to_string()",
             "}",
+            "pub fn fold_simple(key: &str) -> String {",
+            "    key.to_string()",
+            "}",
             "pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {",
             "    Cow::Borrowed(key)",
             "}",
@@ -2299,6 +2454,7 @@ def test_key_steps_join_no_names():
         ("to_string_lossy", "    Path::to_string_lossy(&path_buf).into_owned()"),
         ("from_utf8_lossy", "    String::from_utf8_lossy(bytes).into_owned()"),
         ("fold_case", "    fold_case(path)"),
+        ("fold_simple", "    fold_simple(path)"),
         ("to_lowercase", "    path.chars().flat_map(char::to_lowercase).collect()"),
         ("canonical_form", "    canonical_form(path, true).into_owned()"),
         ("decompose", "    crate::canonical::decompose(path)"),
@@ -4332,7 +4488,7 @@ def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
     names = {(Path(s["path"]).name, s["function"]) for s in real}
     check(
         "the tree's own name-to-thing calls are listed, the workspace's hard-link check among them",
-        ("other_names.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
+        ("other_names.rs", "hard_links") in names and ("linux.rs", "open_row") in names,
         str(sorted(names)[:8]),
     )
     rows = with_cwd(ROOT, lambda: audit.confinement_rows(audit.mechanics.load_sources()))
@@ -4711,6 +4867,7 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
         "identity": [{"path": "crates/agent/src/workspace.rs"}],
         "deny_judgements": [{"path": "crates/agent/src/walker.rs"}],
     }
+    found_starts = {**found, "program_starts": [{"path": "crates/cli/src/browser.rs"}]}
     was = audit.mechanics.changed_files
     try:
         for touched, lane, shown in [
@@ -4725,6 +4882,10 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
             ("contrib/check-source.py", "tooling", found),
             (".githooks/pre-push", "tooling", found),
             ("Makefile", "tooling", found),
+            ("crates/sandbox/src/programs.rs", "inherited-environment", found),
+            ("docs/specs/sandboxing.md", "inherited-environment", found),
+            ("docs/best-practices/paths.md", "inherited-environment", found),
+            ("crates/cli/src/browser.rs", "inherited-environment", found_starts),
         ]:
             audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
             lanes = audit.changed_lanes("base", [Governing()], shown)
@@ -4879,6 +5040,51 @@ def test_no_name_in_the_enumerator_is_bound_twice():
         "every module-level name in security-audit.py, findings.py and workflow_checks.py is bound once",
         not twice,
         ", ".join(twice),
+    )
+
+
+def test_the_inherited_environment_lane_lists_each_start_with_its_selectors():
+    """The lane starts from every `programs::start` and says which selectors argument each passes."""
+    sources = {
+        Path("crates/a/src/one.rs"): [
+            "fn a() {",
+            "    let c = programs::start(p, i, s,",
+            "        CodeSelectors::Checked(&[]));",
+            "}",
+            "// programs::start(commented)",
+        ],
+        Path("crates/a/src/two.rs"): [
+            "use bravebot_sandbox::programs::{Inherits, start};",
+            "fn b() {",
+            "    start(p, i, s, CodeSelectors::Kept);",
+            "}",
+        ],
+        Path("crates/a/src/three.rs"): ["fn c() {", "    start(1);", "}"],
+        Path("crates/a/tests/four.rs"): ["fn d() { programs::start(p, i, s, CodeSelectors::Kept); }"],
+    }
+    found = [(s["path"], s["line"], s["selectors"]) for s in audit.program_starts(sources)]
+    check(
+        "a qualified start and a bare start in a file that imports it are listed with their selectors, and a "
+        "comment, an unrelated start and a test file are not",
+        found == [("crates/a/src/one.rs", 2, "Checked"), ("crates/a/src/two.rs", 3, "Kept")],
+        str(found),
+    )
+
+    def real():
+        specs = audit.load_specs()
+        surface = audit.surface(audit.mechanics.load_sources(), specs)
+        return surface, audit.build_lane(
+            "inherited-environment", surface, specs, Path("results.json"), Path("surface.json"), Path("tracker.txt")
+        )
+
+    surface, prompt = with_cwd(ROOT, real)
+    check(
+        "the tree's own starts are listed, and the prompt names the table and has no placeholder left",
+        any(s["path"] == "crates/sandbox/src/programs.rs" or s["selectors"] for s in surface["program_starts"])
+        and f"{len(surface['program_starts'])} starts of a program" in prompt
+        and "CODE_SELECTORS" in prompt
+        and not SURVIVING.search(prompt.replace("{start_sites}", "")),
+        str(SURVIVING.findall(prompt)),
     )
 
 
@@ -5527,6 +5733,7 @@ TESTS = (
     test_the_tracker_is_written_for_the_lanes,
     test_no_name_in_the_enumerator_is_bound_twice,
     test_every_lane_has_its_file_and_its_row,
+    test_the_inherited_environment_lane_lists_each_start_with_its_selectors,
     test_the_exemption_stops_at_the_person_s_own_configuration,
     test_candidates_that_make_one_claim_are_checked_together,
     test_a_group_is_one_verifier_and_the_others_are_in_its_prompt,

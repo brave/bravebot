@@ -658,6 +658,9 @@ fn tool(name: &str) -> Option<std::process::Command> {
         &bravebot_sandbox::programs::Resolved::found_earlier(&found),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
+        // `crontab -l` and `crontab -`, `launchctl` and `systemctl --user`: none is known to read a
+        // variable of its own that selects code (SANDBOX-30, empty-list starts).
+        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     ))
 }
 
@@ -1240,6 +1243,8 @@ fn run_command(
         me,
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the entry (SCHEDULE-2).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.args(run_arguments(entry));
     // Names the entry, so the run stops at its first question and keeps it (SCHEDULE-2).
@@ -1401,6 +1406,8 @@ fn deliver(program: &Path, bytes: Vec<u8>, limit: Duration) -> Result<(), Undeli
         &bravebot_sandbox::programs::Resolved::named_by_person(program),
         bravebot_sandbox::programs::Inherits::Without(&withheld),
         bravebot_sandbox::programs::SearchPath::Reduced,
+        // The program is the one the person named for delivery, run as a hook is.
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command
         .current_dir(bravebot_agent::home::profile().unwrap_or_else(std::env::temp_dir))
@@ -2731,6 +2738,7 @@ mod tests {
             &bravebot_sandbox::programs::Resolved::own_executable().expect("the test binary"),
             bravebot_sandbox::programs::Inherits::All,
             bravebot_sandbox::programs::SearchPath::Inherited,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         );
         let child = again
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])

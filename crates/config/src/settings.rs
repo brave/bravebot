@@ -6288,19 +6288,20 @@ mod tests {
 
     /// A checkout that stretches a timeout or multiplies attempts would spend the person's account
     /// and time on its own say-so, so a project or local layer's `provider` block is ignored
-    /// whole, retry count and quiet gap with it, and the home layer's figures stay in force.
+    /// whole, retry count, retry window and quiet gap with it, and the home layer's figures stay in
+    /// force.
     #[test]
     fn a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap() {
         let settings = Layers::new("provider-patience")
             .global(
                 r#"{"provider": {"gw": {"options": {
                     "baseURL": "https://personal.invalid/v1",
-                    "maxRetries": 1, "idleTimeoutMs": 30000}}}}"#,
+                    "maxRetries": 1, "idleTimeoutMs": 30000, "retryWindowMs": 60000}}}}"#,
             )
             .project(
                 r#"{"provider": {"gw": {"options": {
                     "baseURL": "https://personal.invalid/v1",
-                    "maxRetries": 7, "idleTimeoutMs": 600000}}}}"#,
+                    "maxRetries": 7, "idleTimeoutMs": 600000, "retryWindowMs": 3600000}}}}"#,
             )
             .local(
                 r#"{"provider": {"other": {"options": {
@@ -6313,6 +6314,11 @@ mod tests {
         assert_eq!(
             patience.idle_timeout,
             Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(
+            patience.retry_window,
+            Some(std::time::Duration::from_secs(60)),
+            "a checkout stretched the window"
         );
         assert_eq!(settings.providers_ignored().count(), 2);
     }

@@ -8,6 +8,23 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+# The same table as the root workspace's `[workspace.lints.clippy]`. This crate cannot inherit it
+# with `[lints] workspace = true`: it declares its own `[workspace]` below so the root workspace
+# never compiles libFuzzer, and a package in a workspace of its own has no outer table to inherit
+# from. `contrib/check-fuzz-lints.py` fails when the two tables drift apart.
+[lints.clippy]
+unwrap_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+unused_async = "deny"
+large_futures = "deny"
+future_not_send = "deny"
+let_underscore_future = "deny"
+rc_mutex = "deny"
+mutex_atomic = "deny"
+allow_attributes_without_reason = "deny"
+
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"

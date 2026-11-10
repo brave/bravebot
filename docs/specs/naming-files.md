@@ -14,6 +14,9 @@ governs:
   - crates/ui-bridge/src/mentions.rs
   - crates/agent/src/named.rs
   - crates/session/src/excerpt.rs
+  - crates/tui/src/render/beneath.rs
+  - ui/src/shared/mentions.ts
+  - ui/src/renderer/components/MentionList.tsx
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -77,7 +80,17 @@ it would name another file. Tab completes without disturbing the rest of the sen
 directory completes so typing can continue into it, and the arrows and Enter choose among what is
 offered.
 
-**Why.** A path typed blind is a path the user did not really choose.
+Each row is drawn through [`bravebot_agent::confirm::shown_name`](prompting.md), the marking a
+vouch prompt already gives a path, in the terminal and in the window, so two names differing only
+by whitespace or a character that draws as nothing cannot draw as the same row. A pick still
+writes the name itself, unmarked (NAME-8); only the row is marked. A directory's own trailing
+slash is marked only where everything else about its name is: taken off before marking and put
+back after, outside any quoting that added, so the row's own split of a directory into the icon,
+the parent and the name never finds the slash swallowed inside a closing quote with nothing left
+at the end to take off.
+
+**Why.** A path typed blind is a path the user did not really choose, and so is a path chosen from
+a row that reads like another one's.
 
 `verified-by: bravebot_tui::references::an_at_sign_offers_the_workspace`
 `verified-by: bravebot_tui::references::tab_completes_a_reference_without_disturbing_the_sentence`
@@ -92,6 +105,13 @@ offered.
 `verified-by: bravebot_mentions::lib::a_name_that_is_not_text_is_told_apart_from_its_lookalike`
 `verified-by: bravebot_mentions::lib::a_name_that_is_not_text_is_not_offered_under_its_lookalike`
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list`
+`verified-by: bravebot_tui::render::beneath::two_names_that_differ_only_by_an_invisible_character_draw_differently`
+`verified-by: bravebot_tui::render::beneath::a_plain_name_draws_as_it_is`
+`verified-by: bravebot_tui::render::beneath::a_marked_directorys_trailing_slash_is_drawn_outside_any_quoting`
+`verified-by: bravebot_tui::render::beneath::a_plain_directorys_name_draws_with_its_slash`
+`verified-by: bravebot_ui_bridge::mentions::an_entry_carries_its_path_marked_for_a_character_that_reads_as_nothing`
+`verified-by: bravebot_ui_bridge::mentions::a_marked_directorys_shown_path_carries_no_trailing_slash`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/drive-at-mentions.mjs types into a marked file and a marked directory in the real window and asserts both rows draw their own marking, the directory's slash outside any quoting, and make check-ui runs it)`
 
 <a id="NAME-5"></a>
 ### NAME-5: a name cannot leave the workspace

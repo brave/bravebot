@@ -161,9 +161,10 @@ at most once more than in asking. A reply an attacker could make fail is a reply
 approve ([MODE-4](permission-modes.md#MODE-4)).
 
 A private context is consulted because the request goes to the model the planner is running on, with
-the planner's own subscription, and the private content was read to that model already. The advisor
-is refused a private question ([ADVISOR-3](tools/advisor.md#ADVISOR-3)) because it is another model.
-Refusing here would end the classifier's use for the rest of a session as soon as the planner read
+the planner's own subscription, and the private content was read to that model already. A
+processor, a check and the advisor are put a private instruction or question for the same reason
+([PROC-4](processors.md#PROC-4), [CHECK-3](vetting.md#CHECK-3),
+[ADVISOR-3](tools/advisor.md#ADVISOR-3)). Refusing here would end the classifier's use for the rest of a session as soon as the planner read
 one command's output: `read_output` makes what the planner writes private from then on, and a
 resumed context cannot be made public again ([LABEL-8](labels.md#LABEL-8)).
 

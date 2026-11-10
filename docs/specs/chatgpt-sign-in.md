@@ -1538,7 +1538,9 @@ Windows, where `start` is a shell builtin. It is started as the sandboxing spec 
 that bravebot looks up by name, resolved first and with the variables that spec removes from what an agent
 passes on left out. The opener failing is not the sign-in failing, and the command carries on waiting. The
 opener is `bravebot_tui::opener`, which the terminal interface uses for a link as well, so the program,
-its arguments and what it is given are one definition.
+its arguments and what it is given are one definition. It is a checked start: `BROWSER`, `XDG_DATA_HOME`,
+`XDG_CONFIG_HOME`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` are removed unless they name a program or file
+outside every directory a stage may write, and every other variable is passed on ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **Why.** A sign-in that printed the URL only when the opener failed would show nothing on a machine where
 the opener exits successfully and opens nothing, which a machine reached over SSH may do. A shell between
@@ -1550,6 +1552,8 @@ identifiers, and the person needs it, so it is the one line [CHATGPT-8](#CHATGPT
 `verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_tui::opener::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
 `verified-by: bravebot_tui::opener::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_tui::opener::the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names`
 `verified-by: bravebot_skus::chatgpt::the_announcement_names_the_port_the_listener_is_already_bound_to`
 `verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
 
@@ -2622,7 +2626,7 @@ These are the places where another spec states something about this service, eac
   status 503 and a retry under a bounded backoff. A 503
   reply is sent again, up to three requests in all with a pause that doubles from one second. A failed event
   of a stream answered 200 has no status, and either code in one is read as an unknown failure, which is not
-  asked for again and is reported in the incomplete category with nothing of what the service said. The
+  asked for again and is reported in the unrecognised category ([BACKEND-37](backends.md#BACKEND-37)) with nothing of what the service said. The
   documentation says a usage-limit error can arrive that way after streaming has begun. It names no `error`
   event. OpenAI's OpenAPI description states one, with a `code` that is a string or null, and lists no
   `subscription_sharing_` or `chatpass_v2_` code among the codes of a failed response.

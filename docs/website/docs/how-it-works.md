@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: How Brave Bot works
-description: The planner, the driver, labels, quarantine and processors.
+description: Planner and driver roles, labels, quarantine references, processors, delegates, routing and content, gates, trust sources and security limits.
 ---
 
 # How Brave Bot works

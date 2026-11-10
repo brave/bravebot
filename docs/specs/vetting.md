@@ -26,10 +26,8 @@ guards:
   - symbol: Policy::vetting_verdict
   - symbol: Policy::vetting_did_not_complete
   - symbol: Policy::vetting_stopped
-  - symbol: Policy::promote_vetted
   - symbol: Policy::before_promoting
   - symbol: Policy::compose_vetting_picture
-  - symbol: Policy::promote_vetted_picture
   - symbol: Policy::attach_vetted_picture
   - symbol: Policy::authorise_a_copy_of_a_picture
 documented-by: docs/website/docs/security/vetting.md
@@ -131,12 +129,13 @@ A check over a picture has no string to encode: the picture goes in a part of it
 `verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
 
 <a id="CHECK-3"></a>
-### CHECK-3: what the planner says it expects is a prompt, must not be private, and is often absent
+### CHECK-3: what the planner says it expects is a prompt, may be private, and is often absent
 
 The planner says what it thinks the slot holds, and the check is told. Those are the planner's own
 words on the footing a processor's instruction sits on: not content anybody read, but the sentence
-the driver is about to send. Private is refused, since the user's own data must not become another
-model's prompt.
+the driver is about to send. A private sentence is sent like a public one. The check is a request
+to the model the session runs on, and the slot it is shown whole is the private content, so the
+sentence adds nothing to what that model is sent.
 
 Only the planner asking for a check carries one. A check run before a prompt the planner did not
 ask for has nowhere to get an expectation from: it asked to read a file, or to be shown what a
@@ -144,7 +143,7 @@ command printed, and said nothing about the contents. There the key is **left ou
 entirely** rather than written empty, because an empty string would tell the reader the planner
 expected nothing, where the truth is that nothing claimed anything.
 
-`verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
+`verified-by: bravebot_core::policy::a_private_expectation_is_put_to_the_check`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 <a id="CHECK-4"></a>
@@ -497,7 +496,19 @@ keep the output back with no prompt drawn in any mode, including one that asks: 
 the planner calls `read_output`. The planner is told that `read: true` did not return the output and
 nothing of the word. Under bypass nobody will be asked, so there the person is also told that
 auto-vetting kept the output back ([CHECK-9](#CHECK-9)); in a mode that asks, they are asked later
-and nothing is added. No check is made over a slot that holds no bytes, by this route or by
+and nothing is added.
+
+**An `unsafe` word is kept for the rest of the turn.** The turn keeps the slot of a check that said
+`unsafe`, and the `read_output` or `vet_content` that follows on that slot uses the word instead of
+making a second check ([OUTPUT-3](tools/read-output.md#OUTPUT-3), [VET-6](tools/vet-content.md#VET-6)).
+Where a person is asked, the prompt is drawn with the word and no sentence, because the reason a check
+wrote is never kept ([CHECK-9](#CHECK-9)). Where nobody is asked, the output stays refused as it would
+have after a second check. The trail says the word was reused, naming the slot and nothing the check
+wrote. A `safe` word is not kept, because the output was released with it. A check that could not be
+made and a check the person stopped are not kept either, because neither says anything about the
+content, so the next call makes its own check. The kept slots end with the turn.
+
+No check is made over a slot that holds no bytes, by this route or by
 `read_output`: there is nothing for a check to read, and the result says the run printed nothing
 ([RUN-24](tools/run.md#RUN-24)). A check the person stopped is neither a word nor a check that could
 not be made: the turn ends as stopped with the output left quarantined and not refused
@@ -586,6 +597,9 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
 `verified-by: bravebot_agent::turn::a_read_kept_back_for_no_verdict_says_the_same_to_the_person`
 `verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
+`verified-by: bravebot_agent::turn::read_output_does_not_check_again_a_slot_the_runs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::read_output_checks_a_slot_the_runs_check_could_not_judge`
+`verified-by: bravebot_agent::turn::vet_content_does_not_check_again_a_page_the_fetchs_read_found_unsafe`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer

@@ -141,7 +141,7 @@ Everything outside the working tree has it already: `read_file`, `write_file`, `
 covers what the agent authenticates with, `~/.bravebot/gateway-keys.json`,
 `~/.bravebot/brave-key.json`, `~/.bravebot/chatgpt-account.json`, `~/.bravebot/xai-account.json`, a
 `~/.bravebot/leo-premium.json` that an earlier version left, and the credentials that sign or authorise a model request, which CRED-14 puts
-out of reach of every program, prompt and record with no legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
+out of reach of every program, prompt and record with no legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) as
 it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), except `~/.bravebot/sessions`,
 which it reads and never writes, as it reads `~/.ssh/config`. No `allowRead` or `allowWrite`
 row, scope variable or `/reach` grant lifts the rest, and none grants a write there. Two things get past it: a command a turn runs
@@ -643,7 +643,7 @@ command that stores it says the file and never the key, and `auth status` and `d
 out of the environment of a program.
 
 **The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
-the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
+the session was opened on is, holds or lies inside `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), since the grant would hand a
 program the gateway keys and `settings.json` and a Windows container cannot be refused a path
 inside it ([SANDBOX-18](sandboxing.md#SANDBOX-18)). Linux and macOS refuse the directory inside
 the grant ([SANDBOX-12](sandboxing.md#SANDBOX-12)).

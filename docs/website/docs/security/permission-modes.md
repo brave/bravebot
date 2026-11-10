@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2.1
 title: Permission modes
-description: What asking, accepting edits, plan mode, auto and bypassing each answer for you, what they stop at, and the two things no mode answers.
+description: Asking, accepting edits, plan, auto and bypass modes, their limits and unanswered prompts, desktop controls and how long a mode lasts.
 ---
 
 # Permission modes
@@ -153,6 +153,14 @@ that runs later), and so are your `denyRead` and `denyWrite` paths, `permissions
 under `read-only`, and everything in a workspace you have not trusted. A file the planner reads there is shown
 to it as vouched, including one another account or program wrote, so instructions in it are read as instructions.
 `/status` lists the directories reached.
+
+**A `run` line may take a variable or a command for an environment assignment.** In this mode only,
+`NAME=$VAR cmd`, `NAME=${VAR} cmd` and `NAME="$(other)" cmd` are accepted in the assignment prefix in
+front of a program; everywhere else, and in every other mode, `$VAR`, `$(…)` and backticks are refused
+as before. The plan, the trail and every message hold the text as written, and the value is looked up
+only when the pipeline holding the step starts, before any of its stages is spawned. A variable
+bravebot removes from every program, or that `run.scrubEnv`
+names, is refused, as is one that is not set. See [`run`](../reference/run-tool.md#an-assignment-can-take-a-variable-or-a-command-in-bypass-mode).
 
 Starting a language server is answered only where the sandbox mode is `off`, which
 `--dangerously-bypass-approvals-and-sandbox` sets. A server runs with no sandbox profile, so under any

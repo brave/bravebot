@@ -77,6 +77,14 @@ use std::fmt;
 /// let a = Labelled::new(String::new(), Label::untrusted_public());
 /// let _: &str = a.as_ref();
 /// ```
+///
+/// Nor converting it into its content, which `From` or `Into` would do without a witness:
+///
+/// ```compile_fail
+/// use bravebot_core::{Label, Labelled};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// let _: String = a.into();
+/// ```
 #[derive(Clone)]
 pub struct Labelled<T> {
     value: T,

@@ -27,14 +27,14 @@ mod turns;
 use bravebot_agent::Workspace;
 use bravebot_agent::confirm::{Confirmer, Unattended};
 use bravebot_agent::interjections::{Arrival, Interjections};
-use bravebot_agent::report::Reporter;
+use bravebot_agent::report::{Phase, Reporter};
 use bravebot_agent::turn::Task;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::RecordingSink;
 use bravebot_core::todo::Row;
 use mock_model::{Scratch, as_sse, config_for, reply_with, trust_of};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -213,6 +213,12 @@ impl Reporter for Tells {
         }
     }
 
+    fn phase(&mut self, phase: Phase) {
+        if matches!(phase, Phase::Reconnecting(Some(_))) {
+            let _ = self.told.send("reconnecting");
+        }
+    }
+
     fn interjected(&mut self, said: String) {
         self.interjected.push(said);
     }
@@ -274,24 +280,7 @@ fn serve_holding(
             let (opening, finishing) = (opening.clone(), finishing.clone());
             let holds = Arc::clone(&holds);
             std::thread::spawn(move || {
-                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line);
-                let mut content_length = 0usize;
-                loop {
-                    let mut header = String::new();
-                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
-                        break;
-                    }
-                    if let Some((name, value)) = header.split_once(':')
-                        && name.trim().eq_ignore_ascii_case("content-length")
-                    {
-                        content_length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0u8; content_length];
-                let _ = reader.read_exact(&mut body);
-                let body = String::from_utf8_lossy(&body).to_string();
+                let body = read_body(&stream);
                 let _ = bodies.send(body.clone());
 
                 if holds(&body, counted.fetch_add(1, Ordering::SeqCst)) {
@@ -320,6 +309,65 @@ fn serve_holding(
     });
 
     (format!("http://127.0.0.1:{port}"), received, release)
+}
+
+/// The body of the request on `stream`, read past its headers.
+fn read_body(stream: &TcpStream) -> String {
+    let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+    let mut line = String::new();
+    let _ = reader.read_line(&mut line);
+    let mut content_length = 0usize;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':')
+            && name.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    let _ = reader.read_exact(&mut body);
+    String::from_utf8_lossy(&body).to_string()
+}
+
+/// A model service that answers its first request with a rate limit asking for a wait of
+/// `seconds`, and answers each later request with the next of `rest`. Reports every request body,
+/// in the order the requests arrived.
+fn serve_a_rate_limit_first(seconds: u64, rest: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (bodies, received) = mpsc::channel();
+    let counted = Arc::new(AtomicUsize::new(0));
+    let rest = Arc::new(Mutex::new(rest.into_iter()));
+
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let (bodies, counted, rest) = (bodies.clone(), Arc::clone(&counted), Arc::clone(&rest));
+            std::thread::spawn(move || {
+                let _ = bodies.send(read_body(&stream));
+                let answer = if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                    format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: {seconds}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else {
+                    let next = rest.lock().expect("script").next();
+                    let frames =
+                        as_sse(&next.unwrap_or_else(|| reply_with("nothing more scripted")));
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                        frames.len()
+                    )
+                };
+                let _ = stream.write_all(answer.as_bytes());
+                let _ = stream.flush();
+            });
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), received)
 }
 
 /// The frame that opens every reply and says nothing.
@@ -809,5 +857,74 @@ fn a_delegates_request_is_not_cut_for_a_line_waiting() {
     assert_eq!(
         delegate_requests, 1,
         "a delegate's request was cut for a line that was the turn's to take"
+    );
+}
+
+/// INPUT-10: a line typed while a failed request waits to be sent again is in the request that
+/// goes out at once, and the wait is not served out first.
+///
+/// The server refuses the first request with a rate limit asking for a wait of sixty seconds, which
+/// the client waits out because it is under the two minutes it will sit through. The test types the
+/// line once the turn says it is reconnecting. Rejects a turn that serves the wait out before it
+/// reads the line: the second request arrives within a few seconds, not after the minute.
+#[test]
+fn a_line_typed_while_a_failed_request_waits_to_be_sent_again_goes_out_at_once() {
+    let scratch = Scratch::new("cut-reconnecting");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_a_rate_limit_first(60, vec![reply_with("switching to the other one")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let buffer = Interjections::new();
+    let mut confirmer = Types::new(&buffer);
+    let (mut reporter, heard) = Tells::new();
+    let mut sink = RecordingSink::new();
+
+    let (typed, outcome) = std::thread::scope(|scope| {
+        let typed = buffer.clone();
+        let typing = scope.spawn(move || {
+            let first = received
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the first request never arrived");
+            wait_for(&heard, "reconnecting");
+            let typed_at = Instant::now();
+            assert!(typed.push(LINE.into()));
+            let second = received.recv_timeout(Duration::from_secs(10));
+            (first, second, typed_at.elapsed())
+        });
+        let outcome = turns::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what is in a.txt?"),
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trust_of(&workspace, false),
+            &Cancel::new(),
+        );
+        (typing.join().expect("the typist"), outcome)
+    });
+    let (first, second, waited) = typed;
+
+    outcome.expect("the turn runs to its answer");
+    let second =
+        second.expect("no second request went out while the first waited to be sent again");
+    assert!(
+        !first.contains(LINE),
+        "the line was in the request that started the wait"
+    );
+    assert!(
+        second.contains(LINE),
+        "the line did not reach the model in the request that replaced the wait: {second}"
+    );
+    assert!(
+        waited < Duration::from_secs(5),
+        "the line waited {waited:?} for a pause the service asked for"
+    );
+    assert_eq!(
+        reporter.interjected,
+        vec![LINE.to_string()],
+        "the interface was not told the line had gone in"
     );
 }

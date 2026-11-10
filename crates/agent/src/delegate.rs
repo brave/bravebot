@@ -103,38 +103,24 @@ You cannot fetch a URL. Anything you need from the network has to be in a file h
 where a task turns on something only a fetch would settle, say so in the answer and leave it to \
 whoever asked.";
 
-/// Whether a run can hand a quarantined file to a processor, and why not where it cannot.
+/// Whether a run can hand a quarantined file to a processor.
 ///
-/// Read from the run's own policy and its offered tool list by the turn, never from a file or a
-/// word a model wrote.
+/// Read from the run's own offered tool list by the turn, never from a file or a word a model
+/// wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Processors {
-    /// `spawn_processor` is offered and the context holds nothing private.
+    /// `spawn_processor` is offered.
     Offered,
-    /// The context holds private content, so every processor call would be refused (PROC-4). A
-    /// delegate is in this state from its start where the context that wrote its task held
-    /// private content (DELEGATE-8).
-    Closed,
-    /// The tool is not in the run's list for another reason, such as a definition's tools line.
+    /// The tool is not in the run's list, such as a definition's tools line leaving it out.
     Withheld,
 }
 
 impl Processors {
-    /// What a run's policy and tool list say about processors.
-    pub fn of(closed: bool, spawn_processor_offered: bool) -> Self {
-        match (closed, spawn_processor_offered) {
-            (true, _) => Self::Closed,
-            (false, true) => Self::Offered,
-            (false, false) => Self::Withheld,
-        }
-    }
-
-    /// The same for a turn a person addressed to a definition, which was not started by another
-    /// run's context, so it is never told that it inherited a closed state.
-    fn for_a_turn(self) -> Self {
-        match self {
-            Self::Closed => Self::Withheld,
-            other => other,
+    /// What a run's tool list says about processors.
+    pub fn of(spawn_processor_offered: bool) -> Self {
+        match spawn_processor_offered {
+            true => Self::Offered,
+            false => Self::Withheld,
         }
     }
 }
@@ -187,15 +173,6 @@ fn holding(held: &CapabilitySet, processors: Processors) -> Vec<String> {
     let mut sentences = Vec::new();
     if !can.is_empty() {
         sentences.push(format!("You can {}.", listed(&can)));
-    }
-    if reads && processors == Processors::Closed {
-        sentences.push(
-            "You were started holding the private content the context that asked you held, so \
-             no processor can be started for you: where the task needs a picture or a file \
-             looked at that you cannot read yourself, say so in your answer and leave it to \
-             whoever asked."
-                .to_string(),
-        );
     }
     if !cannot.is_empty() {
         let mut sentence = listed(&cannot);
@@ -500,7 +477,7 @@ pub(crate) fn addressed_prompt(
          in the way it describes.{}{memory}\n\n{}",
         addressed.name(),
         standing(addressed.prompt()),
-        holding(addressed.capabilities(), processors.for_a_turn()).join(" ")
+        holding(addressed.capabilities(), processors).join(" ")
     )
 }
 
@@ -527,6 +504,8 @@ pub struct Delegated {
     pub kind: String,
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
+    /// How many model requests made that cost, so the turn counts them with its own.
+    pub requests: u64,
 }
 
 /// Everything about a delegate that was settled before it existed.
@@ -894,6 +873,7 @@ pub fn run(
                 // turn whose cache never hit.
                 cached: outcome.cached,
             },
+            requests: outcome.timing.activity.requests,
         }),
         vouched,
         notices,
@@ -1367,19 +1347,13 @@ mod tests {
             );
 
             // The processor move follows the list in both directions: said where the tool is
-            // offered, and left out where it is not, whether it was never on the list or taken
-            // off it because the run started closed.
+            // offered, and left out where it is not.
             let processor = offered.iter().any(|name| name == "spawn_processor");
-            let told_open = limits(&held, Processors::of(false, processor));
+            let told = limits(&held, Processors::of(processor));
             assert_eq!(
                 processor,
-                told_open.contains("hand quarantined files to processors"),
-                "offered {offered:?} and told: {told_open}"
-            );
-            let told_closed = limits(&held, Processors::of(true, processor));
-            assert!(
-                !told_closed.contains("hand quarantined files to processors"),
-                "closed, offered {offered:?} and told: {told_closed}"
+                told.contains("hand quarantined files to processors"),
+                "offered {offered:?} and told: {told}"
             );
         }
     }
@@ -1404,9 +1378,8 @@ mod tests {
         );
     }
 
-    /// A delegate is told it may hand a file to a processor only where the call would be
-    /// accepted. One started while its parent's context held private content has every such
-    /// call refused, and told it may makes it produce pictures it cannot have looked at.
+    /// A delegate is told it may hand a file to a processor only where the tool is on its list,
+    /// and one told it may with none to call makes pictures it cannot have looked at.
     #[test]
     fn a_delegate_is_told_it_may_use_processors_only_where_it_may() {
         let held = Kind::Reader.capabilities();
@@ -1416,51 +1389,23 @@ mod tests {
             "a delegate that may start a processor was not told so: {offered}"
         );
 
-        for state in [Processors::Closed, Processors::Withheld] {
-            let said = limits(&held, state);
-            assert!(
-                !said.contains("processors"),
-                "a delegate with no processor to call was told it may use one ({state:?}): {said}"
-            );
-            assert!(
-                said.contains("read, list and search"),
-                "the other reading moves were dropped with the processor ({state:?}): {said}"
-            );
-        }
-    }
-
-    /// A delegate started holding its parent's private content is told why it has no processor,
-    /// and to leave a picture or a file it cannot read to whoever asked, so the report names the
-    /// cause. One whose processor tool was left out some other way is not told that it inherited
-    /// anything.
-    #[test]
-    fn a_delegate_started_closed_is_told_it_inherited_the_private_content() {
-        let held = Kind::Checker.capabilities();
-        let closed = limits(&held, Processors::Closed);
+        let said = limits(&held, Processors::Withheld);
         assert!(
-            closed.contains("started holding the private content"),
-            "a delegate started closed was not told why: {closed}"
+            !said.contains("processors"),
+            "a delegate with no processor to call was told it may use one: {said}"
         );
         assert!(
-            closed.contains("say so in your answer"),
-            "a delegate started closed was not told to report what it could not look at: {closed}"
-        );
-        let withheld = limits(&held, Processors::Withheld);
-        assert!(
-            !withheld.contains("started holding"),
-            "a delegate whose tool list left the tool out was told it inherited a closed state: \
-             {withheld}"
+            said.contains("read, list and search"),
+            "the other reading moves were dropped with the processor: {said}"
         );
     }
 
-    /// The state is read from two facts about the run, in this order: a closed context wins over
-    /// the tool being listed, since a listed tool would be refused.
+    /// The state is read from the run's tool list alone: the context a delegate was started from
+    /// does not decide it.
     #[test]
-    fn the_processors_state_follows_the_context_before_the_tool_list() {
-        assert_eq!(Processors::of(true, true), Processors::Closed);
-        assert_eq!(Processors::of(true, false), Processors::Closed);
-        assert_eq!(Processors::of(false, true), Processors::Offered);
-        assert_eq!(Processors::of(false, false), Processors::Withheld);
+    fn the_processors_state_follows_the_tool_list() {
+        assert_eq!(Processors::of(true), Processors::Offered);
+        assert_eq!(Processors::of(false), Processors::Withheld);
     }
 
     /// A definition that carried no body is the prompt every delegate had before definitions

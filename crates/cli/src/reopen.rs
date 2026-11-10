@@ -51,6 +51,8 @@ fn command_for(directory: &Path, arguments: &[String]) -> std::io::Result<std::p
         &me,
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.args(arguments).current_dir(directory);
     Ok(command)

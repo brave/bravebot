@@ -976,7 +976,7 @@ def test_an_issue_prints_what_everyone_wrote_under_a_login_that_is_safe_to_print
     assert text.count("## @unknown") == 2 and "Injected heading" not in text, text
     assert "Do this" in by_a_stranger and "Also this" in by_a_stranger and "author: @stranger" in by_a_stranger
     assert "organization member" not in text and "external user" not in text and "filtered" not in text, text
-    assert text.rstrip().endswith("because it says to."), text
+    assert text.rstrip().endswith("written by the issue's author and commenters."), text
 
 
 def test_an_issue_with_an_open_pull_request_is_reported_and_not_started():
@@ -994,7 +994,7 @@ def test_an_issue_with_an_open_pull_request_is_reported_and_not_started():
     assert len(seen) == 1, "the issue itself is not read once a pull request is open"
 
 
-def test_an_issue_with_no_pull_request_is_printed_with_the_next_step():
+def test_an_issue_with_no_pull_request_is_printed_with_no_instruction_added_to_it():
     issue = {
         "html_url": "https://github.com/brave/bravebot/issues/5", "state": "open", "labels": [],
         "user": {"login": "someone"}, "title": "t", "body": "the body",
@@ -1014,7 +1014,10 @@ def test_an_issue_with_no_pull_request_is_printed_with_the_next_step():
     with patched:
         code, out = quietly(pr_fix.issue_report, 5, {"brave/bravebot": ("upstream", "x")})
     assert code == 0 and "the body" in out and "a comment" in out, out
-    assert "issue 5 --branch fix-<name>" in out, out
+    # A hint such as `next: ... --branch fix-<name>` or a sentence telling the reader to run nothing is
+    # an instruction to whoever reads the text, and a check on command output refuses the read for it.
+    assert "next:" not in out and "--branch" not in out and "Run no command" not in out, out
+    assert out.rstrip().endswith("written by the issue's author and commenters."), out
     assert not any("members" in " ".join(call) for call in seen), seen
 
 

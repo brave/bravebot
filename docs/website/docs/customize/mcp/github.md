@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Connecting GitHub
-description: Read GitHub issues and pull requests from a session through GitHub's own MCP server, with every tool that writes switched off.
+description: Connect GitHub's MCP server to read issues and pull requests, disable write tools, and understand the access handed to the server.
 ---
 
 # Connecting GitHub

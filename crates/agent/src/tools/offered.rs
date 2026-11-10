@@ -252,22 +252,6 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
         "You are not shown its output."
     };
 
-    // What puts private content into the context, and so ends every later call. A tool is named
-    // only where the run has it, and the last two are true of every run.
-    let shows = match (beside("read_output"), beside("vet_content")) {
-        (true, true) => "after read_output or vet_content shows you some, ",
-        (true, false) => "after read_output shows you some, ",
-        (false, true) => "after vet_content shows you some, ",
-        (false, false) => "",
-    };
-    // The tools that keep working, which always include the file tools.
-    let working = match (beside("run"), beside("read_output")) {
-        (true, true) => "run, read_output and the file tools",
-        (true, false) => "run and the file tools",
-        (false, true) => "read_output and the file tools",
-        (false, false) => "The file tools",
-    };
-
     // What it says about a summary, a translation or other text made from content the planner was
     // not shown, which a processor writes (SPAWN-6). The route to the program that sends it names
     // `run`, so it is said only where the list holds one. A list without `run` is told who writes
@@ -309,12 +293,37 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
          instruction and its output is quarantined as a new reference. {changing} What the change \
          should be is its decision, not yours. It reads the whole document, so it can work out \
          what is wrong and where the fix goes, and leave a file alone if it turns out not to be \
-         the one you are after. {derived_text} Once your context holds private content, as it does {shows}after \
-         a delegate reports some, in a conversation resumed with some, and in a delegate started \
-         while its parent's context held some, every later \
-         spawn_processor call is refused for the rest of the conversation: what you write is \
-         private from then on, and a processor takes no private instruction. {working} keep \
-         working."
+         the one you are after. {derived_text}"
+    )
+}
+
+/// What `spawn_agent` says about the tools a delegate is never offered, naming each of `vet_content`,
+/// `ask_user`, `fetch_url` and `download_url` only where `beside` says it is on the list. It starts
+/// with a space, to sit after the sentence before it, and is empty where the list holds none of
+/// them, as a delegate's own list does.
+///
+/// The planner writes the task, so it is told here that work needing one of these is its own to do
+/// before it delegates or instead. The same tools are in
+/// [`NEVER_DELEGATED`](bravebot_core::delegate::NEVER_DELEGATED); the others there have no
+/// planner-facing reason to be said when a task is written.
+fn spawn_agent_lacks(beside: &dyn Fn(&str) -> bool) -> String {
+    let held: Vec<&str> = ["vet_content", "ask_user", "fetch_url", "download_url"]
+        .into_iter()
+        .filter(|name| beside(name))
+        .collect();
+    let (named, needs) = match held.as_slice() {
+        [] => return String::new(),
+        [only] => ((*only).to_string(), "it"),
+        [first @ .., last] => (format!("{} or {last}", first.join(", ")), "one of them"),
+    };
+    let whole = if beside("vet_content") {
+        " A reference that has to be read whole is read by you with vet_content."
+    } else {
+        ""
+    };
+    format!(
+        " A delegate cannot call {named}, so do work that needs {needs} yourself, before you \
+         delegate or instead of delegating.{whole}"
     )
 }
 
@@ -326,9 +335,9 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     } else {
         ""
     };
-    let closes_processors = if beside("spawn_processor") {
-        "Being shown output closes spawn_processor for you and for every delegate you start \
-         afterwards. "
+    let filter = if beside("run") {
+        ", and a filter such as tail or grep run on it with the reference as stdin_ref and \
+         read: true reads part of it instead"
     } else {
         ""
     };
@@ -338,13 +347,16 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          output is quarantined by default, so `which`, `find`, `uname` and the like tell you \
          nothing until you ask for the result. Ask for the errors too when a run fails, or you \
          will not know why it failed and must not claim it succeeded. Only for output from run; \
-         a quarantined file is not readable this way. {closes_processors}{anything_else}Output you were shown the \
+         a quarantined file is not readable this way. {anything_else}Output you were shown the \
          beginning and end of, because the whole was too long for one result, is the exception: \
          you may read all of it, so nobody is asked, and it comes back a page at a time from the \
          offset you give. A pattern searches that output instead of paging it: you get the \
          matching lines, each numbered with the byte it starts at, so a second call with that \
          byte as the offset reads on from the match you wanted. A pattern on output you may not \
-         read is refused rather than asked about."
+         read is refused rather than asked about. Called on output you may not read, with no \
+         offset or pattern, it returns all of it, and what it returns stays in every later \
+         request at about a token for every four bytes. Where the reference states a size of \
+         hundreds of kilobytes, that is tens of thousands of tokens or more{filter}."
     )
 }
 
@@ -591,16 +603,18 @@ fn write_file_contents_ref_description(beside: &dyn Fn(&str) -> bool) -> String 
 /// The description of `edit_file`, naming `write_file` only where `beside` says it is on the list.
 fn edit_file_description(beside: &dyn Fn(&str) -> bool) -> String {
     let diff = if beside("write_file") {
-        " Prefer this to write_file when changing part of a file: the user approves a diff, which \
-         is easier to review than a whole body."
+        " Prefer this to write_file when changing part of a file: a diff is easier to review \
+         than a whole body."
     } else {
         ""
     };
     format!(
-        "Replace an exact passage of text in an existing workspace file.{diff} The user must \
-         approve each edit before it happens, so explain what you are changing. To change \
-         several places in one file, give them together in edits: the user approves one diff. \
-         In a .ipynb notebook, name a cell by the number a read showed instead of a passage: \
+        "Replace an exact passage of text in an existing workspace file.{diff} An edit inside a \
+         directory the user vouched for is applied without a prompt; elsewhere the user \
+         approves each edit as a diff before it happens unless a permission rule or mode \
+         answers for them. Explain what you are changing either \
+         way. To change several places in one file, give them together in edits: they are one \
+         diff. In a .ipynb notebook, name a cell by the number a read showed instead of a passage: \
          give cell and new_text to replace that cell's source (its saved outputs are dropped), \
          or cell_action insert_after or delete."
     )
@@ -659,47 +673,16 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
         match tool.function.name.as_str() {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
-            "fetch_url" => {
-                tool.function.description = fetch_url_description(&beside);
-                // `read` asks for the release `vet_content` makes, so a list without it has
-                // nothing for the argument to ask.
-                if !beside("vet_content")
-                    && let Some(properties) = tool
-                        .function
-                        .parameters
-                        .pointer_mut("/properties")
-                        .and_then(|properties| properties.as_object_mut())
-                {
-                    properties.remove("read");
-                }
-            }
+            "fetch_url" => state_fetch_url_beside(tool, &beside),
             "job_output" => tool.function.description = job_output_description(&beside),
-            "run" => {
+            "spawn_agent" => {
                 tool.function.description = tool.function.description.replacen(
-                    &(run_reference_moves(&|_| true) + &run_text_made_from_it(&|_| true)),
-                    &(run_reference_moves(&beside) + &run_text_made_from_it(&beside)),
+                    &spawn_agent_lacks(&|_| true),
+                    &spawn_agent_lacks(&beside),
                     1,
                 );
-                tool.function.description = tool.function.description.replacen(
-                    &run_watching(&|_| true),
-                    &run_watching(&beside),
-                    1,
-                );
-                if let Some(background) = tool
-                    .function
-                    .parameters
-                    .pointer_mut("/properties/background/description")
-                {
-                    *background = json!(run_background_description(&beside));
-                }
-                if let Some(read) = tool
-                    .function
-                    .parameters
-                    .pointer_mut("/properties/read/description")
-                {
-                    *read = json!(run_read_description(&beside));
-                }
             }
+            "run" => state_run_beside(tool, &beside),
             "read_file" => {
                 for (full, narrowed) in [
                     (read_file_pictures(&|_| true), read_file_pictures(&beside)),
@@ -749,6 +732,49 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             }
             _ => {}
         }
+    }
+}
+
+/// [`state_what_is_beside`] for `fetch_url`.
+fn state_fetch_url_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
+    tool.function.description = fetch_url_description(beside);
+    // `read` asks for the release `vet_content` makes, so a list without it has nothing for the
+    // argument to ask.
+    if !beside("vet_content")
+        && let Some(properties) = tool
+            .function
+            .parameters
+            .pointer_mut("/properties")
+            .and_then(|properties| properties.as_object_mut())
+    {
+        properties.remove("read");
+    }
+}
+
+/// [`state_what_is_beside`] for `run`.
+fn state_run_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
+    tool.function.description = tool.function.description.replacen(
+        &(run_reference_moves(&|_| true) + &run_text_made_from_it(&|_| true)),
+        &(run_reference_moves(beside) + &run_text_made_from_it(beside)),
+        1,
+    );
+    tool.function.description =
+        tool.function
+            .description
+            .replacen(&run_watching(&|_| true), &run_watching(beside), 1);
+    if let Some(background) = tool
+        .function
+        .parameters
+        .pointer_mut("/properties/background/description")
+    {
+        *background = json!(run_background_description(beside));
+    }
+    if let Some(read) = tool
+        .function
+        .parameters
+        .pointer_mut("/properties/read/description")
+    {
+        *read = json!(run_read_description(beside));
     }
 }
 
@@ -941,7 +967,9 @@ fn table(
                                         depth, \"src/**/*.rs\" to anchor it, or \
                                         \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported. A pattern with a / in it may \
+                                        globs are not supported. Matching is case-sensitive: \
+                                        readme* does not match README.md, and {r,R}eadme* \
+                                        matches both. A pattern with a / in it may \
                                         be written from the directory or from the workspace \
                                         root."
                     },
@@ -963,10 +991,14 @@ fn table(
         ),
         Tool::function(
             "write_file",
-            "Write a UTF-8 text file in the workspace. Name the destination with path, or with \
-             path_ref to write back to a file a listing gave you a reference to. Give either \
-             the contents or a reference to quarantined content that becomes the contents. The \
-             user must approve each write before it happens, so explain what you are changing; \
+            "Write a UTF-8 text file in the workspace. If the path already holds a file, this \
+             replaces it whole and the old contents are gone, so read or list the path first \
+             when the file may exist. Name the destination with path, or with path_ref to \
+             write back to a file a listing gave you a reference to. Give either the contents \
+             or a reference to quarantined content that becomes the contents. A write inside a \
+             directory the user vouched for is applied without a prompt; elsewhere the user \
+             approves each write before it happens unless a permission rule or mode answers for \
+             them. Explain what you are changing either way; \
              a write to a path_ref is always shown, since the user is the only one who sees \
              which file it is.",
             json!({
@@ -1173,7 +1205,9 @@ fn table(
                         "description": "Optional glob limiting which files are searched, \
                                         e.g. \"*.rs\" or \"**/*.{cc,h,mm}\". Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported. A pattern with a / in it may \
+                                        globs are not supported. Matching is case-sensitive: \
+                                        readme* does not match README.md, and {r,R}eadme* \
+                                        matches both. A pattern with a / in it may \
                                         be written from the directory or from the workspace \
                                         root."
                     },
@@ -1593,7 +1627,10 @@ fn table(
              globs and {a,b} all work in the operands. There is no shell: the line is compiled \
              here into the programs and arguments it names, and anything that cannot be worked \
              out from the line itself is refused rather than guessed at. $(...), backticks, $VAR \
-             and ${...} are refused for that reason: write the value out. `$?`, `$$`, `$@`, \
+             and ${...} are refused for that reason: write the value out. Only in a session that \
+             runs everything without asking, `NAME=$VAR cmd` and `NAME=\"$(cmd)\" cmd` are \
+             accepted in the assignment prefix of a program, and nothing else is expanded: not \
+             as an argument or a program, and no backticks. `$?`, `$$`, `$@`, \
              `$*`, `$#`, `$-`, `$!` and `$'...'` are refused too: the result of a run already says \
              how each step ended, no shell keeps parameters between steps, and escapes in \
              `$'...'` are not read, so a newline comes from a file or from standard input. Name \
@@ -1873,30 +1910,29 @@ fn table(
             "spawn_agent",
             // No numbers for the depth or the ceiling, which delegates read here too: a model
             // told how many it has left spends them.
-            "Hand a whole sub-task to a second agent and get back one report. It has its own \
-             context, so everything it reads stays with it and only what it says at the end \
-             reaches you. That is what this is for: running a build reads the whole log, and \
-             asking a delegate to run the build tells you what failed. Use it when finding \
-             something out would cost you more context than the answer is worth, or when a \
-             sub-task is separable enough to describe in a paragraph. It cannot ask the user \
-             anything, so give it everything it needs in the task. It may hand parts of that \
-             task to delegates of its own, though not without end: the tree stops a few levels \
-             down, and one turn starts only so many however they are arranged. Its writes, its \
-             runs and its calls to an MCP server's tools are still shown to the user for \
-             approval, so this saves you context and never an approval. A delegate started after \
-             you have been shown output from read_output, content from vet_content or a \
-             delegate's report cannot run processors, so start a task that needs a picture or \
-             a file looked at before then, or leave it to the person. Do not use it for \
-             something one read would answer: it is a \
-             whole second agent and costs like one.",
+            format!(
+                "Hand a whole sub-task to a second agent and get back one report. It has its own \
+                 context, so everything it reads stays with it and only what it says at the end \
+                 reaches you. That is what this is for: running a build reads the whole log, and \
+                 asking a delegate to run the build tells you what failed. Use it when finding \
+                 something out would cost you more context than the answer is worth, or when a \
+                 sub-task is separable enough to describe in a paragraph. It cannot ask the user \
+                 anything, so give it everything it needs in the task. It may hand parts of that \
+                 task to delegates of its own, though not without end: the tree stops a few \
+                 levels down, and one turn starts only so many however they are arranged. Its \
+                 writes, its runs and its calls to an MCP server's tools are still shown to the \
+                 user for approval, so this saves you context and never an approval.\
+                 {lacks} Do not use it for something one read would answer: it is a whole second \
+                 agent and costs like one.",
+                lacks = spawn_agent_lacks(&|_| true)
+            ),
             json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
                         "description": "Which kind of agent, narrowest first. \"reader\" reads, \
-                                        lists, searches and, while the context that started it \
-                                        holds nothing private, runs processors: use it to find \
+                                        lists, searches and runs processors: use it to find \
                                         something out. \"checker\" also runs programs and asks \
                                         a language server, so it can build, test and lint, but \
                                         writes nothing: use it to \
@@ -2227,6 +2263,10 @@ fn ask_why(tool: &mut Tool) {
 ///   request at a host of its own would be egress nobody approved for this sub-task, and the
 ///   person shown the host would be answering for a task they never set. The capability being
 ///   held is what makes this one a name and not a capability check: no gate would refuse it.
+///
+/// The planner writes a delegate's task, so the description of `spawn_agent` tells it that a
+/// delegate cannot call `vet_content`, `ask_user`, `fetch_url` or `download_url`
+/// ([`spawn_agent_lacks`]).
 ///
 /// `spawn_agent` is offered by where the delegate sits rather than by what it is: `delegating` is
 /// the kinds it may start, and `None` is a delegate already [`MAX_DEPTH`] below the turn. The

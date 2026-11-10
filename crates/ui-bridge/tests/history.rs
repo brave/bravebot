@@ -10,6 +10,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -371,7 +373,10 @@ impl Window {
     /// Start a turn, without waiting for it to end.
     fn start(&mut self, prompt: &str) {
         let session = self.session.clone();
-        self.call("turn.send", json!({"session": session, "prompt": prompt}));
+        self.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
     }
 
     /// The event that ends the running turn.
@@ -390,7 +395,7 @@ impl Window {
         let session = self.session.clone();
         self.call(
             "turn.send",
-            json!({"session": session, "prompt": prompt, "model": model}),
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt, "model": model})),
         );
         self.ended()
     }
@@ -542,6 +547,15 @@ fn a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_t
                "cache": {"read_tokens": 12, "written_tokens": 4}}),
         "{twice}"
     );
+
+    // The same figures are kept for each turn on its own, beside its time. A resumed turn adds its
+    // entry and leaves the first turn's as it was, where the split above is the session's.
+    let one_request = json!({"requests": 1, "written_tokens": 1,
+                             "cache_read_tokens": 6, "cache_written_tokens": 2,
+                             "compactions": 0});
+    assert_eq!(once["timing"]["1"]["activity"], one_request, "{once}");
+    assert_eq!(twice["timing"]["1"]["activity"], one_request, "{twice}");
+    assert_eq!(twice["timing"]["2"]["activity"], one_request, "{twice}");
 }
 
 /// Undoing a turn in the desktop takes its split back with its tokens, so the record saved after
@@ -582,6 +596,17 @@ fn undoing_a_desktop_turn_takes_its_split_back_with_its_tokens() {
         saved["split"],
         json!({"read": 10, "written": 1,
                "cache": {"read_tokens": 6, "written_tokens": 2}}),
+        "{saved}"
+    );
+    // The undone turn's counts go with it, and the turn before keeps its own.
+    assert!(
+        saved["timing"].get("2").is_none(),
+        "the undone turn still has counts: {saved}"
+    );
+    assert_eq!(
+        saved["timing"]["1"]["activity"],
+        json!({"requests": 1, "written_tokens": 1,
+               "cache_read_tokens": 6, "cache_written_tokens": 2, "compactions": 0}),
         "{saved}"
     );
 }

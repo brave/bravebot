@@ -25,6 +25,7 @@ issue number it was given in DIR/filed.json, which `record` reads.
 
 import argparse
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -46,9 +47,18 @@ def _load_peer():
     return module
 
 
+def _load_digest():
+    spec = importlib.util.spec_from_file_location("session_review_digest", HERE / "digest.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # Prompt rendering, the tracker listing, label and title helpers, the draft cleaning and the `filed`
 # command are peer-advisories.py, which this reuses rather than restating.
 pa = _load_peer()
+# The figures of a record and its trail that code can count, so a model is not asked to.
+digest = _load_digest()
 workdir = pa.workdir
 Problem = pa.Problem
 one_line = pa.one_line
@@ -60,6 +70,7 @@ MAX_PROBLEMS = 8
 # A summary of a session with notes says what was decided about each, so it runs longer than a title.
 SUMMARY_LIMIT = 1200
 MARKER_SUFFIX = ".analysis.jsonl"
+NO_DIGEST = "(no digest was made for this session)"
 # Sessions imported from another tool say nothing about bravebot.
 IMPORTED = "claude-code-"
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -77,10 +88,23 @@ def sessions_root():
     return Path.home() / ".bravebot" / "sessions"
 
 
+MOST_KEY_BYTES = 200
+KEY_DIGEST_BYTES = 16
+
+
 def key_for(project):
-    """The directory name for a working directory: crates/agent/src/home.rs `key_for`."""
+    """The directory name for a working directory: crates/agent/src/home.rs `key_for`.
+
+    A name longer than MOST_KEY_BYTES is cut and ends in a dash and the first 16 bytes, in hex, of the
+    SHA-256 of the path's own bytes.
+    """
     mangled = "".join(c if re.fullmatch(r"[A-Za-z0-9._]", c) else "-" for c in str(project))
-    return mangled if mangled.strip("-") else "root"
+    if not mangled.strip("-"):
+        return "root"
+    if len(mangled) <= MOST_KEY_BYTES:
+        return mangled
+    digest = hashlib.sha256(os.fsencode(project)).digest()[:KEY_DIGEST_BYTES].hex()
+    return f"{mangled[: MOST_KEY_BYTES - 1 - len(digest)]}-{digest}"
 
 
 def read_marker(directory, session):
@@ -244,6 +268,11 @@ def pending(args, now=None):
         if notes:
             notes_copy.write_text(json.dumps(notes, indent=2), encoding="utf-8")
         session = dict(session, notes=len(notes))
+        digest_copy = work / "sessions" / f"{sid}.digest.json"
+        try:
+            digest.write(pa.read_json(record_copy), audit_copy if have_audit else None, digest_copy, session["from_turn"])
+        except ValueError as problem:
+            print(f"warning: no digest for {sid}: {one_line(problem, 160)}", file=sys.stderr)
         prompt.write_text(
             pa.render(
                 template,
@@ -258,6 +287,7 @@ def pending(args, now=None):
                     "notes_file": str(notes_copy) if notes else "(this session has no notes)",
                     "record_file": str(record_copy),
                     "audit_file": str(audit_copy) if have_audit else "(this session has no audit trail)",
+                    "digest_file": str(digest_copy) if digest_copy.is_file() else NO_DIGEST,
                     "tracker": str(tracker_file),
                     "root": str(root),
                     "commit": tip,
@@ -398,6 +428,7 @@ def verify(args):
         record_copy = Path(work) / "sessions" / f"{sid}.json"
         audit_copy = Path(work) / "sessions" / f"{sid}.audit.jsonl"
         notes_copy = Path(work) / "sessions" / f"{sid}.notes.json"
+        digest_copy = Path(work) / "sessions" / f"{sid}.digest.json"
         for problem in session["problems"]:
             if problem["state"] != "verify":
                 print(f"  {problem['id']}  {problem.get('verdict') or problem['state']}", file=sys.stderr)
@@ -414,6 +445,7 @@ def verify(args):
                         "claim": pa.fenced(json.dumps(claim, indent=2)),
                         "record_file": str(record_copy),
                         "audit_file": str(audit_copy) if audit_copy.is_file() else "(this session has no audit trail)",
+                        "digest_file": str(digest_copy) if digest_copy.is_file() else NO_DIGEST,
                         "notes_file": str(notes_copy) if notes_copy.is_file() else "(this session has no notes)",
                         "root": manifest["root"],
                         "commit": manifest["commit"],

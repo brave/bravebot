@@ -15,6 +15,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -288,7 +290,9 @@ impl FrontEnd {
     fn turn(&mut self, session: &str, answers: &[(&str, &str, bool)]) -> Vec<Value> {
         self.call(
             "turn.send",
-            json!({"session": session, "prompt": "what is the weather in Paris"}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": "what is the weather in Paris"}),
+            ),
         );
         let mut events = Vec::new();
         loop {

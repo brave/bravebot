@@ -209,14 +209,16 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // says nothing for a mode other than plan.
     let chosen = task.permission_mode.get();
     if let Some(notice) = state.told_mode.change_notice(chosen) {
+        // A notice is only ever into plan mode or out of it, so the conversation now says plan
+        // mode is on exactly when the mode chosen is plan. The tag carries that, so the record is
+        // dropped with the notice.
         conversation.push_composed_from(
             Message::user(&notice),
-            Composed::Notice,
+            Composed::ModeNotice {
+                plan: chosen == crate::permission_mode::PermissionMode::Plan,
+            },
             Provenance::Driver,
         );
-        // A notice is only ever into plan mode or out of it, so the conversation now says plan
-        // mode is on exactly when the mode chosen is plan.
-        conversation.plan_mode_noticed(chosen == crate::permission_mode::PermissionMode::Plan);
     }
     state.told_mode = chosen;
 
@@ -304,7 +306,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     );
 
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
 
         ..state.account
     });
@@ -449,11 +451,11 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
     if completion.cut_off.is_some() {
         completion.calls.clear();
     }
-    state.account.add_usage(completion.usage);
+    state.account.add_request(completion.usage);
     state.account.context_tokens = completion.context_tokens;
     conversation.measured(state.account.context_tokens);
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         ..state.account
     });
 
@@ -1409,7 +1411,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     {
         account.context_tokens = conversation.last_request_tokens();
         reporter.spent(crate::outcome::Spent {
-            timing: spent.finish(),
+            timing: spent.finish(&*account),
             ..*account
         });
     }
@@ -1430,20 +1432,21 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
         if let Err(error) = &summary
             && let Some(usage) = error.completed_usage()
         {
-            account.add_usage(usage);
+            account.add_request(usage);
             reporter.spent(crate::outcome::Spent {
-                timing: spent.finish(),
+                timing: spent.finish(&*account),
                 ..*account
             });
         }
         match summary {
             Ok(Some(done)) => {
                 shortened = true;
-                account.add_usage(done.usage);
+                account.add_request(done.usage);
+                spent.compactions += 1;
                 // The figure measured the conversation the summary replaced.
                 reporter.spent(crate::outcome::Spent {
                     context_tokens: 0,
-                    timing: spent.finish(),
+                    timing: spent.finish(&*account),
                     ..*account
                 });
                 reporter.narration(format!(
@@ -1525,7 +1528,7 @@ pub(super) fn close_the_rounds<S: Sink, R: Reporter>(
     crate::xai::say_an_unsaved_renewal(reporter);
     state.spent.wall = began.elapsed();
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         ..state.account
     });
 
@@ -1689,6 +1692,7 @@ pub(super) fn tools_for_a_call<'a>(
         auto_vetting: task.auto_vetting,
         run_directory: &mut state.run_directory,
         confined_failures: &mut state.confined_failures,
+        objections: &mut state.objections,
         confine_runs: task.confine_runs,
         // Read as the call is built, so a mode the person chose while the turn ran is the one this
         // call is decided under, in every one of its decisions (SANDBOX-22).
@@ -1822,9 +1826,11 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // A processor is a model call of its own, so what it spent belongs in the turn's
     // total. Left out, a turn that did most of its work in processors would report
     // having cost almost nothing.
-    state.account.add_usage(output.usage);
+    // A request only where the call waited on the model and was not stopped; every other tool's
+    // usage is empty.
+    state.account.add_call(output.usage, output.requested());
     reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         ..state.account
     });
     // Kept as the turn goes rather than read off the last round, and overwritten by each

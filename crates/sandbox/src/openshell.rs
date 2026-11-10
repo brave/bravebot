@@ -19,7 +19,7 @@
 
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{self, ConfinedChild, Environment, Streams};
-use crate::programs::{Inherits, Resolved, SearchPath};
+use crate::programs::{CodeSelectors, Inherits, Resolved, SearchPath};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, OsString};
 use std::process::Output;
@@ -152,8 +152,13 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command =
-        crate::programs::start(cli, Inherits::Only(CLI_INHERITS), SearchPath::Reduced);
+    let mut command = crate::programs::start(
+        cli,
+        Inherits::Only(CLI_INHERITS),
+        SearchPath::Reduced,
+        // Given `HOME` alone, so no generic name reaches the CLI (SANDBOX-30, empty-list starts).
+        CodeSelectors::Checked(&[]),
+    );
     command.args(args);
     output_of(command, within)
 }
@@ -476,8 +481,14 @@ impl Sandbox for OpenShell {
             )));
         }
         self.prepare(program)?;
-        let mut command =
-            crate::programs::start(&self.cli, Inherits::Only(CLI_INHERITS), SearchPath::Reduced);
+        let mut command = crate::programs::start(
+            &self.cli,
+            Inherits::Only(CLI_INHERITS),
+            SearchPath::Reduced,
+            // Given `HOME` alone, so no generic name reaches the CLI (SANDBOX-30, empty-list
+            // starts).
+            CodeSelectors::Checked(&[]),
+        );
         command
             .args([
                 "sandbox", "exec", "-n", &self.name, "--no-tty", "--color", "never", "--",
@@ -849,7 +860,13 @@ fn machine_id() -> Option<String> {
         // Named by its path, since a minimal PATH, as cron or a launched application gives, would
         // otherwise leave this process naming the machine differently from the others.
         let sysctl = Resolved::written_in_source("/usr/sbin/sysctl");
-        let mut command = crate::programs::start(&sysctl, Inherits::Only(&[]), SearchPath::Reduced);
+        let mut command = crate::programs::start(
+            &sysctl,
+            Inherits::Only(&[]),
+            SearchPath::Reduced,
+            // A fixed system program with an empty environment; no variable reaches it (SANDBOX-30).
+            CodeSelectors::Kept,
+        );
         command.args(["-n", "kern.uuid"]);
         let output = output_of(command, Duration::from_secs(5)).ok()?;
         return output
@@ -1183,6 +1200,7 @@ mod tests {
                 &Resolved::find(OsStr::new(name)).expect(name),
                 Inherits::Only(&[]),
                 SearchPath::Reduced,
+                CodeSelectors::Kept,
             )
         };
         let mut sleeping = program("sleep");
@@ -1224,6 +1242,7 @@ mod tests {
             &Resolved::find(OsStr::new("true")).expect("true"),
             Inherits::Only(&[]),
             SearchPath::Reduced,
+            CodeSelectors::Kept,
         )
         .spawn()
         .expect("a child");
@@ -1268,7 +1287,7 @@ mod tests {
             let log = dir.join("log");
             let phase = if failing == "get" { "Error" } else { "Ready" };
             let script = format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") printf '{resolved}\\n' ;;\nesac\nexit 0\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") if [ /dev/fd/2 -ef /dev/null ]; then printf 'stderr-null %s\\n' \"$*\" >> '{log}'; fi; printf '{resolved}\\n' ;;\nesac\nexit 0\n",
                 log = log.display(),
             );
             let program = dir.join("openshell");
@@ -1406,6 +1425,40 @@ mod tests {
         let lookalike = executed(OsStr::new("tool-\u{FFFD}"));
         assert!(raw.ends_with(b"-- tool-\xff"), "{raw:?}");
         assert_ne!(raw, lookalike);
+    }
+
+    /// SERVERS-25: a server in an OpenShell sandbox has its stderr discarded when the caller asks
+    /// for that. The fake CLI records when its own stderr is the null device. The regression it
+    /// rejects: a start that gives `openshell sandbox exec` the caller's stderr whatever was asked,
+    /// which would let a server write to the terminal the caller draws its questions on. A piped
+    /// stderr is the control that shows the probe tells the two apart.
+    #[test]
+    fn a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox() {
+        use crate::process::Stream;
+        let recorded = |stderr: Stream| {
+            let cli = FakeCli::failing("none");
+            let shell = cli.shell(&[]);
+            let mut child = shell
+                .spawn(
+                    OsStr::new("python3"),
+                    &[],
+                    &SandboxPolicy::strict(),
+                    Streams {
+                        stdin: Stream::Null,
+                        stdout: Stream::Null,
+                        stderr,
+                    },
+                    Environment::Inherited,
+                )
+                .expect("started");
+            child.wait().expect("the fake CLI exits");
+            cli.lines()
+                .into_iter()
+                .filter(|line| line.starts_with("stderr-null sandbox exec"))
+                .count()
+        };
+        assert_eq!(recorded(Stream::Null), 1);
+        assert_eq!(recorded(Stream::Piped), 0);
     }
 
     #[test]

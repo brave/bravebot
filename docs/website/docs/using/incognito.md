@@ -1,7 +1,7 @@
 ---
 sidebar_position: 10
 title: Incognito sessions
-description: Start a session with --incognito so it adds nothing to ~/.bravebot, and see what is still read and what still reaches the filesystem.
+description: Start an incognito session with --incognito, omit saved history, records and audit trails, and understand existing-state reads and filesystem side effects.
 ---
 
 # Incognito sessions

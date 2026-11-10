@@ -54,7 +54,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     const made = await rig({})
     const info = await made.rpc.client.describe()
     assert.deepEqual(info.sessionView.approvals, ['confirm', 'run', 'fetch', 'ask'])
-    assert.equal(info.sessionView.reconnect, false)
+    assert.equal(info.sessionView.resync, 'session.view.resync')
     const raw = (await rawOn(made.rpc, 'agent.info')) as Record<string, unknown>
     assert.equal(typeof raw.home, 'string', 'the bridge reports its state directory')
     assert.equal(JSON.stringify(info).includes(raw.home as string), false)

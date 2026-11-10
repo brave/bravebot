@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: Memory
-description: Rules the planner always follows and facts it can recall, kept under ~/.bravebot and shown by /memory.
+description: Persistent planner rules and recalled facts, their storage under ~/.bravebot, inspection with /memory and behavior in incognito sessions.
 ---
 
 # Memory

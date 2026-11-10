@@ -913,22 +913,50 @@ pub(crate) fn write(
     destination: &Destination,
     unwritable: fn(import::Unwritable, &Path) -> String,
 ) -> Result<(), String> {
-    use bravebot_agent::accounts::SettingsNotWritten;
     let path = destination.path();
-    bravebot_agent::accounts::write_settings(destination).map_err(|failure| match failure {
+    bravebot_agent::accounts::write_settings(destination)
+        .map_err(|failure| not_written(failure, path, unwritable))
+}
+
+/// The words for a write that left the file as it was. The file system's own words can name a
+/// path an environment variable chose, so they are drawn (LAYER-3).
+fn not_written(
+    failure: bravebot_agent::accounts::SettingsNotWritten,
+    path: &Path,
+    unwritable: fn(import::Unwritable, &Path) -> String,
+) -> String {
+    use bravebot_agent::accounts::SettingsNotWritten;
+    match failure {
         SettingsNotWritten::Unwritable(why) => unwritable(why, path),
         SettingsNotWritten::Refused(problem) => t!(
             import_not_written,
             file = printable(&path.display().to_string()),
-            problem = problem
+            problem = printable(&problem)
         ),
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bravebot_config::import::Places;
+
+    /// LAYER-3. The file system's words for a refused write can carry a path an environment
+    /// variable chose. Rejects: `not_written` interpolating the problem as it stands, which lets
+    /// an escape in the path reach the terminal.
+    #[test]
+    fn a_refused_write_is_worded_with_its_control_characters_drawn() {
+        let said = not_written(
+            bravebot_agent::accounts::SettingsNotWritten::Refused(
+                "No such file: /tmp/a\u{1b}[31m\u{202e}b".to_string(),
+            ),
+            Path::new("/tmp/settings.json"),
+            unwritable,
+        );
+        assert!(said.chars().all(|c| !c.is_control()), "{said:?}");
+        assert!(said.contains("a\u{241b}[31m"), "{said:?}");
+        assert!(!said.contains('\u{202e}'), "{said:?}");
+    }
 
     /// A scratch profile directory that removes itself.
     struct Scratch {

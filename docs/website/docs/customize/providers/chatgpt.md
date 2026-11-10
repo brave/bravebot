@@ -1,7 +1,7 @@
 ---
 sidebar_position: 10
 title: ChatGPT
-description: Sign in with a ChatGPT Plus or Pro account in a browser, and use the models the account reaches.
+description: ChatGPT account sign-in, model names, request destinations, token refresh, stored credentials, status and sign-out, observed support and documented account restrictions.
 ---
 
 # Reaching a model with a ChatGPT account

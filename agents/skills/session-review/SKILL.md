@@ -26,7 +26,9 @@ seconds) and the saving. Both are filed as `enhancement` unless something is bro
 reads the records, files what it finds, and remembers which it has read.
 
 It files defects in the bravebot product (`crates/`, `ui/` and the behaviour the specs describe). A
-session often runs one of this repository's own skills, such as `pr-fix` or `rebase`. Defects in
+spec clause that is itself the problem counts, and the report names the clause to amend. A clause
+that keeps untrusted content out of the planner or the driver is not weighed against what it costs.
+A session often runs one of this repository's own skills, such as `pr-fix` or `rebase`. Defects in
 those skills, the scripts beside them, the `Makefile`, `contrib/` and the CI workflows are left out.
 A session whose only findings are of that kind has no problems to file and still gets its marker.
 
@@ -107,7 +109,11 @@ python3 agents/skills/session-review/session-review.py pending [--max N] [--work
 Print its stderr: how many sessions exist, how many were reviewed before, and the commit they are
 reviewed against. It refuses a tree that differs from `upstream/main`, since a verdict about a
 branch is no verdict about main; the refusal names the worktree to run from instead. It copies each
-chosen record and trail into the work directory, so the agents read nothing under `~/.bravebot`.
+chosen record and trail into the work directory, so the agents read nothing under `~/.bravebot`. It
+also writes `<id>.digest.json` beside each copy ([digest.py](digest.py)): the figures that code can
+count from the record and the trail, so that the analyzer starts from counts and a verifier can
+recompute one. The digest holds numbers, tool names and fixed words, and no text from the session.
+A session whose digest cannot be made is reviewed without one, and the stderr says so.
 
 Stdout is `{"work_dir": ..., "analyze": [{"id": ..., "prompt_file": ...}]}`. Where `analyze` is
 empty, say there is nothing new to review and stop.
@@ -147,8 +153,9 @@ Execute them completely. Your job is to kill the claim if it can be killed. Open
 Write your verdict JSON to the results file the instructions specify. Do not edit any file in the tree.
 ```
 
-Wait for all of them. A verifier that finds the problem fixed, accepted, already on the tracker or
-not a defect replaces the first pass's claim with its own verdict. One that stopped before writing a
+Wait for all of them. A verifier that finds the problem fixed, accepted (listed under a spec's Known
+costs, or a rule that keeps untrusted content out of the planner or the driver), already on the
+tracker or not a defect replaces the first pass's claim with its own verdict. One that stopped before writing a
 readable verdict leaves the problem, and so its session, unsettled.
 
 ### Step 5: draft (zero model tokens)

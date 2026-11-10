@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Reading the transcript
-description: What is drawn back, the scroller Ctrl-O opens over it, and what the mouse does in it.
+description: Transcript rendering and turn status, themes and model picker, Ctrl-O scroller navigation, search and export, mouse selection and menus, info panel and files-view clicks, edit arrows and close controls.
 ---
 
 # Reading the transcript

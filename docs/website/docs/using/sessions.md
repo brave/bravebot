@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Sessions
-description: What is kept between runs, how to pick a session back up, and what a resume restores.
+description: Resume, fork, search, name, note, import and delete sessions; costs and stats, info panel, files view (/diff) with arrow navigation and exit keys, background sessions, history and compaction.
 ---
 
 # Sessions
@@ -626,7 +626,9 @@ is left out of the list, and a corrupt history reads as no history rather than a
 :::note
 Two working directories can share a session store. The directory name is derived by mapping every
 character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all reduce to the
-same name. Because a resume restores standing permissions, permissions granted in one of those
+same name. A name longer than 200 bytes is cut and ends in a digest of the path, so two long
+directories do not share a store. Because a resume restores standing permissions, permissions
+granted in one of those
 directories would be offered in another. This is
 [a known bug](https://github.com/brave/bravebot/issues), not a design decision.
 :::

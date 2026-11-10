@@ -1891,6 +1891,9 @@ pub fn run(
     prompts: bravebot_agent::turn::SystemPrompts,
     moments: &mut bravebot_agent::hooks::SessionMoments,
 ) -> io::Result<Ended> {
+    // First, because the questions the terminal is asked on the way in read from it, and a terminal
+    // that has gone is where they would spin.
+    crate::hangup::end_with_the_terminal();
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
     crate::theme::sense_no_color();
@@ -20049,6 +20052,26 @@ mod tests {
         assert!(!will_look_again(&helped, Wrote::ThePerson));
     }
 
+    /// CMD-24: only the question contributes a person's file names. The driver-written flag
+    /// suppresses later looks without suppressing those names at the submission boundary.
+    #[test]
+    fn a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers() {
+        let mut session = Session::new("none");
+        let Action::Submit(prompt) = enter_line(
+            &mut session,
+            "/help explain file mentions using @crates/core/src/policy.rs",
+        ) else {
+            panic!("the question did not start a turn");
+        };
+        assert_eq!(
+            files_named_in(&prompt, Wrote::ThePerson, std::path::Path::new("."), &[]),
+            vec!["crates/core/src/policy.rs".to_string()]
+        );
+        assert!(!will_look_again(&session, Wrote::ThePerson));
+        assert!(session.take_driver_prompt());
+        assert!(!crate::help_command::prompt("").contains('@'));
+    }
+
     /// CMD-24: asked nothing, `/help` says what it takes and starts no turn, so no request is made
     /// about no question.
     #[test]
@@ -37453,6 +37476,7 @@ mod tests {
             context_tokens: None,
             conceded: Default::default(),
             backend: None,
+            retry_setting: false,
             attempts: 2,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 ChatError::Account(AccountFailure::NotSignedIn),
@@ -42727,6 +42751,7 @@ mod tests {
             context_tokens: None,
             conceded: Default::default(),
             backend: None,
+            retry_setting: false,
             attempts: 3,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
@@ -42793,6 +42818,7 @@ mod tests {
             context_tokens: None,
             conceded: Default::default(),
             backend: None,
+            retry_setting: false,
             attempts: 1,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
@@ -42864,6 +42890,7 @@ mod tests {
                 context_tokens: None,
                 conceded: Default::default(),
                 backend: None,
+                retry_setting: false,
                 attempts: 2,
                 cause: Box::new(bravebot_agent::backend::BackendError::from(
                     ChatError::Account(failure),

@@ -77,6 +77,7 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
     { workspaces: ['work', 'one', 'two'].map((id) => ({ id, name: id[0]!.toUpperCase() + id.slice(1), directory: `/${id}` })) },
   )
   const ids = new Map<string, number>()
+  const messageIds = new Set<string>()
   const running = new Map<string, Promise<unknown>>()
   const sessions = new Map<string, AgentSession>()
 
@@ -120,7 +121,16 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
       } else if ('expectRequest' in step) {
         const request = await nextRequest()
         assert.equal(request.method, step.method, `${where}: the next request`)
-        assert.deepEqual(request.params, step.params ?? {}, `${where}: params of ${request.method}`)
+        const expected = { ...((step.params ?? {}) as Record<string, unknown>) }
+        const params = request.params as Record<string, unknown>
+        if (expected.messageId === '$fresh') {
+          const id = params.messageId
+          assert.ok(typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id), `${where}: ${String(id)} is not a message id the bridge takes`)
+          assert.ok(!messageIds.has(id), `${where}: message id ${id} was sent before`)
+          messageIds.add(id)
+          expected.messageId = id
+        }
+        assert.deepEqual(request.params, expected, `${where}: params of ${request.method}`)
         ids.set(String(step.expectRequest), request.id)
       } else if ('expectWorkspaces' in step) {
         assert.deepEqual(client.workspaces(), step.expectWorkspaces, `${where}: workspaces`)

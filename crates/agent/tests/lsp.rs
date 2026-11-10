@@ -33,13 +33,18 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
-/// A scratch directory under `target/`, removed with the test.
+/// A scratch directory under `target/`, and a directory beside it for the fake server, both removed
+/// with the test.
 ///
 /// Not [`std::env::temp_dir`]: that directory is shared between users and between processes with
 /// different privileges, so a fixed name under it collides whenever two checkouts run the tests at
-/// once.
+/// once. It is also a directory a stage may write, so a server on `$PATH` there is not searched.
+///
+/// The server is outside the workspace for the same reason: a workspace is a directory a stage may
+/// write, and SANDBOX-30 leaves every `$PATH` entry inside it out of the lookup.
 struct Scratch {
     path: PathBuf,
+    programs: PathBuf,
 }
 
 impl Scratch {
@@ -49,15 +54,19 @@ impl Scratch {
         path.pop();
         path.pop();
         path.extend(["target", "test-scratch", name]);
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("create scratch");
-        Self { path }
+        let programs = path.with_file_name(format!("{name}-programs"));
+        for directory in [&path, &programs] {
+            let _ = std::fs::remove_dir_all(directory);
+            std::fs::create_dir_all(directory).expect("create scratch");
+        }
+        Self { path, programs }
     }
 }
 
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
+        let _ = std::fs::remove_dir_all(&self.programs);
     }
 }
 
@@ -148,8 +157,7 @@ fn a_workspace_with_a_server(scratch: &Scratch) -> (Workspace, PathBuf) {
     std::fs::create_dir_all(&source).expect("create src");
     std::fs::write(source.join("a.rs"), "pub struct Held;\n").expect("write a.rs");
 
-    let binaries = scratch.path.join("bin");
-    std::fs::create_dir_all(&binaries).expect("create bin");
+    let binaries = &scratch.programs;
     let program = binaries.join("rust-analyzer");
     std::fs::write(&program, FAKE_SERVER).expect("write the server");
     {
@@ -352,7 +360,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
 
     // The session owns the set, which is the whole of the fix: the turns borrow it.
     // A final server write during shutdown must happen before restoration, not after it.
-    let program = scratch.path.join("bin/rust-analyzer");
+    let program = scratch.programs.join("rust-analyzer");
     let script = FAKE_SERVER.replace("*'\"shutdown\"'*)", "*'\"shutdown\"'*)\n      printf 'server final write' > \"$DEFINED_AT\"\n      touch \"$DEFINED_AT.stopped\"");
     std::fs::write(program, script).unwrap();
     let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
@@ -447,7 +455,7 @@ fn a_language_server_is_not_handed_a_gateways_environment_token() {
     let scratch = Scratch::new("agent-lsp-gateway-token");
     let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
     let seen = scratch.path.join("environment");
-    let program = scratch.path.join("bin/rust-analyzer");
+    let program = scratch.programs.join("rust-analyzer");
     std::fs::write(
         &program,
         FAKE_SERVER.replacen(
@@ -1221,7 +1229,7 @@ fn the_end_line_is_in_the_context_only_where_the_answer_is_trusted() {
     for (directory, distrusted) in [("vendor", true), ("lib", false)] {
         let scratch = Scratch::new(&format!("agent-lsp-the-end-line-{directory}"));
         let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
-        let program = scratch.path.join("bin").join("rust-analyzer");
+        let program = scratch.programs.join("rust-analyzer");
         std::fs::write(&program, FAKE_SERVER.replacen(plain, linked, 1)).expect("write the server");
         let named = format!("{}/{directory}/b.rs", scratch.path.display());
         std::fs::create_dir_all(scratch.path.join(directory)).expect("create the directory");
@@ -1772,7 +1780,7 @@ fn diagnosing_turn(
 ) -> (Vec<String>, usize, usize) {
     let scratch = Scratch::new(name);
     let (workspace, recorded) = a_workspace_with_a_server(&scratch);
-    std::fs::write(scratch.path.join("bin/rust-analyzer"), DIAGNOSING_SERVER)
+    std::fs::write(scratch.programs.join("rust-analyzer"), DIAGNOSING_SERVER)
         .expect("write the server");
     std::fs::create_dir_all(scratch.path.join("vendor")).expect("create vendor");
     std::fs::write(scratch.path.join("vendor/x.rs"), "pub fn vendored() {}\n").expect("vendor");
@@ -2213,6 +2221,7 @@ fn asking_about_reaching(
     let beside = Scratch::new(name);
     let scratch = Scratch {
         path: beside.path.join("workspace"),
+        programs: beside.programs.clone(),
     };
     std::fs::create_dir_all(&scratch.path).expect("create the workspace");
     let outside = beside.path.join("outside");
@@ -2234,7 +2243,7 @@ fn asking_about_reaching(
             .add_directory(outside.to_str().expect("utf-8 path"))
             .expect("the directory is added");
     }
-    std::fs::write(scratch.path.join("bin/rust-analyzer"), recording_opens())
+    std::fs::write(scratch.programs.join("rust-analyzer"), recording_opens())
         .expect("write the server");
     std::os::unix::fs::symlink(&outside, scratch.path.join("src/link")).expect("link");
     let opened = beside.path.join("opened");

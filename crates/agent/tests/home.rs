@@ -98,6 +98,57 @@ fn a_directory_named_in_the_environment_is_the_state_directory_in_every_crate() 
     });
 }
 
+/// STATE-2, SANDBOX-12: the crate that reads the settings, the one that keeps the sign-ins, the agent
+/// and the sandbox's refusal all name one directory for a `BRAVEBOT_HOME`, so the directory a stage
+/// is refused is the directory the keys are written to.
+///
+/// The settings crate is reached through the language it reads from `settings.json` in the
+/// directory, the sign-ins through their file, and the sandbox through the directory the agent hands
+/// it, since it reads no environment. A crate that kept resolving the directory under the profile
+/// directory would read, write or refuse a different place from the other three.
+#[test]
+fn the_crates_and_the_sandbox_name_one_moved_state_directory() {
+    with_temp_home("four-resolvers", |home| {
+        let named = home.join("elsewhere").join("state");
+        std::fs::create_dir_all(&named).expect("the named directory");
+        std::fs::write(named.join("settings.json"), r#"{"language": "fr"}"#)
+            .expect("a settings file in the named directory");
+        // SAFETY: `with_temp_home` holds the lock, and restores this along with the rest.
+        unsafe { std::env::set_var(bravebot_agent::home::STATE_VARIABLE, &named) };
+
+        assert_eq!(bravebot_agent::home::directory(), Some(named.clone()));
+        assert_eq!(
+            bravebot_config::Settings::written_language().as_deref(),
+            Some("fr"),
+            "the settings crate looked somewhere the agent's state directory is not"
+        );
+        assert_eq!(
+            bravebot_skus::chatgpt::path()
+                .expect("a named directory")
+                .parent(),
+            Some(named.as_path()),
+            "the sign-ins crate kept its file somewhere the agent's state directory is not"
+        );
+        let moved = bravebot_sandbox::base::moved_state_directory(home, Some(&named));
+        assert_eq!(
+            moved,
+            Some(named.clone()),
+            "the sandbox did not take the directory the agent resolved as one to refuse"
+        );
+        let policy = bravebot_sandbox::base::run_base(
+            bravebot_sandbox::base::Prelude::Linux,
+            std::path::Path::new("/scratch"),
+            Some(home),
+            bravebot_agent::home::directory().as_deref(),
+        );
+        assert!(
+            policy.unreadable.contains(&named),
+            "{named:?} is not refused to a stage: {:?}",
+            policy.unreadable
+        );
+    });
+}
+
 /// STATE-2: a value in `BRAVEBOT_HOME` that names nothing leaves a machine with no profile
 /// directory with no state directory, whatever the value is. A relative one resolved against the
 /// working directory, or an empty one joined onto the root, would be the guessed location the clause

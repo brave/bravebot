@@ -462,8 +462,9 @@ fn run(
             false => bravebot_agent::servers::Asking::Person,
         },
         asker,
-        // Where this session's own lines go, since nothing draws over them.
-        bravebot_sandbox::Stream::Inherited,
+        // Nowhere: the questions above are drawn on the stream a server's stderr would share, and
+        // a server's bytes could rewrite them (SERVERS-25).
+        bravebot_sandbox::Stream::Null,
     );
     for note in std::mem::take(&mut reached.notes) {
         asking.say(&crate::progress::printable_lines(&note));
@@ -1905,6 +1906,7 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -1936,6 +1938,7 @@ mod tests {
                 tools_ms: 22,
                 stalled_ms: 33,
                 file_wait_ms: 0,
+                ..Default::default()
             })
         );
     }

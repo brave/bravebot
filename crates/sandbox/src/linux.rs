@@ -21,13 +21,14 @@ use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use landlock::{
-    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, PathFdError,
-    RulesetAttr, RulesetCreated, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope,
-    path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, RulesetAttr,
+    RulesetCreated, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope,
 };
 use std::ffi::{OsStr, OsString};
+use std::fs::{File, OpenOptions};
+use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The right set the ruleset handles, which is every right this crate knows of.
@@ -150,30 +151,78 @@ fn abi_meets_minimum(version: libc::c_long) -> Result<(), SandboxError> {
     Ok(())
 }
 
+/// A descriptor for `path` that a rule can be attached to, opened without following a link in
+/// the last component of the name where `not_through_a_link` is set.
+///
+/// `PathFd::new` opens by name and follows a link, so a row judged at a place and relinked
+/// before the open would attach its rights to wherever the name leads at that moment. A row in
+/// [`SandboxPolicy::not_through_a_link`] was judged where it leads and is opened as what the
+/// name is: a name that is now a link is refused and no rule is built (SANDBOX-28). The rule is
+/// built from the descriptor opened here, so the rights go to the inode this open found. A link
+/// in a directory above the last component is still followed.
+fn open_row(path: &Path, not_through_a_link: bool) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // `O_PATH` takes no access to the file, only a place to attach a rule to, as `PathFd` opens.
+    let mut flags = libc::O_PATH | libc::O_CLOEXEC;
+    if not_through_a_link {
+        flags |= libc::O_NOFOLLOW;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)?;
+    // An `O_PATH` open of a link under `O_NOFOLLOW` succeeds and names the link itself.
+    if not_through_a_link && file.metadata()?.file_type().is_symlink() {
+        return Err(std::io::Error::other(
+            "the name is a link, and the row was judged for where its name led",
+        ));
+    }
+    Ok(file)
+}
+
+/// The error for the row at `path`, saying which row it was.
+fn refused_row(path: &Path, error: &std::io::Error) -> std::io::Error {
+    std::io::Error::other(format!("{}: {error}", path.display()))
+}
+
+/// The rule that grants `access` at the descriptor `file`, cut to the rights that apply to a
+/// file where it is not a directory, as `path_beneath_rules` does.
+fn rule_on(file: File, access: BitFlags<AccessFs>) -> std::io::Result<PathBeneath<OwnedFd>> {
+    let access = match file.metadata()?.is_dir() {
+        true => access,
+        false => access & AccessFs::from_file(HANDLED_ABI),
+    };
+    Ok(PathBeneath::new(OwnedFd::from(file), access))
+}
+
 /// A rule for every path in `paths`, or an error saying how many produced none.
 ///
 /// A Landlock rule is a right attached to an open descriptor, so a path nothing can open
 /// cannot be named in one, and the rule builder skips such a path rather than reporting
 /// it. A ruleset built straight from that builder therefore confines the process to fewer
-/// paths than the policy listed while the policy reads as applied in full.
+/// paths than the policy listed while the policy reads as applied in full. A path in
+/// `not_through_a_link` is opened by [`open_row`] without following a link.
 fn rules_for_every_path(
     paths: &[PathBuf],
     access: BitFlags<AccessFs>,
-) -> std::io::Result<Vec<Result<PathBeneath<PathFd>, RulesetError>>> {
-    let rules: Vec<_> = path_beneath_rules(paths, access).collect();
-    if rules.len() != paths.len() {
-        // Which paths, found by asking again, since the builder reports only the rules it
-        // produced. The second pass is on the refusal path alone, and it names the grant
-        // that is missing rather than leaving a count for somebody to work back from.
-        let missing: Vec<_> = paths
-            .iter()
-            .filter(|path| PathFd::new(path).is_err())
-            .map(|path| path.display().to_string())
-            .collect();
+    not_through_a_link: &[PathBuf],
+) -> std::io::Result<Vec<Result<PathBeneath<OwnedFd>, RulesetError>>> {
+    let mut rules = Vec::with_capacity(paths.len());
+    let mut missing = Vec::new();
+    for path in paths {
+        match open_row(path, not_through_a_link.contains(path))
+            .and_then(|file| rule_on(file, access))
+        {
+            Ok(rule) => rules.push(Ok(rule)),
+            Err(error) => missing.push(refused_row(path, &error).to_string()),
+        }
+    }
+    if !missing.is_empty() {
         return Err(std::io::Error::other(format!(
             "landlock: {} of the {} paths the policy names have no rule ({}); refusing \
              rather than confining to less than the policy asked for",
-            paths.len() - rules.len(),
+            missing.len(),
             paths.len(),
             missing.join(", ")
         )));
@@ -190,18 +239,17 @@ fn rules_for_every_path(
 /// a directory, or is a stale handle on a network file system. The same open decides it, so a
 /// name present at that open and removed later is the installer's to skip. A listed row that is
 /// there and cannot be opened, and a path the caller named, are refused (SANDBOX-6).
-fn opened_rows(policy: &SandboxPolicy) -> Result<Option<SandboxPolicy>, PathFdError> {
+fn opened_rows(policy: &SandboxPolicy) -> Result<Option<SandboxPolicy>, std::io::Error> {
+    let unfollowed = |path: &Path| policy.not_through_a_link.iter().any(|row| row == path);
     for path in &policy.readable {
-        PathFd::new(path)?;
+        open_row(path, unfollowed(path)).map_err(|error| refused_row(path, &error))?;
     }
     let mut gone = Vec::new();
     for (index, row) in policy.writable.iter().enumerate() {
-        match PathFd::new(&row.path) {
+        match open_row(&row.path, unfollowed(&row.path)) {
             Ok(_) => {}
-            Err(PathFdError::OpenCall { source, .. }) if row.listed && name_is_gone(&source) => {
-                gone.push(index);
-            }
-            Err(error) => return Err(error),
+            Err(error) if row.listed && name_is_gone(&error) => gone.push(index),
+            Err(error) => return Err(refused_row(&row.path, &error)),
         }
     }
     if gone.is_empty() {
@@ -232,21 +280,28 @@ fn name_is_gone(error: &std::io::Error) -> bool {
 /// For the rows a listing produced, which are opened again here after the fork. One whose name is
 /// gone has nothing to grant and is left out, as [`opened_rows`] leaves out a listed row before
 /// it. One that is there and cannot be opened is a grant this backend cannot install, and is the
-/// error. Each rule is added as it is built, so a large directory holds one descriptor at a time
-/// and not one for each entry.
+/// error. A row in `not_through_a_link` is opened without following a link, as [`opened_rows`]
+/// opens it (SANDBOX-28). Each rule is added as it is built, so a large directory holds one
+/// descriptor at a time and not one for each entry.
 fn with_the_listed_rules(
     mut ruleset: RulesetCreated,
     paths: &[PathBuf],
     access: BitFlags<AccessFs>,
+    not_through_a_link: &[PathBuf],
 ) -> std::io::Result<RulesetCreated> {
     for path in paths {
-        let fd = match PathFd::new(path) {
-            Ok(fd) => fd,
-            Err(PathFdError::OpenCall { source, .. }) if name_is_gone(&source) => continue,
-            Err(error) => return Err(std::io::Error::other(format!("landlock: {error}"))),
+        let file = match open_row(path, not_through_a_link.contains(path)) {
+            Ok(file) => file,
+            Err(error) if name_is_gone(&error) => continue,
+            Err(error) => {
+                return Err(std::io::Error::other(format!(
+                    "landlock: {}",
+                    refused_row(path, &error)
+                )));
+            }
         };
         ruleset = ruleset
-            .add_rule(PathBeneath::new(fd, access))
+            .add_rule(rule_on(file, access)?)
             .map_err(|e| std::io::Error::other(format!("landlock: {e}")))?;
     }
     Ok(ruleset)
@@ -429,6 +484,8 @@ impl LandlockSandbox {
             &crate::programs::Resolved::to_confine(program),
             crate::programs::Inherits::All,
             crate::programs::SearchPath::Inherited,
+            // The program is confined by the policy this call applies (SANDBOX-30).
+            crate::programs::CodeSelectors::Kept,
         );
         command.args(args);
         if let Some(directory) = &policy.starting_in {
@@ -445,6 +502,8 @@ impl LandlockSandbox {
         };
         let readable = policy.readable_by_enumeration().map_err(unlistable)?;
         let writable = policy.writable_by_enumeration().map_err(unlistable)?;
+        // Owned, since the closure below outlives this call's borrow of the policy.
+        let not_through_a_link = policy.not_through_a_link.clone();
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -490,14 +549,19 @@ impl LandlockSandbox {
 
                 // A path the caller named is granted at the exec, or the exec is refused
                 // (SANDBOX-6). A row granted as its entries has no rule of its own, so what is
-                // asked of it is that it is still a directory: one that has gone, or become a
-                // file, leaves every entry with nothing to grant.
+                // asked of it is that it is still a directory, and for a judged row that its name
+                // is not a link now (SANDBOX-28): one that has gone, or become a file, leaves every
+                // entry with nothing to grant.
                 for path in readable
                     .above_a_refusal
                     .iter()
                     .chain(&writable.above_a_refusal)
                 {
-                    if !std::fs::metadata(path).is_ok_and(|found| found.is_dir()) {
+                    let found = match not_through_a_link.contains(path) {
+                        true => std::fs::symlink_metadata(path),
+                        false => std::fs::metadata(path),
+                    };
+                    if !found.is_ok_and(|found| found.is_dir()) {
                         return Err(Error::other(format!(
                             "landlock: {} is no longer a directory",
                             path.display()
@@ -509,24 +573,28 @@ impl LandlockSandbox {
                     .add_rules(rules_for_every_path(
                         &readable.named,
                         AccessFs::from_read(HANDLED_ABI),
+                        &not_through_a_link,
                     )?)
                     .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
                 ruleset = with_the_listed_rules(
                     ruleset,
                     &readable.listed,
                     AccessFs::from_read(HANDLED_ABI),
+                    &not_through_a_link,
                 )?;
 
                 ruleset = ruleset
                     .add_rules(rules_for_every_path(
                         &writable.named,
                         AccessFs::from_all(HANDLED_ABI),
+                        &not_through_a_link,
                     )?)
                     .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
                 ruleset = with_the_listed_rules(
                     ruleset,
                     &writable.listed,
                     AccessFs::from_all(HANDLED_ABI),
+                    &not_through_a_link,
                 )?;
 
                 let status = ruleset
@@ -1407,6 +1475,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temporary_directory);
     }
 
+    /// A granted row whose name is later replaced by a link to a directory outside the grants.
+    /// Landlock opens a row with a handle that follows links, so a row opened after the name was
+    /// relinked is attached to the link's target. SANDBOX-28 judges the row when the policy is
+    /// built and relies on this being the only window; this records what the kernel does with a
+    /// name that leads elsewhere by the time it is opened. The control is the same row left as the
+    /// directory, which is read and written, so the refusals mean something.
+    #[test]
+    fn a_granted_row_replaced_by_a_link_is_attached_to_what_the_name_leads_to_when_opened() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-row-relinked");
+        let top = top.canonicalize().expect("the scratch directory is there");
+        for name in ["kept", "outside"] {
+            std::fs::create_dir_all(top.join(name)).expect("the directory is creatable");
+        }
+        std::fs::write(top.join("kept").join("file"), "kept").expect("writable");
+        std::fs::write(top.join("outside").join("file"), "outside").expect("writable");
+        std::os::unix::fs::symlink(top.join("outside"), top.join("shared"))
+            .expect("the link is creatable");
+        let policy = loadable_policy()
+            .allow_read(top.join("kept"))
+            .allow_write(top.join("kept"))
+            .allow_read(top.join("shared"))
+            .allow_write(top.join("shared"));
+        let succeeds = |program: &str, path: PathBuf| {
+            sandbox
+                .spawn(
+                    OsStr::new(program),
+                    &[path.into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .success()
+        };
+
+        assert!(
+            succeeds("/usr/bin/cat", top.join("kept").join("file")),
+            "a granted directory was not read, so the result below means nothing"
+        );
+        // The row named a link at the open, so it was attached to the target: the widening the
+        // spec describes for the window after the policy is built. The fresh judgement of the
+        // row at that point is what keeps a link from reaching here.
+        assert!(
+            succeeds("/usr/bin/cat", top.join("outside").join("file")),
+            "a row opened through a link did not attach to the link's target"
+        );
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
     /// The run base under the kernel: each credential location is refused, each file a program
     /// reads by name is read, the three kinds of file in `~/.ssh` that hold no secret are read
     /// beside the private key that is not, a link to a credential is judged by where it leads,
@@ -1524,7 +1647,7 @@ mod tests {
         std::os::unix::fs::symlink(home.join(".aws"), &door).expect("a link");
         let state_door = home.join("docs").join("state-door");
         std::os::unix::fs::symlink(home.join(".bravebot"), &state_door).expect("a link");
-        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None)
             .nameable_under(&sandbox.capabilities())
             .policy;
         let cat = |path: &Path| {
@@ -1578,7 +1701,7 @@ mod tests {
         let home = crate::testutil::scratch_dir("bravebot-run-base-writes");
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join("docs")).expect("the scratch home is creatable");
-        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None)
             .nameable_under(&sandbox.capabilities())
             .policy;
         let touch = |path: &Path| {
@@ -1622,7 +1745,7 @@ mod tests {
                 .expect("the scratch home is creatable");
             std::fs::write(&file, CONTENTS).expect("the scratch home is writable");
         }
-        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None)
             .allow_write(&home)
             .nameable_under(&sandbox.capabilities())
             .policy;
@@ -1665,6 +1788,7 @@ mod tests {
         let policy = crate::base::run_base(
             Prelude::Linux,
             &a_temporary_directory("bravebot-landlock-unwritable-tmp"),
+            None,
             None,
         )
         .allow_write(&work)
@@ -1717,6 +1841,7 @@ mod tests {
         let err = rules_for_every_path(
             &[PathBuf::from("/bravebot-no-such-path")],
             AccessFs::from_read(HANDLED_ABI),
+            &[],
         )
         .expect_err("must refuse to build a ruleset short of a path");
         assert!(
@@ -1866,6 +1991,175 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A row the caller judged where its name led is opened as what the name is. A name that has
+    /// become a link to another directory is refused and the link's target is not granted, where
+    /// the same policy without the judgement follows the link as it always did, which is why
+    /// `/bin` on a merged-usr machine still works. The rejected implementation opens every row by
+    /// following links, and fails the first assertion by running the write in the target.
+    /// Linux only: Landlock does not exist on the macOS host this was written on, and this test
+    /// has not been run there.
+    #[test]
+    fn a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed() {
+        let top = a_temporary_directory("bravebot-landlock-relinked-row");
+        let judged = top.join("judged");
+        let target = top.join("target");
+        std::fs::create_dir_all(&target).expect("the target is creatable");
+        std::os::unix::fs::symlink(&target, &judged).expect("the row can be relinked");
+
+        let write_in = |policy: &SandboxPolicy| {
+            LandlockSandbox.spawn(
+                OsStr::new("/bin/sh"),
+                &[
+                    OsString::from("-c"),
+                    OsString::from(format!("echo x > {}/out", target.display())),
+                ],
+                policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+        };
+
+        let judged_policy = loadable_policy()
+            .allow_write_directory(&judged)
+            .not_through_a_link(&judged);
+        match write_in(&judged_policy) {
+            Err(SandboxError::SetupFailed { mechanism, detail }) => {
+                assert_eq!(mechanism, "landlock");
+                assert!(
+                    detail.contains(&judged.display().to_string()),
+                    "the refusal has to name the row: {detail}"
+                );
+            }
+            other => panic!("a judged row that is a link must refuse the policy: {other:?}"),
+        }
+        assert!(!target.join("out").exists());
+
+        let followed_policy = loadable_policy().allow_write_directory(&judged);
+        let mut child = write_in(&followed_policy).expect("a row not judged follows the link");
+        assert_eq!(child.wait().expect("should wait").code(), Some(0));
+        assert!(target.join("out").exists());
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// SANDBOX-15, SANDBOX-18, SANDBOX-28: a stage able to write the directory that holds a
+    /// toolchain cache moves the cache aside and links its name to the keys, and the next stage
+    /// reaches nothing of them. The first stage runs `mv` and `ln` under a row on the cache's
+    /// parent, as the rows of a session opened on the home directory or of bypass give it. The
+    /// second stage runs `cat` and `touch` on the keys under the policy built after that, where the
+    /// cache row is judged again and left out, and under the policy built before it, whose row is
+    /// opened as what the name was and so refuses the link. The control is the same row while the
+    /// name is the directory, which is written.
+    ///
+    /// The regressions it rejects are a row made from the cache's name, which Landlock opens
+    /// through the link and attaches read and write to `~/.ssh`, and a row judged once and then
+    /// opened by following links. Linux only: Landlock does not exist on the macOS host this was
+    /// written on, and this test has not been run there.
+    #[test]
+    fn a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-cache-relinked-tmp");
+        let home = crate::testutil::scratch_dir("bravebot-cache-relinked");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).expect("the keys are creatable");
+        std::fs::create_dir_all(home.join(".cargo/registry")).expect("the cache is creatable");
+        std::fs::write(home.join(".ssh/id_test"), CONTENTS).expect("a key");
+        let home = home.canonicalize().expect("the scratch home is there");
+        let registry = home.join(".cargo/registry");
+        let planted = home.join(".ssh/planted");
+
+        let run_base =
+            || crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None);
+        let held_when_it_starts = || {
+            crate::toolchain::Toolchain::grant_every_cache(run_base(), Prelude::Linux, &home, None)
+                .nameable_under(&sandbox.capabilities())
+                .policy
+        };
+        let run = |program: &str, args: &[String], policy: &SandboxPolicy| {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            sandbox.spawn(
+                OsStr::new(program),
+                &args,
+                policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+        };
+        let code = |program: &str, args: &[String], policy: &SandboxPolicy| {
+            run(program, args, policy)
+                .expect("the stage starts")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+        let path = |path: &Path| path.display().to_string();
+
+        // The control: the cache is written while its name is the directory.
+        let before = held_when_it_starts();
+        assert_eq!(
+            code("/usr/bin/touch", &[path(&registry.join("made"))], &before),
+            Some(0),
+            "the cache is not written, so the refusals below mean nothing"
+        );
+
+        // Stage one: the row on the cache's parent that bypass or a session on the home gives.
+        let first = run_base()
+            .allow_read(home.join(".cargo"))
+            .allow_write_directory(home.join(".cargo"))
+            .nameable_under(&sandbox.capabilities())
+            .policy;
+        let moved_and_linked = format!(
+            "mv {registry} {registry}.old && ln -s {keys} {registry}",
+            registry = registry.display(),
+            keys = home.join(".ssh").display()
+        );
+        assert_eq!(
+            code("/bin/sh", &["-c".into(), moved_and_linked], &first),
+            Some(0),
+            "the first stage could not move the cache and link its name"
+        );
+        assert!(
+            std::fs::symlink_metadata(&registry)
+                .expect("the name is there")
+                .file_type()
+                .is_symlink(),
+            "the first stage did not leave a link at the cache's name"
+        );
+
+        // Stage two, started after the change: the row is judged where it leads and left out.
+        let after = held_when_it_starts();
+        assert_eq!(
+            code("/usr/bin/cat", &[path(&home.join(".ssh/id_test"))], &after),
+            Some(CAT_FAILED),
+            "a key was read through the relinked cache"
+        );
+        assert_eq!(
+            code("/usr/bin/touch", &[path(&planted)], &after),
+            Some(TOUCH_FAILED),
+            "a file was made in the keys through the relinked cache"
+        );
+        assert!(!planted.exists());
+
+        // Stage two, with the policy built before the change: the row names a link now, so the
+        // policy is refused, and the keys are reached by no process at all.
+        match run("/usr/bin/touch", &[path(&planted)], &before) {
+            Err(SandboxError::SetupFailed { mechanism, detail }) => {
+                assert_eq!(mechanism, "landlock");
+                assert!(
+                    detail.contains(&registry.display().to_string()),
+                    "the refusal has to name the row: {detail}"
+                );
+            }
+            other => panic!("a row judged before the change must refuse the link: {other:?}"),
+        }
+        assert!(!planted.exists());
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&temporary_directory);
     }
 
     /// A listed row is left out because its name is not there, and for no other reason. One that

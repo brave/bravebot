@@ -414,11 +414,17 @@ impl Rule {
     /// written out: a wildcard in that stretch is a pattern about more than the one directory and
     /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
     /// through a link is, and never floats.
-    fn copy_beneath(&mut self, from: &[String], to: &[String]) {
+    ///
+    /// `full_fold` is whether the segments are compared in the full case fold, which joins
+    /// `class` with `cla\u{df}`. A rule that restricts is matched that way on a volume that folds
+    /// case, so its copy is made for every checkout it applies to. A rule that grants is compared
+    /// as it is stored, in the fold that leaves such a letter alone, since a copy of a grant under
+    /// a checkout of another file would grant a place nobody approved.
+    fn copy_beneath(&mut self, from: &[String], to: &[String], full_fold: bool) {
         let copies: Vec<Pattern> = std::iter::once(&self.pattern)
             .chain(&self.landed)
             .filter_map(|pattern| match pattern {
-                Pattern::Absolute(pattern) if pattern.segments.starts_with(from) => {
+                Pattern::Absolute(pattern) if is_under(&pattern.segments, from, full_fold) => {
                     let mut segments = to.to_vec();
                     segments.extend_from_slice(&pattern.segments[from.len()..]);
                     Some(Pattern::Absolute(PathPattern {
@@ -827,13 +833,14 @@ impl Permissions {
         let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
         let from = split(&key_of(from, backslash_separates, folds_case));
         let to = split(&key_of(to, backslash_separates, folds_case));
-        for rule in self
-            .deny
-            .iter_mut()
-            .chain(self.ask.iter_mut())
-            .chain(self.allow.iter_mut())
-        {
-            rule.copy_beneath(&from, &to);
+        // A rule that restricts is matched in the full fold where the volume folds case, as
+        // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
+        let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
+        for rule in restricting {
+            rule.copy_beneath(&from, &to, folds_case);
+        }
+        for rule in &mut self.allow {
+            rule.copy_beneath(&from, &to, false);
         }
     }
 
@@ -1212,18 +1219,39 @@ fn segments_of(path: &str) -> Vec<&str> {
 ///
 /// There a planner's `.ENV` opens the same file as the `.env` a deny rule names, so both sides of
 /// a match are folded before they are compared, upper case first as
-/// [`fold_case`](crate::trust::fold_case) does. Folding segment-wise leaves the separators, and
+/// [`fold_simple`](crate::trust::fold_simple) does. Folding segment-wise leaves the separators, and
 /// with them the anchor and relative/absolute logic and the `*` and `**` semantics, exactly as
 /// they were. Nothing is folded where the volume keeps the spellings apart, since there it would
 /// make one rule cover another file.
+///
+/// A letter whose upper or lower case is more than one character, such as `ß`, is left as it is:
+/// NTFS holds `claß.md` and `class.md` apart and APFS opens one as the other, and the rules are not
+/// told which. The key is the one a grant is matched in, so a grant reaches only the spellings
+/// every volume that folds case joins. A rule that restricts is also matched in the full fold
+/// ([`Pattern::canonical`]), so it covers both spellings.
 fn fold(path: &str, folds: bool) -> String {
     if !folds {
         return path.to_string();
     }
     path.split('/')
-        .map(crate::trust::fold_case)
+        .map(crate::trust::fold_simple)
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// Whether `segments` start with `from`, comparing each segment in the full case fold where
+/// `full_fold` says so and byte for byte otherwise.
+///
+/// Both are keyed, so each segment is already in the fold a grant is matched in, and the full fold
+/// is taken from there as [`PathPattern::canonical`] takes it for a path.
+fn is_under(segments: &[String], from: &[String], full_fold: bool) -> bool {
+    if !full_fold {
+        return segments.starts_with(from);
+    }
+    segments.len() >= from.len()
+        && segments.iter().zip(from).all(|(segment, name)| {
+            segment == name || crate::trust::fold_case(segment) == crate::trust::fold_case(name)
+        })
 }
 
 /// Whether a pattern's segments cover a path's, with `**` crossing directories and `*` not.
@@ -2494,6 +2522,102 @@ mod tests {
         }
     }
 
+    /// NTFS holds `claß.md` and `class.md` apart and APFS opens one as the other, and the rules are
+    /// not told which. A grant covers the spellings every volume that folds case joins and not the
+    /// one only full case folding joins, so `Edit(claß.md)` never reaches a `class.md` that may be
+    /// another file.
+    #[test]
+    fn an_allow_rule_does_not_reach_a_spelling_only_full_case_folding_joins() {
+        for (written, same, other) in [
+            (
+                "Edit(cla\u{df}.md)",
+                ["cla\u{df}.md", "CLA\u{df}.md"],
+                "class.md",
+            ),
+            (
+                "Edit(cla\u{df}.md)",
+                ["cla\u{1e9e}.md", "Cla\u{df}.MD"],
+                "CLASS.md",
+            ),
+            ("Edit(class.md)", ["class.md", "CLASS.md"], "cla\u{df}.md"),
+            (
+                "Edit(cla\u{df}/**)",
+                ["cla\u{df}/a", "CLA\u{df}/a"],
+                "class/a",
+            ),
+            (
+                "Edit(a/cla\u{df}/**)",
+                ["a/cla\u{df}/b", "A/CLA\u{df}/b"],
+                "a/class/b",
+            ),
+        ] {
+            let permissions = rules_on_a_volume_that_folds_case(true, &[], &[], &[written]);
+            for path in same {
+                assert_eq!(
+                    permissions.for_path(Subject::Edit, path),
+                    Decision::Ruled(Ruling::Allow),
+                    "{written} should grant {path:?}"
+                );
+            }
+            assert_eq!(
+                permissions.for_path(Subject::Edit, other),
+                Decision::Unmatched,
+                "{written} granted {other:?}, which only full case folding joins to it"
+            );
+        }
+    }
+
+    /// The other polarities keep the full fold: a rule that restricts is read for the other
+    /// spelling, because on a volume that opens one as the other a rule that missed it would leave
+    /// the file open.
+    #[test]
+    fn a_deny_or_ask_rule_covers_a_spelling_only_full_case_folding_joins() {
+        for (written, path) in [
+            ("Read(cla\u{df}.md)", "class.md"),
+            ("Read(class.md)", "cla\u{df}.md"),
+            ("Read(class.md)", "CLA\u{df}.MD"),
+            ("Read(cla\u{df}/**)", "class/a"),
+            ("Read(class/**)", "cla\u{df}/a"),
+            ("Read(a/cla\u{df}.md)", "a/class.md"),
+        ] {
+            for (ruling, permissions) in [
+                (
+                    Ruling::Deny,
+                    rules_on_a_volume_that_folds_case(true, &[written], &[], &[]),
+                ),
+                (
+                    Ruling::Ask,
+                    rules_on_a_volume_that_folds_case(true, &[], &[written], &[]),
+                ),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(ruling),
+                    "{written} in the {ruling} list did not cover {path:?}"
+                );
+            }
+        }
+    }
+
+    /// An allow rule does not undo a restriction of the spelling it does not reach, and a
+    /// restriction of either spelling still decides both.
+    #[test]
+    fn a_deny_rule_decides_a_spelling_only_full_case_folding_joins_whatever_a_grant_says() {
+        let permissions = rules_on_a_volume_that_folds_case(
+            true,
+            &["Edit(class.md)"],
+            &[],
+            &["Edit(cla\u{df}.md)"],
+        );
+        for path in ["class.md", "cla\u{df}.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Ruled(Ruling::Deny),
+                "{path:?} was not refused"
+            );
+        }
+    }
+
     /// On a volume that keeps `Docs` and `docs` apart they are two files, so a rule about one
     /// decides nothing about the other, in both polarities. Folding here would widen a grant to a
     /// file the person never named.
@@ -2804,6 +2928,101 @@ mod tests {
             Decision::Unmatched,
             "a copy was made for a checkout nobody asked for"
         );
+    }
+
+    /// CHECKOUT-9, PERM-3. A rule that restricts is copied from every name the full case fold
+    /// joins with the working directory, as a refusal is read, and a rule that grants only from a
+    /// name every volume that folds case joins with it, as a grant is read. A deny or ask rule
+    /// written with `class` therefore reaches a checkout of `cla\u{df}`, which APFS opens as the same
+    /// directory, and an allow rule for `class` does not, which NTFS holds apart.
+    #[test]
+    fn a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold() {
+        let mut permissions = rules_on_a_volume_that_folds_case(
+            true,
+            &["Read(//work/class/secrets/**)"],
+            &["Read(//work/class/asked/**)"],
+            &[
+                "Read(//work/class/granted/**)",
+                "Read(//work/cla\u{df}/own/**)",
+            ],
+        );
+        permissions.copy_beneath("/work/cla\u{df}", "/state/c1");
+        for (path, decision) in [
+            ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+            ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+            ("/state/c1/own/file", Decision::Ruled(Ruling::Allow)),
+            ("/state/c1/granted/file", Decision::Unmatched),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                decision,
+                "{path} was ruled wrongly under a copy for a checkout of /work/cla\u{df}"
+            );
+        }
+    }
+
+    /// A deny or ask rule written with `\u{1e9e}` is a rule about `\u{df}` as well: the rules are
+    /// keyed in the one-letter fold, which joins the two, so the copy for a checkout of either
+    /// carries a rule recorded under the other, and an allow rule is copied across the pair for
+    /// the same reason (CHECKOUT-9, PERM-3).
+    #[test]
+    fn a_rule_is_copied_across_the_pair_the_simple_fold_joins() {
+        for (written, checked_out) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")] {
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                true,
+                &[&format!("Read(//work/{written}/secrets/**)")],
+                &[&format!("Read(//work/{written}/asked/**)")],
+                &[&format!("Read(//work/{written}/granted/**)")],
+            );
+            permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+            for (path, decision) in [
+                ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+                ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+                ("/state/c1/granted/file", Decision::Ruled(Ruling::Allow)),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    decision,
+                    "{path} was ruled wrongly under a copy for a checkout of /work/{checked_out} of rules written with {written}"
+                );
+            }
+        }
+    }
+
+    /// A deny or ask rule and an allow rule that land on one path in the checkout (`\u{df}` and
+    /// `\u{1e9e}` are one name to the one-letter fold) are both copied there, and the more
+    /// restrictive list decides as it does under the working directory (CHECKOUT-9, PERM-3).
+    #[test]
+    fn a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused() {
+        for (refused, granted) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            for checked_out in ["cla\u{df}", "cla\u{1e9e}"] {
+                let mut permissions = rules_on_a_volume_that_folds_case(
+                    true,
+                    &[&format!("Read(//work/{refused}/x/**)")],
+                    &[&format!("Read(//work/{refused}/y/**)")],
+                    &[
+                        &format!("Read(//work/{granted}/x/**)"),
+                        &format!("Read(//work/{granted}/y/**)"),
+                    ],
+                );
+                assert_eq!(
+                    permissions.for_path(Subject::Read, &format!("/work/{checked_out}/x/a")),
+                    Decision::Ruled(Ruling::Deny),
+                    "the working directory does not refuse /work/{checked_out}/x/a"
+                );
+                permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+                for (path, decision) in [
+                    ("/state/c1/x/a", Decision::Ruled(Ruling::Deny)),
+                    ("/state/c1/y/a", Decision::Ruled(Ruling::Ask)),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        decision,
+                        "{path} was ruled wrongly under a copy for /work/{checked_out} of a refusal at {refused} and a grant at {granted}"
+                    );
+                }
+            }
+        }
     }
 
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a

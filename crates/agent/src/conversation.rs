@@ -151,6 +151,19 @@ pub enum Composed {
     /// for the failure note, so a transcript draws no row for it, no fork is cut in front of it and
     /// no cut between exchanges falls in front of it.
     Notice,
+    /// The notice that tells the planner plan mode is on, or that it ended (MODE-8).
+    ///
+    /// `plan` is whether the notice says plan mode is on. It is set by the driver from the mode it
+    /// chose to announce and never from a word of any message, so what the conversation last says
+    /// about plan mode is read from the newest of these still in the request
+    /// ([`Conversation::plan_mode_told`]). A message that leaves the request, as a compaction,
+    /// a rewind or a fork takes it, takes what it said with it.
+    ///
+    /// House-keeping for the planner, drawn and cut around as [`Composed::Notice`] is.
+    ModeNotice {
+        /// Whether the notice says plan mode is on.
+        plan: bool,
+    },
     /// A message the agent or a front end wrote in its own words into the conversation, and that a
     /// person is shown as it stands: the line a goal's carry-on or `/init` sends, the standard
     /// input a run was given, a file the kernel would not show, and what a shell line the person
@@ -210,6 +223,7 @@ impl Composed {
                 | Self::SkillNamed { .. }
                 | Self::SkillKept { .. }
                 | Self::Notice
+                | Self::ModeNotice { .. }
                 | Self::MessageSent { .. }
         )
     }
@@ -360,19 +374,16 @@ pub struct Conversation {
     /// Trusted metadata: from the names of the functions the planner called, never their
     /// arguments or anything a tool returned.
     asked_to_write: bool,
-    /// Whether the last thing the kept messages say about the permission mode is a notice that
-    /// plan mode is on (MODE-8).
+    /// What a record written before plan-mode notices were tagged said about the last of them:
+    /// whether it said plan mode is on (MODE-8).
     ///
-    /// Kept here rather than in the turn because the notice stays in the conversation after the turn
-    /// that pushed it ends, while the system prompt a later turn is built with says nothing about any
-    /// mode but plan. A turn that starts outside plan mode while this is set has to say that plan
-    /// mode ended, or the planner reads the notice as current. A turn that starts in plan mode has
-    /// its system prompt say so and needs no second notice. Written down with the messages that
-    /// hold the notice.
+    /// Read only while the messages and the archive hold no [`Composed::ModeNotice`], since those
+    /// carry the answer themselves and leave the request when the notice does. Set only by
+    /// [`Conversation::restored`], from a record whose notices are untagged, and left alone after
+    /// that, so a compaction that drops such a notice can still cost one needless line.
     ///
-    /// Trusted metadata: set from the driver's own decision to push a notice, never from a word of
-    /// any message.
-    plan_mode_told: bool,
+    /// Trusted metadata: read from the record, never from a word of any message.
+    untagged_plan_mode_told: bool,
     /// The windows of files the planner has been shown, and the call that showed each.
     ///
     /// Held here for the reason `quarantine` is: a session is many turns and this is the only thing
@@ -523,7 +534,7 @@ impl Conversation {
             archive: Vec::new(),
             measured: 0,
             asked_to_write: false,
-            plan_mode_told: false,
+            untagged_plan_mode_told: false,
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
@@ -924,16 +935,13 @@ impl Conversation {
         self.asked_to_write
     }
 
-    /// Record whether the notice just pushed into the kept messages says plan mode is on or that it
-    /// ended (MODE-8).
-    pub fn plan_mode_noticed(&mut self, on: bool) {
-        self.plan_mode_told = on;
-    }
-
     /// Whether the kept messages last say that plan mode is on, which a turn that starts outside it
-    /// has to retract before its first request.
+    /// has to retract before its first request (MODE-8).
+    ///
+    /// Read from the newest [`Composed::ModeNotice`] among the kept messages, so a notice a
+    /// compaction moved to the archive, or that a drain removed, no longer counts.
     pub fn plan_mode_told(&self) -> bool {
-        self.plan_mode_told
+        plan_mode_said(&self.messages, &self.archive, self.untagged_plan_mode_told)
     }
 
     /// Whether `skills_overview_said` is set.
@@ -1494,11 +1502,12 @@ pub struct Snapshot {
     /// needless line to the planner.
     #[serde(default)]
     pub asked_to_write: bool,
-    /// Whether the last notice in the messages said plan mode is on (MODE-8).
+    /// Whether the last plan-mode notice in the messages said plan mode is on (MODE-8).
     ///
-    /// Stored because the notice is in the messages that are stored, and a resumed session whose
-    /// first turn starts outside plan mode has to say that plan mode ended. Defaulted to false, so
-    /// a record written before this existed reads as it did then.
+    /// The fallback for a record written before the notices were tagged. It is read only when the
+    /// kept messages and the archive hold no tagged notice, because a tagged notice carries the
+    /// answer itself. Defaulted to false, so a record written before the flag existed reads as it
+    /// did then.
     #[serde(default)]
     pub plan_mode_told: bool,
     /// Whether the planner had been shown private content: `public`, or anything else.
@@ -1508,6 +1517,43 @@ pub struct Snapshot {
     /// nothing says what that session's planner was shown.
     #[serde(default = "unrecorded")]
     pub holds: String,
+}
+
+impl Snapshot {
+    /// What the child of a fork cut from this record records for the messages it keeps (MODE-8).
+    ///
+    /// Read from the notices that remain when the record holds tagged ones, so a cut that takes
+    /// the newest away reports the one before it, or none. A record with no tagged notice is from
+    /// before the tag existed and the flag is all it has, so it is carried as it stands.
+    #[must_use]
+    pub fn plan_mode_told_after_cut(&self, kept: &[Stored], kept_archive: &[Stored]) -> bool {
+        if holds_a_mode_notice(self.archive.iter().chain(&self.messages)) {
+            plan_mode_said(kept, kept_archive, false)
+        } else {
+            self.plan_mode_told
+        }
+    }
+}
+
+/// Whether any of `messages` is a [`Composed::ModeNotice`].
+fn holds_a_mode_notice<'a>(mut messages: impl Iterator<Item = &'a Stored>) -> bool {
+    messages.any(|stored| matches!(stored.composed, Some(Composed::ModeNotice { .. })))
+}
+
+/// Whether the newest [`Composed::ModeNotice`] in `messages` says plan mode is on.
+///
+/// `untagged` is what a record written before the tag existed said, and it counts only while no
+/// tagged notice has been sent since: one in the archive is newer than it and no longer in the
+/// request, so it leaves the request saying nothing.
+fn plan_mode_said(messages: &[Stored], archive: &[Stored], untagged: bool) -> bool {
+    let mode_notice = |stored: &Stored| match stored.composed {
+        Some(Composed::ModeNotice { plan }) => Some(plan),
+        _ => None,
+    };
+    if let Some(plan) = messages.iter().rev().find_map(mode_notice) {
+        return plan;
+    }
+    untagged && !holds_a_mode_notice(archive.iter())
 }
 
 /// The word for an integrity, as it is written down.
@@ -1544,7 +1590,7 @@ impl Conversation {
             archive: self.archive.clone(),
             measured: self.measured,
             asked_to_write: self.asked_to_write,
-            plan_mode_told: self.plan_mode_told,
+            plan_mode_told: self.plan_mode_told(),
             holds: match self.holds {
                 Confidentiality::Public => PUBLIC.to_string(),
                 Confidentiality::Private => PRIVATE.to_string(),
@@ -1604,6 +1650,11 @@ impl Conversation {
             });
         }
 
+        // A record that holds a tagged notice answers from it. The stored flag is read only for a
+        // record written before the tag existed.
+        let untagged_plan_mode_told = snapshot.plan_mode_told
+            && !holds_a_mode_notice(snapshot.archive.iter().chain(&messages));
+
         Self {
             messages,
             quarantine: SlotStore::new(),
@@ -1621,7 +1672,7 @@ impl Conversation {
             archive: snapshot.archive,
             measured: snapshot.measured,
             asked_to_write: snapshot.asked_to_write,
-            plan_mode_told: snapshot.plan_mode_told,
+            untagged_plan_mode_told,
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
@@ -1901,6 +1952,7 @@ fn opens_an_exchange(stored: &Stored) -> bool {
                     | Composed::SkillNamed { .. }
                     | Composed::SkillKept { .. }
                     | Composed::Notice
+                    | Composed::ModeNotice { .. }
             )
         )
 }
@@ -2240,6 +2292,77 @@ mod tests {
         let notice = &conversation.messages()[1];
         assert!(!opens_an_exchange(notice), "compaction may cut at a nudge");
         assert!(opens_an_exchange(&conversation.messages()[2]));
+    }
+
+    /// Four exchanges, the first two long enough that a cut gives up more than it keeps, with a
+    /// plan-mode notice between the third and the fourth when `notice` is set.
+    fn exchanges_with_a_notice_before_the_last(notice: bool) -> Conversation {
+        let long = "x".repeat(2000);
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("first", long.as_str()),
+            ("second", long.as_str()),
+            ("third", "c"),
+        ] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        if notice {
+            conversation.push_composed(
+                Message::user("plan on"),
+                Composed::ModeNotice { plan: true },
+            );
+        }
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
+        conversation
+    }
+
+    /// COMPACT-4: a plan-mode notice between two exchanges does not open one, so compaction cuts
+    /// in front of the same prompt with it as without it.
+    ///
+    /// The fault this rejects: a notice counted as the start of an exchange. The last two
+    /// exchanges kept would then begin at the notice, so the cut would fall at the notice and give
+    /// up the third exchange as well.
+    #[test]
+    fn a_mode_notice_between_exchanges_is_not_a_place_to_cut() {
+        let without = exchanges_with_a_notice_before_the_last(false);
+        let with = exchanges_with_a_notice_before_the_last(true);
+
+        let notice = &with.messages()[6];
+        assert!(
+            matches!(notice.composed, Some(Composed::ModeNotice { .. })),
+            "the message at 6 is not the notice, so this says nothing"
+        );
+        assert!(!opens_an_exchange(notice), "compaction may cut at a notice");
+        assert_eq!(without.compaction_boundary(), Some(4));
+        assert_eq!(with.compaction_boundary(), Some(4));
+    }
+
+    /// LAYER-6: a plan-mode notice is written for the planner and no transcript draws it, as a
+    /// resumed session's transcript does not either.
+    ///
+    /// The fault this rejects: a notice recounted as a message of its own, which a window draws as
+    /// something the person said.
+    #[test]
+    fn a_mode_notice_is_left_out_of_what_is_recounted() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("typed words"));
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push(Message::assistant("a reply"));
+        let drawn = vec![
+            Said::User("typed words".into(), None),
+            Said::Assistant("a reply".into()),
+        ];
+
+        assert_eq!(conversation.recounted(), drawn);
+        assert_eq!(
+            Conversation::restored(conversation.snapshot()).recounted(),
+            drawn
+        );
     }
 
     /// And the tag is not sent. The messages are the request body, so a field inside one would be
@@ -3053,11 +3176,15 @@ mod tests {
 
     /// A plan-mode notice in the kept messages is as current in a later process as in this one.
     /// Dropped on the way to disk, a resumed session that starts outside plan mode would never
-    /// be told that plan mode ended. A record written before the flag existed reads as false.
+    /// be told that plan mode ended. A record written before the notices were tagged reads the
+    /// stored flag, and one written before the flag existed reads as false.
     #[test]
     fn a_restored_conversation_remembers_that_its_last_notice_said_plan_mode_is_on() {
         let mut conversation = four_exchanges();
-        conversation.plan_mode_noticed(true);
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
 
         let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
         let restored =
@@ -3067,9 +3194,185 @@ mod tests {
             "a plan-mode notice before the record was written came back retracted"
         );
 
+        let untagged =
+            r#"{"messages":[],"context":"trusted","references":0,"plan_mode_told":true}"#;
+        let untagged =
+            Conversation::restored(serde_json::from_str(untagged).expect("an untagged record"));
+        assert!(
+            untagged.plan_mode_told(),
+            "a record from before the notices were tagged lost the flag it stored"
+        );
+
         let older = r#"{"messages":[],"context":"trusted","references":0}"#;
         let older = Conversation::restored(serde_json::from_str(older).expect("an older record"));
         assert!(!older.plan_mode_told());
+    }
+
+    /// A tagged notice outranks the flag a record stored, so a notice that ended plan mode after
+    /// an untagged one is not read as plan mode still being on.
+    #[test]
+    fn a_tagged_notice_outranks_the_flag_an_untagged_record_stored() {
+        let untagged =
+            r#"{"messages":[],"context":"trusted","references":0,"plan_mode_told":true}"#;
+        let mut conversation =
+            Conversation::restored(serde_json::from_str(untagged).expect("an untagged record"));
+        conversation.push_composed(Message::user("ended"), Composed::ModeNotice { plan: false });
+
+        assert!(!conversation.plan_mode_told());
+    }
+
+    /// Compaction moves a notice it cuts into the archive, and the request no longer holds it. The
+    /// planner has nothing to be told ended.
+    ///
+    /// The fault this rejects: a flag kept apart from the messages that compaction leaves alone,
+    /// which keeps saying plan mode is on after the notice that said so is out of the request.
+    #[test]
+    fn compacting_away_the_plan_mode_notice_leaves_nothing_to_retract() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push(Message::assistant("a"));
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        assert!(conversation.plan_mode_told());
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they asked about the first thing");
+
+        assert!(
+            conversation
+                .messages()
+                .iter()
+                .all(|stored| !matches!(stored.composed, Some(Composed::ModeNotice { .. }))),
+            "the notice stayed in the request, so this says nothing"
+        );
+        assert!(!conversation.plan_mode_told());
+        assert!(
+            !Conversation::restored(conversation.snapshot()).plan_mode_told(),
+            "a resume read the notice in the archive as current"
+        );
+    }
+
+    /// A notice that compaction keeps is still in front of the planner, so it is still to be
+    /// retracted.
+    ///
+    /// The fault this rejects: a flag cleared by every compaction.
+    #[test]
+    fn compacting_around_the_plan_mode_notice_keeps_it_to_be_retracted() {
+        let mut conversation = Conversation::new();
+        let long = "x".repeat(2000);
+        for prompt in ["first", "second", "third"] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(&long));
+        }
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they asked about the first things");
+
+        assert!(
+            conversation
+                .messages()
+                .iter()
+                .any(|stored| matches!(stored.composed, Some(Composed::ModeNotice { .. }))),
+            "the notice left the request, so this says nothing"
+        );
+        assert!(conversation.plan_mode_told());
+        assert!(Conversation::restored(conversation.snapshot()).plan_mode_told());
+    }
+
+    /// Only the newest notice says what the mode is: one that ended plan mode retracts the one
+    /// before it, and the end is said once.
+    #[test]
+    fn the_newest_mode_notice_decides_whether_plan_mode_is_on() {
+        let mut conversation = four_exchanges();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push_composed(
+            Message::user("plan off"),
+            Composed::ModeNotice { plan: false },
+        );
+        assert!(!conversation.plan_mode_told());
+
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        assert!(conversation.plan_mode_told());
+    }
+
+    /// A rewind restores the conversation as it was snapshotted, so the flag is what the messages
+    /// of that moment say and not what the conversation says by now.
+    ///
+    /// The fault this rejects: a flag that is not derived from the messages, which a restore of an
+    /// earlier snapshot would leave as the later conversation set it.
+    #[test]
+    fn restoring_an_earlier_snapshot_reports_what_its_messages_said() {
+        let mut conversation = four_exchanges();
+        let before = conversation.snapshot();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        let during = conversation.snapshot();
+
+        assert!(!Conversation::restored(before).plan_mode_told());
+        assert!(Conversation::restored(during).plan_mode_told());
+    }
+
+    /// The turn pushes its mode notice after the opening, so taking the opening back never takes a
+    /// notice, and a notice an earlier turn left is before the mark. Either way the record stays
+    /// with the notice that is still in the conversation.
+    ///
+    /// The fault this rejects: a drain that clears the record, which would leave a notice standing
+    /// with nothing to retract it.
+    #[test]
+    fn taking_a_turn_back_leaves_the_plan_mode_notice_and_what_it_said() {
+        let mut conversation = four_exchanges();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        let began = conversation.mark();
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+        conversation.push_composed(
+            Message::user("plan off"),
+            Composed::ModeNotice { plan: false },
+        );
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(
+            conversation
+                .messages()
+                .iter()
+                .filter(|stored| matches!(stored.composed, Some(Composed::ModeNotice { .. })))
+                .count(),
+            3,
+            "the drain took a notice"
+        );
+        assert!(conversation.plan_mode_told());
     }
 
     /// The figure said how large the conversation was before it was shortened. Kept, it would

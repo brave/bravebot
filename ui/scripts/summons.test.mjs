@@ -277,7 +277,12 @@ test('a summoned send addresses one turn to the bot’s definition and records w
   const there = world()
   const answer = await turn.sendSummonedTurn(there.services, 'project', lantern, 'Ask [@Lantern] hi', {})
   assert.deepEqual(answer, { ok: { accepted: true } })
-  assert.deepEqual(there.sent, [{ method: 'turn.send', params: { session: 'project', prompt: 'Ask [@Lantern] hi', address: 'lantern-def', files: [] } }])
+  const { messageId, ...rest } = there.sent[0].params
+  assert.deepEqual([{ method: there.sent[0].method, params: rest }], [{ method: 'turn.send', params: { session: 'project', prompt: 'Ask [@Lantern] hi', address: 'lantern-def', files: [] } }])
+  // RPCVIEW-10: the agent refuses a send without an id, and reads a repeated one as the same send.
+  assert.match(messageId, /^[A-Za-z0-9_-]{1,64}$/, 'the send carried no id the agent takes')
+  await turn.sendSummonedTurn(there.services, 'project', lantern, 'Ask [@Lantern] hi', {})
+  assert.notEqual(there.sent[1].params.messageId, messageId, 'a second send repeated the first one’s id')
   assert.deepEqual(there.summoning.finish('project'), { slug: 'lantern', host: { kind: 'project' }, after: { id: HOME, prompt: 4 } })
 
   const inBot = world()

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: Troubleshooting
-description: What to check when something is not working, and why some behaviour that looks broken is not.
+description: Diagnose configuration and model failures, interface problems, file reads and writes, command execution, long conversations, session storage and Windows issues, and collect a bug report.
 ---
 
 # Troubleshooting
@@ -63,12 +63,13 @@ and an editor say the sentence alone.
 | What it says | What it means |
 |---|---|
 | the service would not accept the credentials | the credential is wrong for this deployment, or has lapsed. The line ends with the commands to run: `bravebot auth status` shows the sign-in or key in use and `bravebot doctor` shows the endpoint. When the request carried your premium key, it names `bravebot auth login brave` to replace the key and `bravebot auth logout brave` to send requests to the free endpoint instead |
-| the service asked for fewer requests | rate limited, so wait and ask again |
+| the service asked for fewer requests | rate limited. A rate limit that named no wait is sent again up to five times, after waits of 8, 16, 32, 64 and 120 seconds, before the turn ends; one that named its wait is waited out as asked, up to two minutes. The line ends with the next step. For a model served through a `provider` entry it is to raise `maxRetries` in that entry, which replaces the five retries with the count you state, or to set `fallbackModel` in `~/.bravebot/settings.json`; when the service asked for more than two minutes the call is not sent again, so the line names `fallbackModel` and trying again later only. For the Brave endpoint, an AWS account reached through the tier variables, and a ChatGPT or xAI sign-in, which have no entry to state `maxRetries` in, it is to set `fallbackModel` or to try again later |
 | the service could not answer | the service is unavailable at the moment |
 | the service rejected the request | the request was refused as invalid. The line names the backend it was sent to, the model you configured or chose (not a name the service sent back), and the request fields the retries left out (the cache lifetime, set by `promptCacheTtl`; the effort level, set by `/effort`; the assumed reply limit, set by `BRAVEBOT_OUTPUT_BUDGET`; the cache marks; streamed tool arguments; shown thinking). It ends with the next step: choose another model with `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log is kept. Neither shows the service's own error text |
 | the request did not get through | nothing reached the service, or no reply began: network, proxy or TLS roots |
 | the reply stopped before it was finished | the reply began and was cut off, went quiet part way, or was still being written when its time ran out |
 | the reply could not be read | a reply arrived that could not be decoded, or the model sent back nothing twice in a row |
+| the service answered with a failure this build does not recognise | the service reported a failure in the middle of a reply, in a form this version has no name for. It is not asked for again, since nothing says a second try would pass. The line ends with the next step: choose another model with `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log is kept. The log holds one line, `aichat.stream_failure`, with the kind of event, the count of requests and the time, and not what the service sent |
 | the model reached its output limit | the reply hit a ceiling, which `BRAVEBOT_OUTPUT_BUDGET` raises. In a turn it is said after the model was asked once to do the work in smaller parts and ran out again |
 | nothing here was configured to send the request | no model service is set up |
 | a gate here would not let the request out | a gate refused it before it left, so it never went |
@@ -167,7 +168,10 @@ every time, whatever is vouched for.
 
 **A command line was refused rather than run.** `$(...)`, `$VAR`, `$?` and the other special
 parameters, `$'...'`, `$((...))`, `&`, here-documents and control flow are refused, because what they
-stand for is not in the line and so could not be shown to you at the prompt. Pipes, `&&`, redirection,
+stand for is not in the line and so could not be shown to you at the prompt. The one exception is
+bypass mode, where `NAME=$VAR cmd` and `NAME="$(cmd)" cmd` are accepted in the assignment prefix in
+front of a program, and nothing else is: not as an argument or a program, and not a backtick. Pipes,
+`&&`, redirection,
 globs and braces are all fine. The refusal names the part of the line that caused it, and single quotes
 turn any of them into an ordinary argument; double quotes do not. To use a real
 shell, type `!` yourself. See [`run`](reference/tools.md#run) and

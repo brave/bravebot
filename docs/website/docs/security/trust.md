@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Trusted directories
-description: The question at startup, every other way a path comes to be trusted, and how long an answer lasts.
+description: Workspace trust prompts, path matching, trust changes after writes, quarantined-read grants, /add-dir and /cd, scratch directories, remembered answers and trust-map inspection.
 ---
 
 # Trusted directories
@@ -86,7 +86,8 @@ Windows that is every path there is, so opening a directory by name is unavailab
 about one decides the other, in both directions, and where rules disagree about the spellings the least
 trusting one decides: untrusted over undecided over trusted, whichever sorts first. Trusting `docs`
 does not undo a distrust recorded for `Docs`. A decision about one spelling replaces only that
-spelling's rule, since some volumes can hold `claß.md` and `class.md` apart. Where the working
+spelling's rule, since some volumes can hold `claß.md` and `class.md` apart. A trust under `claß.md`
+therefore leaves `class.md` undecided, while a refusal of either name is read for the other. Where the working
 directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
 about `docs`.
 

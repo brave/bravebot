@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Non-interactive use
-description: One-shot tasks, piped input, and what changes when there is nobody to ask.
+description: One-shot tasks and piping, unattended approvals, JSON and streaming output, multi-turn input, session follow-ups, schedules and event triggers, model selection, limits and exit codes.
 ---
 
 # Non-interactive use

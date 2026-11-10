@@ -2,11 +2,13 @@ import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
 import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
-import { applyUpdate, endView, startView, type ViewState } from './view.js'
+import { applySnapshot, applyUpdate, awaitSnapshot, endView, startView, type ViewState } from './view.js'
 import {
+  SESSION_VIEW_RESYNC,
   SESSION_VIEW_START,
   SESSION_VIEW_VERSION,
   SUPPORTED_APPROVALS,
+  decodeSnapshot,
   decodeUpdate,
   readActionTargets,
   readSessionViewCapability,
@@ -54,6 +56,8 @@ class Session implements AgentSession {
   private readonly replying = new Set<number>()
   /** Sends whose answer has not arrived, so the target of the turn they start is not yet known. */
   private sending = 0
+  /** How many resyncs have been asked for, so an answer can tell whether it is the latest. */
+  private resyncs = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
 
@@ -64,6 +68,8 @@ class Session implements AgentSession {
     private readonly report: (message: string) => void,
     /** Whether the runtime names what a cancel is for. */
     private readonly namesTargets: boolean,
+    /** How many rows a snapshot holds, when the runtime sends one on request. */
+    private readonly retained: number | null,
   ) {}
 
   get view(): ViewState {
@@ -96,13 +102,36 @@ class Session implements AgentSession {
         this.set(startView(decodeUpdate(event.data)))
       } else if (event.event === 'session.view.update') {
         if (this.current === null) throw new ProtocolError('a view update arrived before the initial view')
-        this.set(applyUpdate(this.current, decodeUpdate(event.data)))
+        const update = decodeUpdate(event.data)
+        const view = this.current
+        if (this.retained !== null && view.ended === null && !view.resyncing && update.sequence !== view.sequence + 1) this.resync()
+        else this.set(applyUpdate(view, update, this.retained ?? Infinity))
+      } else if (event.event === 'session.view.snapshot') {
+        if (this.current === null) throw new ProtocolError('a view snapshot arrived before the initial view')
+        this.set(applySnapshot(this.current, decodeSnapshot(event.data)))
       }
     } catch (error) {
       if (!(error instanceof ProtocolError)) throw error
       if (this.current === null) this.refused = error.message
       else this.end('protocol_error', error.message)
     }
+  }
+
+  /**
+   * An update was missed: hold the view, ask for a snapshot, and continue from it. The bridge
+   * writes the snapshot before its answer, so a view still waiting when the answer arrives ends.
+   */
+  private resync(): void {
+    this.set(awaitSnapshot(this.view))
+    // A later gap asks again once this snapshot has arrived, and only its answer can end the view.
+    const asked = ++this.resyncs
+    const gap = (detail: string): void => {
+      if (asked === this.resyncs && this.current !== null && this.current.resyncing) this.set(endView(this.current, 'sequence_gap', detail))
+    }
+    this.connection.request(SESSION_VIEW_RESYNC, this.params(), undefined, { control: true }).then(
+      () => gap('the snapshot did not arrive before the resync answer'),
+      (error: unknown) => gap(describeThrown('the resync was refused', error)),
+    )
   }
 
   end(reason: 'protocol_error' | 'connection_lost', detail: string): void {
@@ -125,6 +154,7 @@ class Session implements AgentSession {
   private live(what: string): ViewState {
     const view = this.view
     if (view.ended !== null) throw new UnsupportedError(`cannot ${what}: the view ended (${view.ended.reason})`)
+    if (view.resyncing) throw new StaleActionError(`cannot ${what}: the view is waiting for a snapshot`)
     return view
   }
 
@@ -141,7 +171,7 @@ class Session implements AgentSession {
     this.sending++
     let result: unknown
     try {
-      result = await this.connection.request('turn.send', this.params({ prompt: text }))
+      result = await this.connection.request('turn.send', this.params({ prompt: text, messageId: newMessageId() }))
     } finally {
       this.sending--
     }
@@ -200,9 +230,9 @@ class Session implements AgentSession {
     // Name what to stop when the runtime can use it, so a cancel that arrives late cannot reach a
     // turn that began after the one meant. A caller names it. Otherwise it is the turn on screen,
     // unless a send is unanswered (the target of the turn it starts is not known) or the view has
-    // ended (what it shows is stale). Then the cancel names nothing and stops whatever is running,
+    // ended or is waiting for a snapshot (what it shows is stale). Then the cancel names nothing and stops whatever is running,
     // as Stop always has.
-    const shown = this.current !== null && this.current.ended === null && this.sending === 0 ? this.current.target : undefined
+    const shown = this.current !== null && this.current.ended === null && !this.current.resyncing && this.sending === 0 ? this.current.target : undefined
     const named = this.namesTargets ? (target ?? shown) : undefined
     const result = await this.connection.request('turn.cancel', this.params(named === undefined ? {} : { target: named }), undefined, {
       control: true,
@@ -224,6 +254,17 @@ class Session implements AgentSession {
     if (this.current !== null && this.current.ended === null) this.set(endView(this.current, 'detached', 'the bridge closed the session'))
     return { viewDetached: this.current?.ended?.reason === 'detached', workerTerminated: 'unknown', saved: 'unknown' }
   }
+}
+
+/**
+ * A new id for one send. The bridge refuses a send without one, and a later step reads a repeated
+ * id as the same send again. It needs only to differ from the session's other sends, so the time
+ * and 64 random bits are enough, and neither React Native nor this package's common code has
+ * `crypto.randomUUID` to rely on.
+ */
+function newMessageId(): string {
+  const random = (): string => Math.floor(Math.random() * 2 ** 32).toString(36)
+  return `${Date.now().toString(36)}-${random()}-${random()}`
 }
 
 type RawAccess = (client: RpcAgentClient, method: string, params: Record<string, unknown>) => Promise<unknown>
@@ -369,7 +410,7 @@ export class RpcAgentClient implements AgentClient {
     let created: Session | null = null
     const opened = (outcome: Outcome): void => {
       if (!('ok' in outcome) || !isRecord(outcome.ok) || typeof outcome.ok.session !== 'string') return
-      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message), described.actionTargets)
+      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message), described.actionTargets, described.sessionView.retainedRows ?? null)
       created = session
       this.sessions.set(session.id, session)
       const held = this.early.get(session.id) ?? []

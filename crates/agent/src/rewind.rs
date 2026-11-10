@@ -233,12 +233,28 @@ fn put_back_kept(home: &Path, backup: &Backup, folds: bool) -> std::io::Result<(
             }
             crate::home::replace(&target, bytes)
         }
+        // The rules file is removed under the spelling the preamble reads (INSTR-1). Where the
+        // volume folds case, `AGENTS.md` also names a person's `agents.md`, which this undo did
+        // not make and the preamble does not read as their rules.
+        Before::Nothing
+            if !inside && target.symlink_metadata().is_ok() && !lists_in_its_directory(&target) =>
+        {
+            Err(refused())
+        }
         Before::Nothing => match std::fs::remove_file(&target) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             other => other,
         },
         Before::NotKept => Err(std::io::Error::other("what it held was not kept")),
     }
+}
+
+/// Whether the directory holding `target` lists an entry spelled exactly as `target` is.
+fn lists_in_its_directory(target: &Path) -> bool {
+    target
+        .parent()
+        .zip(target.file_name().and_then(std::ffi::OsStr::to_str))
+        .is_some_and(|(directory, name)| crate::preamble::lists_entry_named(directory, name))
 }
 
 #[cfg(test)]
@@ -800,6 +816,95 @@ mod tests {
         assert!(put_back_kept(&home, &backup("facts"), false).is_ok());
         assert_eq!(std::fs::read(home.join("facts/x.md")).unwrap(), b"forged");
         assert!(put_back_kept(&home, &backup("Facts"), true).is_ok());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-3, INSTR-1: the rules file made by a rule is removed only under the spelling the
+    /// preamble reads. Where the volume folds case, a person's `agents.md` also opens as
+    /// `AGENTS.md`, and a removal named by the other spelling must leave it. On a volume that tells
+    /// the names apart the removal finds nothing and counts as done. The fault this rejects is
+    /// deleting the person's own file because the volume answers for the name.
+    #[test]
+    fn undo_does_not_remove_a_home_rules_file_spelled_in_another_case() {
+        let home = crate::testutil::scratch_dir("undo-rule-removal-cased");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("agents.md"), "- the person's own\n").unwrap();
+        let rule_made = Backup {
+            path: home.join("AGENTS.md"),
+            was: Before::Nothing,
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        let folds = home.join("AGENTS.md").exists();
+        let put_back = put_back_kept(&home, &rule_made, false);
+        if folds {
+            assert!(
+                put_back.is_err(),
+                "the removal was allowed on a volume that folds case: {put_back:?}"
+            );
+        } else {
+            assert!(
+                put_back.is_ok(),
+                "the removal found nothing and should count as done: {put_back:?}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(home.join("agents.md")).unwrap(),
+            b"- the person's own\n"
+        );
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-3: the rules file made by a rule is removed when it is spelled exactly `AGENTS.md` in
+    /// the state directory. The directory lists that name, so the removal is not refused. This holds
+    /// on a volume that folds case and on one that does not.
+    #[test]
+    fn undo_removes_a_home_rules_file_spelled_exactly_that_a_rule_made() {
+        let home = crate::testutil::scratch_dir("undo-rule-removal-exact");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("AGENTS.md"), "- made by the rule\n").unwrap();
+        let rule_made = Backup {
+            path: home.join("AGENTS.md"),
+            was: Before::Nothing,
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        let put_back = put_back_kept(&home, &rule_made, false);
+        assert!(put_back.is_ok(), "{put_back:?}");
+        let listed = std::fs::read_dir(&home)
+            .unwrap()
+            .any(|entry| entry.unwrap().file_name() == "AGENTS.md");
+        assert!(!listed, "the rules file the rule made is still there");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-3: bytes put back under a name the volume answers for are written to the file the
+    /// name resolves to, and only the rules file's own spelling is one. Where the volume folds
+    /// case, a person's `agents.md` resolves under its own spelling and a backup naming `AGENTS.md`
+    /// is refused rather than written over it. Where it does not, `AGENTS.md` is a free name.
+    /// Bytes are refused by the check on where the file resolves, which this change does not touch,
+    /// so this test pins that refusal and does not fail when the removal check is reverted.
+    #[test]
+    fn undo_does_not_write_over_a_home_rules_file_spelled_in_another_case() {
+        let home = crate::testutil::scratch_dir("undo-rule-bytes-cased");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("agents.md"), "- the person's own\n").unwrap();
+        let rule_appended = Backup {
+            path: home.join("AGENTS.md"),
+            was: Before::Bytes(b"- older\n".to_vec()),
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        if home.join("AGENTS.md").exists() {
+            assert!(put_back_kept(&home, &rule_appended, false).is_err());
+            assert_eq!(
+                std::fs::read(home.join("agents.md")).unwrap(),
+                b"- the person's own\n"
+            );
+        }
         std::fs::remove_dir_all(home).unwrap();
     }
 }

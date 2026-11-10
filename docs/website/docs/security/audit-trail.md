@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: The audit trail
-description: What is recorded about every decision the system makes, and how to read it.
+description: Read gate decisions and audit records for compaction, limits, plans, permission modes, network hosts, delegates, checkouts and processors; inspect model requests and on-disk storage.
 ---
 
 # The audit trail
@@ -226,7 +226,9 @@ ending line says how long it ran, how many rounds it made out of the most it may
 answered, it reached its round limit and answered with what it had, it was stopped, it did not finish
 (with the kind of failure), or its thread died and returned nothing. A delegate that ran for
 twenty minutes and produced nothing can be told apart this way from one that ran out of rounds. The
-same cause is in the note you are shown. The planner is told only that the delegate did not finish.
+same cause is in the note you are shown. The planner is told only that the delegate did not finish,
+except when the cause was a rate limit or an outage: it is then also told which, and that starting the
+same delegate again meets the same limit.
 
 Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
 removed, is recorded as well.

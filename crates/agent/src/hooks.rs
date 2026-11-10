@@ -582,6 +582,8 @@ fn run(
         &bravebot_sandbox::programs::Resolved::named_by_person(program),
         bravebot_sandbox::programs::Inherits::Without(&withheld),
         bravebot_sandbox::programs::SearchPath::Reduced,
+        // A hook is a command the person wrote for themselves (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.

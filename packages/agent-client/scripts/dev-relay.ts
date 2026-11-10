@@ -41,10 +41,13 @@ const hello = JSON.stringify({ workspaces: directories.map((directory) => ({ id:
 const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
 const host = process.stdin
 const out = process.stdout
-host.pause()
 host.setEncoding('utf8')
 
 let connection: WebSocketEnd | null = null
+let admitted = false
+/** What the host wrote before an app gave the code. Its input is read from the start, so that the
+ * relay sees the host end even when no app has connected. */
+let held: string[] = []
 let exitCode = 0
 
 function finish(detail: string): void {
@@ -69,7 +72,6 @@ server.on('upgrade', (request, socket) => {
   }
   // One connection per launch, whatever its outcome.
   server.close()
-  let admitted = false
   const waiting = setTimeout(() => {
     exitCode = 1
     connection?.close(CLOSE_PROTOCOL, 'no code arrived')
@@ -88,7 +90,8 @@ server.on('upgrade', (request, socket) => {
         admitted = true
         process.stderr.write('dev-relay: the app gave the code and is connected\n')
         opened!.send(hello)
-        host.resume()
+        for (const chunk of held) toTheApp(chunk)
+        held = []
         return
       }
       if (!out.write(text)) {
@@ -110,11 +113,16 @@ server.on('upgrade', (request, socket) => {
   connection = opened
 })
 
-host.on('data', (chunk: string) => {
-  if (connection !== null && !connection.send(chunk)) {
+function toTheApp(chunk: string): void {
+  if (!connection!.send(chunk)) {
     host.pause()
-    connection.onDrain(() => host.resume())
+    connection!.onDrain(() => host.resume())
   }
+}
+
+host.on('data', (chunk: string) => {
+  if (admitted) toTheApp(chunk)
+  else held.push(chunk)
 })
 
 server.listen(0, '127.0.0.1', () => {

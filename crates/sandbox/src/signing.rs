@@ -88,8 +88,8 @@ const PUBLIC_KEY_LIMIT: u64 = 16 * 1024;
 ///
 /// With no agent, one that does not answer, or `gpg.format` other than `ssh`, this is the
 /// configured key alone, or nothing.
-pub fn lent(home: &Path, place: &Place) -> Vec<PathBuf> {
-    let signing = read(home, place);
+pub fn lent(home: &Path, moved: Option<&Path>, place: &Place) -> Vec<PathBuf> {
+    let signing = read(home, moved, place);
     if !signing.enabled {
         return Vec::new();
     }
@@ -98,7 +98,7 @@ pub fn lent(home: &Path, place: &Place) -> Vec<PathBuf> {
         files.push(file.clone());
     }
     if let Some(socket) = place.agent.as_deref() {
-        for file in held_public_keys(home, socket) {
+        for file in held_public_keys(home, moved, socket) {
             if !files.contains(&file) {
                 files.push(file);
             }
@@ -113,7 +113,7 @@ pub fn lent(home: &Path, place: &Place) -> Vec<PathBuf> {
 /// A file is lent only where `judged_public_key` accepts it, as for an `IdentityFile` line: a
 /// regular file named `*.pub` once a link is followed, outside every other credential location. A
 /// private key is never named `*.pub` here, and no file is lent for what it holds.
-fn held_public_keys(home: &Path, socket: &Path) -> Vec<PathBuf> {
+fn held_public_keys(home: &Path, moved: Option<&Path>, socket: &Path) -> Vec<PathBuf> {
     let held: Vec<String> = crate::agent::identities(socket)
         .iter()
         .map(|key| base64(key))
@@ -132,7 +132,7 @@ fn held_public_keys(home: &Path, socket: &Path) -> Vec<PathBuf> {
     names.sort();
     let mut files: Vec<PathBuf> = Vec::new();
     for name in names {
-        let Some(file) = crate::scope::judged_public_key(&name, home) else {
+        let Some(file) = crate::scope::judged_public_key(&name, home, moved) else {
             continue;
         };
         if files.contains(&file) || !names_a_held_key(&file, &held) {
@@ -195,7 +195,7 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 /// The files are read in the order git reads them, so the later one wins, and within a file the
 /// last assignment wins. An `[includeIf]` whose file applies is read where git reads it, in the
 /// order of the file that holds it. A file that cannot be read sets nothing.
-pub fn read(home: &Path, place: &Place) -> Signing {
+pub fn read(home: &Path, moved: Option<&Path>, place: &Place) -> Signing {
     let mut format = None;
     let mut key = None;
     let mut set = |entry: Entry| match (entry.section.as_str(), entry.name.as_str()) {
@@ -212,7 +212,7 @@ pub fn read(home: &Path, place: &Place) -> Signing {
             }
             let included = file
                 .parent()
-                .and_then(|beside| included_file(&entry, beside, home, place));
+                .and_then(|beside| included_file(&entry, beside, home, moved, place));
             if let Some(included) = included {
                 entries(&configuration(&included))
                     .into_iter()
@@ -226,7 +226,7 @@ pub fn read(home: &Path, place: &Place) -> Signing {
             None => Key::Unset,
             Some(None) => Key::Refused,
             Some(Some(value)) if value.is_empty() => Key::Unset,
-            Some(Some(value)) => judged(&value, home),
+            Some(Some(value)) => judged(&value, home, moved),
         },
     }
 }
@@ -237,7 +237,13 @@ pub fn read(home: &Path, place: &Place) -> Signing {
 /// It is a regular file inside the home and outside every credential location other than
 /// `~/.ssh`, and outside every directory the session may write. A relative name is beside the file
 /// that holds the line, as git reads it.
-fn included_file(entry: &Entry, beside: &Path, home: &Path, place: &Place) -> Option<PathBuf> {
+fn included_file(
+    entry: &Entry,
+    beside: &Path,
+    home: &Path,
+    moved: Option<&Path>,
+    place: &Place,
+) -> Option<PathBuf> {
     let condition = entry.condition.as_deref()?;
     if !condition_holds(condition, beside, home, place) {
         return None;
@@ -254,7 +260,7 @@ fn included_file(entry: &Entry, beside: &Path, home: &Path, place: &Place) -> Op
     });
     (!writable
         && inside(&resolved, home)
-        && !crate::scope::in_another_credential_location(&resolved, home)
+        && !crate::scope::in_another_credential_location(&resolved, home, moved)
         && std::fs::metadata(&resolved).is_ok_and(|held| held.is_file()))
     .then_some(resolved)
 }
@@ -507,11 +513,12 @@ fn value_of(raw: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
-fn judged(value: &str, home: &Path) -> Key {
+fn judged(value: &str, home: &Path, moved: Option<&Path>) -> Key {
     if value.starts_with("key::") || value.starts_with("ssh-") {
         return Key::Literal;
     }
-    match crate::scope::judged_public_key(Path::new(value), home).filter(|file| inside(file, home))
+    match crate::scope::judged_public_key(Path::new(value), home, moved)
+        .filter(|file| inside(file, home))
     {
         Some(file) => Key::File(file),
         None => Key::Refused,
@@ -710,7 +717,7 @@ mod tests {
     }
 
     fn read_alone(home: &Path) -> Signing {
-        read(home, &Place::default())
+        read(home, None, &Place::default())
     }
 
     /// A run in `home/work/project`, which is also the directory its session may write.
@@ -742,9 +749,42 @@ mod tests {
         home
     }
 
+    /// A public key inside the state directory `BRAVEBOT_HOME` moved into the home directory is not
+    /// read, named directly or through a link, as one inside `~/.bravebot` is not (SANDBOX-12,
+    /// SANDBOX-16, #2917). The regression it rejects: judging the name without the moved directory,
+    /// which lends a stage the files of the directory the person moved.
+    #[test]
+    fn a_public_key_inside_a_state_directory_that_is_moved_is_not_read() {
+        let home = a_home_signing_with(
+            "signing-moved-state",
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/.ci-state/key.pub\n",
+            &[".ci-state/key.pub", "keys/ok.pub"],
+        );
+        let moved = home.join(".ci-state");
+        let place = Place::default();
+        assert!(read(&home, None, &place).file().is_some(), "control");
+        assert!(read(&home, Some(&moved), &place).file().is_none());
+
+        std::os::unix::fs::symlink(moved.join("key.pub"), home.join("keys/linked.pub")).unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/linked.pub\n",
+        )
+        .unwrap();
+        assert!(read(&home, None, &place).file().is_some(), "control link");
+        assert!(read(&home, Some(&moved), &place).file().is_none());
+
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/ok.pub\n",
+        )
+        .unwrap();
+        assert!(read(&home, Some(&moved), &place).file().is_some());
+    }
+
     /// The name of the key file read for a run in `home/work/project`.
     fn the_key_read(home: &Path, place: &Place) -> String {
-        match read(home, place).file() {
+        match read(home, None, place).file() {
             Some(file) => file.file_name().unwrap().to_string_lossy().into_owned(),
             None => "none".to_string(),
         }
@@ -1082,7 +1122,7 @@ mod tests {
         assert_eq!(the_key_read(&home, &place), "default.pub");
 
         std::fs::write(home.join(".gitconfig"), "[gpg]\nformat = ssh\n").unwrap();
-        let signing = read(&home, &place);
+        let signing = read(&home, None, &place);
         assert_eq!(signing.key, Key::Unset);
         assert_eq!(signing.file(), None);
         std::fs::remove_dir_all(&home).unwrap();
@@ -1155,7 +1195,7 @@ mod tests {
         use crate::agent::fake::{Answer, FakeAgent, key};
         let home = a_home_with_ssh_public_keys("lent-held", &[("repo.pub", 2)]);
         let agent = FakeAgent::answering("lent-held", Answer::Holding(vec![key(2)]));
-        let lent = lent(&home, &a_place_with(&agent));
+        let lent = lent(&home, None, &a_place_with(&agent));
         assert_eq!(file_names(lent.clone()), ["work.pub", "repo.pub"]);
         assert_eq!(lent[1], home.join(".ssh/repo.pub"));
         std::fs::remove_dir_all(&home).unwrap();
@@ -1170,7 +1210,7 @@ mod tests {
             a_home_with_ssh_public_keys("lent-not-held", &[("held.pub", 2), ("other.pub", 3)]);
         let agent = FakeAgent::answering("lent-not-held", Answer::Holding(vec![key(2), key(9)]));
         assert_eq!(
-            file_names(lent(&home, &a_place_with(&agent))),
+            file_names(lent(&home, None, &a_place_with(&agent))),
             ["work.pub", "held.pub"]
         );
         std::fs::remove_dir_all(&home).unwrap();
@@ -1194,7 +1234,11 @@ mod tests {
             a_place_with(&closed),
             a_place_with(&garbage),
         ] {
-            assert_eq!(file_names(lent(&home, &place)), ["work.pub"], "{place:?}");
+            assert_eq!(
+                file_names(lent(&home, None, &place)),
+                ["work.pub"],
+                "{place:?}"
+            );
         }
         std::fs::remove_dir_all(&home).unwrap();
     }
@@ -1214,14 +1258,14 @@ mod tests {
             sessions: vec![project.clone()],
             ..a_place_with(&agent)
         };
-        let before = lent(&home, &place);
+        let before = lent(&home, None, &place);
         for named in ["~/.ssh/repo.pub", "~/.ssh/other.pub", "~/.ssh/id_ed25519"] {
             std::fs::write(
                 project.join(".git/config"),
                 format!("[user]\n\tsigningkey = {named}\n"),
             )
             .unwrap();
-            assert_eq!(lent(&home, &place), before, "{named}");
+            assert_eq!(lent(&home, None, &place), before, "{named}");
         }
         std::fs::remove_dir_all(&home).unwrap();
     }
@@ -1236,7 +1280,7 @@ mod tests {
         std::fs::write(home.join(".ssh/copy"), public_key_line(2)).unwrap();
         let agent = FakeAgent::answering("lent-private", Answer::Holding(vec![key(2)]));
         assert_eq!(
-            file_names(lent(&home, &a_place_with(&agent))),
+            file_names(lent(&home, None, &a_place_with(&agent))),
             ["work.pub", "id_ed25519.pub"]
         );
         std::fs::remove_dir_all(&home).unwrap();
@@ -1254,7 +1298,7 @@ mod tests {
         )
         .unwrap();
         let agent = FakeAgent::answering("lent-not-ssh", Answer::Holding(vec![key(2)]));
-        assert!(lent(&home, &a_place_with(&agent)).is_empty());
+        assert!(lent(&home, None, &a_place_with(&agent)).is_empty());
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -1275,7 +1319,7 @@ mod tests {
         let agent =
             FakeAgent::answering("lent-links", Answer::Holding(vec![key(2), key(3), key(4)]));
         assert_eq!(
-            file_names(lent(&home, &a_place_with(&agent))),
+            file_names(lent(&home, None, &a_place_with(&agent))),
             ["work.pub", "plain.pub"]
         );
         std::fs::remove_dir_all(&home).unwrap();
@@ -1296,7 +1340,7 @@ mod tests {
         let home = a_home_with_ssh_public_keys("lent-limit", &files);
         let held = (0..40).map(key).collect();
         let agent = FakeAgent::answering("lent-limit", Answer::Holding(held));
-        let lent = lent(&home, &a_place_with(&agent));
+        let lent = lent(&home, None, &a_place_with(&agent));
         assert_eq!(lent.len(), 1 + 32);
         assert_eq!(file_names(lent)[32], "key31.pub");
         std::fs::remove_dir_all(&home).unwrap();

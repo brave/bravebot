@@ -1521,9 +1521,11 @@ a directory, so a person working in two clones of one repository answers in each
 begun in a subdirectory is a different
 directory from the one above it. That key is a directory's name with every character outside a small
 set mapped to `-`, which is lossy, so two directories whose names reduce to the same one are answered
-by one record; [sessions.md](../sessions.md) records the same cost of the session store, where it
-takes a person resuming another directory's session to reach it, and here it takes only a session
-begun in either. And a line whose arguments differ every time is not helped at all, which
+by one record. A name longer than 200 bytes is cut and ends in a digest of the path, so two such
+directories are told apart ([TRUST-23](../trust-map.md#TRUST-23)). [sessions.md](../sessions.md)
+records the same cost of the session store, where it takes a person resuming another directory's
+session to reach it, and here it takes only a session begun in either. And a line whose arguments
+differ every time is not helped at all, which
 [RUN-20](#RUN-20) is the answer to.
 
 `verified-by: bravebot_core::remembered::the_line_that_was_recorded_is_covered`
@@ -1831,6 +1833,18 @@ file would answer differently on a machine whose owner had configured it. A dele
 figure the turn that spawned it holds, since the budget is a person's answer about what output is
 worth and does not stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 
+**What an unfiltered `read_output` costs is said where the size is stated.** `read_output` on
+output nobody vouched for hands back all of the slot, which the cap above does not bound and which
+stays in every later request. Where the size the slot states is above the cap, the advice beside a
+quarantined reference says that `read_output` returns all N bytes, about N/4 tokens, and, in a turn
+offered `run`, that a filter such as `tail -n 100` or `grep` given the reference as `stdin_ref`, with
+`read: true`, reads part of it. That holds for a `job_output` result and for a `run` result that did
+not ask to read, in every mode, and for the refusal of an `offset` or a `pattern` on that output
+([OUTPUT-4](read-output.md#OUTPUT-4), [OUTPUT-5](read-output.md#OUTPUT-5)). The description of
+`read_output` says the same without a size. A run that asked to read is told in the sentence
+[RUN-22](#RUN-22) gives and is not told twice. The driver decides this from the size the slot
+states and from nothing the output holds: a size at or below the cap, or none stated, adds nothing.
+
 `verified-by: bravebot_config::settings::a_settings_file_names_what_a_commands_output_may_spend`
 `verified-by: bravebot_config::settings::a_cap_of_zero_or_of_nonsense_leaves_the_built_in_one`
 `verified-by: bravebot_config::settings::the_nearest_layer_that_named_an_output_cap_wins`
@@ -1840,6 +1854,12 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_look_at_a_background_job_is_cut_to`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to`
+`verified-by: bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
+`verified-by: bravebot_agent::turn::sentences::output_within_the_cap_or_of_no_stated_size_says_nothing_of_its_cost`
+`verified-by: bravebot_agent::turn::sentences::a_run_that_asked_to_read_is_not_told_the_cost_twice`
+`verified-by: bravebot_agent::turn::sentences::the_filter_is_offered_only_where_the_list_holds_run`
+`verified-by: bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`
+`verified-by: bravebot_agent::turn::the_read_output_description_says_what_reading_all_of_a_long_output_costs`
 
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where the mode or a check answers
@@ -1868,6 +1888,9 @@ notice of the driver's own and not in the result, that auto-vetting kept the out
 setting lifts that. The notice is drawn from the mode and the setting and never from the word, so a
 word other than `safe` and a check that could not be made read alike. In a mode that asks nothing is
 added.
+
+A check that said `unsafe` is not made again for the same slot in the turn. `read_output` on that
+slot uses the word ([OUTPUT-3](read-output.md#OUTPUT-3), [CHECK-12](../vetting.md#CHECK-12)).
 
 A check the person stops is neither of those ([CHECK-16](../vetting.md#CHECK-16)). The turn ends as
 stopped once the run's result is recorded, the output stays quarantined and is not refused, and
@@ -1934,6 +1957,9 @@ decide it.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
+`verified-by: bravebot_agent::turn::read_output_does_not_check_again_a_slot_the_runs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::read_output_checks_a_slot_the_runs_check_could_not_judge`
+`verified-by: bravebot_agent::turn::a_run_check_the_person_stopped_leaves_nothing_for_read_output_to_reuse`
 `verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_a_person_still_answers_for_it`
 `verified-by: bravebot_agent::turn::a_background_line_cannot_ask_to_read_what_it_printed`
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
@@ -2395,3 +2421,13 @@ show that a model follows them.
   ([SANDBOX-24](../sandboxing.md#SANDBOX-24)). A probe refused for either reason fails as a closed
   port does, so the planner then asks about a browser that is listening, and the person answers
   that question.
+- **`read_output` on quarantined run output returns all of it, and the output cap does not bound
+  that.** [RUN-21](#RUN-21)'s cap bounds a run's result, a `job_output` page and a released page, and
+  `read_output` on output nobody vouched for hands back the whole slot, which stays in every later
+  request. The driver's advice states the size (about N/4 tokens) where the slot's stated size is
+  above the cap and names the `stdin_ref` filter that reads part of it, so the cost is told and not
+  removed. A planner that ignores the advice still pays it. Stubbing a large result in the requests
+  after its round ([COMPACT-18](../compaction.md#COMPACT-18)) would bound it and is not built. The
+  advice is pinned by
+  `bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
+  and `bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`.

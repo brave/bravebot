@@ -123,14 +123,12 @@ impl Drop for Held {
 ///
 /// The names the program looks up itself, such as the program a `unixexec:` bus address names to
 /// `systemd-inhibit`, are looked up on a `PATH` reduced to the entries `find` searches (SANDBOX-30).
+/// `powershell`, the inhibitor on Windows, is also given the variables it reads to choose code
+/// (`CODE_SELECTORS` in `powershell.rs`).
 pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> {
     let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Reduced,
-    );
+    let mut command = crate::powershell::start(program);
     let child = command
         .args(arguments)
         .stdin(Stdio::piped())

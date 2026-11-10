@@ -11,6 +11,7 @@
 //   pnpm run drive:project-actions
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -72,7 +73,7 @@ async function takeTurn(rpc, directory, prompt) {
   await rpc.call('trust.reply', { session, trusted: true }).catch((error) => {
     if (!/no_such_request/.test(error.message)) throw error
   })
-  await rpc.call('turn.send', { session, prompt })
+  await rpc.call('turn.send', { session, prompt, messageId: randomUUID() })
   const ended = await rpc.event((message) => message.session === session && (message.event === 'turn.done' || message.event === 'turn.error'))
   assert.equal(ended.event, 'turn.done', JSON.stringify(ended))
   await rpc.call('session.close', { session })

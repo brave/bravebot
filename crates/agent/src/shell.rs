@@ -174,25 +174,31 @@ fn run_sending(
     cancel: &Cancel,
     live: Option<&mpsc::Sender<String>>,
 ) -> Result<Ran, ShellError> {
+    use bravebot_sandbox::programs::{CodeSelectors, Inherits, Resolved, SearchPath};
+
     if line.trim().is_empty() {
         return Err(ShellError::Io("there was no command to run".to_string()));
     }
 
-    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
     let shell = shell();
     let program = Resolved::named_by_person(&shell);
-    let mut child = match bravebot_sandbox::process::starting_a_program(|| {
-        bravebot_sandbox::programs::start(&program, Inherits::All, SearchPath::Inherited)
-            .arg("-c")
-            .arg(line)
-            .current_dir(directory)
-            // Nothing is typed at a command bravebot started: the terminal belongs to the TUI, which is
-            // still drawing. A program that reads stdin gets nothing rather than fighting for the keys.
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }) {
+    let mut command = bravebot_sandbox::programs::start(
+        &program,
+        Inherits::All,
+        SearchPath::Inherited,
+        // The person's own shell, run with the environment they set (SANDBOX-30).
+        CodeSelectors::Kept,
+    );
+    // Nothing is typed at a command bravebot started: the terminal belongs to the TUI, which is
+    // still drawing. A program that reads stdin gets nothing rather than fighting for the keys.
+    command
+        .arg("-c")
+        .arg(line)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
         Ok(child) => child,
         Err(e) => {
             return Err(ShellError::NotStarted {

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Tools
-description: Every tool the model may call, what it takes, and what it is allowed to touch.
+description: Built-in tools for files and notebooks, search, git, language servers, commands and jobs, web requests, quarantine, processors, delegates, skills, memory, watches and session messages.
 ---
 
 # Tools
@@ -18,8 +18,8 @@ that is merely carried.
 | [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
-| [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, every time** |
+| [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, unless the path is vouched for and the contents are trusted** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, unless the path is vouched for** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
@@ -213,7 +213,10 @@ result says how many links it did not enter, as a number, and a directory made o
 said not to be empty. That holds when the names are quarantined, where the count comes beside the
 references. To see what is behind a link, list the directory it points to by its own name.
 
-The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
+The glob is literal and the matcher does not backtrack. Matching is case-sensitive, and a brace
+group such as `{r,R}eadme*` covers both cases. A call with a `pattern` whose result holds no file
+says so, and names a character class, an extended glob or a leading `!` as syntax the matcher does
+not have. A truncated listing says it was truncated.
 
 ## `repo_map`
 
@@ -415,7 +418,9 @@ text at it are labelled, and where the index is cached are in [the lsp tool](lsp
 ## `write_file`
 
 Writes a UTF-8 text file in the workspace, or a picture or PDF the agent holds only as a reference.
-**You approve every write before it happens.**
+**You approve a write before it happens, except where the path is one you vouched for and the
+contents are trusted, which is written without a prompt.** A write to a path that already holds a
+file replaces it whole, and the agent is told to read or list the path first when the file may exist.
 
 | Parameter | |
 |---|---|
@@ -469,7 +474,8 @@ file written from a `contents_ref` reports nothing.
 
 ## `edit_file`
 
-Replaces an exact passage in an existing file. **You approve every edit, as a diff.** The agent
+Replaces an exact passage in an existing file. **You approve an edit as a diff, except in a
+directory you vouched for, where it is applied without a prompt.** The agent
 prefers this to rewriting a whole body.
 
 | Parameter | |
@@ -591,10 +597,9 @@ wrote are on the screen beside the bytes. The check runs before the question rat
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
 planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
 
-**Being shown output closes processors.** Output you let through is private content, so once the
-planner has been shown some, [`spawn_processor`](#spawn_processor) is refused for it and for every
-delegate it starts afterwards. The tool's description says so where `spawn_processor` is offered, and
-leaves it out where it is not.
+**Being shown output makes what the planner writes private.** Output you let through is private
+content, so once the planner has been shown some, what it writes is private too. A
+[`spawn_processor`](#spawn_processor) call is still started, and its answer is private.
 
 **Output the planner may already read is not asked about.** Where a command's output was one the
 planner may read and too long for one result, it saw the beginning and the end, and `read_output`
@@ -645,7 +650,7 @@ A picture or a PDF is vetted the same way, except that the check is given the fi
 copy of it to open. If you let it through, it is attached to the planner's next request and is not
 returned as text. See [A picture or a PDF](../security/vetting.md#a-picture-or-a-pdf).
 
-Refused for a reference to nothing, for a private `expects`, and for a call from a delegate. A
+Refused for a reference to nothing and for a call from a delegate. A
 picture is also refused where the model in use takes no pictures, or where there is nowhere to put a
 copy of it for you to open. A reference to a file nothing has read
 yet is opened rather than refused, since naming one is the ordinary way to ask about a file the planner
@@ -893,15 +898,12 @@ argument of a tool that a server was declared to take it
 (`bravebot mcp add --choice <tool>:<argument>`), and you are shown the number and the reference it
 came from when you are asked about that call.
 
-**Refused once the model has been shown private content.** After [`read_output`](#read_output) or
-[`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
-private, what it writes is private too, and a processor takes no private instruction, so every
-`spawn_processor` call is refused for the rest of the conversation. This includes every delegate it
-starts afterwards, which begins holding the same private content, is not offered `spawn_processor`
-and is told so. `run`, `read_output` and the file tools keep working. Quarantined results made from
-then on do not suggest a processor, and the refusal names what still works, only where the run is
-offered it: a filter such as `grep` or `tail` run with `stdin_ref` set to the reference, then
-`read_output` on what it printed, or `vet_content` for a reference that holds no text.
+**Private content does not stop a processor.** After [`read_output`](#read_output) or
+[`vet_content`](#vet_content) has shown the model something private, or a delegate has reported
+something private, what it writes is private too, and the instruction it gives a processor is private
+with it. The processor runs all the same, on the model the turn runs on or the one `processorModel`
+names, and is given the references it reads whole. Its answer is private where the instruction is,
+even when the reference it read was not. This holds in every delegate the model starts afterwards.
 
 Everything before the document marker in a processor's reply is a remark for you: it reaches your
 screen and stops there, is part of no file, and cannot be another processor's input. An answer with no
@@ -945,9 +947,13 @@ A name that is neither a kind nor a definition is refused, and the refusal lists
 have worked.
 
 A delegate started after the planner has been shown private content (by `read_output` or
-`vet_content`, or in a delegate's report) starts holding it too, so it cannot run a processor and is
-not offered `spawn_processor`. Start a task that needs a picture or a file looked at before then, or
-leave it to the person. A delegate that is told it cannot say so in its report.
+`vet_content`, or in a delegate's report) starts holding it too, so what it writes is private. It is
+offered `spawn_processor` as any delegate is.
+
+A delegate is never offered `vet_content`, `ask_user`, `fetch_url` or `download_url`, and the
+description of `spawn_agent` tells the planner so. Work that needs one of them, such as reading a
+reference whole with `vet_content`, is done by the planner before it delegates or instead of
+delegating. A tool the session does not offer is not named in that sentence.
 
 A call that names a kind the run was not offered because it does not hold what the kind needs is
 still answered by the same rules. A delegate started that way is narrowed to what the run holds, and
@@ -1049,13 +1055,26 @@ Reads one of the skills the planner was listed, or one `search_skills` found.
 
 | Parameter | |
 |---|---|
-| `name` | the name exactly as it was listed or as `search_skills` returned it, e.g. `commit-style` |
+| `name` | the exact skill name listed or returned by `search_skills`, e.g. `commit-style`, or a compiled help name advertised by `bravebot-help` |
 
 The name selects from a set fixed before the turn started and **never becomes a path**: a name holding
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
 guessed at. A skill whose file says `disable-model-invocation: true` is not in the set, so asking for
 it is refused the same way; you load it by naming it in your own line. See
 [Skills](../customize/skills.md).
+
+For built-in help, load `bravebot-help` for the page index with topics and whole-page Unicode scalar
+character counts, excluding frontmatter and the tool-result wrapper. A page of 12000 characters or
+fewer loads whole by its bare name. A longer page loads by its bare name as an outline: its opening
+text and one line per section with the section's size and its name, `<page>#<section>`, which loads
+that section alone. Load `<page>::headings` for heading selectors without body text, then copy an
+exact `<page>::section:<number>:<heading>` name to load one section with its nested content and
+literal Markdown. This second route works for any page. The one-based number distinguishes
+repeated headings; mismatched numbers, leading zeroes and heading near matches are refused. This
+applies only to published built-in help pages: ordinary skills have no section selectors, and
+`bravebot-help/specs` lists spec pages carrying only clause headings. Shadowing or excluding
+`bravebot-help` removes its built-in routes and loading it grants no file reach. See
+[Built-in help sections](../customize/skills.md#built-in-help-sections).
 
 Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
 and their names. Where a project's skill directory is a link to another directory in the project,
@@ -1162,10 +1181,7 @@ session was opened on is the usual cause.
 You are shown the path as it resolves, whether it is to be read or written, and the planner's reason, and you
 answer yes or no. The grant and the record of it hold the resolved path, and the result the planner reads
 back, a success as much as a refusal, names the path as the planner typed it, so the name of what a link
-points at does not reach the planner. The path is judged when you answer and not again when a line starts,
-so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link keeps
-its row, and what the sandbox then does with that row, including whether it widens to the link's target,
-has not been tested on either backend ([#2914](https://github.com/brave/bravebot/issues/2914)). A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
+points at does not reach the planner. The path is judged when you answer and again each time a line starts: the grant keeps the directory you approved, so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link, by another directory or by a link to a refused place is given no row when a stage starts, and the grant is still listed. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
 `list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
@@ -1286,7 +1302,8 @@ Puts a question to a second model that is shown the conversation. The result is 
 | `question` | what the planner wants the advisor's view on |
 
 The advisor is sent the same request the planner was sent on that round, followed by the question, and
-is offered no tools. It can only advise. The planner does not choose the model: the session does, with
+is offered no tools. It can only advise. A question that quotes what the planner was shown is sent
+like any other, since the request already holds it. The planner does not choose the model: the session does, with
 [`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
 setting or [`/advisor`](commands.md#advisor-model--off).
 

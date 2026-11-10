@@ -39,7 +39,10 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
         {bots.length > 0 && entries.length > 0 && <div className="mention-section" role="presentation">Files</div>}
         {entries.map((entry, at) => {
           const index = bots.length + at
-          const name = entry.path.replace(/\/$/, '')
+          // `shownPath` never carries a trailing slash, marked or not (the bridge takes it off
+          // before marking), so the directory's own slash is only ever the one added back below,
+          // outside of whatever quoting marking the name added.
+          const name = entry.shownPath
           const slash = name.lastIndexOf('/')
           return (
             <div key={entry.path} role="option" aria-selected={index === active} data-test="mention-option"
@@ -47,7 +50,9 @@ export function MentionList({ bots, entries, active, onActive, onChoose, onSummo
               ref={index === active ? (row) => row?.scrollIntoView({ block: 'nearest' }) : undefined}
               onMouseEnter={() => onActive(index)}
               onMouseDown={(event) => { event.preventDefault(); onChoose(entry) }}>
-              {entry.directory ? <Icon name="folder" /> : <FileGlyph name={name} />}
+              {/* `entry.path` and never `name`: a marked file's `shownPath` is quoted, and an
+                  extension read off the quote closing it is not the file's own. */}
+              {entry.directory ? <Icon name="folder" /> : <FileGlyph name={entry.path} />}
               <span className="mention-path">
                 {slash >= 0 && <span className="mention-parent">{name.slice(0, slash + 1)}</span>}
                 <span className="mention-name">{name.slice(slash + 1)}{entry.directory ? '/' : ''}</span>

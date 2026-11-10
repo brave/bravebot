@@ -198,17 +198,17 @@ process's words. A tool's account is kept, under a label, because a tool failure
 explanation is usually a person's own server and there is a person on the screen to read it.
 
 What a stdio server writes to its standard error is neither a failure nor a reply, and it goes
-where the caller launching the server sends it: to the terminal a plain session or a one-shot run
-writes to, where the person watching reads it, and nowhere under the full-screen interface, where it
-would draw over the screen. It is never read by this process, so it reaches no message the planner
-is sent. The two streams the protocol runs over are pipes whatever the caller chose.
+where the caller launching the server sends it. Every front end sends it nowhere
+([SERVERS-25](mcp-servers.md#SERVERS-25)), because a terminal acts on the escape sequences in it. It
+is never read by this process, so it reaches no message the planner is sent. The two streams the
+protocol runs over are pipes whatever the caller chose.
 
 **A known cost.** A server that fails for a reason only its own sentence gives reports a code and
 a method and nothing else, and a reply this client rejects reports which kind of malformed it was
 and not where. Carrying either under a label instead would put it behind the release a tool
-result's account is behind, where nobody is watching a handshake or a tool listing. Under the
-full-screen interface a server's own diagnostics are discarded as well, so a server that fails
-there says only what its failure's code and method say.
+result's account is behind, where nobody is watching a handshake or a tool listing. A server's own
+diagnostics are discarded as well, so a server that fails says only what its failure's code and
+method say.
 
 `verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
 `verified-by: bravebot_mcp::lib::a_server_failure_reports_the_method_and_the_code`

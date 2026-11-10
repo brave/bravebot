@@ -578,6 +578,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     let mut jobs = tools::Jobs::default();
     let mut run_directory = tools::RunDirectory::at(workspace.root());
     let mut confined_failures = tools::ConfinedFailures::default();
+    let mut objections = tools::Objections::default();
     let done = tools::apply_kept_checkout(
         &mut policy,
         &mut tools::Tools {
@@ -616,6 +617,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
             confined_failures: &mut confined_failures,
+            objections: &mut objections,
             confine_runs: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
             asks_about_unconfined: false,
@@ -1657,6 +1659,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
                 account.add_usage(delegated.usage);
+                account.requests += delegated.requests;
 
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
@@ -2404,6 +2407,9 @@ struct State<'s> {
     open_loops: Option<String>,
     run_directory: tools::RunDirectory,
     confined_failures: tools::ConfinedFailures,
+    /// The slots a check said `unsafe` about this turn, which `read_output` and `vet_content` do
+    /// not check again (OUTPUT-3).
+    objections: tools::Objections,
     spent: Elapsed,
     told_mode: crate::permission_mode::PermissionMode,
     /// The sandbox mode the planner was last told of, which is what its `run` description states
@@ -2879,10 +2885,7 @@ where
     // `read_output` only where the list holds them, and so do the descriptions of the tools that
     // name others. A delegate is never offered the first and a reader the third, and a
     // definition's tools line or the command line can leave any of them out of a turn's.
-    let processors = crate::delegate::Processors::of(
-        policy.processors_closed(),
-        offered_names(&offered, "spawn_processor"),
-    );
+    let processors = crate::delegate::Processors::of(offered_names(&offered, "spawn_processor"));
     if !offers_vet_content {
         policy.without_vetting();
     }
@@ -3317,7 +3320,7 @@ where
     // here. The condition is a duration and whether a list was held, never a server's bytes.
     if !settled_wait.is_zero() || mcp.is_some() {
         reporter.spent(crate::outcome::Spent {
-            timing: spent.finish(),
+            timing: spent.finish(&account),
             ..account
         });
     }
@@ -3436,6 +3439,7 @@ where
         // the change that gives a session somewhere to keep one.
         run_directory: tools::RunDirectory::at(workspace.root()),
         confined_failures: tools::ConfinedFailures::default(),
+        objections: tools::Objections::default(),
         // Seeded with the time the lists' questions kept the turn waiting on the person.
         spent,
         // The system prompt states the mode the turn starts in, and a plan-mode notice an earlier
@@ -3556,7 +3560,7 @@ where
         wakeup: state.wakeup,
         watches: state.watches,
         links: state.links,
-        timing: state.spent.finish(),
+        timing: state.spent.finish(&state.account),
         clean: false,
         standing_refusals: Vec::new(),
         worked_around: 0,
@@ -3731,7 +3735,7 @@ where
             }
             client.complete_streaming(policy, &request, |progress| {
                 let phase = if progress.attempt > 1 && progress.output_tokens == 0 {
-                    Phase::Reconnecting
+                    Phase::Reconnecting(progress.retry)
                 } else {
                     round
                 };
@@ -3778,7 +3782,7 @@ where
         if let Err(error) = &completion
             && let Some(usage) = error.completed_usage()
         {
-            state.account.add_usage(usage);
+            state.account.add_request(usage);
             if let Some(measured) = error.context_tokens() {
                 state.account.context_tokens = measured;
                 conversation.measured(state.account.context_tokens);
@@ -4218,12 +4222,22 @@ where
                 };
                 // A count and no names, in the sentence every quarantined walk result shares.
                 let linked = sentences::links_note(&output.tool, output.links);
-                format!(
-                    "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}\n\n{described}",
-                    output.tool,
-                    references.len(),
-                )
+                // The pattern's own sentence, which the tool wrote from the pattern the planner
+                // typed: the body that would carry it reaches nobody here.
+                let unmatched = output
+                    .unmatched
+                    .as_deref()
+                    .map(|note| format!(" {note}"))
+                    .unwrap_or_default();
+                let listed = |described: &str| {
+                    format!(
+                        "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
+             quarantined, one reference each.{capped}{linked}{unmatched}\n\n{described}",
+                        output.tool,
+                        references.len(),
+                    )
+                };
+                listed(&described)
             } else if !output.pictures.is_empty() {
                 // A server's answer that carried pictures: its text and each picture get a
                 // reference of their own, the text first and the pictures in the order the server
@@ -4293,13 +4307,16 @@ where
                 reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 result_from = Provenance::Reference(ids.join(", "));
                 let left_out = sentences::left_out_note(output.left_out);
-                format!(
-                    "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its text and its {} are \
+                let with_pictures = |described: &[String]| {
+                    format!(
+                        "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its text and its {} are \
                      quarantined, one reference each.{left_out}\n\n{}",
-                    output.tool,
-                    tools::tally(output.pictures.len(), "picture", "pictures"),
-                    described.join("\n")
-                )
+                        output.tool,
+                        tools::tally(output.pictures.len(), "picture", "pictures"),
+                        described.join("\n")
+                    )
+                };
+                with_pictures(&described)
             } else {
                 // Reserved here rather than before the branch above, which reserves one per
                 // entry and would otherwise leave this one hanging: a name handed out and
@@ -4437,6 +4454,7 @@ where
                                 confirmer,
                                 &mut chat,
                                 reporter,
+                                &mut state.objections,
                                 &reference.slot,
                             )
                         } else {
@@ -4448,6 +4466,7 @@ where
                                 confirmer,
                                 &mut chat,
                                 reporter,
+                                &mut state.objections,
                                 &reference.slot,
                                 plan.beside,
                             )
@@ -4458,7 +4477,7 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_usage(released.usage);
+                        state.account.add_call(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.
@@ -4466,7 +4485,7 @@ where
                             cancellation = released.stopped;
                         }
                         reporter.spent(crate::outcome::Spent {
-                            timing: state.spent.finish(),
+                            timing: state.spent.finish(&state.account),
                             ..state.account
                         });
                         released
@@ -4630,18 +4649,22 @@ where
                         // After the sample rather than in the middle of it, where the
                         // notice naming what went is: what wrote that notice dropped the
                         // bytes and does not know the slot they were kept in.
-                        let rest = match (&whole, &read_from) {
-                            (Some(reference), _) => format!(
-                                "\n\nThe whole of this output, middle included, is a \
+                        let rest_with =
+                            |describe: fn(&bravebot_core::reference::Reference) -> String| match (
+                                &whole, &read_from,
+                            ) {
+                                (Some(reference), _) => format!(
+                                    "\n\nThe whole of this output, middle included, is a \
                              reference:\n{}",
-                                reference.describe()
-                            ),
-                            (None, Some(slot)) => format!(
-                                "\n\nThe same output is {slot}, to name wherever a tool \
+                                    describe(reference)
+                                ),
+                                (None, Some(slot)) => format!(
+                                    "\n\nThe same output is {slot}, to name wherever a tool \
                                  takes a reference."
-                            ),
-                            (None, None) => String::new(),
-                        };
+                                ),
+                                (None, None) => String::new(),
+                            };
+                        let rest = rest_with(bravebot_core::reference::Reference::describe);
                         // Workspace content only, as with the landing above: the driver's
                         // own sentence about a call is already its note.
                         if output.content {
@@ -4676,10 +4699,13 @@ where
                             _ => String::new(),
                         };
                         let respelled = sentences::respelled_note(output.respelled);
-                        format!(
-                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
-                            output.tool
-                        )
+                        let composed = |rest: &str| {
+                            format!(
+                                "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
+                                output.tool
+                            )
+                        };
+                        composed(&rest)
                     }
                     // Told a mkdir's empty output was quarantined, with the ways to
                     // process, vet or read it, a planner went looking for something to
@@ -4781,16 +4807,19 @@ where
                         let linked = sentences::links_note(&output.tool, output.links);
                         // How to see this one and how to stop being asked, for a run and only for a run:
                         // the reasoning is on `sentences::run_advice`.
-                        let advice = sentences::run_advice(
-                            output.printed_by.is_some(),
-                            output.covered_by_record,
-                            read_output_is(),
-                            plan.beside,
-                            &output.tool,
-                            output.read_asked,
-                            reference.bytes,
-                            output_cap,
-                        );
+                        let advice_beside = |beside: tools::Beside| {
+                            sentences::run_advice(
+                                output.printed_by.is_some(),
+                                output.covered_by_record,
+                                read_output_is(),
+                                beside,
+                                &output.tool,
+                                output.read_asked,
+                                reference.bytes,
+                                output_cap,
+                            )
+                        };
+                        let advice = advice_beside(plan.beside);
                         // `read: true` asked of `fetch_url` or a server's tool that still came
                         // back as a reference: said once, so it does not read as an unexplained
                         // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
@@ -4826,11 +4855,13 @@ where
                             }
                             _ => String::new(),
                         };
-                        format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
-                            output.tool,
-                            reference.describe()
-                        )
+                        let composed = |described: &str, advice: &str| {
+                            format!(
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
+                                output.tool,
+                            )
+                        };
+                        composed(&reference.describe(), &advice)
                     }
                 }
             };
@@ -4838,7 +4869,7 @@ where
             // What the person typed beside their answer to the question this call asked, after the
             // result and in their own words (PROMPT-12). Trusted, so it is shown whatever the
             // result was: a result held back as a reference is still followed by the note.
-            let body = match &output.told {
+            let note = match &output.told {
                 Some(told) => match policy.present(
                     "tool_result",
                     bravebot_core::SlotId::new("note"),
@@ -4847,10 +4878,14 @@ where
                     conversation.quarantine(),
                 ) {
                     Ok(presented) if presented.is_visible() => {
-                        format!("{body}\n\n{}", presented.for_context())
+                        Some(format!("\n\n{}", presented.for_context()))
                     }
-                    _ => body,
+                    _ => None,
                 },
+                None => None,
+            };
+            let body = match note {
+                Some(note) => format!("{body}{note}"),
                 None => body,
             };
 
@@ -5549,6 +5584,7 @@ mod tests {
                         report,
                         kind: "one-round".to_string(),
                         usage: Default::default(),
+                        requests: 0,
                     }),
                 };
                 (
@@ -5763,6 +5799,7 @@ mod tests {
                             report,
                             kind: "one-round".to_string(),
                             usage: Default::default(),
+                            requests: 0,
                         }),
                         vouched: handed,
                         notices: Vec::new(),
@@ -5858,6 +5895,7 @@ mod tests {
                                 completion_tokens: 200,
                                 cached: Default::default(),
                             },
+                            requests: 1,
                         }),
                         vouched: handed,
                         notices: Vec::new(),
@@ -5956,6 +5994,7 @@ mod tests {
                                     report,
                                     kind: "one-round".to_string(),
                                     usage: Default::default(),
+                                    requests: 0,
                                 }),
                                 vouched: handed,
                                 notices: Vec::new(),
@@ -6073,6 +6112,7 @@ mod tests {
                                         report,
                                         kind: "one-round".to_string(),
                                         usage: Default::default(),
+                                        requests: 0,
                                     }),
                                     vouched: handed,
                                     notices: Vec::new(),
@@ -6256,6 +6296,7 @@ mod tests {
                                     completion_tokens: 100,
                                     ..Default::default()
                                 },
+                                requests: 1,
                             }),
                             vouched: handed,
                             notices: Vec::new(),
@@ -8992,6 +9033,27 @@ mod tests {
         assert_eq!(note, "the delegate was stopped");
         let (note, _) = delegate_end::unfinished_account(&Finish::Lost, None, 3, id);
         assert_eq!(note, "the delegate could not finish");
+
+        // A limit or an outage is named to the planner beside the spent bound, and the person's
+        // note keeps the category as it does for every failure.
+        let limited = Finish::Failed {
+            took,
+            rounds: 3,
+            why: "rate-limited",
+        };
+        let (note, body) = delegate_end::unfinished_account(&limited, Some((took, 3)), 3, id);
+        assert_eq!(
+            note,
+            "the delegate could not finish (rate-limited), having spent its limit of 3 rounds"
+        );
+        assert!(
+            body.contains(
+                "(rate-limited), so starting the same delegate again meets the same limit."
+            )
+        );
+        assert!(body.ends_with(
+            " It had spent its limit of 3 rounds, so the same task will not get further."
+        ));
     }
 
     /// RECALL-9: which kept facts reach a turn's prompt, and what that does to the turn's label.

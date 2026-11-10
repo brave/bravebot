@@ -7,6 +7,7 @@ use super::{
     BACKSLASH_SEPARATES, Workspace, WorkspaceError, destination, expand_home, locked,
     refuse_unkeyable,
 };
+use crate::scratch::ScratchDirectory;
 use bravebot_i18n::t;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -123,6 +124,75 @@ pub struct PathReach {
     pub write: bool,
     /// What the planner said it was for.
     pub why: String,
+    /// The device and inode `path` had when the grant was made, read without following a link.
+    /// None where nothing was at the path or the platform reports none, and then only the
+    /// judgement of [`PathReach::stands`] applies.
+    pub identity: Option<(u64, u64)>,
+}
+
+/// The device and inode of whatever is at `path`, without following a link.
+fn identity_of(found: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((found.dev(), found.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = found;
+        None
+    }
+}
+
+impl PathReach {
+    /// A grant of `path`, with the identity it has now.
+    pub fn new(path: PathBuf, write: bool, why: String) -> Self {
+        let identity = std::fs::symlink_metadata(&path)
+            .ok()
+            .and_then(|found| identity_of(&found));
+        Self {
+            path,
+            write,
+            why,
+            identity,
+        }
+    }
+
+    /// Whether the name still leads to what the person approved, judged as each stage starts
+    /// (SANDBOX-28).
+    ///
+    /// A name with nothing at it holds, since a row opens nothing. Where something is at it, the
+    /// name must not be a link, none of its parents may be one, it must be the device and inode
+    /// approved, and with a `home` the request is judged again as a new one for the same access
+    /// would be: it may not lead to a credential or persistence location, `~/.ssh` or the state
+    /// directory, or a place above the home directory. Decided from file system metadata and the
+    /// path alone.
+    pub fn stands(&self, home: Option<&Path>, state: Option<&Path>) -> bool {
+        let Ok(found) = std::fs::symlink_metadata(&self.path) else {
+            return true;
+        };
+        if found.file_type().is_symlink() {
+            return false;
+        }
+        if let Some(approved) = self.identity
+            && identity_of(&found) != Some(approved)
+        {
+            return false;
+        }
+        if bravebot_sandbox::rules::resolved(&self.path) != self.path {
+            return false;
+        }
+        home.is_none_or(|home| {
+            bravebot_sandbox::rules::judged_request(
+                &self.path,
+                self.write,
+                Some(home),
+                state,
+                &bravebot_sandbox::rules::Rules::none(),
+            )
+            .is_ok_and(|judged| judged == self.path)
+        })
+    }
 }
 
 /// The hosts a person answered a prompt about for the session (SANDBOX-24).
@@ -214,7 +284,11 @@ impl Workspace {
         // The macOS profile lets a row at a credential location lift the refusal of it, so the
         // location is refused here on every platform (SANDBOX-18).
         if self.home.as_deref().is_some_and(|home| {
-            bravebot_sandbox::rules::inside_a_credential_location(&canonical, home)
+            bravebot_sandbox::rules::inside_a_credential_location(
+                &canonical,
+                home,
+                self.state.as_deref(),
+            )
         }) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -248,13 +322,25 @@ impl Workspace {
     /// [`Workspace::add_directory`] through a shared reference, for the one route that opens a
     /// directory in the middle of a turn, where the turn holds a clone of the workspace and the
     /// session's own copy has to see the directory after it (PATHREQ-7).
+    ///
+    /// The directory is recorded by device and inode as it is added, and a stage is given a row
+    /// for it only while its name still leads there (SANDBOX-18). The file tools hold the name
+    /// that is returned.
     pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let canonical = self.resolve_directory(directory)?;
 
         bravebot_sandbox::programs::keep_out(&canonical);
         let mut added = locked(&self.added);
-        if !added.contains(&canonical) {
-            added.push(canonical.clone());
+        if !added.iter().any(|open| open.path() == canonical) {
+            // Recorded as the directory it is now, so a name that later leads elsewhere is not
+            // taken for it (SANDBOX-18). A name that cannot be read as a directory is not opened.
+            let made = ScratchDirectory::observed(canonical.clone()).ok_or_else(|| {
+                WorkspaceError::Invalid {
+                    path: directory.to_string(),
+                    reason: "must be a directory",
+                }
+            })?;
+            added.push(made);
         }
         Ok(canonical)
     }
@@ -344,7 +430,24 @@ impl Workspace {
 
     /// The directories added by name, in the order they were added.
     pub fn added_directories(&self) -> Vec<PathBuf> {
-        locked(&self.added).clone()
+        locked(&self.added)
+            .iter()
+            .map(|open| open.path().to_path_buf())
+            .collect()
+    }
+
+    /// The working directory and every directory added by name, each as the directory it was when
+    /// the session opened or added it, which is what a stage is given a row for only while its
+    /// name still leads there (SANDBOX-18). The working directory comes first.
+    ///
+    /// A working directory that could not be read as a directory when it was recorded is left out,
+    /// and so is given no row.
+    pub fn session_directories(&self) -> Vec<ScratchDirectory> {
+        self.root_made
+            .iter()
+            .cloned()
+            .chain(locked(&self.added).iter().cloned())
+            .collect()
     }
 
     /// Let programs reach `path` for the rest of the session. A second grant of a path already
@@ -353,10 +456,12 @@ impl Workspace {
         let mut held = locked(&self.path_reach);
         match held.iter_mut().find(|row| row.path == path) {
             Some(row) => {
-                row.write |= write;
-                row.why = why;
+                let again = PathReach::new(path, write, why);
+                row.write |= again.write;
+                row.why = again.why;
+                row.identity = again.identity;
             }
-            None => held.push(PathReach { path, write, why }),
+            None => held.push(PathReach::new(path, write, why)),
         }
     }
 
@@ -469,17 +574,18 @@ impl Workspace {
         bravebot_sandbox::programs::keep_out(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
+        self.root_made = ScratchDirectory::observed(canonical.clone());
         // Names relative to the root left behind mean nothing under the new one (INSTR-14, INSTR-16,
         // CHECKOUT-23).
         self.kept.touched = Arc::default();
         locked(&self.kept.working_writes).last.clear();
         {
             let mut added = locked(&self.added);
-            let (overlapping, kept) = std::mem::take(&mut *added)
+            let (overlapping, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut *added)
                 .into_iter()
-                .partition(|open| overlaps(open, &canonical));
+                .partition(|open| overlaps(open.path(), &canonical));
             *added = kept;
-            closed.extend(overlapping);
+            closed.extend(overlapping.iter().map(|open| open.path().to_path_buf()));
         }
         // Whatever the new root is now reachable as itself, so it did not close.
         closed.retain(|open| *open != canonical);
@@ -521,15 +627,15 @@ impl Workspace {
         let mut added = locked(&self.added);
         let open = added
             .iter()
-            .position(|open| open == candidate)
+            .position(|open| open.path() == candidate)
             .or_else(|| {
                 let resolved = destination(candidate)?;
-                added.iter().position(|open| *open == resolved)
+                added.iter().position(|open| open.path() == resolved)
             })
             .ok_or_else(|| WorkspaceError::Invalid {
                 path: directory.to_string(),
                 reason: "is not a directory opened beside the working directory",
             })?;
-        Ok(added.remove(open))
+        Ok(added.remove(open).path().to_path_buf())
     }
 }

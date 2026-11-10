@@ -283,15 +283,26 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
 /// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
 /// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
 /// folding takes text.
+///
+/// Two names are one where either fold joins them: the full one
+/// ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with `class`, and the one-letter
+/// one ([`bravebot_core::trust::fold_simple`]), which joins `cla\u{df}` with `cla\u{1e9e}`. That is
+/// the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given to
+/// [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root spelled
+/// `class` or `cla\u{1e9e}`, and nothing is granted by it.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
     if !folds_case {
         let relative = path.strip_prefix(root).ok()?;
         return Some(tail(relative.components()));
     }
-    let fold = |name: &std::ffi::OsStr| bravebot_core::trust::fold_case(&name.to_string_lossy());
+    let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| {
+        let (one, other) = (one.to_string_lossy(), other.to_string_lossy());
+        bravebot_core::trust::fold_case(&one) == bravebot_core::trust::fold_case(&other)
+            || bravebot_core::trust::fold_simple(&one) == bravebot_core::trust::fold_simple(&other)
+    };
     let mut names = path.components();
     for held in root.components() {
-        if fold(names.next()?.as_os_str()) != fold(held.as_os_str()) {
+        if !same(names.next()?.as_os_str(), held.as_os_str()) {
             return None;
         }
     }
@@ -480,7 +491,7 @@ mod tests {
             deny_write: vec![entry("secret.env"), entry("../../outside-the-root")],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &session);
+        let rules = resolve(&lists, None, None, &session);
         let cannot = t!(sandbox_rule_cannot_subtract);
         let climbs = filesystem_reason(bravebot_sandbox::rules::Reason::Climbs);
         let standing = |capabilities: Option<&bravebot_sandbox::policy::Capabilities>| {
@@ -537,7 +548,7 @@ mod tests {
             deny_write: vec![entry(&secret)],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &session);
+        let rules = resolve(&lists, None, None, &session);
         let why = |capabilities: &bravebot_sandbox::policy::Capabilities| {
             filesystem_standing(&rules, &session, Some(capabilities))
                 .into_iter()
@@ -1473,6 +1484,58 @@ mod tests {
                 false
             ),
             Some("a/b".to_string())
+        );
+    }
+
+    /// A deny or ask rule about a place under `cla\u{df}` is also given as a place under a root
+    /// spelled `class` where the volume folds case, and a volume that does not fold keeps them apart.
+    /// Only refusals reach `beneath`, so reading the two as one narrows (TRUST-2, PERM-7).
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_the_full_fold() {
+        use std::path::Path;
+        assert_eq!(
+            beneath(Path::new("/p/cla\u{df}/a/b"), Path::new("/p/class"), true),
+            Some("a/b".to_string())
+        );
+        assert_eq!(
+            beneath(Path::new("/p/CLASS/a"), Path::new("/p/cla\u{df}"), true),
+            Some("a".to_string())
+        );
+        assert_eq!(
+            beneath(Path::new("/p/cla\u{df}/a/b"), Path::new("/p/class"), false),
+            None
+        );
+    }
+
+    /// A root spelled `\u{1e9e}` is the root a refusal about `\u{df}` names, and the other way
+    /// round, since the one-letter fold the map decides by joins them and the full fold does not
+    /// (TRUST-2, PERM-7). A volume that does not fold keeps them apart.
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold() {
+        use std::path::Path;
+        assert_eq!(
+            beneath(
+                Path::new("/p/cla\u{df}/a/b"),
+                Path::new("/p/cla\u{1e9e}"),
+                true
+            ),
+            Some("a/b".to_string())
+        );
+        assert_eq!(
+            beneath(
+                Path::new("/p/cla\u{1e9e}/a"),
+                Path::new("/p/cla\u{df}"),
+                true
+            ),
+            Some("a".to_string())
+        );
+        assert_eq!(
+            beneath(
+                Path::new("/p/cla\u{df}/a"),
+                Path::new("/p/cla\u{1e9e}"),
+                false
+            ),
+            None
         );
     }
 

@@ -1424,7 +1424,9 @@ fn reach_the_servers(
             false => servers::Asking::OneShot,
         },
         &mut servers::nobody(),
-        bravebot_sandbox::Stream::Inherited,
+        // Nowhere: a server's stderr is its own bytes, and this run's stderr is where its notices
+        // and progress lines are drawn (SERVERS-25).
+        bravebot_sandbox::Stream::Null,
     );
     say_notices(&mut std::io::stderr().lock(), &reached.notes);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,

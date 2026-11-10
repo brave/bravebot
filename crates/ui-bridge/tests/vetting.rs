@@ -12,6 +12,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -332,7 +334,7 @@ fn auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it() {
     scratch.home_settings(r#"{"vetting": {"auto": false}}"#);
     front.call(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     let done =
         front.until(|message| message["event"] == "turn.done" || message["event"] == "turn.error");
@@ -395,7 +397,7 @@ fn a_turn_vetting_a_file_nobody_trusts(scratch: &Scratch, later: &str) -> Turn {
     scratch.home_settings(later);
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "read the notes"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "read the notes"})),
     );
 
     // `until` waits afresh on each event, so a turn that never ended would never fail on its own.

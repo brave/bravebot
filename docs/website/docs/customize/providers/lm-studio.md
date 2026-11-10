@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: LM Studio
-description: Reach a model served by LM Studio's local server with no key, what the first run writes for you, and the block to write yourself.
+description: Connect LM Studio's local server without an API key, use first-run discovery or manual gateway configuration, and set the context window.
 ---
 
 # Reaching a model through LM Studio

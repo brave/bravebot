@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: The run tool
-description: How a command line is compiled, approved and run, what each answer grants, and how its output is labelled.
+description: Run command grammar, directories, approvals and remembered commands, globbing, redirections, output trust and filtering, inherited environment, deadlines and background jobs.
 ---
 
 # The run tool
@@ -102,7 +102,7 @@ reported as removed rather than as a program that could not be started.
 | patterns | `*`, `?`, `[…]`, `**` |
 | brace expansion | `{a,b}`, `{1..9}` |
 | home | a leading `~`, and only a leading one |
-| per-command environment | `NAME=literal cmd` |
+| per-command environment | `NAME=literal cmd`; in [bypass mode](#an-assignment-can-take-a-variable-or-a-command-in-bypass-mode) only, the value may also be `$VAR`, `${VAR}` or `$(cmd)` |
 
 A leading `~` is **your home directory**, the one `~/.bravebot` sits inside, and never that directory
 itself: a home-relative path the planner writes names a file of your own rather than one among this
@@ -115,8 +115,8 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 
 | Refused | Why |
 |---|---|
-| `$(…)`, backticks | a command whose text is computed is a destination nobody saw; inside double quotes it is still one |
-| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line |
+| `$(…)`, backticks | a command whose text is computed is a destination nobody saw; inside double quotes it is still one. Bypass mode accepts `$(…)` as the value of an assignment in front of a program, never elsewhere, and never a backtick |
+| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line. Bypass mode accepts them in the value of an assignment in front of a program, never elsewhere |
 | `$?` | the exit status of an earlier step is not in the line; the result of a run already says how each step ended |
 | `$$`, `$@`, `$*`, `$#`, `$-`, `$!` | no shell holds parameters between the steps of a line, so there is no value for them to stand for |
 | `$'…'`, `$"…"` | escapes after a `$` quote are not read; a newline comes from a file or from standard input |
@@ -138,6 +138,30 @@ program as one word. Double quotes settle none of the `$` forms, so `"$HOME"` an
 `$` followed by no name, brace, parenthesis, special parameter or quote is an ordinary character even
 unquoted, so the end anchor in `grep -E "x$" file` reaches `grep` as written. To pass a literal `$` that comes
 before a name, put it in single quotes or write `\$`.
+
+### An assignment can take a variable or a command in bypass mode
+
+Only in [bypass mode](../security/permission-modes.md), and only for the `NAME=value` words in front
+of a program, a value may be `$VAR`, `${VAR}`, text around them (`NAME=a-$VAR-b`), or a command
+substitution, `NAME="$(cmd)" prog` or `NAME=$(cmd) prog`. Several assignments may each have one, and a
+later step of a pipeline may have its own. Everything else stays refused, in bypass mode too: a
+variable or substitution as an argument or as the program, backticks (an assignment value included),
+`$1`, `$?`, `${X:-y}` and the like, and `FOO=*.rs prog`. Outside bypass mode all of it is refused.
+
+- **The plan shows the line's own words.** The plan, the trail and every message show `$X` or
+  `$(cmd)` as written, never what they stood for. The value is looked up when that step starts and
+  goes only into that program's environment.
+- **`cmd` is a step of the plan.** It is compiled by the same rules as any other step, with the same
+  resolved binary, permission checks and recorded reads and writes, and runs just before the step
+  that uses it, in the same directory, under the same deadline and sandbox, with no standard input.
+  It is one level deep: `$`, a substitution or a backtick inside it is refused. Trailing newlines of
+  its output are dropped, and the output is not shown to the model.
+- **A withheld variable is refused.** The credentials bravebot removes from every step
+  ([below](#what-a-program-is-handed)) and the names in `run.scrubEnv` cannot be read this way, and
+  the removal is still applied after the assignment. A variable that is not set is refused too,
+  naming the variable.
+- **A failing `cmd` is reported by its source and its exit status.** What it printed is in the
+  message neither for you nor for the model.
 
 ## Your answer binds to the plan, not to the line
 

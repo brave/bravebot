@@ -41,6 +41,10 @@ pub enum Category {
     Incomplete,
     /// The reply arrived and was not the shape it had to be, or carried nothing usable.
     Undecodable,
+    /// The service reported a failure this build has no name for. Chosen only as the fixed
+    /// fallback of a closed list of known codes, so nothing the service wrote decides it or is
+    /// kept in it.
+    Unrecognised,
     /// The model reached its output ceiling before finishing.
     TooLong,
     /// Nothing local could send the request: no credential, no model, no usable address.
@@ -64,6 +68,7 @@ impl Category {
             Self::Transport => "transport",
             Self::Incomplete => "incomplete",
             Self::Undecodable => "undecodable",
+            Self::Unrecognised => "unrecognised",
             Self::TooLong => "too-long",
             Self::Unconfigured => "unconfigured",
             Self::Blocked => "blocked",
@@ -129,6 +134,14 @@ pub struct Diagnosis {
     /// Set from the variant that sent the request and never from a reply or an address. Never
     /// given to the planner.
     pub backend: Option<BackendKind>,
+    /// Whether the request went to a backend with a `provider` entry, which is where `maxRetries`
+    /// is stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    ///
+    /// Set from the variant that sent the request and the configuration it was selected with, and
+    /// never from a reply or an address. A front end uses it to name that setting in the next step of
+    /// a rate-limited failure. False for the Brave endpoint, a tier-variable account and the two
+    /// sign-in accounts. Never given to the planner.
+    pub retry_setting: bool,
 }
 
 /// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
@@ -150,6 +163,7 @@ impl Diagnosis {
             premium_key: false,
             conceded: Conceded::default(),
             backend: None,
+            retry_setting: false,
         }
     }
 
@@ -162,6 +176,12 @@ impl Diagnosis {
     /// The same, with the backend that sent the request.
     pub fn on_backend(mut self, backend: BackendKind) -> Self {
         self.backend = Some(backend);
+        self
+    }
+
+    /// The same, marked as a failure of a request to a backend that has a `provider` entry.
+    pub fn with_retry_setting(mut self) -> Self {
+        self.retry_setting = true;
         self
     }
 
@@ -299,6 +319,11 @@ pub struct Spent {
     pub context_tokens: u64,
     /// How much of the total the service served out of its prompt cache.
     pub cached: Cached,
+    /// How many model requests completed to make the total: the planner's rounds, a processor's
+    /// call, a summary, the check on a released read and a delegate's own requests. Counted by
+    /// [`Spent::add_request`], and not by [`Spent::add_usage`], which is also given the empty usage
+    /// of a tool that made no request. The check on a server's tool list is not counted.
+    pub requests: u64,
     /// Time measured so far. The session uses its own wall clock, starting when Enter is pressed.
     pub timing: Timing,
 }
@@ -312,13 +337,32 @@ impl Spent {
         self.cached.add(usage.cached);
     }
 
-    /// Add another run's cost, such as a delegate's, to this one: its total, what the model wrote
-    /// and what the cache served. The context reading is that run's own conversation and the timing
-    /// overlaps this one's clock, so both are left as they are.
+    /// Add the usage of a model request that completed, and count the request.
+    ///
+    /// A reply that stated no usage is still a request, which is why the count is made here and
+    /// not from whether the usage was empty.
+    pub fn add_request(&mut self, usage: Usage) {
+        self.add_usage(usage);
+        self.requests += 1;
+    }
+
+    /// Add a call's usage, counting a request where one completed for it.
+    pub fn add_call(&mut self, usage: Usage, completed: bool) {
+        if completed {
+            self.add_request(usage);
+        } else {
+            self.add_usage(usage);
+        }
+    }
+
+    /// Add another run's cost, such as a delegate's, to this one: its total, what the model wrote,
+    /// what the cache served and how many requests made it. The context reading is that run's own
+    /// conversation and the timing overlaps this one's clock, so both are left as they are.
     pub fn add_spent(&mut self, other: &Spent) {
         self.tokens += other.tokens;
         self.output_tokens += other.output_tokens;
         self.cached.add(other.cached);
+        self.requests += other.requests;
     }
 }
 
@@ -352,6 +396,7 @@ mod tests {
                 read_tokens: 10,
                 written_tokens: 20,
             },
+            requests: 4,
             timing,
         };
 
@@ -363,6 +408,10 @@ mod tests {
         assert_eq!(spent.output_tokens, 150);
         assert_eq!(spent.cached.read_tokens, 15);
         assert_eq!(spent.cached.written_tokens, 27);
+        assert_eq!(
+            spent.requests, 4,
+            "usage added for something that is not one request counts none"
+        );
 
         spent.add_spent(&Spent {
             tokens: 2_000,
@@ -372,6 +421,7 @@ mod tests {
                 read_tokens: 100,
                 written_tokens: 200,
             },
+            requests: 3,
             timing: Timing {
                 wall_ms: 5_000,
                 ..Timing::default()
@@ -381,9 +431,35 @@ mod tests {
         assert_eq!(spent.output_tokens, 550);
         assert_eq!(spent.cached.read_tokens, 115);
         assert_eq!(spent.cached.written_tokens, 227);
+        assert_eq!(
+            spent.requests, 7,
+            "a delegate's requests are part of the cost it was charged"
+        );
 
         assert_eq!(spent.context_tokens, 700, "a context reading is not a cost");
         assert_eq!(spent.timing, timing, "the clock is the turn's own");
+    }
+
+    /// A tool that made no request is given an empty usage, so counting from the usage being
+    /// there, or from it being non-empty, would count a `read_file` as a request or a reply that
+    /// stated no usage as none.
+    #[test]
+    fn a_request_is_counted_when_it_completed_whatever_usage_it_stated() {
+        let mut spent = Spent::default();
+        spent.add_usage(a_usage(0, 0, 0, 0));
+        assert_eq!(spent.requests, 0, "an empty usage is not a request");
+
+        spent.add_request(a_usage(0, 0, 0, 0));
+        assert_eq!(spent.requests, 1, "a reply that stated no usage is one");
+        assert_eq!(spent.tokens, 0);
+
+        spent.add_request(a_usage(10, 1, 2, 0));
+        assert_eq!(spent.requests, 2);
+        assert_eq!(
+            (spent.tokens, spent.output_tokens, spent.cached.read_tokens),
+            (11, 1, 2),
+            "a request adds its usage as well"
+        );
     }
 
     #[test]
@@ -408,6 +484,7 @@ mod tests {
             Category::Transport,
             Category::Incomplete,
             Category::Undecodable,
+            Category::Unrecognised,
             Category::TooLong,
             Category::Unconfigured,
             Category::Blocked,

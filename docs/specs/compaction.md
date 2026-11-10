@@ -124,9 +124,18 @@ place of what was given up.
 The replaced messages go to an archive the transcript still reads and the session record still
 stores. The user owns their transcript; compaction is about what gets sent.
 
+A message that is in the archive and not in the request says nothing to the planner. That holds for a
+plan-mode notice as for any other message, so the end of plan mode is not announced after a
+compaction took the notice that said plan mode was on ([MODE-8](permission-modes.md#MODE-8)). A
+plan-mode notice is house-keeping: it is not the start of an exchange, so compaction does not cut in
+front of it, and a transcript does not draw it.
+
 `verified-by: bravebot_agent::conversation::what_compaction_took_out_of_the_request_is_still_recounted_to_the_person`
 `verified-by: bravebot_agent::conversation::a_compacted_conversation_survives_being_written_down`
 `verified-by: bravebot_agent::conversation::the_summary_is_not_shown_as_something_the_user_said`
+`verified-by: bravebot_agent::conversation::compacting_away_the_plan_mode_notice_leaves_nothing_to_retract`
+`verified-by: bravebot_agent::conversation::a_mode_notice_between_exchanges_is_not_a_place_to_cut`
+`verified-by: bravebot_agent::conversation::a_mode_notice_is_left_out_of_what_is_recounted`
 
 <a id="COMPACT-7"></a>
 ### COMPACT-7: the budget is configurable, and a nonsensical one falls back

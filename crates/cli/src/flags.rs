@@ -457,12 +457,12 @@ pub(crate) fn starts_no_program(first: Option<&str>) -> bool {
 /// floor.
 pub(crate) fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
     use bravebot_config::sandbox::Floor;
-    let pinned_in = refused.pinned_in.display().to_string();
+    let pinned_in = crate::progress::printable_path(&refused.pinned_in);
     match (&refused.asked_in, refused.because) {
         (Some(file), Floor::Mode) => t!(
             cli_sandbox_refused_file,
             asked = refused.asked.name(),
-            asked_in = file.display().to_string(),
+            asked_in = crate::progress::printable_path(file),
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
             looser = bravebot_agent::sandbox_reason::looser(refused)
@@ -477,7 +477,7 @@ pub(crate) fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> St
         (Some(file), Floor::Network) => t!(
             cli_sandbox_refused_network_file,
             asked = refused.asked.name(),
-            asked_in = file.display().to_string(),
+            asked_in = crate::progress::printable_path(file),
             pinned_in = pinned_in
         ),
         (None, Floor::Network) => t!(
@@ -625,6 +625,32 @@ mod tests {
 
     fn words(typed: &[&str]) -> Vec<String> {
         typed.iter().map(|word| word.to_string()).collect()
+    }
+
+    /// LAYER-3: the file a refused mode was asked in can be a checkout's, so the refusal draws it,
+    /// and the managed file's path with it. The regression it rejects: either printed as it is.
+    #[test]
+    fn the_files_a_refused_sandbox_mode_names_are_drawn() {
+        use bravebot_config::sandbox::{Floor, Refused};
+        let hostile = "/x\u{1b}[2J\u{202e}/settings.json";
+        for (asked_in, because) in [
+            (Some(PathBuf::from(hostile)), Floor::Mode),
+            (Some(PathBuf::from(hostile)), Floor::Network),
+            (None, Floor::Mode),
+            (None, Floor::Network),
+        ] {
+            let said = sandbox_refusal(&Refused {
+                asked: SandboxMode::Off,
+                asked_in,
+                pinned: SandboxMode::WorkspaceWrite,
+                pinned_in: PathBuf::from(hostile),
+                because,
+            });
+
+            assert!(!said.contains('\u{1b}'), "{said:?}");
+            assert!(!said.contains('\u{202e}'), "{said:?}");
+            assert!(said.contains("\u{2039}U+202E\u{203A}"), "{said:?}");
+        }
     }
 
     #[test]

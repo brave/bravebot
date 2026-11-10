@@ -70,6 +70,15 @@ and opening it runs it outside the sandbox. Opening the same file from the file 
 asked about; [the sandboxing spec](../../docs/specs/sandboxing.md#programs-a-person-asked-for)
 records that. The check reads the file's name and mode and no other metadata.
 `scripts/open-in-app.test.mjs` holds this.
+Every call to `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` in `src/main` goes
+through `src/main/external-open.ts`, which deletes `BROWSER`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+`XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` from the main process environment first, because the opener Electron
+starts reads them to choose the program it runs
+([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). The names are removed whatever they hold,
+which is stricter than the terminal client's check of the value, and a bridge started after an open is
+started without them. `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
+`scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
+launcher it starts is a script that records which of the five names it was started with.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 

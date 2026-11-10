@@ -3,7 +3,8 @@
 // The list is cached in ~/Library/Caches/bravebot-review-ready/cache.json and read at launch, so the
 // menu has content as soon as the app starts and opens at once when clicked. `make review-ready`
 // runs in the background on a timer, after the Mac wakes, and on "Refresh Now". The number of ready
-// pull requests is shown next to the icon.
+// pull requests is shown next to the icon. The menu lists them in the order `make review-ready`
+// prints them, the one that has waited longest first, and does not sort them again.
 //
 // Settings come from Info.plist (written by install.sh) and can be overridden by environment
 // variables for running the binary by hand:

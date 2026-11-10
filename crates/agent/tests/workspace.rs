@@ -346,13 +346,157 @@ fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_l
     }
 }
 
+/// What a record about `first` or `second` decides about the other when the volume holds them
+/// apart (TRUST-2). A refusal reaches the other only where the two are `joined`, and a trust never
+/// does. The map compares case as the volume does (`folds_case`).
+///
+/// Asks nothing of the filesystem, so the pair tests and the pair test of the sharp s share it.
+fn assert_records_about_a_pair(
+    root: &str,
+    first: &str,
+    second: &str,
+    joined: bool,
+    folds_case: bool,
+) {
+    for (named, other) in [(first, second), (second, first)] {
+        let mut refused = TrustStore::new(root).folding_case(folds_case);
+        refused.trust(".");
+        refused.distrust(named);
+        assert_eq!(
+            refused.integrity_of(other),
+            if joined {
+                Some(Integrity::Untrusted)
+            } else {
+                Some(Integrity::Trusted)
+            },
+            "a refusal about {named:?} decided the other file {other:?}"
+        );
+
+        let mut vouched = TrustStore::new(root).folding_case(folds_case);
+        vouched.trust(named);
+        assert_eq!(
+            vouched.integrity_of(other),
+            None,
+            "a trust about {named:?} reached the other file {other:?}"
+        );
+    }
+}
+
+/// Two names the volume holds apart have two keys, whether or not a refusal or a writer reaches
+/// from one to the other (TRUST-2).
+fn assert_keys_of_a_pair(store: &TrustStore, first: &str, second: &str) {
+    let authority = FileAuthority::new(store.clone());
+    assert_ne!(
+        authority.key(first),
+        authority.key(second),
+        "{first:?} and {second:?} are two files and have one key"
+    );
+}
+
+/// The key of each name, and whether a writer to one reserves the other, for two names the volume
+/// holds apart (TRUST-2). The keys are two, since the key is the name; the reservation is shared
+/// only where the two are `joined`. Asks nothing of the filesystem.
+fn assert_keys_and_reservation_of_a_pair(
+    store: &TrustStore,
+    first: &str,
+    second: &str,
+    joined: bool,
+) {
+    assert_keys_of_a_pair(store, first, second);
+    for (named, other) in [(first, second), (second, first)] {
+        let authority = FileAuthority::new(store.clone());
+        let held = authority
+            .capture()
+            .begin(named)
+            .unwrap_or_else(|| panic!("the first writer to {named:?} was refused"));
+        assert_eq!(
+            authority.capture().begin(other).is_none(),
+            joined,
+            "a writer to {named:?} did not leave a writer to {other:?} as the table says"
+        );
+        held.complete(Integrity::Trusted);
+    }
+}
+
+/// What a rule about `named` decides about `other`, a file the volume holds apart from it, for each
+/// ruling and verb (TRUST-2, PERM-7). A deny or ask rule reaches the other name only where the two
+/// are `joined`, and an allow rule never does. Asks nothing of the filesystem.
+fn assert_rules_about_a_pair(first: &str, second: &str, joined: bool, folds_case: bool) {
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
+
+    for (named, other) in [(first, second), (second, first)] {
+        for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
+            for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+                let text = vec![if named.trim_end() != named || named.contains('*') {
+                    format!("{verb}(\"./{named}\")")
+                } else {
+                    format!("{verb}(./{named})")
+                }];
+                let none: Vec<String> = Vec::new();
+                let (deny, ask, allow) = match ruling {
+                    Ruling::Deny => (&text, &none, &none),
+                    Ruling::Ask => (&none, &text, &none),
+                    Ruling::Allow => (&none, &none, &text),
+                };
+                let (permissions, rejected) = Permissions::parse(
+                    deny,
+                    ask,
+                    allow,
+                    &Anchors {
+                        folds_case,
+                        ..Anchors::none()
+                    },
+                );
+                let decides =
+                    |path: &str| permissions.for_path(subject, path) == Decision::Ruled(ruling);
+                assert!(rejected.is_empty(), "{text:?} did not parse");
+                assert!(decides(named), "{text:?} did not decide {named:?}");
+                assert_eq!(
+                    decides(other),
+                    joined && ruling != Ruling::Allow,
+                    "{text:?} ({ruling:?}) decided the other file {other:?}"
+                );
+            }
+        }
+    }
+}
+
+/// `cla\u{df}.md` and `class.md` are one file to APFS and two to NTFS and to a case-sensitive
+/// volume, and no host runs both, so the pair tests below skip it on APFS. This asks the same
+/// questions of the pair without a volume: where the map folds case, a refusal and a writer about
+/// one name reach the other, a trust and an allow rule do not; where it does not fold case, nothing
+/// reaches the other (TRUST-2, PERM-7).
+#[test]
+fn the_sharp_s_pair_is_one_group_for_a_refusal_and_two_names_for_a_trust() {
+    let (first, first_group) = aliases::WINDOWS_NAMES
+        .iter()
+        .copied()
+        .find(|(name, _)| *name == "cla\u{df}.md")
+        .expect("the table lists the sharp s name");
+    let (second, second_group) = aliases::WINDOWS_NAMES
+        .iter()
+        .copied()
+        .find(|(name, _)| *name == "class.md")
+        .expect("the table lists the two s name");
+    assert_eq!(first_group, second_group, "the pair is not one group");
+
+    for folds_case in [true, false] {
+        let joined = aliases::joined(first_group, second_group, folds_case);
+        assert_eq!(joined, folds_case, "the pair is joined only by a fold");
+        let store = TrustStore::new("/work").folding_case(folds_case);
+        assert_records_about_a_pair("/work", first, second, joined, folds_case);
+        assert_keys_and_reservation_of_a_pair(&store, first, second, joined);
+        assert_rules_about_a_pair(first, second, joined, folds_case);
+    }
+}
+
 /// Two names the volume holds apart are two files, so a record about one decides nothing about the
 /// other, in either polarity (TRUST-2). The table above asks the opposite question, whether names of
 /// one file share a rule. A step that turns a name into a key can also join different files, which
 /// no row of that table would show: trimming whitespace from the ends of a name made `note.md ` and
 /// `note.md` one rule. Every pair of awkward names is made in a scratch directory and asked of the
 /// volume; a pair that is two files there has to be two rules, unless the names are one group, which
-/// a refusal joins on purpose.
+/// a refusal joins on purpose, and a group joined by a fold only where the volume folds case.
 #[test]
 fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
     let names = aliases::held_names();
@@ -364,31 +508,10 @@ fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
                 continue;
             }
             asked += 1;
-            let joined = first_group == second_group;
+            let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
+            let joined = aliases::joined(first_group, second_group, folds_case);
             let root = scratch.path.to_str().expect("scratch path is text");
-
-            for (named, other) in [(first, second), (second, first)] {
-                let mut refused = TrustStore::new(root);
-                refused.trust(".");
-                refused.distrust(named);
-                assert_eq!(
-                    refused.integrity_of(other),
-                    if joined {
-                        Some(Integrity::Untrusted)
-                    } else {
-                        Some(Integrity::Trusted)
-                    },
-                    "a refusal about {named:?} decided the other file {other:?}"
-                );
-
-                let mut vouched = TrustStore::new(root);
-                vouched.trust(named);
-                assert_eq!(
-                    vouched.integrity_of(other),
-                    None,
-                    "a trust about {named:?} reached the other file {other:?}"
-                );
-            }
+            assert_records_about_a_pair(root, first, second, joined, folds_case);
         }
     }
     assert!(
@@ -415,16 +538,15 @@ fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_
                 continue;
             }
             asked += 1;
-            let joined = first_group == second_group;
             let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let folds_case = bravebot_agent::workspace::trust_store(workspace.root()).folds_case();
+            let joined = aliases::joined(first_group, second_group, folds_case);
             let through = |name: &str| format!("./{name}");
 
-            let authority =
-                FileAuthority::new(bravebot_agent::workspace::trust_store(workspace.root()));
-            assert_ne!(
-                authority.key(first),
-                authority.key(second),
-                "{first:?} and {second:?} are two files and have one key"
+            assert_keys_of_a_pair(
+                &bravebot_agent::workspace::trust_store(workspace.root()),
+                first,
+                second,
             );
 
             for (named, other) in [(first, second), (second, first)] {
@@ -497,8 +619,9 @@ fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule()
                 continue;
             }
             asked += 1;
-            let joined = first_group == second_group;
             let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let folds_case = bravebot_agent::workspace::trust_store(workspace.root()).folds_case();
+            let joined = aliases::joined(first_group, second_group, folds_case);
             let integrity_of_listing = |distrusted: Option<&str>| {
                 let mut sink = RecordingSink::new();
                 let mut policy = alias_policy(&workspace, &mut sink, distrusted);
@@ -564,8 +687,6 @@ fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule()
 /// (PERM-3), which is the only spelling a rule can give it.
 #[test]
 fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
-    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
-
     let names = aliases::held_names();
     let mut asked = 0;
     for (index, (first, first_group)) in names.iter().enumerate() {
@@ -576,44 +697,8 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
             }
             asked += 1;
             let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
-
-            for (named, other) in [(first, second), (second, first)] {
-                for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
-                    for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
-                        let text = vec![if named.trim_end() != *named || named.contains('*') {
-                            format!("{verb}(\"./{named}\")")
-                        } else {
-                            format!("{verb}(./{named})")
-                        }];
-                        let none: Vec<String> = Vec::new();
-                        let (deny, ask, allow) = match ruling {
-                            Ruling::Deny => (&text, &none, &none),
-                            Ruling::Ask => (&none, &text, &none),
-                            Ruling::Allow => (&none, &none, &text),
-                        };
-                        let (permissions, rejected) = Permissions::parse(
-                            deny,
-                            ask,
-                            allow,
-                            &Anchors {
-                                folds_case,
-                                ..Anchors::none()
-                            },
-                        );
-                        let decides = |path: &str| {
-                            permissions.for_path(subject, path) == Decision::Ruled(ruling)
-                        };
-                        assert!(rejected.is_empty(), "{text:?} did not parse");
-                        assert!(decides(named), "{text:?} did not decide {named:?}");
-                        let joined = first_group == second_group && ruling != Ruling::Allow;
-                        assert_eq!(
-                            decides(other),
-                            joined,
-                            "{text:?} ({ruling:?}) decided the other file {other:?}"
-                        );
-                    }
-                }
-            }
+            let joined = aliases::joined(first_group, second_group, folds_case);
+            assert_rules_about_a_pair(first, second, joined, folds_case);
         }
     }
     assert!(
@@ -803,6 +888,99 @@ fn each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_look
                 ),
             };
             aliases::expect(row, aliases::Consumer::ProgramLookup, left_out);
+        }
+    }
+}
+
+/// A value of `BROWSER` or an `XDG_` directory variable that leads into a directory a stage may
+/// write is removed under every name the volume opens that directory by (SANDBOX-30). The rows that
+/// spell a directory another way are asked: the directory spelled as the name is recorded, and the
+/// value is the file spelled as the alias, alone as a path, as an entry of a list, and as a command
+/// with and without ` %s`. A file in a directory beside it that is not recorded is kept in each of
+/// those forms, so a judgment that removes every value fails the row rather than passing it. A row
+/// that is not removed lists the issue that tracks it. The rows with a drive letter, a short name or
+/// a stream are Windows spellings that a path on this host cannot hold (TRUST-2). The scratch
+/// directory is below `target`, since the system temporary directory is left out whatever is
+/// recorded and would pass every row.
+#[cfg(unix)]
+#[test]
+fn each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap()
+ {
+    use bravebot_sandbox::programs::{Names, may_be_run, outside_stage_writable_with};
+
+    /// Removes the directory when a row fails as well as when it passes.
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let directory = |spelling: &str| {
+            std::path::Path::new(spelling)
+                .parent()
+                .expect("a name is in a directory")
+                .to_path_buf()
+        };
+        let (recorded, spelled) = (directory(row.name), directory(row.alias));
+        if recorded == spelled {
+            continue;
+        }
+        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("bravebot-alias-selector-{index}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let _removed = Removed(root.clone());
+        if aliases::prepare(&root, row) {
+            let writable = [root.join(&recorded)];
+            let outside =
+                |file: &std::path::Path| outside_stage_writable_with(file, &writable, &[]);
+            let aliased = root.join(row.alias);
+            let installed = root.join("installed");
+            std::fs::create_dir_all(&installed).expect("directory");
+            let genuine = installed.join("opener");
+            std::fs::write(&genuine, "").expect("installed file");
+
+            let join = |first: &std::path::Path, second: &std::path::Path| {
+                std::env::join_paths([first, second]).expect("a list")
+            };
+            // Each form of value for a file: a path, a list of paths, and a list of commands, bare and
+            // followed by ` %s`.
+            let forms = |file: &std::path::Path| {
+                let text = file.to_str().expect("a scratch path is text");
+                [
+                    (Names::Directory, file.as_os_str().to_os_string()),
+                    (Names::Directories, join(&genuine, file)),
+                    (Names::Commands, std::ffi::OsString::from(text)),
+                    (
+                        Names::Commands,
+                        std::ffi::OsString::from(format!("{text} %s")),
+                    ),
+                    (Names::Commands, join(&genuine, file)),
+                ]
+            };
+            let kept = [
+                (Names::Directory, genuine.as_os_str().to_os_string()),
+                (Names::Directories, join(&genuine, &genuine)),
+                (Names::Commands, genuine.as_os_str().to_os_string()),
+                (
+                    Names::Commands,
+                    std::ffi::OsString::from(format!("{} %s", genuine.display())),
+                ),
+                (Names::Commands, join(&genuine, &genuine)),
+            ];
+            for (names, value) in &kept {
+                assert!(
+                    may_be_run(*names, std::path::Path::new(value), &outside),
+                    "{}: the installed file is removed as {names:?} {value:?}",
+                    row.kind
+                );
+            }
+            let removed = forms(&aliased)
+                .iter()
+                .all(|(names, value)| !may_be_run(*names, std::path::Path::new(value), &outside));
+            aliases::expect(row, aliases::Consumer::CodeSelectorValue, removed);
         }
     }
 }
@@ -10361,6 +10539,119 @@ fn a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout(
     .expect("a directory the parent opened is reachable from the checkout");
 }
 
+/// SANDBOX-18. The working directory and each directory added are recorded as the directories they
+/// were when they were opened, and the record of one made again at its name does not stand. Moving
+/// the working directory records the new one in place of the old. The faults it rejects: a record
+/// taken when `session_directories` is asked, which stands for whatever is at the name; and a move
+/// that keeps the record of the directory it left.
+#[cfg(unix)]
+#[test]
+fn the_session_directories_are_the_directories_recorded_as_they_were_opened() {
+    let scratch = Scratch::new("recorded-directories");
+    let other = outside("recorded-directories");
+    let moved = outside("recorded-directories-moved");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let paths = |workspace: &Workspace| -> Vec<PathBuf> {
+        workspace
+            .session_directories()
+            .iter()
+            .map(|made| made.path().to_path_buf())
+            .collect()
+    };
+    let stands = |workspace: &Workspace, path: &std::path::Path| -> bool {
+        workspace
+            .session_directories()
+            .iter()
+            .find(|made| made.path() == path)
+            .expect("a recorded directory")
+            .stands_as_made_at(path)
+    };
+
+    assert_eq!(
+        paths(&workspace),
+        vec![workspace.root().to_path_buf(), opened.clone()],
+        "the working directory comes first"
+    );
+    assert!(stands(&workspace, workspace.root()));
+    assert!(stands(&workspace, &opened));
+
+    let aside = opened.with_extension("aside");
+    std::fs::rename(&opened, &aside).expect("move the added directory aside");
+    std::fs::create_dir(&opened).expect("make it again");
+    assert!(
+        !stands(&workspace, &opened),
+        "a directory made again at the name stands for the one opened"
+    );
+    assert!(stands(&workspace, workspace.root()));
+
+    workspace
+        .change_root(moved.path.to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+    let first = workspace.session_directories().remove(0);
+    assert_eq!(
+        first.path(),
+        workspace.root(),
+        "the old root is still first"
+    );
+    assert!(first.stands_as_made_at(workspace.root()));
+    let old = scratch.path.canonicalize().expect("canonical");
+    assert!(
+        !paths(&workspace).contains(&old),
+        "the directory left is still recorded"
+    );
+
+    let _ = std::fs::remove_dir_all(&aside);
+}
+
+/// SANDBOX-18, CHECKOUT-7. A delegate's workspace records its own working directory, the checkout,
+/// and carries the records its parent held for the directories added, so a directory the parent
+/// had made again is not taken for the one opened. The faults it rejects: a delegate that keeps the
+/// parent's working directory as its first record, and one that records the added directories
+/// again from their names when the checkout is made.
+#[cfg(unix)]
+#[test]
+fn a_delegates_checkout_records_its_own_root_and_carries_its_parents_records() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-records", &[("README", "hello\n")]);
+    let other = outside("checkout-records");
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let aside = opened.with_extension("aside");
+    std::fs::rename(&opened, &aside).expect("move the added directory aside");
+    std::fs::create_dir(&opened).expect("make it again");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let held = made.session_directories();
+    assert_ne!(made.root(), workspace.root());
+    assert_eq!(
+        held[0].path(),
+        made.root(),
+        "the first record is not the checkout"
+    );
+    assert!(held[0].stands_as_made_at(made.root()));
+    assert!(
+        held.iter().all(|made| made.path() != workspace.root()),
+        "the parent's working directory is recorded for the delegate"
+    );
+    let carried = held
+        .iter()
+        .find(|made| made.path() == opened)
+        .expect("the added directory is carried");
+    assert!(
+        !carried.stands_as_made_at(&opened),
+        "the directory made again is taken for the one the parent opened"
+    );
+    let _ = std::fs::remove_dir_all(&aside);
+}
+
 /// CHECKOUT-7. The session's own directory outside the project stays reachable from the delegate's
 /// workspace by the same absolute path, for a read and for a write, so a delegate leaves its
 /// intermediate files where the session does.
@@ -13550,6 +13841,7 @@ impl BypassPlaces {
             person: bravebot_sandbox::rules::resolve(
                 &lists,
                 Some(&self.home),
+                None,
                 self.workspace.root(),
             ),
             excluded,
@@ -14027,6 +14319,7 @@ fn a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another
         person: bravebot_sandbox::rules::resolve(
             &bravebot_sandbox::rules::Lists::default(),
             Some(&home.path),
+            None,
             made.root(),
         ),
         excluded,

@@ -126,6 +126,7 @@ fn a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host
             .expect("openshell"),
         bravebot_sandbox::programs::Inherits::Only(&["HOME"]),
         bravebot_sandbox::programs::SearchPath::Reduced,
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     )
     .args(["sandbox", "list", "--color", "never"])
     .output()
@@ -232,12 +233,14 @@ fn a_recorded_sandbox_of_an_ended_process_is_removed_and_no_other() {
                 .expect("openshell"),
             bravebot_sandbox::programs::Inherits::Only(&["HOME"]),
             bravebot_sandbox::programs::SearchPath::Reduced,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         )
     };
     let mut ended = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("true")).expect("true"),
         bravebot_sandbox::programs::Inherits::Only(&[]),
         bravebot_sandbox::programs::SearchPath::Reduced,
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     )
     .spawn()
     .expect("a child");

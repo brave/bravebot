@@ -343,7 +343,7 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
 const working = (thinking, showThinking, offerThinking = thinking !== '' || showThinking) =>
   renderToStaticMarkup(
     React.createElement(WorkingRow, {
-      bot: null, word: 'Thinking', tokens: 0, turn: null, onAudit() {}, thinking, showThinking, offerThinking, onThinking() {},
+      bot: null, word: () => 'Thinking', tokens: 0, turn: null, onAudit() {}, thinking, showThinking, offerThinking, onThinking() {},
     }),
   )
 

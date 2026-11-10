@@ -72,6 +72,37 @@ export function buildProfile(argv) {
   }
 }
 
+// What a packaged bundle needs from the network is Electron's own zip, which `@electron/get` fetches
+// from GitHub's release assets once, with no retry. A 5xx from GitHub there failed the Windows
+// installer job although nothing in the change under test was involved. Only a response in the
+// 500s, or a request that never got a response, is repeated: a 404 means the version has no such
+// asset, and retrying it would only delay saying so. `overwrite` is set on the packager call, so a
+// second attempt replaces whatever the first left in `dist/`.
+export function isTransientDownloadError(error) {
+  if (error?.name === 'HTTPError') {
+    const status = error.response?.status
+    return typeof status === 'number' && status >= 500 && status <= 599
+  }
+  return error instanceof TypeError && error.message === 'fetch failed'
+}
+
+export async function withDownloadRetries(run, {
+  attempts = 3,
+  delayMs = 5000,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  log = (line) => console.error(line),
+} = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run()
+    } catch (error) {
+      if (attempt >= attempts || !isTransientDownloadError(error)) throw error
+      log(`packaging failed on attempt ${attempt} of ${attempts}, trying again in ${delayMs / 1000} seconds: ${error.message}`)
+      await sleep(delayMs)
+    }
+  }
+}
+
 // What builds the prebuilt pair for each platform the app is packaged for.
 const PREBUILT_TARGET = {
   darwin: 'make app-release',
@@ -208,7 +239,7 @@ async function main() {
     process.exit(1)
   }
 
-  const paths = await packager({
+  const paths = await withDownloadRetries(() => packager({
     dir: '.',
     out: 'dist',
     name: 'Brave Bot',
@@ -259,7 +290,7 @@ async function main() {
       /^\/tsconfig\.json$/,
       /^\/electron\.vite\.config\.ts$/,
     ],
-  })
+  }))
 
   // Which profile, because the bundle is named and versioned the same either way: a debug
   // bundle and a release one overwrite each other in `dist/` and look identical afterwards.

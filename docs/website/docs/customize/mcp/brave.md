@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Connecting Brave
-description: Let a session use Brave's tabs, history, bookmarks and more through the BraveBot extension, one group of tools at a time, each off until you turn it on.
+description: Connect Brave extensions, enable browser tool groups and presets, restrict sites and profiles, read pages and screenshots, use trusted input, inspect access and remove the connection.
 ---
 
 # Connecting Brave
