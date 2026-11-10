@@ -583,12 +583,12 @@ person typed the question a moment ago, and the press that asked for it came fro
 which this mode does not draw. An answer left behind a key they have not been told about is not an
 answer.
 
-**Why a line for the answers that do not open the view.** The row was announced by a count on the
-bottom line, `ctrl-l 1 to open`, which sits among the parts a narrow terminal drops first and says
-nothing of a question. A question typed beside a turn drew nothing when it went out, so a person
-could not tell it had been taken, and an answer could arrive and nothing say so. Stopping a question
-when its turn ended on its own threw the answer away and said only that the question was stopped,
-which read as a request that never got an answer.
+**Why a line for the answers that do not open the view.** Without one, the row is announced only by
+the `ctrl-l 1 to open` count on the bottom line, which sits among the parts a narrow terminal drops
+first and says nothing of a question. Without a line when the question goes out, nothing shows it
+was taken, and an answer can arrive with nothing to say so. A question stopped when its turn ends on
+its own discards an answer the person asked for and is owed, and leaves only a line that the question
+was stopped, which reads as a request that never got an answer.
 
 The wait answers keys, so the mode standing over the session when the answer lands is whichever
 one the person opened during it. The scroller is drawn in front of this view, so an answer under
