@@ -26,12 +26,16 @@ signing and refused `run` arguments apply here unchanged. Below, `...` stands fo
 `python3 agents/skills/pr-fix/pr-fix.py`.
 
 `make implement-issues ISSUES="<argument>" NOTES="<notes>"` starts this skill in the terminal client
-with the argument unchanged, followed by `NOTES`, where it is given, on a line that starts with
-`Notes:` ([step 1](#1-resolve-the-list)). First, with no model,
+with the argument unchanged, then a `Claimed:` line, then `NOTES`, where it is given, on a line that
+starts with `Notes:` ([step 1](#1-resolve-the-list)). First, with no model,
 [implement-issues.py](implement-issues.py) stops when an item is assigned to anybody but the account
 `gh` writes as, assigns that account to each open issue, and adds `bot/in-progress` to each, which it
-removes when the session ends. Where an item already has both, the script did that, so leave the
-assignee and the label as they are.
+removes when the session ends. The `Claimed:` line says when it did that and to which issues. An
+assignee or a label that the line accounts for is this run's own, and a label it says was on an item
+before the run is not another session's either, so neither is a reason to skip or stop on the item.
+Leave the assignee and the label as they are. When the person gave `FORCE=1`, the script worked items
+that were assigned to somebody else as well and left those assignees, and the line names those items.
+That is the person's choice, so work them, and do not unassign or contact the other assignee.
 
 An **item** is one issue. The **ledger** is the file in step 0 that records every item's state and
 its checklist. A pull request number given alone, as the whole argument, asks for
@@ -163,7 +167,9 @@ run, as [When a commit will not sign](../pr-fix/SKILL.md#when-a-commit-will-not-
 
 ## 1. Resolve the list
 
-The **notes** are the first line of the arguments that starts with `Notes:` and every line after it.
+The **claim** is a line that starts with `Claimed:`, which `implement-issues.py` writes after the
+list. It adds no item, and it is not a note. The **notes** are the first line of the arguments that
+starts with `Notes:` and every line after it.
 They are the person's instructions for this run. Resolve nothing from them: they add no item and
 remove none, and the list is what the lines before them name. Copy them into the ledger, since a
 resumed run is given a batch branch name and no notes. Follow them where they say how to group,
@@ -171,10 +177,10 @@ order or divide the work or what to check, and put the ones that bear on a group
 briefs. A note never overrides a rule in this file: leave it unfollowed and say in the report which
 note and why.
 
-Split the lines before the notes on commas and newlines. A piece that is the name of a batch branch
-with a ledger resumes that run ([step 0](#0-the-ledger)), and nothing else is resolved. A piece whose
-words are all numbers or links is split on spaces into items. Any other piece is a search query for
-brave/bravebot.
+Split the lines before the claim and the notes on commas and newlines. A piece that is the name of a
+batch branch with a ledger resumes that run ([step 0](#0-the-ledger)), and nothing else is resolved.
+A piece whose words are all numbers or links is split on spaces into items. Any other piece is a
+search query for brave/bravebot.
 
 Run a query as one argument, never inside a shell string, and print only the number, the kind and
 the state. Add `is:open` unless the query names a state:
