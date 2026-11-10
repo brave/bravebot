@@ -4027,8 +4027,49 @@ file. A new spawn that looks a name up through
   started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
   draw both end there. A dependency is audited for a bare-name start when it is added or
   raised. `ratatui-image` 11.1.0 (`src/picker.rs`) starts `tmux` with the whole environment when
-  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853, and the `git` and `sh` starts
-  compiled in from `gix-path` 0.13.0, which nothing in the tree calls, by #3852.
+  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853.
+- **No caller reaches the starts in `gix-path`.** `gix-path` 0.13.0 is compiled in through
+  `gix-features`, `gix-fs`, `gix-glob`, `gix-ignore`, `gix-odb`, `gix-pack` and `gix-ref`, and the
+  crate has no feature that removes its `env` module. That module has three starts, none of them
+  through `programs::start`, so none has its `PATH` reduced and none has its `CodeSelectors`
+  checked, and each is given this program's environment (the `git config` query removes or sets
+  some `GIT_*` variables and passes the rest on). `shell_command` starts `/bin/sh` on Unix, by
+  that absolute path. On Windows it starts the `sh.exe` that Git for Windows installs, by the full path found from
+  the output of `git --exec-path` (`bin/sh.exe`, then `usr/bin/sh.exe`), and falls back to the bare
+  name `sh.exe`, found through the `PATH`, when that path is not found (`src/env/mod.rs`,
+  `src/env/auxiliary.rs`). `core_dir` starts
+  `git --exec-path` on every platform; `core_dir_program` and `installation_program` reach it, and
+  on Windows so do `shell`, `shell_command` and `system_prefix`. `installation_config`,
+  `installation_config_is_system` and `installation_config_prefix` can start `git config` on every
+  platform, and `system_config` can on Windows (`src/env/git/mod.rs`). `git` is the bare name, so
+  it is found through the `PATH` the process has, and a `git` in a directory a stage may write,
+  such as the `bin` of an activated virtualenv, would run with the environment this program has.
+  Nothing in the tree reaches any of them. The tree holds that with a test that reads source: no
+  `.rs` or `.toml` file under `crates/`, `fuzz/` or `third_party/`, and no `Cargo.toml` at the
+  workspace root, names `gix-path` (other file kinds, such as `Cargo.lock`, are not read); no package in the resolved
+  graph of the workspace or of `fuzz/` that depends on `gix-path` names its `env` module in any of
+  its Rust source (a path through it, an import group or a glob that includes it, or the crate's
+  name with no path after it), other than `home_dir`, `var` and `xdg_config`, which start nothing;
+  and `gix-path` starts a program in no file outside `src/env`. A fourth check lists the functions
+  of `gix-path` that name `Command` (`shell_command`, `git_cmd`, the initialiser of `GIT_CORE_DIR`
+  and the import in `src/env/git/mod.rs`) in `AUDITED_STARTS`, and fails when the set the source
+  gives differs, so `home_dir`, `var` and `xdg_config` are read as starting nothing only while
+  they name no `Command`, and a raise of `gix-path` that changes the set of (file, function) pairs that name
+  `Command` needs a new audit before it merges. A raise that leaves the set the same is not
+  stopped, so a start added inside a function that already names `Command` is not seen. That check
+  attributes each use to the function it is in by counting braces, and does not see a start made
+  through a macro or by a function that another function calls. The test reads the graph with
+  `cargo metadata --locked` on every run. Cargo needs the manifest of every package the lock names, including
+  packages of other platforms and the crates of `fuzz/Cargo.lock` that the test jobs never build, and downloads
+  any that `CARGO_HOME` lacks, so the test needs the network on a machine with a cold `CARGO_HOME`. A graph
+  that cannot be read is skipped on a developer machine with the cause printed and fails the test where `CI`
+  is set. CI runs the workspace's tests on each
+  change, so a change that raises a gix crate or `gix-path` in `Cargo.lock` is read by the test
+  before it merges. A package whose source is not on disk is named in the test's output as
+  skipped. The test reads source and does not run the program: it does not see a call made through
+  a macro, a trait object or a name the source computes, and it cannot show that the list of
+  entry points is complete ([PATH-008](../best-practices/paths.md#PATH-008)). The starts are
+  accepted until a caller appears, and the test fails when one does.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -4671,6 +4712,16 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_cli::terminal_size::a_failed_size_query_starts_no_tput`
+`verified-by: bravebot_cli::gix_path_starts::nothing_in_this_repository_names_gix_path`
+`verified-by: bravebot_cli::gix_path_starts::no_crate_that_depends_on_gix_path_names_its_env_module`
+`verified-by: bravebot_cli::gix_path_starts::gix_path_starts_a_program_only_in_its_env_module`
+`verified-by: bravebot_cli::gix_path_starts::the_scan_sees_each_way_to_reach_the_env_module_and_not_the_paths_that_start_nothing`
+`verified-by: bravebot_cli::gix_path_starts::the_scan_of_gix_path_sees_a_command_under_any_name_and_not_a_comment`
+`verified-by: bravebot_cli::gix_path_starts::a_dependency_on_gix_path_under_another_name_is_found_and_reported`
+`verified-by: bravebot_cli::gix_path_starts::the_functions_of_gix_path_that_start_a_program_are_the_audited_ones`
+`verified-by: bravebot_cli::gix_path_starts::the_audit_of_gix_path_passes_on_the_audited_shape`
+`verified-by: bravebot_cli::gix_path_starts::the_audit_of_gix_path_fails_when_a_new_function_starts_a_program`
+`verified-by: bravebot_cli::gix_path_starts::the_audit_of_gix_path_fails_when_an_audited_non_starting_function_starts_a_program`
 `verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`

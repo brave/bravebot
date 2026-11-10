@@ -83,7 +83,8 @@ history, with nobody asked.
 
 Built on gitoxide's plumbing crates for hashes, objects, packs and refs, none of which starts a
 process. The history walk, the tree diff and the line diff are written here, and `.config/deny.toml` bans
-the gix crates that start one.
+the gix crates that start one. `gix-path`, which those crates depend on, has a module that starts `git`
+and `sh`; nothing calls it, and [SANDBOX-30](../sandboxing.md#SANDBOX-30) records the test that fails if anything does.
 
 `verified-by: bravebot_agent::turn::read_git_shows_the_planner_the_history_of_a_trusted_repository`
 `verified-by: bravebot_agent::git::log_lists_commits_newest_first_one_line_each`
