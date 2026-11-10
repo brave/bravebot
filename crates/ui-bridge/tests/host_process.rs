@@ -408,6 +408,63 @@ fn a_send_without_a_message_id_is_refused_before_a_turn_starts() {
     client.leave();
 }
 
+/// A client that lost the answer to a send, or a client started again, looks the send up and sends
+/// it again under the same id, and the session runs one turn for it. The same id with another prompt
+/// is refused, and an id the session never received is answered as not received.
+#[test]
+fn a_send_repeated_under_its_id_runs_one_turn_and_a_lookup_says_what_it_was_given() {
+    let scratch = Scratch::new();
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    let endpoint = a_model_service(ends_the_turn, move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let mut host = Host::start(&scratch, &endpoint);
+    let mut first = host.client();
+    let session = first.viewed_session_in(&scratch.project());
+    let lookup = |id: &str| json!({"session": session, "messageId": id});
+
+    let send = json!({"session": session, "prompt": "hello", "messageId": "send-1"});
+    let sent = first.call("turn.send", send.clone());
+    first.event("turn.done");
+    assert_eq!(first.call("turn.send", send.clone()), sent);
+
+    let changed = first.answered(
+        "turn.send",
+        json!({"session": session, "prompt": "other", "messageId": "send-1"}),
+    );
+    assert_eq!(changed["error"]["code"], "bad_request", "{changed}");
+    assert!(
+        changed["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("messageId")),
+        "{changed}"
+    );
+
+    let accepted = json!({"state": "accepted", "turn": sent["turn"], "target": sent["target"]});
+    assert_eq!(first.call("turn.lookup", lookup("send-1")), accepted);
+    assert_eq!(
+        first.call("turn.lookup", lookup("send-2")),
+        json!({"state": "not_received"})
+    );
+    first.leave();
+
+    let mut second = Client::next_client_of(&mut host);
+    second.call("session.attach", json!({"session": session}));
+    assert_eq!(second.call("turn.lookup", lookup("send-1")), accepted);
+    assert_eq!(second.call("turn.send", send), sent);
+
+    // A new id is a new turn, and once it ends the model has been asked once for each id.
+    let next = second.call(
+        "turn.send",
+        json!({"session": session, "prompt": "hello", "messageId": "send-2"}),
+    );
+    assert_ne!(next["turn"], sent["turn"]);
+    second.event("turn.done");
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+    second.leave();
+}
+
 /// What the planner was told about the programs `run` starts, on the first request of a turn in a
 /// host started on the settings file `named` holds, when there is one.
 fn told_to_a_hosts_planner(named: Option<&str>) -> String {

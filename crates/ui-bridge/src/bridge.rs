@@ -99,6 +99,9 @@ struct Open {
     /// (INPUT-50). Left in place once it has answered: stopping a request that has ended does
     /// nothing, and the next one replaces it.
     enhancing: Option<Cancel>,
+    /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
+    /// (RPCVIEW-11).
+    sends: crate::sends::Sends,
 }
 
 impl Open {
@@ -125,6 +128,7 @@ impl Open {
             sandbox: None,
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
+            sends: crate::sends::Sends::default(),
         }
     }
 
@@ -251,6 +255,14 @@ impl Bridge {
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "turn.send" => self.send_turn(request),
+            "turn.lookup" => {
+                let id = crate::wire::message_id(request.params.get("messageId"))?;
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                Ok(open.sends.lookup(&id))
+            }
             "mentions.offer" => {
                 let open = self
                     .open
@@ -1402,15 +1414,30 @@ impl Bridge {
     /// began, because a turn takes as long as a model does and a front-end that blocked
     /// on it would show nothing until it ended.
     fn send_turn(&mut self, request: &Request) -> Result<Value, Failure> {
+        // Checked here and not in `start_turn`, which also starts the turn of a watch: that has no
+        // client behind it, so no id.
+        let id = crate::wire::message_id(request.params.get("messageId"))?;
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(earlier) = open.sends.earlier(&id, &request.params) {
+            return earlier;
+        }
+        // Requests are served one at a time, so nothing can ask about this id before it is
+        // recorded.
+        //
         // The one tag a request may claim, and every other word refused. A front end composes
         // prompts of its own, so it has to be able to say which those are or its transcript is
         // back to recognising them by their wording; what it may not do is claim one of the
         // agent's, which is [`wire::composed`]'s whole job.
-        let composed = crate::wire::composed(request.params.get("composed"))?;
-        // Checked here and not in `start_turn`, which also starts the turn of a watch: that has no
-        // client behind it, so no id.
-        crate::wire::message_id(request.params.get("messageId"))?;
-        self.start_turn(request, composed)
+        let answer = crate::wire::composed(request.params.get("composed"))
+            .and_then(|composed| self.start_turn(request, composed));
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.sends.record(id, &request.params, answer.clone());
+        }
+        answer
     }
 
     /// The same, for a turn this crate asked for and knows what it composed.

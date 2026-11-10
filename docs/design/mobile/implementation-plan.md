@@ -147,6 +147,8 @@ The message ID is required, not optional. An optional ID would leave a caller th
 2. **The send record.** Deduplication, the send states, the lookup method, the budget, and what a lookup answers after a host restart.
 3. **TypeScript client recovery.** After a reconnect, look up a send whose outcome is unknown, and retry it under the same ID.
 
+Status: steps 1 and 2 are built ([RPCVIEW-10](../../specs/session-view.md#RPCVIEW-10), [RPCVIEW-11](../../specs/session-view.md#RPCVIEW-11)). The bridge records each send's answer under its id with a digest of its parameters, answers a repeat from the record, refuses other parameters under a recorded id, and refuses a new id once a session holds 4096 records. `turn.lookup` answers accepted, refused or not received, and an unknown handle is refused, which a client takes as unknown. A lookup says whether a turn started, not how it ended. Not built: step 3.
+
 ### 5a. Prove takeover with two TypeScript clients
 
 Use the local test program as a second client, launched by the host. Prove one controller plus viewers, expected-epoch takeover, and rejection of delayed former-controller actions. Transfer pending questions only during explicit connected takeover; controller loss refuses them. The incoming client supplies its own answerable kinds. Busy sends retain drafts rather than queueing. This provides the handoff evidence needed for phone integration without depending on Electron. Include the typed host-local startup-trust screen in this client. Test that a phone cannot claim this capability and that its answer still requires the current local controller. Other host-only reply kinds stay unavailable until a capable host UI implements them.

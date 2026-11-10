@@ -80,6 +80,10 @@ pub const OFFERED: &[Operation] = &[
         fields: &["session", "prompt", "messageId"],
     },
     Operation {
+        method: "turn.lookup",
+        fields: &["session", "messageId"],
+    },
+    Operation {
         method: "turn.cancel",
         fields: &["session", "target"],
     },
