@@ -18,7 +18,7 @@ use rustix::{
     termios::{Termios, Winsize},
 };
 
-use std::{fs::File, io, process};
+use std::{fs::File, io};
 #[cfg(feature = "libc")]
 use std::{
     mem,
@@ -84,7 +84,7 @@ pub(crate) fn window_size() -> io::Result<WindowSize> {
 
 #[cfg(not(feature = "libc"))]
 pub(crate) fn window_size() -> io::Result<WindowSize> {
-    let file = File::open("/dev/tty").map(|file| (FileDesc::Owned(file.into())));
+    let file = File::open("/dev/tty").map(|file| FileDesc::Owned(file.into()));
     let fd = if let Ok(file) = &file {
         file.as_fd()
     } else {
@@ -97,11 +97,10 @@ pub(crate) fn window_size() -> io::Result<WindowSize> {
 
 #[allow(clippy::useless_conversion)]
 pub(crate) fn size() -> io::Result<(u16, u16)> {
-    if let Ok(window_size) = window_size() {
-        return Ok((window_size.columns, window_size.rows));
-    }
-
-    tput_size().ok_or_else(|| std::io::Error::last_os_error().into())
+    // The published crate falls back to running `tput` here. That start is made by a bare name
+    // with the whole environment, so it is not made: a failed query is an error.
+    let window_size = window_size()?;
+    Ok((window_size.columns, window_size.rows))
 }
 
 #[cfg(feature = "libc")]
@@ -263,36 +262,6 @@ fn query_keyboard_enhancement_flags_raw() -> io::Result<Option<KeyboardEnhanceme
             }
             Err(_) => {}
         }
-    }
-}
-
-/// execute tput with the given argument and parse
-/// the output as a u16.
-///
-/// The arg should be "cols" or "lines"
-fn tput_value(arg: &str) -> Option<u16> {
-    let output = process::Command::new("tput").arg(arg).output().ok()?;
-    let value = output
-        .stdout
-        .into_iter()
-        .filter_map(|b| char::from(b).to_digit(10))
-        .fold(0, |v, n| v * 10 + n as u16);
-
-    if value > 0 {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-/// Returns the size of the screen as determined by tput.
-///
-/// This alternate way of computing the size is useful
-/// when in a subshell.
-fn tput_size() -> Option<(u16, u16)> {
-    match (tput_value("cols"), tput_value("lines")) {
-        (Some(w), Some(h)) => Some((w, h)),
-        _ => None,
     }
 }
 

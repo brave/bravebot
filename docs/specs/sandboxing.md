@@ -3824,6 +3824,16 @@ file. A new spawn that looks a name up through
   credential authority, the client the host starts, the delivery program of a scheduled entry, the
   `sysctl` that reads a machine identifier with an empty environment, and this program started
   again. A start added to either list is added here in the same change.
+- **A dependency starts no program.** crossterm 0.29.0 started `tput` by bare name, with the whole
+  environment and `PATH`, when a terminal-size query failed. That start did not go through
+  `programs::start`, which `clippy.toml` cannot see into a dependency. The tree keeps crossterm in
+  `third_party/crossterm` with that fallback removed, so a failed query is an error and nothing is
+  started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
+  draw both end there. A dependency is audited for a bare-name start when it is added or
+  raised: the audit at #3802 found one other, `tmux` in `ratatui-image` 11.1.0
+  (`src/picker.rs`), started with the whole environment when `TERM` or `TERM_PROGRAM` names tmux.
+  It is tracked by #3853, and the `git` and `sh` starts compiled in from `gix-path` 0.13.0, which
+  nothing in the tree calls, by #3852.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -4102,9 +4112,6 @@ program's documentation or launcher and what was run. These were not shown by ru
   `GOAUTH`, `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `COMPILER_PATH`, `RANLIB`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
-- `tput` is started by bare name by crossterm 0.29.0 (`src/terminal/sys/unix.rs`, line 273) when a
-  terminal-size query fails. The dependency makes that start and it does not go through
-  `programs::start`, so it has no `CodeSelectors` argument. It is tracked by #3802.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
@@ -4166,6 +4173,7 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_cli::terminal_size::a_failed_size_query_starts_no_tput`
 `verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
