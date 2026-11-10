@@ -3711,7 +3711,8 @@ file. A new spawn that looks a name up through
   `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
   whose fourth argument is not written at the call as `CodeSelectors::Kept` or
   `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
-  reason, and a name in any `CODE_SELECTORS` list that lacks a test that keeps a safe value or a
+  reason, a start in production code that passes `CodeSelectors::Checked(&[])` with no comment at
+  the call or whose file has no row in the table below, and a name in any `CODE_SELECTORS` list that lacks a test that keeps a safe value or a
   test that removes a value a stage may write. A list of options needs only the second. The check
   cannot tell that a list is complete, which [PATH-008](../best-practices/paths.md#PATH-008) leaves
   to a reviewer.
@@ -3827,6 +3828,9 @@ file. A new spawn that looks a name up through
   | Variable | Names | Why it selects code |
   |---|---|---|
   | `SSH_ASKPASS` | options | the program `ssh` runs to ask for a passphrase. This command asks for none from the environment |
+  The test that runs the installed CLI with a `credential_process` helper is skipped on a machine
+  with no `aws` in a directory the lookup accepts, so its `verified-by` line holds only where the
+  CLI is installed.
   | `SSH_ASKPASS_REQUIRE` | options | `force` makes `ssh` run `SSH_ASKPASS` even with a terminal |
   | `SSH_SK_PROVIDER` | options | the library `ssh` and `ssh-keygen` load for a hardware key |
   | `SSH_SK_HELPER` | options | the program `ssh` runs for a hardware key |
@@ -3860,8 +3864,27 @@ file. A new spawn that looks a name up through
   environment and read the one it gives the program, so they run on every platform and start no real
   `powershell`. One of them reads `clipboard.rs` and `caffeinate.rs` as text and fails when either
   starts a program other than through `powershell::start`, because no test on a host without
-  Windows runs those starts. The other programs bravebot starts for itself, apart from the ones
-  with a list above, have no list yet.
+  Windows runs those starts.
+
+  Every other start that passes `CodeSelectors::Checked(&[])` is given the generic table and no
+  names of its own. Each file with one has a row here that says what the program was read for, and
+  `make check-code-selectors` fails when a production start passes an empty list with no comment at
+  the call or with no row for its file. A row is not a finding that no other variable selects code:
+  the basis column says how each program was read, and none of these was shown by running the
+  program with a name planted.
+
+  <!-- empty-list-starts -->
+
+  | File | Start | Names read | Basis |
+  |---|---|---|---|
+  | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` is not read on macOS and is tracked by #3810 | the strings of the macOS binaries. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
+  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. The Linux tools are tracked by #3810 | the strings of the macOS binaries, for those two only |
+  | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
+
+  The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
+  not in this table, because they pass a list of their own.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -4003,6 +4026,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_bedrock::credentials::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_bedrock::credentials::an_aws_value_that_selects_no_code_is_left_as_set`
 `verified-by: bravebot_bedrock::credentials::the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one`
+`verified-by: bravebot_bedrock::credentials::the_installed_cli_runs_a_credential_process_outside_a_stage_and_not_one_inside`
 `verified-by: bravebot_sandbox::programs::a_file_that_names_code_must_exist_as_a_file_outside_every_directory_a_stage_may_write`
 `verified-by: bravebot_sandbox::programs::a_code_selector_is_taken_off_unless_its_value_passes`
 `verified-by: bravebot_sandbox::programs::a_list_of_directories_passes_only_when_every_entry_does_and_options_never_do`

@@ -337,6 +337,8 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
                 &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
                 crate::programs::Inherits::All,
                 crate::programs::SearchPath::Inherited,
+                // `xcode-select -p`: its own variable, `DEVELOPER_DIR`, is removed below, and no
+                // other is known to select code (SANDBOX-30, empty-list starts).
                 crate::programs::CodeSelectors::Checked(&[]),
             );
             command

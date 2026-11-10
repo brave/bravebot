@@ -787,7 +787,8 @@ fn login_command(
         inherits,
         unconfined_path(confinement),
         // The stored-login `gh` is a program bravebot found, so the generic names that select
-        // code are checked. `gh auth token` reads none of its own that run code.
+        // code are checked. `gh auth token` reads none of its own that run code
+        // (SANDBOX-30, empty-list starts).
         bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
         held,
         outside_stage_writable,

@@ -658,7 +658,8 @@ fn tool(name: &str) -> Option<std::process::Command> {
         &bravebot_sandbox::programs::Resolved::found_earlier(&found),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-        // A scheduler's own program: `crontab`, `launchctl` and `systemctl` are bravebot's to find.
+        // `crontab -l` and `crontab -`, `launchctl` and `systemctl --user`: none is known to read a
+        // variable of its own that selects code (SANDBOX-30, empty-list starts).
         bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     ))
 }

@@ -233,7 +233,9 @@ program never reads it. A variable the launcher reads that is in neither breaks 
 program's names are passed to `start` and the check stays in shared code ([PATH-006](#PATH-006)).
 
 `make check-code-selectors` confirms that every call of `start` and `start_against` states
-`CodeSelectors::Kept` with a comment or `CodeSelectors::Checked`, and that every name in a
+`CodeSelectors::Kept` with a comment or `CodeSelectors::Checked`, that a start passing
+`CodeSelectors::Checked(&[])` has a comment and a row in the table of empty-list starts in
+SANDBOX-30, and that every name in a
 `CODE_SELECTORS` list (in `crates/sandbox/src/programs.rs`, `crates/agent/src/gcloud.rs`,
 `crates/bedrock/src/credentials.rs` and `crates/cli/src/push_identity.rs`) has one test that removes
 a value and one that keeps a value (an options variable needs only the first). A reviewer confirms

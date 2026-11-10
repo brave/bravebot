@@ -369,7 +369,9 @@ which `make check-versions` runs first.
 
 `make check-code-selectors` fails a call of `start` or `start_against` that does not write
 `CodeSelectors::Kept` (with a comment giving the reason, outside a test) or
-`CodeSelectors::Checked(&NAME)`, and holds each variable in a `CODE_SELECTORS` list, in
+`CodeSelectors::Checked(&NAME)`, fails a production start that passes `CodeSelectors::Checked(&[])`
+with no comment at the call or whose file has no row in the table of empty-list starts in
+`docs/specs/sandboxing.md`, and holds each variable in a `CODE_SELECTORS` list, in
 `crates/sandbox/src/programs.rs` (the generic table), `crates/agent/src/gcloud.rs`,
 `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`, the browser opener's in
 `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and

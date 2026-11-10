@@ -26,6 +26,11 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
      has no keep test.
 6. A constant in `selectors` whose Rust name is not the variable it holds, since a list names it
    as `selectors::NAME` and this script takes the constant's name as the variable.
+7. A `CodeSelectors::Checked(&[])` call outside a test that has no comment in its argument list, or
+   whose file has no row in the table of docs/specs/sandboxing.md that follows the line
+   `<!-- empty-list-starts -->`. Such a start removes the generic names and no name of its own, so
+   the table says what the program reads and why none of it selects code, or which issue tracks
+   it. The row is what a reviewer reads; this script checks that it exists, not that it is right.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -72,6 +77,30 @@ BARE_IMPORT = re.compile(
 )
 FOURTH = re.compile(r"^(?:[\w:]*::)?CodeSelectors::(Kept|Checked\(\s*&(.*?)\s*\))$", re.DOTALL)
 FOLLOWS_TEST_ATTRIBUTE = re.compile(r"#\[cfg\(\s*(?:all\(\s*)?test\b")
+
+# The spec file and the line above the table that holds a row for each file with a production start
+# that passes no list of its own.
+SPEC = "docs/specs/sandboxing.md"
+EMPTY_LIST_MARKER = "<!-- empty-list-starts -->"
+
+
+def listed_in_spec(spec, label):
+    """Whether the table after the marker in `spec` has a row that names the file `label`.
+
+    The table is the lines that start with `|` straight after the marker line and its blank line.
+    A file named anywhere else in the spec does not count, since the row is where the start's
+    reason is written.
+    """
+    lines = [line.strip() for line in spec.splitlines()]
+    if EMPTY_LIST_MARKER not in lines:
+        return False
+    rows = []
+    for line in lines[lines.index(EMPTY_LIST_MARKER) + 1 :]:
+        if line.startswith("|"):
+            rows.append(line)
+        elif rows:
+            break
+    return any(f"`{label}`" in row for row in rows)
 
 
 def selectors(text):
@@ -193,7 +222,7 @@ def in_test_code(label, text, position):
     return FOLLOWS_TEST_ATTRIBUTE.search(text, 0, position) is not None
 
 
-def call_complaints(label, text):
+def call_complaints(label, text, spec=""):
     """Every `programs::start` or `start_against` call in `text` that does not state its class."""
     positions = [found.end() - 1 for found in CALL.finditer(text)]
     if BARE_IMPORT.search(text):
@@ -229,18 +258,31 @@ def call_complaints(label, text):
                     f"{where}: CodeSelectors::Kept has no comment saying why the program may "
                     "run what the environment names (SANDBOX-30)."
                 )
-        elif fourth.group(2).strip() != "[]" and selectors(text) is None:
-            complaints.append(
-                f"{where}: Checked(&{fourth.group(2)}) is used in a file with no "
-                "const CODE_SELECTORS list."
-            )
+        elif fourth.group(2).strip() != "[]":
+            if selectors(text) is None:
+                complaints.append(
+                    f"{where}: Checked(&{fourth.group(2)}) is used in a file with no "
+                    "const CODE_SELECTORS list."
+                )
+        elif not in_test_code(label, text, position):
+            if "//" not in given[3]:
+                complaints.append(
+                    f"{where}: CodeSelectors::Checked(&[]) has no comment saying why the program "
+                    "reads no variable of its own that selects code (SANDBOX-30)."
+                )
+            if not listed_in_spec(spec, label):
+                complaints.append(
+                    f"{where}: CodeSelectors::Checked(&[]) is in a file with no row in the table "
+                    f"after {EMPTY_LIST_MARKER} in {SPEC} (SANDBOX-30)."
+                )
     return complaints
 
 
-def verdict(files, required=None):
+def verdict(files, required=None, spec=""):
     """Every complaint over `files`, a mapping of label to text.
 
-    `required` is the labels that must be among the files and hold a list.
+    `required` is the labels that must be among the files and hold a list. `spec` is the text of
+    docs/specs/sandboxing.md, which holds the table a start with no list of its own is named in.
     """
     required = [PROGRAMS, *SOURCES] if required is None else required
     complaints = []
@@ -259,7 +301,7 @@ def verdict(files, required=None):
                     f"selectors::{const} would be tested under the wrong name."
                 )
         else:
-            complaints += call_complaints(label, text)
+            complaints += call_complaints(label, text, spec)
     return complaints
 
 
@@ -361,6 +403,7 @@ fn command() -> Command {
         &program,
         Inherits::All,
         SearchPath::Inherited,
+        // This program reads no variable of its own that selects code (SANDBOX-30).
         bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
         held,
         &judge,
@@ -373,6 +416,20 @@ START_AGAINST = (
     CALLER.replace("programs::start(", "programs::start_against(")
     .replace("    )\n}", "        held,\n        &outside,\n    )\n}")
 )
+
+
+# The table a start with no list of its own is named in, as docs/specs/sandboxing.md writes it.
+EMPTY_TABLE = """\
+Some text.
+
+<!-- empty-list-starts -->
+
+| Start | File | Reads |
+|---|---|---|
+| A program | `crates/agent/src/x.rs` | nothing that selects code |
+
+More text.
+"""
 
 
 def selftest():
@@ -500,8 +557,8 @@ def selftest():
     ]
     programs = {PROGRAMS: COVERED}
 
-    def complaints(text, caller=CALLER, label="crates/agent/src/x.rs"):
-        return verdict({PROGRAMS: text, label: caller}, required=[PROGRAMS])
+    def complaints(text, caller=CALLER, label="crates/agent/src/x.rs", spec=EMPTY_TABLE):
+        return verdict({PROGRAMS: text, label: caller}, required=[PROGRAMS], spec=spec)
 
     case(
         "verdict: a covered list and a classified call pass",
@@ -562,6 +619,22 @@ def selftest():
         (
             "a Checked call with an empty own list passes",
             CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&[])"),
+            0,
+        ),
+        (
+            "a Checked call with an empty own list and no comment fails once",
+            CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&[])").replace(
+                "        // The person's own choice (SANDBOX-30).\n", ""
+            ),
+            1,
+        ),
+        (
+            "a Checked call with an empty own list in a test module needs neither",
+            "#[cfg(test)]\nmod tests {\n"
+            + CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&[])").replace(
+                "        // The person's own choice (SANDBOX-30).\n", ""
+            )
+            + "}\n",
             0,
         ),
         (
@@ -635,6 +708,24 @@ def selftest():
         + COVERED,
     )
     case("call: a Checked call naming the file's own list passes", named == [], named)
+    empty = CALLER.replace("CodeSelectors::Kept", "CodeSelectors::Checked(&[])")
+    for claim, spec, expected in [
+        ("no spec text", "", 1),
+        ("a spec with no marker", EMPTY_TABLE.replace(EMPTY_LIST_MARKER, ""), 1),
+        (
+            "a row for another file",
+            EMPTY_TABLE.replace("crates/agent/src/x.rs", "crates/agent/src/y.rs"),
+            1,
+        ),
+        (
+            "the file named in prose after the table, not in a row",
+            EMPTY_TABLE.replace("`crates/agent/src/x.rs`", "-") + "`crates/agent/src/x.rs`\n",
+            1,
+        ),
+        ("a row for the file", EMPTY_TABLE, 0),
+    ]:
+        got = verdict({PROGRAMS: COVERED, "crates/agent/src/x.rs": empty}, [PROGRAMS], spec)
+        case(f"call: a Checked(&[]) start with {claim} gives {expected} complaint(s)", len(got) == expected, got)
     missing = verdict({"crates/agent/src/x.rs": CALLER}, required=[PROGRAMS])
     case("verdict: a tree without programs.rs fails", len(missing) == 1, missing)
     required = verdict({**programs, "crates/tui/src/opener.rs": CALLER}, [PROGRAMS, "crates/tui/src/opener.rs"])
@@ -676,7 +767,8 @@ def main():
         str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
         for path in sorted(CRATES.rglob("*.rs"))
     }
-    complaints = verdict(files)
+    spec = (ROOT / SPEC).read_text(encoding="utf-8")
+    complaints = verdict(files, spec=spec)
     for complaint in complaints:
         print(complaint, file=sys.stderr)
     if complaints:
