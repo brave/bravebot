@@ -1843,6 +1843,7 @@ that is written down is still asking.
 `verified-by: bravebot_config::settings::a_rule_is_traced_to_the_file_and_list_that_wrote_it`
 `verified-by: bravebot_config::settings::a_checkouts_allow_rule_is_traced_to_no_file`
 `verified-by: bravebot_cli::running::permissions_check_names_the_rule_and_the_file_that_decide`
+`verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
