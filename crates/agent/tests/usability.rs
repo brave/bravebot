@@ -690,15 +690,20 @@ fn a_setup_commit() -> Workflow {
 
 /// Runs `workflow` with `set` in the environment of this process and asserts that nothing ran the
 /// file planted to write `marker`. A machine without a program the workflow starts skips it by
-/// name.
-fn run_with_planted(name: &str, set: &[(&'static str, &str)], workflow: Workflow, marker: &Path) {
+/// name, and the result is whether the workflow ran.
+fn run_with_planted(
+    name: &str,
+    set: &[(&'static str, &str)],
+    workflow: Workflow,
+    marker: &Path,
+) -> bool {
     let report = {
         let _environment = Environment::held(set, &[]);
         run(name, &[workflow])
     };
     if !report.skipped().is_empty() {
         eprintln!("skipped {name}: {:?}", report.skipped());
-        return;
+        return false;
     }
     assert!(
         !marker.exists(),
@@ -706,6 +711,7 @@ fn run_with_planted(name: &str, set: &[(&'static str, &str)], workflow: Workflow
         report.rows
     );
     assert!(report.is_green(), "{:?}", report.rows);
+    true
 }
 
 /// Starts `program` with `args` over `files` directly, with `set` in its environment and nothing
@@ -761,7 +767,7 @@ fn runs_the_helper_when_given(
 /// did not run the file that writes `marker` ([`run_with_planted`]), after a control that the
 /// program does run it when handed `set` as it is ([`runs_the_helper_when_given`]). Where the
 /// control shows the installed program does not read the names, the test proves nothing on this host
-/// and says it skipped.
+/// and says it skipped. The result is whether the stage ran.
 ///
 /// `writable` is the directory the helper is in when the variable names a path. A start keeps a
 /// path outside every directory a stage may write, and a session records its own directories only
@@ -775,7 +781,7 @@ fn withheld_from_a_setup_stage(
     set: &[(&'static str, &str)],
     marker: &Path,
     writable: Option<&Path>,
-) {
+) -> bool {
     let workflow = files
         .iter()
         .fold(
@@ -787,7 +793,7 @@ fn withheld_from_a_setup_stage(
     match runs_the_helper_when_given(name, program, args, files, set, marker) {
         None => {
             eprintln!("skipped {name}: {program} is not installed");
-            return;
+            return false;
         }
         Some(false) => {
             let names: Vec<&str> = set.iter().map(|(variable, _)| *variable).collect();
@@ -796,14 +802,14 @@ fn withheld_from_a_setup_stage(
                 std::env::consts::OS,
                 std::env::consts::ARCH
             );
-            return;
+            return false;
         }
         Some(true) => {}
     }
     if let Some(directory) = writable {
         bravebot_sandbox::programs::keep_out(directory);
     }
-    run_with_planted(name, set, workflow, marker);
+    run_with_planted(name, set, workflow, marker)
 }
 
 /// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 ran the shell named by `SHELL=` in `MAKEFLAGS`
@@ -1054,14 +1060,15 @@ fn host_target_variable(end: &str) -> Option<&'static str> {
 
 /// Runs a setup `cargo` with `subcommand` over a package that has a library with a documentation
 /// test and a binary, and asserts it did not run the file planted to write `marker`, after the
-/// control that it does when handed `set` as it is ([`withheld_from_a_setup_stage`]).
+/// control that it does when handed `set` as it is ([`withheld_from_a_setup_stage`]). The result is
+/// whether the stage ran.
 fn withheld_from_a_setup_cargo(
     name: &str,
     subcommand: &[&str],
     set: &[(&'static str, &str)],
     marker: &Path,
     writable: Option<&Path>,
-) {
+) -> bool {
     let mut args: Vec<&str> = subcommand.to_vec();
     args.push("--manifest-path={session}/demo/Cargo.toml");
     withheld_from_a_setup_stage(
@@ -1082,7 +1089,7 @@ fn withheld_from_a_setup_cargo(
         set,
         marker,
         writable,
-    );
+    )
 }
 
 /// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 and rustc 1.99.0 on macOS arm64 ran the program
@@ -1245,6 +1252,12 @@ fn a_setup_cargo_is_not_handed_a_rustdoc_or_documentation_flags() {
 /// only when each is one program outside every directory a stage may write, so the helper is put in
 /// one. The regression it rejects: a setup `cargo doc --open` started with the `BROWSER` the
 /// person's shell holds.
+///
+/// With `BROWSER` removed, cargo runs the platform's opener on the documentation. A stub `open` and
+/// `xdg-open` come first on the `PATH`, in a directory outside every one a stage may write so that
+/// a start keeps it, so the run opens nothing in the browser of whoever runs the suite. On macOS,
+/// where the opener is `open`, the test also requires the stub to have run. A `PATH` that no longer
+/// reaches the stub then fails the test and does not open a browser unnoticed.
 #[test]
 fn a_setup_cargo_doc_open_is_not_handed_a_browser() {
     if !usability::available() {
@@ -1254,14 +1267,32 @@ fn a_setup_cargo_doc_open_is_not_handed_a_browser() {
     let marker = planted.join("ran");
     let helper = planted.join("helper");
     plant(&helper, &marker);
+    let openers = planted_dir("cargo-browser-openers");
+    let opened = openers.join("opened");
+    plant(&openers.join("open"), &opened);
+    plant(&openers.join("xdg-open"), &opened);
+    let path = std::env::join_paths(std::iter::once(openers).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("a PATH");
 
-    withheld_from_a_setup_cargo(
+    let ran = withheld_from_a_setup_cargo(
         "cargo-browser",
         &["doc", "-q", "--offline", "--no-deps", "--open"],
-        &[("BROWSER", helper.to_str().expect("utf-8"))],
+        &[
+            ("BROWSER", helper.to_str().expect("utf-8")),
+            ("PATH", path.to_str().expect("utf-8")),
+        ],
         &marker,
         Some(planted.as_path()),
     );
+
+    if ran && cfg!(target_os = "macos") {
+        assert!(
+            opened.exists(),
+            "cargo did not run the stub opener, so the opener it used may have opened the documentation in a browser"
+        );
+    }
 }
 
 /// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 read `config.toml` in the
