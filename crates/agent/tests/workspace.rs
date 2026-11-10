@@ -13841,6 +13841,7 @@ impl BypassPlaces {
             person: bravebot_sandbox::rules::resolve(
                 &lists,
                 Some(&self.home),
+                None,
                 self.workspace.root(),
             ),
             excluded,
@@ -14318,6 +14319,7 @@ fn a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another
         person: bravebot_sandbox::rules::resolve(
             &bravebot_sandbox::rules::Lists::default(),
             Some(&home.path),
+            None,
             made.root(),
         ),
         excluded,

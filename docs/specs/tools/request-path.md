@@ -57,7 +57,7 @@ name whoever made the link chose, and the sentence is the driver's own words, as
 <a id="PATHREQ-3"></a>
 ### PATHREQ-3: a path an `allowWrite` row refuses is refused, and not asked about
 
-`~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot`, a
+`~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), a
 credential location and any path holding a wildcard are refused whatever the person would answer;
 a request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to
 write there is refused like the rest of `~/.bravebot`. The result says so without asking, says what is true of the path that made it refuse (it holds

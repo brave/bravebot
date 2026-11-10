@@ -280,6 +280,92 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
     }
 }
 
+/// SANDBOX-12, #2917. The regression it rejects: a run base built from the home directory alone, so
+/// a state directory `BRAVEBOT_HOME` puts outside `~/.bravebot` is read by a stage (its gateway keys
+/// print), or one that lifts the named directory whole instead of its `sessions` subtree. The
+/// confinement with no state directory is the control that the file is there to be read under the
+/// same base, and the default directory is refused alongside.
+#[cfg(unix)]
+#[test]
+fn a_stage_cannot_read_a_state_directory_that_is_moved_out_of_the_default() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("moved-state");
+    let moved = places.home.parent().expect("a parent").join("moved-state");
+    std::fs::create_dir_all(moved.join("sessions/-repo")).expect("the moved directory");
+    std::fs::write(moved.join("gateway-keys.json"), "moved gateway secret\n").expect("a file");
+    std::fs::write(moved.join("sessions/-repo/1.json"), "moved record\n").expect("a file");
+    let moved = resolved(&moved);
+    let confinement = places
+        .confinement()
+        .with_state_directory(Some(moved.clone()));
+    let reads = |path: &Path, confinement: Option<&Confinement>| {
+        places.run(&format!("cat {}", path.display()), confinement)
+    };
+
+    let keys = moved.join("gateway-keys.json");
+    let unmoved = reads(&keys, Some(&places.confinement()));
+    assert!(
+        unmoved.ended_well && unmoved.stdout.contains("moved gateway secret"),
+        "the control does not read the file: {unmoved:?}"
+    );
+    for held_back in [keys, places.home.join(".bravebot/gateway-keys.json")] {
+        let confined = reads(&held_back, Some(&confinement));
+        assert!(
+            !confined.ended_well && !confined.stdout.contains("secret"),
+            "{} was read: {confined:?}",
+            held_back.display()
+        );
+    }
+    let record = reads(&moved.join("sessions/-repo/1.json"), Some(&confinement));
+    assert!(
+        record.ended_well && record.stdout.contains("moved record"),
+        "the session record was not read: {record:?}"
+    );
+}
+
+/// SANDBOX-12, #2917. A state directory `BRAVEBOT_HOME` puts inside a session directory is held back
+/// from a stage although the session directory is read and written whole. The regression it rejects:
+/// the moved directory left out of the refusals, so the grant of the session directory above it
+/// reaches the gateway keys. The confinement with no state directory is the control that the file is
+/// read under the same grant, and a file beside the moved directory is read under the refusal.
+#[cfg(unix)]
+#[test]
+fn a_stage_cannot_read_a_state_directory_that_lies_inside_its_session_directory() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("moved-state-in-session");
+    let moved = places.session.join("state");
+    std::fs::create_dir_all(&moved).expect("the moved directory");
+    std::fs::write(moved.join("gateway-keys.json"), "inside gateway secret\n").expect("a file");
+    std::fs::write(places.session.join("notes.txt"), "a note\n").expect("a file");
+    let confinement = places
+        .confinement()
+        .with_state_directory(Some(moved.clone()));
+    let reads = |path: &Path, confinement: &Confinement| {
+        places.run(&format!("cat {}", path.display()), Some(confinement))
+    };
+
+    let keys = moved.join("gateway-keys.json");
+    let unmoved = reads(&keys, &places.confinement());
+    assert!(
+        unmoved.ended_well && unmoved.stdout.contains("inside gateway secret"),
+        "the control does not read the file: {unmoved:?}"
+    );
+    let confined = reads(&keys, &confinement);
+    assert!(
+        !confined.ended_well && !confined.stdout.contains("secret"),
+        "the keys were read from inside the session directory: {confined:?}"
+    );
+    let note = reads(&places.session.join("notes.txt"), &confinement);
+    assert!(
+        note.ended_well && note.stdout.contains("a note"),
+        "the session directory beside the moved one was refused: {note:?}"
+    );
+}
+
 /// SANDBOX-26: a strict stage that asked for `aws` reads the aws credential directory and nothing
 /// else of the home, under the kernel. The controls are the same line with no request, which is
 /// refused, and one that asked for another scope, which is too. The regression it rejects is a

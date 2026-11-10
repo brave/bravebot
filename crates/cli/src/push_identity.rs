@@ -403,7 +403,10 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
-    let keys = bravebot_sandbox::scope::candidate_public_keys(&home);
+    let keys = bravebot_sandbox::scope::candidate_public_keys(
+        &home,
+        bravebot_agent::home::directory().as_deref(),
+    );
     if keys.is_empty() {
         return fail(Ending::Failed, t!(doctor_push_no_keys));
     }
@@ -430,15 +433,19 @@ fn chosen_for(
     home: &Path,
 ) -> Option<(PathBuf, ChosenBy)> {
     if let Some(entry) = settings.git_identities().for_address(address) {
-        return bravebot_sandbox::scope::identity_key(&entry.key, home)
-            .map(|key| (key, ChosenBy::Settings));
+        return bravebot_sandbox::scope::identity_key(
+            &entry.key,
+            home,
+            bravebot_agent::home::directory().as_deref(),
+        )
+        .map(|key| (key, ChosenBy::Settings));
     }
     let state = bravebot_agent::home::directory()?;
     let chosen = bravebot_agent::reach::Store::new(&state)
         .chosen_keys()
         .into_iter()
         .find(|held| held.address.same_as(address))?;
-    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home)
+    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home, Some(&state))
         .map(|key| (key, ChosenBy::Prompt))
 }
 

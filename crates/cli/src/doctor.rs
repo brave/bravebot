@@ -312,7 +312,12 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
         });
     let profile = bravebot_agent::home::profile();
     let directory = std::env::current_dir().unwrap_or_default();
-    let rules = bravebot_sandbox::rules::resolve(&settled.lists, profile.as_deref(), &directory);
+    let rules = bravebot_sandbox::rules::resolve(
+        &settled.lists,
+        profile.as_deref(),
+        bravebot_agent::home::directory().as_deref(),
+        &directory,
+    );
     let backend = bravebot_sandbox::for_current_platform().ok();
     let capabilities = backend.as_ref().map(|backend| backend.capabilities());
     for line in sandbox_filesystem_lines(&rules, &directory, capabilities.as_ref()) {
@@ -392,8 +397,12 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
     // Judged as a stage judges it, so a key a push would not be given is named before the push.
     if let Some(home) = bravebot_agent::home::profile() {
         for entry in &settings.git_identities().entries {
-            let lent = bravebot_sandbox::scope::identity_key(&entry.key, &home)
-                .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
+            let lent = bravebot_sandbox::scope::identity_key(
+                &entry.key,
+                &home,
+                bravebot_agent::home::directory().as_deref(),
+            )
+            .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
             if lent.is_none() {
                 fact(
                     t!(doctor_settings_ignored),
@@ -4152,7 +4161,7 @@ mod tests {
             deny_write: vec![entry("secret.env"), entry(outside)],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &directory);
+        let rules = resolve(&lists, None, None, &directory);
         let backend = |subtracts_from_a_grant| Capabilities {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["a mechanism"],

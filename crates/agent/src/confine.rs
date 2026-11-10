@@ -69,6 +69,9 @@ pub struct Confinement {
     prelude: Prelude,
     temporary: PathBuf,
     home: Option<PathBuf>,
+    /// The state directory in force where `BRAVEBOT_HOME` puts it elsewhere than `~/.bravebot`
+    /// ([`Confinement::with_state_directory`]), refused to every stage as `~/.bravebot` is.
+    state: Option<PathBuf>,
     roots: Vec<PathBuf>,
     /// The session directories as the session recorded them when it opened or added them
     /// ([`Confinement::with_session_directories`]), empty where the roots came from paths alone.
@@ -103,6 +106,9 @@ pub struct Confinement {
     temporary_held_back: bool,
     /// The reach a person remembered for commands, which attaches to the steps its shape names.
     grants: Vec<Grant>,
+    /// The person's own filesystem lists as written ([`Confinement::with_filesystem`]), kept so
+    /// that `filesystem` is resolved again when the state directory is set after them.
+    lists: Lists,
     /// The person's own filesystem lists, resolved against this session's directories.
     filesystem: Rules,
     /// The paths the person let programs reach for this session, as they were approved
@@ -249,12 +255,13 @@ impl Confinement {
         let roots: Vec<PathBuf> = roots.iter().map(|root| canonical(root)).collect();
         let home = home.map(canonical);
         let scratch = scratch.filter(|row| {
-            reaching_credentials(prelude, home.as_deref(), std::iter::once(row)).is_none()
+            reaching_credentials(prelude, home.as_deref(), None, std::iter::once(row)).is_none()
         });
         Self {
             prelude,
             temporary,
             home,
+            state: None,
             place: signing::Place {
                 directory: roots.first().cloned(),
                 sessions: roots.iter().chain(scratch.iter()).cloned().collect(),
@@ -271,6 +278,7 @@ impl Confinement {
             mode: SandboxMode::WorkspaceWrite,
             temporary_held_back: false,
             grants: Vec::new(),
+            lists: Lists::default(),
             filesystem: Rules::none(),
             path_reach: Vec::new(),
             unasked_writes: false,
@@ -378,6 +386,37 @@ impl Confinement {
             .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))
     }
 
+    /// This confinement with the state directory in force, as [`crate::home::directory`] answers
+    /// it, refused to every stage as `~/.bravebot` is, with the read of its `sessions` that
+    /// `~/.bravebot` has (SANDBOX-12). The sandbox crate reads no environment, so the caller
+    /// passes it. A value that adds nothing (the default, or a directory that holds the home
+    /// directory or is a filesystem root) is passed over by
+    /// [`bravebot_sandbox::base::moved_state_directory`].
+    ///
+    /// A scratch row that is or lies inside it is left out, as one inside `~/.bravebot` is.
+    #[must_use]
+    pub fn with_state_directory(mut self, state: Option<PathBuf>) -> Self {
+        self.state = state;
+        // The lists refuse an entry at or over the state directory, so they are judged again
+        // against this one whichever of the two was given first.
+        self.resolve_filesystem();
+        self.scratch = self.scratch.take().filter(|row| {
+            reaching_credentials(
+                self.prelude,
+                self.home.as_deref(),
+                self.state.as_deref(),
+                std::iter::once(row),
+            )
+            .is_none()
+        });
+        self
+    }
+
+    /// The state directory in force, for the functions of the sandbox crate that refuse it.
+    fn state(&self) -> Option<&Path> {
+        self.state.as_deref()
+    }
+
     /// This confinement with the person's own filesystem lists (`sandbox.filesystem`), resolved
     /// now against the session's home and its first directory: globs are listed here, so a file a
     /// program makes afterwards is outside what one named, and a link is judged by where it leads.
@@ -385,6 +424,13 @@ impl Confinement {
     /// Every stage of every line this confinement starts gets them, a stage of a line left running
     /// included, because [`Confinement::policy`] is the one place a stage's rows are made.
     pub fn with_filesystem(mut self, lists: &Lists) -> Self {
+        self.lists = lists.clone();
+        self.resolve_filesystem();
+        self
+    }
+
+    /// Resolves the kept lists against the home, the state directory and the first directory.
+    fn resolve_filesystem(&mut self) {
         let base = self
             .roots
             .first()
@@ -393,11 +439,11 @@ impl Confinement {
             .unwrap_or_default();
         self.filesystem = bravebot_sandbox::rules::resolve_for(
             Some(self.prelude),
-            lists,
+            &self.lists,
             self.home.as_deref(),
+            self.state(),
             &base,
         );
-        self
     }
 
     /// This confinement with the temporary directory written by no stage where `held_back`, which
@@ -427,9 +473,14 @@ impl Confinement {
         self.path_reach
             .iter()
             .filter(|row| {
-                row.stands(home)
-                    && reaching_credentials(self.prelude, home, std::iter::once(&row.path))
-                        .is_none()
+                row.stands(home, self.state())
+                    && reaching_credentials(
+                        self.prelude,
+                        home,
+                        self.state(),
+                        std::iter::once(&row.path),
+                    )
+                    .is_none()
             })
             .collect()
     }
@@ -600,9 +651,9 @@ impl Confinement {
     fn written_by_some_stage(&self) -> SandboxPolicy {
         let mut policy = self.base_policy();
         if let Some(home) = self.home.as_deref() {
-            policy = Toolchain::grant_every_cache(policy, self.prelude, home);
+            policy = Toolchain::grant_every_cache(policy, self.prelude, home, self.state());
             for grant in self.grants.iter().filter(|grant| grant.write) {
-                if let Some(path) = grant.directory(home) {
+                if let Some(path) = grant.directory(home, self.state()) {
                     policy = policy.allow_write(path);
                 }
             }
@@ -922,7 +973,7 @@ impl Confinement {
             match written
                 .to_str()
                 .and_then(|written| self.offerable(written, home))
-                .filter(|(_, key)| candidate_public_keys(home).contains(key))
+                .filter(|(_, key)| candidate_public_keys(home, self.state()).contains(key))
             {
                 Some((command, key)) => Identified::Chosen {
                     chosen: ChosenKey {
@@ -940,7 +991,7 @@ impl Confinement {
     /// given it: a public key file in the person's home ([`identity_key`]) outside every directory
     /// the plan may write, since a key there would be one the plan chose.
     fn offerable(&self, written: &str, home: &Path) -> Option<(String, PathBuf)> {
-        identity_key(written, home)
+        identity_key(written, home, self.state())
             .filter(|key| !self.writable_by_the_plan(key))
             .and_then(|key| Some((ssh_command(&key)?, key)))
     }
@@ -1004,7 +1055,7 @@ impl Confinement {
 
     /// The public keys ssh could offer that a stage may be given ([`Confinement::offerable`]).
     fn offerable_candidates(&self, home: &Path) -> Vec<PathBuf> {
-        candidate_public_keys(home)
+        candidate_public_keys(home, self.state())
             .into_iter()
             .filter(|key| {
                 key.to_str()
@@ -1135,7 +1186,7 @@ impl Confinement {
                     || self
                         .home
                         .as_deref()
-                        .is_some_and(|home| signing::read(home, &self.place).enabled))
+                        .is_some_and(|home| signing::read(home, self.state(), &self.place).enabled))
         })
     }
 
@@ -1174,7 +1225,7 @@ impl Confinement {
                         .iter()
                         .filter_map(|request| match (request, home) {
                             (Requested::Scope(scope), Some(home)) => {
-                                Some(requested_reach(*scope, home, environment))
+                                Some(requested_reach(*scope, home, self.state(), environment))
                             }
                             _ => None,
                         })
@@ -1193,13 +1244,15 @@ impl Confinement {
                     let remembered: Vec<Remembered> = self
                         .granted(step)
                         .filter(|grant| match (&grant.reached, self.home.as_deref()) {
-                            (Reached::Directory(_), Some(home)) => grant.directory(home).is_some(),
+                            (Reached::Directory(_), Some(home)) => {
+                                grant.directory(home, self.state()).is_some()
+                            }
                             _ => true,
                         })
                         .map(|grant| Remembered {
                             reached: match (&grant.reached, self.home.as_deref()) {
                                 (Reached::Directory(_), Some(home)) => grant
-                                    .directory(home)
+                                    .directory(home, self.state())
                                     .map_or(grant.reached.clone(), Reached::Directory),
                                 _ => grant.reached.clone(),
                             },
@@ -1253,7 +1306,9 @@ impl Confinement {
     /// of it carries no scope to move.
     fn stage_reaches(&self, step: &Step, environment: &[(String, String)]) -> Vec<Reach> {
         match (self.carries(step).1, self.home.as_deref()) {
-            (Some(scope), Some(home)) => reaches(&step.resolved, scope, home, environment),
+            (Some(scope), Some(home)) => {
+                reaches(&step.resolved, scope, home, self.state(), environment)
+            }
             _ => Vec::new(),
         }
     }
@@ -1267,8 +1322,8 @@ impl Confinement {
         home: &Path,
     ) -> SandboxPolicy {
         match self.mode {
-            SandboxMode::ReadOnly => toolchain.grant_reads(policy, home),
-            _ => toolchain.grant(policy, self.prelude, home),
+            SandboxMode::ReadOnly => toolchain.grant_reads(policy, home, self.state()),
+            _ => toolchain.grant(policy, self.prelude, home, self.state()),
         }
     }
 
@@ -1297,7 +1352,12 @@ impl Confinement {
     /// The base every stage of this confinement starts from, before anything its step brings.
     fn base_policy(&self) -> SandboxPolicy {
         let mut policy = if self.reads_the_machine() {
-            run_base(self.prelude, &self.temporary, self.home.as_deref())
+            run_base(
+                self.prelude,
+                &self.temporary,
+                self.home.as_deref(),
+                self.state(),
+            )
         } else {
             base(
                 self.prelude,
@@ -1343,12 +1403,12 @@ impl Confinement {
         if let Some(home) = self.home.as_deref() {
             // The caches are written, which `read-only` does not do (SANDBOX-22).
             if self.reads_the_machine() && self.mode != SandboxMode::ReadOnly {
-                policy = Toolchain::grant_every_cache(policy, self.prelude, home);
+                policy = Toolchain::grant_every_cache(policy, self.prelude, home, self.state());
             }
             // A step with an assignment in front carries no scope, so this is the socket the
             // process started with, and never one the plan chose. It is judged here, as each stage
             // starts, and the row is the path the name leads to (SANDBOX-18).
-            let socket = agent_socket(Some(home), environment);
+            let socket = agent_socket(Some(home), self.state(), environment);
             let place = signing::Place {
                 agent: socket.clone(),
                 ..self.place.clone()
@@ -1358,9 +1418,9 @@ impl Confinement {
                 policy = self.toolchain_rows(toolchain, policy, home);
             }
             if let Some(scope) = scope {
-                policy = scope.grant(policy, home, &place);
+                policy = scope.grant(policy, home, self.state(), &place);
                 if !self.reads_the_machine() {
-                    for reach in reaches(resolved, scope, home, environment) {
+                    for reach in reaches(resolved, scope, home, self.state(), environment) {
                         policy = policy.allow_read(reach.path);
                     }
                 }
@@ -1383,9 +1443,9 @@ impl Confinement {
                     Requested::SshKey => policy,
                     Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
                     Requested::Scope(scope) => {
-                        let mut policy = scope.grant(policy, home, &place);
+                        let mut policy = scope.grant(policy, home, self.state(), &place);
                         if !self.reads_the_machine() {
-                            for reach in requested_reach(scope, home, environment) {
+                            for reach in requested_reach(scope, home, self.state(), environment) {
                                 policy = policy.allow_read(reach.path);
                             }
                         }
@@ -1393,7 +1453,9 @@ impl Confinement {
                         // person whose git signs with ssh.
                         let lends_the_agent = match scope {
                             Scope::Remote => true,
-                            Scope::Signing => signing::read(home, &self.place).enabled,
+                            Scope::Signing => {
+                                signing::read(home, self.state(), &self.place).enabled
+                            }
                             _ => false,
                         };
                         match socket.clone() {
@@ -1406,8 +1468,8 @@ impl Confinement {
             for grant in self.granted(step) {
                 policy = match &grant.reached {
                     Reached::Scope(scope) if !self.lends(*scope) => policy,
-                    Reached::Scope(scope) => scope.grant(policy, home, &place),
-                    Reached::Directory(_) => match grant.directory(home) {
+                    Reached::Scope(scope) => scope.grant(policy, home, self.state(), &place),
+                    Reached::Directory(_) => match grant.directory(home, self.state()) {
                         Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
                         Some(path) => policy.allow_read(path),
                         None => policy,
@@ -1422,7 +1484,7 @@ impl Confinement {
             let searched: Vec<PathBuf> = std::env::var_os("PATH")
                 .map(|path| std::env::split_paths(&path).collect())
                 .unwrap_or_default();
-            for path in program_reads(resolved, &searched, self.home.as_deref()) {
+            for path in program_reads(resolved, &searched, self.home.as_deref(), self.state()) {
                 policy = policy.allow_read(path);
             }
             // The two files the step starts, as files: a program installed inside the home is in
@@ -1450,7 +1512,7 @@ impl Confinement {
         }
         let mut policy = self.reach_in_force().apply(policy);
         let unasked: Vec<PathBuf> = match (self.writes_without_a_request(), self.home.as_deref()) {
-            (true, Some(home)) => writable_without_a_request(home),
+            (true, Some(home)) => writable_without_a_request(home, self.state()),
             _ => Vec::new(),
         };
         let held: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
@@ -1674,7 +1736,7 @@ impl Confinement {
     /// Counted from the environment the stage starts with and the person's own files, never from
     /// what a program printed.
     fn push_reach_sentence(&self, home: Option<&Path>, environment: &[(String, String)]) -> String {
-        let agent = match agent_socket(home, environment) {
+        let agent = match agent_socket(home, self.state(), environment) {
             Some(_) => IDENTITY_AGENT_LENT_SENTENCE,
             None => IDENTITY_NO_AGENT_SENTENCE,
         };
@@ -1682,7 +1744,7 @@ impl Confinement {
             return agent.to_string();
         };
         let readable = self.offerable_candidates(home).len();
-        let refused = refused_identity_files(home);
+        let refused = refused_identity_files(home, self.state());
         let files = |count: usize| match count {
             1 => "1 public key file".to_string(),
             _ => format!("{count} public key files"),
@@ -1720,7 +1782,7 @@ impl Confinement {
         if !asked {
             return (false, false);
         }
-        let signing = signing::read(home, &self.place);
+        let signing = signing::read(home, self.state(), &self.place);
         (
             true,
             signing.enabled && signing.key == signing::Key::Refused,
@@ -1738,7 +1800,7 @@ impl Confinement {
         let enabled = self
             .home
             .as_deref()
-            .is_some_and(|home| signing::read(home, &self.place).enabled);
+            .is_some_and(|home| signing::read(home, self.state(), &self.place).enabled);
         let lends = |scope: Scope| {
             self.lends(scope)
                 && match scope {
@@ -1756,7 +1818,7 @@ impl Confinement {
         });
         match (
             reaches_the_socket,
-            agent_socket(self.home.as_deref(), environment).is_some(),
+            agent_socket(self.home.as_deref(), self.state(), environment).is_some(),
         ) {
             (true, true) => SIGNING_AGENT_LENT_SENTENCE.to_string(),
             (true, false) => SIGNING_NO_AGENT_SENTENCE.to_string(),
@@ -1953,7 +2015,12 @@ impl Confinement {
     /// directory is dropped by [`Confinement::with_session_directories`], so this judges where
     /// each one leads now.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
-        reaching_credentials(self.prelude, self.home.as_deref(), self.roots.iter())
+        reaching_credentials(
+            self.prelude,
+            self.home.as_deref(),
+            self.state(),
+            self.roots.iter(),
+        )
     }
 
     /// The scratch directory, if its name now leads to a link or a file.
@@ -3203,10 +3270,11 @@ fn reaches(
     resolved: &Path,
     scope: Scope,
     home: &Path,
+    moved: Option<&Path>,
     environment: &[(String, String)],
 ) -> Vec<Reach> {
     let program = program_name(resolved).unwrap_or_default();
-    environment_reach(scope, &program, home, environment)
+    environment_reach(scope, &program, home, moved, environment)
 }
 
 /// This process's variables, those whose name and value are text.
@@ -3221,8 +3289,16 @@ fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
 /// The socket the process's own `SSH_AUTH_SOCK` names, as a stage that carries a scope that lends
 /// the agent is granted it, or `None` where there is none or the row is refused
 /// ([`judged_socket`]).
-fn agent_socket(home: Option<&Path>, environment: &[(String, String)]) -> Option<PathBuf> {
-    judged_socket(Path::new(&variable(environment, "SSH_AUTH_SOCK")?), home?)
+fn agent_socket(
+    home: Option<&Path>,
+    moved: Option<&Path>,
+    environment: &[(String, String)],
+) -> Option<PathBuf> {
+    judged_socket(
+        Path::new(&variable(environment, "SSH_AUTH_SOCK")?),
+        home?,
+        moved,
+    )
 }
 
 fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Option<String> {
@@ -3238,11 +3314,12 @@ fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Opti
 fn reaching_credentials<'a>(
     prelude: Prelude,
     home: Option<&Path>,
+    moved: Option<&Path>,
     directories: impl Iterator<Item = &'a PathBuf>,
 ) -> Option<(&'a Path, PathBuf)> {
     // The locations under the home need one to name them; `/Library/Keychains` does not.
     let mut locations = home
-        .map(|home| credential_locations(prelude, home))
+        .map(|home| credential_locations(prelude, home, moved))
         .unwrap_or_default();
     if prelude == Prelude::MacOs {
         locations.push(PathBuf::from(
@@ -3489,8 +3566,9 @@ pub(crate) fn program_reads(
     program: &Path,
     searched: &[PathBuf],
     home: Option<&Path>,
+    moved: Option<&Path>,
 ) -> Vec<PathBuf> {
-    reads_of(program, searched, home, false)
+    reads_of(program, searched, home, moved, false)
 }
 
 /// [`program_reads`] for a local server, which has no toolchain list to bring the installation a
@@ -3501,14 +3579,16 @@ pub(crate) fn server_program_reads(
     program: &Path,
     searched: &[PathBuf],
     home: Option<&Path>,
+    moved: Option<&Path>,
 ) -> Vec<PathBuf> {
-    reads_of(program, searched, home, true)
+    reads_of(program, searched, home, moved, true)
 }
 
 fn reads_of(
     program: &Path,
     searched: &[PathBuf],
     home: Option<&Path>,
+    moved: Option<&Path>,
     with_installation: bool,
 ) -> Vec<PathBuf> {
     let home = home.map(canonical);
@@ -3550,7 +3630,9 @@ fn reads_of(
         reads.push(directory);
     }
     match home.as_deref() {
-        Some(home) => bravebot_sandbox::rules::outside_every_credential_location(reads, home),
+        Some(home) => {
+            bravebot_sandbox::rules::outside_every_credential_location(reads, home, moved)
+        }
         None => reads,
     }
 }
@@ -4262,6 +4344,98 @@ mod tests {
                 refused_naming(&reading_confinement(prelude, &[root]), location);
             }
         }
+    }
+
+    /// A state directory `BRAVEBOT_HOME` puts elsewhere is a credential location for the check on
+    /// session directories as `~/.bravebot` is (SANDBOX-18, #2917): a session directory that is or
+    /// lies inside it is refused on every platform, one that holds it is refused on Windows only,
+    /// and a scratch row inside it gets no row. The regressions it rejects: the check built from
+    /// the home directory alone, which grants a stage the moved directory with the session
+    /// directory it was started in, and a state directory that is the home directory refusing every
+    /// session. The confinement without the state directory is the control that the roots are fine.
+    #[test]
+    fn a_session_inside_a_state_directory_that_is_moved_is_refused_as_the_default_is() {
+        let state = "/srv/ci/bravebot-state";
+        let with_state = |prelude, roots: &[&str]| {
+            reading_confinement(prelude, roots).with_state_directory(Some(PathBuf::from(state)))
+        };
+        for prelude in [Prelude::MacOs, Prelude::Linux, Prelude::Windows] {
+            for root in [
+                state,
+                "/srv/ci/bravebot-state/sessions",
+                "/srv/ci/bravebot-state/x",
+            ] {
+                assert!(
+                    reading_confinement(prelude, &[root])
+                        .root_reaching_credentials()
+                        .is_none(),
+                    "control {prelude:?} {root}"
+                );
+                refused_naming(&with_state(prelude, &[root]), state);
+            }
+            for root in [
+                "/srv/ci/bravebot-state-other",
+                "/srv/ci/other",
+                "/srv/ci/bravebot-stat",
+            ] {
+                assert!(
+                    with_state(prelude, &[root])
+                        .root_reaching_credentials()
+                        .is_none(),
+                    "{prelude:?} {root}"
+                );
+            }
+        }
+        // A directory above it holds it: refused on Windows, whose grant has no refusal beneath it.
+        refused_naming(&with_state(Prelude::Windows, &["/srv/ci"]), state);
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            assert!(
+                with_state(prelude, &["/srv/ci"])
+                    .root_reaching_credentials()
+                    .is_none(),
+                "{prelude:?}"
+            );
+        }
+        // A value that is the home directory, above it or a root adds no location: no session is
+        // refused for it.
+        for passed_over in [
+            HOME,
+            "/people",
+            "/",
+            "relative/state",
+            "/people/person/.bravebot",
+        ] {
+            for prelude in [Prelude::MacOs, Prelude::Linux, Prelude::Windows] {
+                let confinement = reading_confinement(prelude, &["/people/person/project"])
+                    .with_state_directory(Some(PathBuf::from(passed_over)));
+                assert!(
+                    confinement.root_reaching_credentials().is_none(),
+                    "{prelude:?} {passed_over}"
+                );
+            }
+        }
+    }
+
+    /// The scratch row is left out when it is or lies inside the state directory in force, as one
+    /// inside `~/.bravebot` is (SANDBOX-18, #2917). The regression it rejects: the row kept, which
+    /// writes the moved directory.
+    #[test]
+    fn a_scratch_directory_inside_a_state_directory_that_is_moved_gets_no_row() {
+        let state = "/srv/ci/bravebot-state";
+        let rows = |scratch: &str, moved: Option<&str>| {
+            let confinement = scratch_confinement(Prelude::Linux, scratch)
+                .with_state_directory(moved.map(PathBuf::from));
+            let policy = confinement.policy(
+                &step("/bin/cat", &["f"]),
+                Path::new("/people/person/project"),
+                &[],
+            );
+            reads(&policy, scratch) || writes(&policy, scratch)
+        };
+        assert!(rows("/srv/ci/bravebot-state/tmp", None), "control");
+        assert!(!rows("/srv/ci/bravebot-state/tmp", Some(state)));
+        assert!(!rows(state, Some(state)));
+        assert!(rows("/srv/ci/other-tmp", Some(state)));
     }
 
     /// The system keychain directory is a refused location on macOS, so a session directory at or
@@ -8007,8 +8181,8 @@ mod tests {
             ),
         ];
 
-        assert!(agent_socket(None, &environment).is_none());
-        assert!(agent_socket(Some(Path::new(HOME)), &environment).is_some());
+        assert!(agent_socket(None, None, &environment).is_none());
+        assert!(agent_socket(Some(Path::new(HOME)), None, &environment).is_some());
         for (way, confined, step) in &ways {
             let policy = confined.policy(step, Path::new("/work/project"), &environment);
             assert!(!writes(&policy, socket), "{way} wrote the socket");
@@ -8788,7 +8962,12 @@ mod tests {
             PathBuf::from(format!("{HOME}/.cargo/bin")),
         ];
 
-        let rows = program_reads(Path::new("/usr/bin/ls"), &searched, Some(Path::new(HOME)));
+        let rows = program_reads(
+            Path::new("/usr/bin/ls"),
+            &searched,
+            Some(Path::new(HOME)),
+            None,
+        );
 
         assert!(rows.contains(&PathBuf::from("/opt/tools/bin")));
         assert!(rows.contains(&PathBuf::from("/opt/tools")));
@@ -8804,8 +8983,9 @@ mod tests {
         let program = format!("{installation}/bin/tool");
         let searched = vec![PathBuf::from(format!("{installation}/bin"))];
 
-        let stage = program_reads(Path::new(&program), &searched, Some(Path::new(HOME)));
-        let server = server_program_reads(Path::new(&program), &searched, Some(Path::new(HOME)));
+        let stage = program_reads(Path::new(&program), &searched, Some(Path::new(HOME)), None);
+        let server =
+            server_program_reads(Path::new(&program), &searched, Some(Path::new(HOME)), None);
 
         assert!(!stage.contains(&PathBuf::from(&installation)), "{stage:?}");
         assert!(stage.contains(&PathBuf::from(format!("{installation}/bin"))));
@@ -8829,7 +9009,12 @@ mod tests {
             PathBuf::from(format!("{HOME}/work/bin")),
         ];
 
-        let rows = program_reads(Path::new("/usr/bin/ls"), &searched, Some(Path::new(HOME)));
+        let rows = program_reads(
+            Path::new("/usr/bin/ls"),
+            &searched,
+            Some(Path::new(HOME)),
+            None,
+        );
 
         for refused in [
             format!("{HOME}/.ssh"),
@@ -10835,7 +11020,7 @@ mod tests {
                 .filter(|row| !known.contains(row))
                 .filter(|row| {
                     let led = row.canonicalize().unwrap_or_else(|_| row.clone());
-                    bravebot_sandbox::rules::inside_a_credential_location(&led, &home)
+                    bravebot_sandbox::rules::inside_a_credential_location(&led, &home, None)
                         || bravebot_sandbox::rules::inside_a_persistence_location(&led, &home)
                 })
                 .collect::<Vec<PathBuf>>()

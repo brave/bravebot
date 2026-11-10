@@ -102,9 +102,15 @@ impl Toolchain {
     /// says what it names so that, on a backend that cannot name an absent path, a machine which
     /// has not run the toolchain yet gets an empty cache rather than a build that fails on a row
     /// the resolution left out.
-    pub fn grant(self, policy: SandboxPolicy, prelude: Prelude, home: &Path) -> SandboxPolicy {
-        let policy = self.grant_reads(policy, home);
-        self.grant_caches(policy, prelude, home)
+    pub fn grant(
+        self,
+        policy: SandboxPolicy,
+        prelude: Prelude,
+        home: &Path,
+        moved: Option<&Path>,
+    ) -> SandboxPolicy {
+        let policy = self.grant_reads(policy, home, moved);
+        self.grant_caches(policy, prelude, home, moved)
     }
 
     /// `policy` with this toolchain's installs and configuration readable and nothing written, for
@@ -115,7 +121,12 @@ impl Toolchain {
     /// directory too, and a stage able to write the directory above it could link it to `~/.ssh`,
     /// which a read row opened by name would then grant. An install is a directory and a
     /// configuration file is a file.
-    pub fn grant_reads(self, policy: SandboxPolicy, home: &Path) -> SandboxPolicy {
+    pub fn grant_reads(
+        self,
+        policy: SandboxPolicy,
+        home: &Path,
+        moved: Option<&Path>,
+    ) -> SandboxPolicy {
         let mut policy = policy;
         let rows = self
             .installs()
@@ -127,7 +138,7 @@ impl Toolchain {
                     .map(|row| (under(home, row), false)),
             );
         for (name, directory) in rows {
-            let Some(path) = led_to(&name, home, directory) else {
+            let Some(path) = led_to(&name, home, moved, directory) else {
                 continue;
             };
             policy = policy.allow_read(&path).not_through_a_link(path);
@@ -146,11 +157,12 @@ impl Toolchain {
         policy: SandboxPolicy,
         prelude: Prelude,
         home: &Path,
+        moved: Option<&Path>,
     ) -> SandboxPolicy {
         EVERY_TOOLCHAIN
             .into_iter()
             .fold(policy, |policy, toolchain| {
-                toolchain.grant_caches(policy, prelude, home)
+                toolchain.grant_caches(policy, prelude, home, moved)
             })
     }
 
@@ -169,6 +181,7 @@ impl Toolchain {
         mut policy: SandboxPolicy,
         prelude: Prelude,
         home: &Path,
+        moved: Option<&Path>,
     ) -> SandboxPolicy {
         let rows: Vec<(PathBuf, bool)> = self
             .cache_directories(prelude)
@@ -181,7 +194,7 @@ impl Toolchain {
             )
             .collect();
         for (name, directory) in rows {
-            let Some(path) = led_to(&name, home, directory) else {
+            let Some(path) = led_to(&name, home, moved, directory) else {
                 continue;
             };
             if policy.writable.iter().any(|granted| granted.path == path) {
@@ -283,7 +296,7 @@ const EVERY_TOOLCHAIN: [Toolchain; 6] = [
 /// following a link refuses the whole policy over it. It is given no row. So is a name that
 /// cannot be examined at all, since it may be a link. Reads file system metadata and the path
 /// alone.
-fn led_to(name: &Path, home: &Path, directory: bool) -> Option<PathBuf> {
+fn led_to(name: &Path, home: &Path, moved: Option<&Path>, directory: bool) -> Option<PathBuf> {
     use std::io::ErrorKind;
 
     let below_home = name.strip_prefix(home).unwrap_or(name);
@@ -306,7 +319,7 @@ fn led_to(name: &Path, home: &Path, directory: bool) -> Option<PathBuf> {
     }
     let path = if through_a_link {
         let path = resolved(name);
-        if !clear_of_every_refused_location(&path, home) {
+        if !clear_of_every_refused_location(&path, home, moved) {
             return None;
         }
         path
@@ -344,7 +357,7 @@ mod tests {
     const EVERY_PLATFORM: [Prelude; 3] = [Prelude::Linux, Prelude::MacOs, Prelude::Windows];
 
     fn a_list(toolchain: Toolchain, prelude: Prelude) -> SandboxPolicy {
-        toolchain.grant(SandboxPolicy::strict(), prelude, Path::new(A_HOME))
+        toolchain.grant(SandboxPolicy::strict(), prelude, Path::new(A_HOME), None)
     }
 
     fn granted_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
@@ -746,7 +759,7 @@ mod tests {
         let home = scratch_dir("a-toolchain-list-creates-its-cache");
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("the scratch home is creatable");
-        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home, None);
 
         policy.create_missing_write_rows(&Capabilities {
             level: ConfinementLevel::Kernel,
@@ -813,7 +826,8 @@ mod tests {
             let _ = std::fs::remove_file(&name);
             symlink(&leads_to, &name).expect("the cache is replaceable by a link");
 
-            let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+            let policy =
+                Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home, None);
 
             for row in written_paths(&policy) {
                 let at = crate::rules::resolved(&row);
@@ -854,7 +868,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".cargo/git")).expect("the git cache is creatable");
         let home = crate::rules::resolved(&home);
 
-        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home, None);
 
         let written = written_paths(&policy);
         assert!(
@@ -891,7 +905,7 @@ mod tests {
         symlink(home.join("nowhere"), home.join(".cargo/registry"))
             .expect("the registry is linkable");
 
-        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home, None);
 
         let granted = granted_paths(&policy);
         for name in [
@@ -936,7 +950,7 @@ mod tests {
         )
         .expect("the lock is linkable");
 
-        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home, None);
 
         let granted = granted_paths(&policy);
         for name in [
@@ -978,7 +992,7 @@ mod tests {
         symlink(home.join(".bashrc"), home.join(".cargo/config.toml"))
             .expect("the configuration is linkable");
 
-        let policy = Toolchain::Cargo.grant_reads(SandboxPolicy::strict(), &home);
+        let policy = Toolchain::Cargo.grant_reads(SandboxPolicy::strict(), &home, None);
 
         let granted = granted_paths(&policy);
         assert!(granted.contains(&home.join(".cargo/bin")), "{granted:?}");
@@ -1009,8 +1023,12 @@ mod tests {
         std::os::unix::fs::symlink(top.join("disk/registry"), top.join("home/.cargo/registry"))
             .expect("the cache is linkable");
 
-        let policy =
-            Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &top.join("home"));
+        let policy = Toolchain::Cargo.grant(
+            SandboxPolicy::strict(),
+            Prelude::Linux,
+            &top.join("home"),
+            None,
+        );
 
         let written = written_paths(&policy);
         assert!(written.contains(&top.join("disk/registry")), "{written:?}");
@@ -1029,6 +1047,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&top);
     }
 
+    /// A cache linked into the state directory `BRAVEBOT_HOME` moved is given no row, as one linked
+    /// into `~/.bravebot` is (SANDBOX-15, #2917). The regression it rejects: judging the place the
+    /// link leads without the moved directory, which hands the stage the gateway keys.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_linked_into_a_state_directory_that_is_moved_is_given_no_row() {
+        let top = scratch_dir("a-toolchain-cache-in-a-moved-state-directory");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("home/.cargo")).expect("the cargo directory is creatable");
+        std::fs::create_dir_all(top.join("state/registry")).expect("the state is creatable");
+        let top = crate::rules::resolved(&top);
+        std::os::unix::fs::symlink(top.join("state/registry"), top.join("home/.cargo/registry"))
+            .expect("the cache is linkable");
+        let moved = top.join("state");
+
+        let grant = |moved: Option<&Path>| {
+            Toolchain::Cargo.grant(
+                SandboxPolicy::strict(),
+                Prelude::Linux,
+                &top.join("home"),
+                moved,
+            )
+        };
+        let unmoved = granted_paths(&grant(None));
+        assert!(unmoved.contains(&moved.join("registry")), "{unmoved:?}");
+        let held = granted_paths(&grant(Some(&moved)));
+        assert!(held.iter().all(|row| !row.starts_with(&moved)), "{held:?}");
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
     /// A list is added to the base a profile starts from, so what the base granted has to reach
     /// the backend as it was. A list that started from a strict policy of its own hands the
     /// program a profile without its loader, and one that closed egress refuses every fetch.
@@ -1042,7 +1091,7 @@ mod tests {
         );
 
         for toolchain in EVERY_TOOLCHAIN {
-            let policy = toolchain.grant(base.clone(), Prelude::Linux, Path::new(A_HOME));
+            let policy = toolchain.grant(base.clone(), Prelude::Linux, Path::new(A_HOME), None);
             assert!(policy.readable.starts_with(&base.readable), "{toolchain:?}");
             assert!(policy.writable.starts_with(&base.writable), "{toolchain:?}");
             assert_eq!(policy.allow_network, base.allow_network, "{toolchain:?}");

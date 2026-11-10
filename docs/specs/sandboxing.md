@@ -627,7 +627,7 @@ everything beneath it:
 
 | Where | Refused |
 | --- | --- |
-| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium key, the ChatGPT and xAI sign-ins and the server list are, and where a `leo-premium.json` that an earlier version wrote and this one does not is refused with the rest, so a file left from an earlier version stays protected (a directory `BRAVEBOT_HOME` moves it to is not covered, [Known costs](state-directory.md#known-costs)); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
+| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium key, the ChatGPT and xAI sign-ins and the server list are, and where a `leo-premium.json` that an earlier version wrote and this one does not is refused with the rest, so a file left from an earlier version stays protected (a directory `BRAVEBOT_HOME` moves it to is refused in the same way, with the same `sessions` exception, unless it is the home directory, a place above it or a filesystem root, which would refuse the home itself); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
 | Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold; the browser profiles `~/AppData/Local/BraveSoftware`, `~/AppData/Local/Google/Chrome`, `~/AppData/Local/Chromium`, `~/AppData/Local/Microsoft/Edge` and `~/AppData/Roaming/Mozilla`; and the platform's own stores, Credential Manager's files `~/AppData/Local/Microsoft/Credentials` and `~/AppData/Roaming/Microsoft/Credentials`, the keys the data protection API encrypts with `~/AppData/Roaming/Microsoft/Protect`, the account's private keys `~/AppData/Roaming/Microsoft/Crypto`, and the vault `~/AppData/Local/Microsoft/Vault` and `~/AppData/Roaming/Microsoft/Vault` (an application data directory moved out of the home is not covered) |
 | macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
 | Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
@@ -650,7 +650,12 @@ public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_
 so that a script can read past sessions (`session-review` is one). It is lifted for reading only, and
 the rest of the directory stays refused with everything beneath it, including a file a later
 version adds, since the refusal covers the whole directory and no list of files has to be kept in
-step with what the program writes. Nothing under `~/.bravebot` is written by a stage. A transcript
+step with what the program writes. Nothing under `~/.bravebot` is written by a stage. Every refusal
+of `~/.bravebot` in this clause, and in the clauses that cite it, is of the state directory in force:
+`~/.bravebot`, and the directory `BRAVEBOT_HOME` puts elsewhere ([STATE-2](state-directory.md#STATE-2)),
+the home directory, a directory above it and a filesystem root excepted, since a refusal of one of
+those would refuse the account's own files. A link is judged where it leads, for the moved directory
+as for the default. A transcript
 can hold what a person pasted, so a stage that reads the records is one the plan has to be willing
 to let read them; the network is where they could leave, and the plan decides that
 ([SANDBOX-3](#SANDBOX-3)). A public key at another name is read by a stage that carries the remote
@@ -783,6 +788,27 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_agent::home::the_state_directory_is_the_one_the_sandbox_refuses`
+`verified-by: bravebot_sandbox::base::the_run_base_refuses_a_state_directory_that_is_moved_as_it_refuses_the_default`
+`verified-by: bravebot_sandbox::base::a_moved_state_directory_that_would_refuse_more_than_itself_adds_no_row`
+`verified-by: bravebot_sandbox::base::a_moved_state_directory_that_leads_to_the_default_adds_no_row`
+`verified-by: bravebot_sandbox::base::a_moved_state_directory_that_is_a_link_to_the_home_or_above_adds_no_row`
+`verified-by: bravebot_sandbox::base::the_windows_table_holds_a_moved_state_directory_and_its_base_is_unchanged`
+`verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_a_state_directory_that_is_moved`
+`verified-by: bravebot_sandbox::rules::a_request_for_the_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_sandbox::rules::a_state_directory_that_is_a_link_is_refused_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_state_directory_that_is_a_link_reads_its_session_records_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_directory_added_inside_or_above_the_state_directory_that_is_moved_is_refused`
+`verified-by: bravebot_sandbox::rules::a_windows_row_over_a_directory_holding_the_state_directory_that_is_moved_is_refused`
+`verified-by: bravebot_sandbox::rules::the_rows_written_without_a_request_leave_out_the_state_directory_that_is_moved`
+`verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_sandbox::scope::a_name_inside_a_state_directory_that_is_moved_through_a_link_is_refused`
+`verified-by: bravebot_agent::confine::a_session_inside_a_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_agent::confine::a_scratch_directory_inside_a_state_directory_that_is_moved_gets_no_row`
+`verified-by: bravebot_agent::confine::a_stage_cannot_read_a_state_directory_that_is_moved_out_of_the_default`
+`verified-by: bravebot_agent::confine::a_stage_cannot_read_a_state_directory_that_lies_inside_its_session_directory`
+`verified-by: bravebot_agent::tools::a_turns_confinement_refuses_the_state_directory_the_turn_runs_under`
+`verified-by: bravebot_agent::tools::a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under`
+`verified-by: bravebot_agent::servers::a_servers_confinement_does_not_read_a_state_directory_that_is_moved`
 `verified-by: bravebot_sandbox::policy::a_refusal_is_recorded_and_changes_nothing_else`
 `verified-by: bravebot_sandbox::policy::a_policy_made_nameable_keeps_its_refusals`
 `verified-by: bravebot_sandbox::policy::a_refusal_nothing_grants_is_not_meaningful`
@@ -892,9 +918,11 @@ names, so a backend that cannot name an absent path has the cache created as the
 the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
 A cache row is judged again where its name leads each time a stage starts: a name with a link
 below the home directory is given at the place it leads to, and is given no row, with the stage
-still started, where that place is, holds or lies inside a credential or persistence location, or
+still started, where that place is, holds or lies inside a credential or persistence location or the
+state directory in force ([SANDBOX-12](#SANDBOX-12)), or
 where it is a file for a directory row or a directory for a file row ([SANDBOX-18](#SANDBOX-18)).
-What decides a row is the table and the platform: nothing on the machine is read, so `CARGO_HOME`,
+What decides a row is the table, the platform and where its name leads: the environment is not
+read, so `CARGO_HOME`,
 `GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
 package managers, pip, go, mvn and gradle fetch, and `node`, `python3` and a program no list knows
@@ -916,6 +944,7 @@ runs. Cargo's configuration is read at all because cargo fails every invocation 
 file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise meets on every build.
 
 `verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_a_program_resolved_to`
+`verified-by: bravebot_sandbox::toolchain::a_cache_linked_into_a_state_directory_that_is_moved_is_given_no_row`
 `verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_without_a_windows_executable_extension`
 `verified-by: bravebot_sandbox::programs::a_windows_executable_extension_is_not_part_of_a_programs_name`
 `verified-by: bravebot_sandbox::toolchain::a_program_no_list_knows_brings_none`
@@ -2925,7 +2954,7 @@ a session that names no home directory is refused. Each path is judged where it 
 part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
-which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` or anything inside it, which is
+which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) or anything inside it, which is
 where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), except that an `allowRead` entry may name
 `~/.bravebot/sessions` or a path inside it, which the run base reads already, and no list can set the `.git` writes
 [SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. On Windows, where a
@@ -3218,7 +3247,7 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
 
 - **The same refusals as an `allowWrite` row** ([SANDBOX-25](#SANDBOX-25)), for a read as for a
   write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
-  `~/.bravebot` and anything inside either (a request to read `~/.bravebot/sessions` or a path
+  `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) and anything inside either (a request to read `~/.bravebot/sessions` or a path
   inside it is not refused), a credential location of the table
   ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
   `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. A
@@ -3250,7 +3279,7 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   again, and it is given no row, with the stage still started, when something is at the path and
   the name is a link, a parent of it is a link, it is not the device and inode approved, or it is
   refused as a new request for the same access would be: at, inside or above a credential location
-  ([SANDBOX-12](#SANDBOX-12)), `~/.ssh`, `~/.bravebot`, a persistence location for a write
+  ([SANDBOX-12](#SANDBOX-12)), `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), a persistence location for a write
   ([SANDBOX-18](#SANDBOX-18)), or the home directory and any directory above it. A name with
   nothing at it keeps its row, since a row opens nothing. A grant made while nothing was at the
   name has no identity to compare, so the directory made there later is judged as each stage
@@ -3297,7 +3326,7 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   Linux, the stages of a `run` are given at the start what a request for writing
   would be granted, those of a delegate included: every path the account can write, except `/`, a drive root, the home
   directory and any directory above it as a whole (the entries already in them stay writable, and
-  no new entry is made directly in one), `~/.ssh`, `~/.bravebot` and everything inside either, each
+  no new entry is made directly in one), `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) and everything inside either, each
   credential location of the table ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one,
   each persistence location ([SANDBOX-18](#SANDBOX-18)) and any directory that holds one, and every
   path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,

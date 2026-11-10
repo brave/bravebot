@@ -3013,7 +3013,7 @@ int main(int argc, char **argv) {
             ),
             (
                 "the run base",
-                crate::base::run_base(prelude, &temporary, Some(&home)),
+                crate::base::run_base(prelude, &temporary, Some(&home), None),
             ),
         ];
         let mut live = Command::new("/bin/sleep")
@@ -3359,7 +3359,8 @@ int main(int argc, char **argv) {
                 .expect("the scratch home is creatable");
             std::fs::write(&file, "contents").expect("the scratch home is writable");
         }
-        let policy = crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let policy =
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let code = |program: &str, path: PathBuf| {
             exit_code_under(
                 &policy,
@@ -3426,7 +3427,7 @@ int main(int argc, char **argv) {
         std::fs::create_dir_all(cache.join("mds")).expect("the scratch cache is creatable");
         let cache = cache.canonicalize().expect("the scratch cache is there");
         let policy = crate::base::with_security_cache(
-            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None),
             &cache,
         );
         let code = |path: PathBuf| {
@@ -3477,6 +3478,7 @@ int main(int argc, char **argv) {
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             crate::base::Prelude::MacOs,
             &home,
+            None,
         );
         let at = |path: PathBuf| path.display().to_string();
         let code = |program: &str, path: PathBuf| {
@@ -3537,6 +3539,7 @@ int main(int argc, char **argv) {
         let policy = crate::scope::Scope::Remote.grant(
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         let at = |path: PathBuf| path.display().to_string();
@@ -3629,8 +3632,9 @@ int main(int argc, char **argv) {
         )
         .expect("the scratch home is writable");
         let policy = crate::scope::Scope::Remote.grant(
-            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         let code = |path: PathBuf| {
@@ -3724,7 +3728,7 @@ int main(int argc, char **argv) {
         std::fs::write(&message, "a commit").expect("the scratch directory is writable");
 
         let run_base =
-            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
         let sign = |policy: &SandboxPolicy| {
             let _ = std::fs::remove_file(temporary.join("message.sig"));
@@ -3753,6 +3757,7 @@ int main(int argc, char **argv) {
         let key_only = crate::scope::Scope::Signing.grant(
             run_base(),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         assert_ne!(sign(&key_only), Some(0), "signed with no agent");
@@ -3826,7 +3831,7 @@ int main(int argc, char **argv) {
         std::fs::write(&message, "a commit").expect("the scratch directory is writable");
 
         let run_base =
-            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
         let sign = |policy: &SandboxPolicy, key: &str| {
             let _ = std::fs::remove_file(temporary.join("message.sig"));
@@ -3851,12 +3856,13 @@ int main(int argc, char **argv) {
             )
         };
         let without_the_agent = crate::scope::Scope::Signing
-            .grant(run_base(), &home, &crate::signing::Place::default())
+            .grant(run_base(), &home, None, &crate::signing::Place::default())
             .allow_write(&socket);
         let asking_the_agent = crate::scope::Scope::Signing
             .grant(
                 run_base(),
                 &home,
+                None,
                 &crate::signing::Place {
                     agent: Some(socket.clone()),
                     ..crate::signing::Place::default()

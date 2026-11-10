@@ -1647,7 +1647,7 @@ mod tests {
         std::os::unix::fs::symlink(home.join(".aws"), &door).expect("a link");
         let state_door = home.join("docs").join("state-door");
         std::os::unix::fs::symlink(home.join(".bravebot"), &state_door).expect("a link");
-        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None)
             .nameable_under(&sandbox.capabilities())
             .policy;
         let cat = |path: &Path| {
@@ -1701,7 +1701,7 @@ mod tests {
         let home = crate::testutil::scratch_dir("bravebot-run-base-writes");
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join("docs")).expect("the scratch home is creatable");
-        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None)
             .nameable_under(&sandbox.capabilities())
             .policy;
         let touch = |path: &Path| {
@@ -1745,7 +1745,7 @@ mod tests {
                 .expect("the scratch home is creatable");
             std::fs::write(&file, CONTENTS).expect("the scratch home is writable");
         }
-        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None)
             .allow_write(&home)
             .nameable_under(&sandbox.capabilities())
             .policy;
@@ -1788,6 +1788,7 @@ mod tests {
         let policy = crate::base::run_base(
             Prelude::Linux,
             &a_temporary_directory("bravebot-landlock-unwritable-tmp"),
+            None,
             None,
         )
         .allow_write(&work)
@@ -2071,9 +2072,10 @@ mod tests {
         let registry = home.join(".cargo/registry");
         let planted = home.join(".ssh/planted");
 
-        let run_base = || crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home));
+        let run_base =
+            || crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home), None);
         let held_when_it_starts = || {
-            crate::toolchain::Toolchain::grant_every_cache(run_base(), Prelude::Linux, &home)
+            crate::toolchain::Toolchain::grant_every_cache(run_base(), Prelude::Linux, &home, None)
                 .nameable_under(&sandbox.capabilities())
                 .policy
         };

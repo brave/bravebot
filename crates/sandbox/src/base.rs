@@ -459,11 +459,47 @@ const SSH_READABLE: &[&str] = &[
     ".ssh/id_ed25519_sk.pub",
 ];
 
-/// The places in the state directory under `home` that a stage reads ([`STATE_READABLE`]).
-pub fn readable_state_locations(home: &Path) -> Vec<PathBuf> {
+/// The state directory a person moved with `BRAVEBOT_HOME`, as a stage is refused it, or `None`
+/// where there is none to add (SANDBOX-12).
+///
+/// `moved` is the state directory in force as `bravebot_agent::home::directory` answers it. The
+/// sandbox crate reads no environment, so the caller passes it. It adds nothing where it is not
+/// absolute, where it is the default `~/.bravebot` under `home` (that is a row of the table
+/// already) or where it is `home`, a directory above it or a filesystem root, since a row over any
+/// of those would refuse the whole account's files and no row would be a refusal of the state
+/// directory alone. Each of those is judged where the links of both paths lead as well as by their
+/// spelling, so a link to the home directory or to a directory above it adds no row.
+pub fn moved_state_directory(home: &Path, moved: Option<&Path>) -> Option<PathBuf> {
+    let moved = moved?;
+    let default = under(home, STATE_DIRECTORY);
+    let leads_to = crate::rules::resolved(moved);
+    (moved.is_absolute()
+        && !home.starts_with(moved)
+        && !crate::rules::resolved(home).starts_with(&leads_to)
+        && !crate::policy::names_a_filesystem_root(moved)
+        && moved != default
+        && leads_to != crate::rules::resolved(&default))
+    .then(|| moved.to_path_buf())
+}
+
+/// The state directory under `home` and the one `moved` puts elsewhere, which the credential
+/// checks refuse alike ([`moved_state_directory`]).
+pub(crate) fn state_directories(home: &Path, moved: Option<&Path>) -> Vec<PathBuf> {
+    std::iter::once(under(home, STATE_DIRECTORY))
+        .chain(moved_state_directory(home, moved))
+        .collect()
+}
+
+/// The places in the state directory under `home` that a stage reads ([`STATE_READABLE`]), and in
+/// the one `moved` puts it elsewhere ([`moved_state_directory`]).
+pub fn readable_state_locations(home: &Path, moved: Option<&Path>) -> Vec<PathBuf> {
+    let moved = moved_state_directory(home, moved);
     STATE_READABLE
         .iter()
-        .map(|row| under(&under(home, STATE_DIRECTORY), row))
+        .flat_map(|row| {
+            std::iter::once(under(&under(home, STATE_DIRECTORY), row))
+                .chain(moved.iter().map(|moved| under(moved, row)))
+        })
         .collect()
 }
 
@@ -481,7 +517,9 @@ pub(crate) fn every_credential_directory() -> impl Iterator<Item = &'static &'st
 ///
 /// A Windows container cannot be refused a location inside a directory it is granted, so the
 /// caller checks the directories it would grant against this list instead.
-pub fn credential_locations(prelude: Prelude, home: &Path) -> Vec<PathBuf> {
+///
+/// The state directory `moved` puts elsewhere is a location too ([`moved_state_directory`]).
+pub fn credential_locations(prelude: Prelude, home: &Path, moved: Option<&Path>) -> Vec<PathBuf> {
     let platform = match prelude {
         Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
         Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
@@ -491,6 +529,7 @@ pub fn credential_locations(prelude: Prelude, home: &Path) -> Vec<PathBuf> {
         .iter()
         .chain(platform)
         .map(|row| under(home, row))
+        .chain(moved_state_directory(home, moved))
         .collect()
 }
 
@@ -503,6 +542,8 @@ pub fn credential_locations(prelude: Prelude, home: &Path) -> Vec<PathBuf> {
 /// per-tool list that a program the list never heard of is refused for.
 ///
 /// `home` is the account's home directory. Without one only the rows that are absolute apply.
+/// `moved` is the state directory in force where `BRAVEBOT_HOME` moves it out of `home`, which is
+/// refused as `~/.bravebot` is, with the same read of its `sessions` ([`moved_state_directory`]).
 ///
 /// On Windows a container is granted the paths it is given and reaches nothing else, so the base
 /// is [`base`] and nothing here widens it.
@@ -510,6 +551,7 @@ pub fn run_base(
     prelude: Prelude,
     temporary_directory: &Path,
     home: Option<&Path>,
+    moved: Option<&Path>,
 ) -> SandboxPolicy {
     if prelude == Prelude::Windows {
         return base(prelude, temporary_directory, None, home);
@@ -528,17 +570,26 @@ pub fn run_base(
         policy = policy.deny_read(MACOS_SYSTEM_KEYCHAINS);
     }
     if let Some(home) = home {
-        for location in credential_locations(prelude, home) {
+        for location in credential_locations(prelude, home, moved) {
             policy = policy.deny_read(location);
         }
         for row in SSH_READABLE {
             policy = policy.allow_read(under(home, row));
         }
-        for location in readable_state_locations(home) {
+        for location in readable_state_locations(home, moved) {
             policy = policy.allow_read(location);
         }
         if prelude == Prelude::MacOs {
             policy = policy.allow_read(under(home, MACOS_LOGIN_KEYCHAIN));
+        }
+    } else if let Some(moved) =
+        moved.filter(|moved| moved.is_absolute() && !crate::policy::names_a_filesystem_root(moved))
+    {
+        // No home directory to compare it with, so the one test left is that it is a directory a
+        // row can name without refusing the whole filesystem.
+        policy = policy.deny_read(moved);
+        for row in STATE_READABLE {
+            policy = policy.allow_read(under(moved, row));
         }
     }
 
@@ -638,6 +689,7 @@ mod tests {
             prelude,
             Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
             Some(Path::new(A_HOME)),
+            None,
         )
     }
 
@@ -927,12 +979,196 @@ mod tests {
         }
     }
 
+    /// SANDBOX-12, #2917. The regression it rejects: a run base built from the home directory
+    /// alone, which leaves a state directory `BRAVEBOT_HOME` puts outside `~/.bravebot` readable
+    /// (its gateway keys print), or one that lifts the named directory whole instead of its
+    /// `sessions` subtree. Shown failing with `moved_state_directory` returning `None`.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_base_refuses_a_state_directory_that_is_moved_as_it_refuses_the_default() {
+        let moved = Path::new("/srv/ci/bravebot-state");
+        let read = |policy: &SandboxPolicy, path: &Path| {
+            let lifted = policy
+                .readable
+                .iter()
+                .any(|row| row.starts_with(moved) && path.starts_with(row));
+            let refused = policy.unreadable.iter().any(|row| path.starts_with(row));
+            lifted || !refused
+        };
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let policy = run_base(
+                prelude,
+                Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+                Some(Path::new(A_HOME)),
+                Some(moved),
+            );
+            let default = under(Path::new(A_HOME), STATE_DIRECTORY);
+            assert!(policy.unreadable.contains(&default), "{prelude:?}");
+            assert!(
+                policy.unreadable.contains(&moved.to_path_buf()),
+                "{prelude:?}"
+            );
+            assert!(
+                !read(&policy, &moved.join("gateway-keys.json")),
+                "{prelude:?}"
+            );
+            assert!(
+                !read(&policy, &moved.join("sessionsx/1.json")),
+                "{prelude:?}"
+            );
+            assert!(
+                read(&policy, &moved.join("sessions/-repo/1.json")),
+                "{prelude:?}"
+            );
+        }
+    }
+
+    /// The regression it rejects: a state directory that is the home directory, a directory above
+    /// it, a filesystem root, the default, not absolute or absent being refused as a row, which
+    /// would deny the whole account (or add a duplicate), where the default `~/.bravebot` rows
+    /// alone are right. The named directory is the control that a row is added at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_state_directory_that_would_refuse_more_than_itself_adds_no_row() {
+        let home = Path::new(A_HOME);
+        let default = under(home, STATE_DIRECTORY);
+        assert_eq!(
+            moved_state_directory(home, Some(Path::new("/srv/ci/state"))),
+            Some(PathBuf::from("/srv/ci/state"))
+        );
+        // Below the home directory, in a project, is a directory of its own and is refused.
+        assert_eq!(
+            moved_state_directory(home, Some(&under(home, "projects/state"))),
+            Some(under(home, "projects/state"))
+        );
+        for skipped in [
+            None,
+            Some(home),
+            Some(Path::new("/home")),
+            Some(Path::new("/")),
+            Some(default.as_path()),
+            Some(Path::new("relative/state")),
+            Some(Path::new("")),
+        ] {
+            assert_eq!(moved_state_directory(home, skipped), None, "{skipped:?}");
+            for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+                assert_eq!(
+                    credential_locations(prelude, home, skipped),
+                    credential_locations(prelude, home, None),
+                    "{prelude:?} {skipped:?}"
+                );
+            }
+            assert_eq!(
+                readable_state_locations(home, skipped),
+                readable_state_locations(home, None),
+                "{skipped:?}"
+            );
+            let policy = run_base(
+                Prelude::Linux,
+                Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+                Some(home),
+                skipped,
+            );
+            let unmoved = a_run_base(Prelude::Linux);
+            assert_eq!(policy.unreadable, unmoved.unreadable, "{skipped:?}");
+            assert_eq!(policy.readable, unmoved.readable, "{skipped:?}");
+        }
+    }
+
+    /// A state directory that is the default under another spelling (a link to it) adds no row
+    /// either, and one that is not a link to it does.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_state_directory_that_leads_to_the_default_adds_no_row() {
+        let dir = crate::testutil::scratch_dir("base-moved-link");
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(STATE_DIRECTORY)).unwrap();
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        std::os::unix::fs::symlink(home.join(STATE_DIRECTORY), dir.join("linked")).unwrap();
+        assert_eq!(
+            moved_state_directory(&home, Some(&dir.join("linked"))),
+            None
+        );
+        assert_eq!(
+            moved_state_directory(&home, Some(&dir.join("other"))),
+            Some(dir.join("other"))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A state directory that is a link to the home directory or to a directory above it adds no
+    /// row, as the home directory and a directory above it spelled out do not. The regression it
+    /// rejects: guards that compare the spelling, which pass the link and refuse every file of the
+    /// account.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_state_directory_that_is_a_link_to_the_home_or_above_adds_no_row() {
+        let dir = crate::testutil::scratch_dir("base-moved-link-above");
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        std::os::unix::fs::symlink(&home, dir.join("to-home")).unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("to-above")).unwrap();
+        std::os::unix::fs::symlink(dir.join("other"), dir.join("to-other")).unwrap();
+        for linked in ["to-home", "to-above"] {
+            let moved = dir.join(linked);
+            assert_eq!(moved_state_directory(&home, Some(&moved)), None, "{linked}");
+            for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+                assert_eq!(
+                    credential_locations(prelude, &home, Some(&moved)),
+                    credential_locations(prelude, &home, None),
+                    "{linked} {prelude:?}"
+                );
+            }
+            let policy = run_base(
+                Prelude::Linux,
+                Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+                Some(&home),
+                Some(&moved),
+            );
+            assert!(!policy.unreadable.contains(&moved), "{linked}");
+        }
+        let moved = dir.join("to-other");
+        assert_eq!(
+            moved_state_directory(&home, Some(&moved)),
+            Some(moved),
+            "control"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The Windows container is granted the paths it is given, so the directory the person moved
+    /// is a location the caller checks the grants against ([`credential_locations`]), and the
+    /// keyed base is the same with or without it.
+    #[cfg(unix)]
+    #[test]
+    fn the_windows_table_holds_a_moved_state_directory_and_its_base_is_unchanged() {
+        let moved = Path::new("/srv/ci/bravebot-state");
+        let home = Path::new(A_HOME);
+        assert!(
+            credential_locations(Prelude::Windows, home, Some(moved))
+                .contains(&moved.to_path_buf())
+        );
+        assert!(!credential_locations(Prelude::Windows, home, None).contains(&moved.to_path_buf()));
+        let with = run_base(
+            Prelude::Windows,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            Some(home),
+            Some(moved),
+        );
+        let without = a_run_base(Prelude::Windows);
+        assert_eq!(with.unreadable, without.unreadable);
+        assert_eq!(with.readable, without.readable);
+    }
+
     /// The regression it rejects: a lift in the table that names more than the session records
     /// without this list, which a reviewer reads, being changed with it.
     #[test]
     fn the_state_directory_entries_a_stage_reads_are_the_session_records_alone() {
         assert_eq!(
-            readable_state_locations(Path::new(A_HOME)),
+            readable_state_locations(Path::new(A_HOME), None),
             vec![under(Path::new(A_HOME), ".bravebot/sessions")]
         );
     }
@@ -1168,7 +1404,7 @@ mod tests {
     #[test]
     fn the_credential_locations_are_the_rows_the_run_base_refuses() {
         let home = Path::new(A_HOME);
-        let windows = credential_locations(Prelude::Windows, home);
+        let windows = credential_locations(Prelude::Windows, home, None);
 
         for row in [
             ".bravebot",
@@ -1183,7 +1419,7 @@ mod tests {
         }
         for prelude in [Prelude::MacOs, Prelude::Linux] {
             let refused = a_run_base(prelude).unreadable;
-            for location in credential_locations(prelude, home) {
+            for location in credential_locations(prelude, home, None) {
                 assert!(refused.contains(&location), "{prelude:?} {location:?}");
             }
         }
@@ -1201,7 +1437,7 @@ mod tests {
             .iter()
             .map(|row| under(home, row))
             .collect();
-        let mut only_windows: Vec<PathBuf> = credential_locations(Prelude::Windows, home)
+        let mut only_windows: Vec<PathBuf> = credential_locations(Prelude::Windows, home, None)
             .into_iter()
             .filter(|location| !shared.contains(location))
             .collect();
@@ -1237,10 +1473,39 @@ mod tests {
             Prelude::MacOs,
             Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
             None,
+            None,
         );
 
         assert_eq!(policy.unreadable, vec![PathBuf::from("/Library/Keychains")]);
         assert!(policy.is_meaningful());
+    }
+
+    /// SANDBOX-12, #2917. The regression it rejects: a state directory `BRAVEBOT_HOME` moves being
+    /// ignored where the session names no home directory, which leaves its gateway keys readable
+    /// to every program a run starts. A relative one and a filesystem root add no row, and the
+    /// `sessions` subtree is still read, as with a home.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_base_without_a_home_refuses_a_state_directory_that_is_moved() {
+        let moved = Path::new("/srv/ci/bravebot-state");
+        let policy = run_base(
+            Prelude::Linux,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            None,
+            Some(moved),
+        );
+
+        assert_eq!(policy.unreadable, vec![moved.to_path_buf()]);
+        assert!(policy.readable.contains(&moved.join("sessions")));
+        for unfit in [Path::new("relative/state"), Path::new("/")] {
+            let policy = run_base(
+                Prelude::Linux,
+                Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+                None,
+                Some(unfit),
+            );
+            assert!(policy.unreadable.is_empty(), "{unfit:?}");
+        }
     }
 
     /// Every path the policy names, whichever list it is in, since a program reaches what either

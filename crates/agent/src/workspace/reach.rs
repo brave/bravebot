@@ -167,7 +167,7 @@ impl PathReach {
     /// would be: it may not lead to a credential or persistence location, `~/.ssh` or the state
     /// directory, or a place above the home directory. Decided from file system metadata and the
     /// path alone.
-    pub fn stands(&self, home: Option<&Path>) -> bool {
+    pub fn stands(&self, home: Option<&Path>, state: Option<&Path>) -> bool {
         let Ok(found) = std::fs::symlink_metadata(&self.path) else {
             return true;
         };
@@ -187,6 +187,7 @@ impl PathReach {
                 &self.path,
                 self.write,
                 Some(home),
+                state,
                 &bravebot_sandbox::rules::Rules::none(),
             )
             .is_ok_and(|judged| judged == self.path)
@@ -283,7 +284,11 @@ impl Workspace {
         // The macOS profile lets a row at a credential location lift the refusal of it, so the
         // location is refused here on every platform (SANDBOX-18).
         if self.home.as_deref().is_some_and(|home| {
-            bravebot_sandbox::rules::inside_a_credential_location(&canonical, home)
+            bravebot_sandbox::rules::inside_a_credential_location(
+                &canonical,
+                home,
+                self.state.as_deref(),
+            )
         }) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
