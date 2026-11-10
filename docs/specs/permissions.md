@@ -1210,7 +1210,7 @@ against them whole. A wrapper added to the table is a decision about both questi
   the table does not know could name the wrong program, and a deny rule that matched it would be a
   guess about a command line. Whether the table should read more (a path-named `env`, `env -S`) is
   undecided, and so is whether the Why should say "for the wrappers in the table", which is what
-  the behaviour is. Behaviour is unchanged.
+  the behaviour is.
 - **`env` is read with a looser grammar than the program's own.** PERM-20 reads every word of `env`
   containing `=` as an assignment, so `env =1 git push` is read as `env` running `git push`. BSD
   `env` on macOS refuses `=1` (`setenv =1: Invalid argument`) and runs nothing. What GNU and uutils

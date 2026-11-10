@@ -2444,17 +2444,14 @@ show that a model follows them.
   advice is pinned by
   `bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
   and `bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`.
-- **How a Linux stage's argv is assembled has no known defect, and the program word is not checked
-  to be absolute at the backend.** The agent starts each step from the absolute path it resolved
+- **`LandlockSandbox::spawn` does not require an absolute program.** A caller that passed a bare
+  name would have it searched on the person's `PATH` after confinement is applied. The agent's own
+  path always passes an absolute one: it starts each step from the absolute path it resolved
   (`command_for` in `crates/agent/src/exec.rs`), re-checks that path before any step starts, and
   hands the program and arguments to the Landlock backend byte for byte. The backend
   (`crates/sandbox/src/linux.rs`, `confining`) spawns that program directly with `Command::args`
   and `current_dir`, with no wrapper or helper process, so no argument is read as an option and a NUL
-  byte fails the spawn. `LandlockSandbox::spawn` itself does not require an absolute program: a
-  caller that passed a bare name would have it searched on the person's `PATH` after confinement is
-  applied. The agent's own path always passes an absolute one. A step that starts after an earlier
-  step has begun can find the file at its path replaced by that earlier step, when the earlier step
-  can write the directory ([RUN-2](#RUN-2)). The environment a stage inherits, including
-  `LD_PRELOAD`, is the person's own or what the plan assigned
-  ([SANDBOX-30](../sandboxing.md#SANDBOX-30)). This statement does not cover the network namespace
-  entry or the Landlock rule construction.
+  byte fails the spawn. A step that starts after an earlier step has begun can find the file at its
+  path replaced by that earlier step, when the earlier step can write the directory
+  ([RUN-2](#RUN-2)). The environment a stage inherits, including `LD_PRELOAD`, is the person's own
+  or what the plan assigned ([SANDBOX-30](../sandboxing.md#SANDBOX-30)).

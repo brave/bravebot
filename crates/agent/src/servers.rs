@@ -4850,6 +4850,8 @@ mod tests {
         );
     }
 
+    /// A floating package behind a pinned one is what the prompt exists to show: reading only the
+    /// first package would call the line pinned (SERVERS-6).
     #[test]
     fn a_runner_line_that_installs_two_packages_draws_the_one_that_floats() {
         let argv = words(&["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"]);
@@ -4882,6 +4884,9 @@ mod tests {
         );
     }
 
+    /// A person who writes `npm x` runs a package from the registry as `npm exec` does, so the
+    /// prompt must draw it as a runner; `npm install` fetches nothing to run and must not be
+    /// (SERVERS-6).
     #[test]
     fn an_npm_alias_is_drawn_as_the_npm_exec_runner_it_is_and_install_is_not() {
         let lines_of = |argv: &[&str]| -> Vec<String> {
@@ -4917,6 +4922,8 @@ mod tests {
         assert!(lines_of(&["npm", "install", "x", "evil@latest"]).is_empty());
     }
 
+    /// The question a person answers is where the unpinned package has to be visible, so the line
+    /// naming it must reach the prompt and not only the unit that reads the command (SERVERS-6).
     #[test]
     fn a_runner_line_with_two_packages_draws_the_unpinned_one_at_the_question() {
         let (home, project, _) = declared(
