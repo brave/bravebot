@@ -2926,6 +2926,13 @@ fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
             .any(|body| body.contains("So a task that reorganises many items is one read, then one apply, and no process or answer step besides")),
         "no planning request said a separate step cannot preview the calls"
     );
+    // The planner sees which tools a plan's approval covers, beside what a row may fill.
+    assert!(
+        ran.chat
+            .iter()
+            .any(|body| body.contains("brave:move_mark") && body.contains("plan-covered\\n")),
+        "no planning request named the covered tools"
+    );
     assert!(ran.events.iter().any(|event| matches!(
         event,
         bravebot_core::event::Event::GatePassed { gate: "approval", detail }
