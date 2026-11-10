@@ -11,7 +11,7 @@
     {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
     {"await": "a", "bindSession": "a"},
     {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
-    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go", "messageId": "$fresh"}},
     {"send": [{"id": "$send", "ok": {"turn": 1, "target": -1}}]},
     {"await": "send", "error": {"name": "ProtocolError"}}
   ]

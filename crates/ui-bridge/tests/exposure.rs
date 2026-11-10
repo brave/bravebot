@@ -11,6 +11,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -262,7 +264,7 @@ impl FrontEnd {
     fn ask(&mut self, session: &str) -> Value {
         self.send(
             "turn.send",
-            json!({"session": session, "prompt": "what is in .env"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "what is in .env"})),
         );
         self.question_or_the_end()
     }

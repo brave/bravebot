@@ -21,6 +21,8 @@
 )]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
@@ -144,7 +146,10 @@ impl Window {
     /// Send one turn and wait for the event that ends it, which is returned.
     fn turn(&mut self, session: &str, prompt: &str) -> Value {
         let before = self.events.lock().unwrap().len();
-        self.call("turn.send", json!({"session": session, "prompt": prompt}));
+        self.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
         self.event_after(before, |event| {
             matches!(event["event"].as_str(), Some("turn.done" | "turn.error"))
                 && event["session"] == session
@@ -583,7 +588,7 @@ fn the_desktop_process_ends(close_first: bool, name: &str) {
     until(&said, |message| message["id"] == 2);
     write_line(
         &mut child,
-        &json!({"id": 3, "method": "turn.send", "params": {"session": session, "prompt": "hello"}}),
+        &json!({"id": 3, "method": "turn.send", "params": message_ids::with_fresh(json!({"session": session, "prompt": "hello"}))}),
     );
     until(&said, |message| message["event"] == "turn.done");
     if close_first {

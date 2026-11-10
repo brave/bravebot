@@ -632,6 +632,41 @@ fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
     }
 }
 
+/// RPCVIEW-10: a send's id is 1 to 64 ASCII letters, digits, `-` or `_`, and anything else,
+/// including no id at all, is refused.
+#[test]
+fn a_message_id_is_a_short_ascii_word_and_is_required() {
+    let longest = "a".repeat(wire::MESSAGE_ID_LENGTH);
+    for taken in [
+        "0f1e2d3c-aaaa-4bbb-8ccc-123456789abc",
+        "acp_1",
+        "7",
+        longest.as_str(),
+    ] {
+        assert_eq!(wire::message_id(Some(&json!(taken))).expect("an id"), taken);
+    }
+    let longer = "a".repeat(wire::MESSAGE_ID_LENGTH + 1);
+    for refused in [
+        json!(""),
+        json!(longer),
+        json!("a.b"),
+        json!("a b"),
+        json!("a\nb"),
+        json!("é"),
+        json!(7),
+        Value::Null,
+    ] {
+        assert!(
+            wire::message_id(Some(&refused)).is_err(),
+            "{refused} was taken as an id"
+        );
+    }
+    assert!(
+        wire::message_id(None).is_err(),
+        "a send without an id was taken"
+    );
+}
+
 /// MSG-11: a message between sessions crosses as its own kind with the session, the name, the
 /// label and the words, so a window draws a marked block and never a prompt; the frame the planner
 /// was shown is not sent, and a message whose words the planner was not given sends none.

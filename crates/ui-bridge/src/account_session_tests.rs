@@ -382,7 +382,7 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
     call("effort.set", json!({"level": "high"}));
     call(
         "turn.send",
-        json!({"session": handle, "prompt": "say hello"}),
+        crate::message_ids::with_fresh(json!({"session": handle, "prompt": "say hello"})),
     );
     assert_eq!(levels_after(1), [("turn", Some("high"))]);
     call(
@@ -403,7 +403,7 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
     .unwrap();
     call(
         "turn.send",
-        json!({"session": handle, "prompt": "say hello"}),
+        crate::message_ids::with_fresh(json!({"session": handle, "prompt": "say hello"})),
     );
     call(
         "manifest.run",

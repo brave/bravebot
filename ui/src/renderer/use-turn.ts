@@ -139,7 +139,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         // there from a definition this side cannot reach.
         await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
+        // A new id for each Send, which the agent requires on every send (RPCVIEW-10).
+        await call('turn.send', { session: handle, prompt, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {

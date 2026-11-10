@@ -141,6 +141,12 @@ Persist only the phone's pending send ID, text, target, and instance before tran
 
 Done when a lost acknowledgement and client process recreation produce one turn, changed content under an existing ID is rejected, and host restart does not cause automatic re-execution. The budget limit must reject safely. Client-side durable pending-message storage may be completed with stage 7, before its recovery claim.
 
+The message ID is required, not optional. An optional ID would leave a caller that omits it without protection, and nothing would fail when one stopped sending it. Every `turn.send` caller is in this repository and the desktop app runs the bridge it ships with, so all of them change together. Build 4b in three steps:
+
+1. **Require the ID.** `turn.send` refuses a request without a `messageId`. Every caller sends a new ID per action: the desktop composer, the desktop bot turns, the ACP adapter and the TypeScript client. Tests get a shared helper. The specs and the protocol doc describe the field. Nothing is recorded or deduplicated yet.
+2. **The send record.** Deduplication, the send states, the lookup method, the budget, and what a lookup answers after a host restart.
+3. **TypeScript client recovery.** After a reconnect, look up a send whose outcome is unknown, and retry it under the same ID.
+
 ### 5a. Prove takeover with two TypeScript clients
 
 Use the local test program as a second client, launched by the host. Prove one controller plus viewers, expected-epoch takeover, and rejection of delayed former-controller actions. Transfer pending questions only during explicit connected takeover; controller loss refuses them. The incoming client supplies its own answerable kinds. Busy sends retain drafts rather than queueing. This provides the handoff evidence needed for phone integration without depending on Electron. Include the typed host-local startup-trust screen in this client. Test that a phone cannot claim this capability and that its answer still requires the current local controller. Other host-only reply kinds stay unavailable until a capable host UI implements them.

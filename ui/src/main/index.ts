@@ -10,6 +10,7 @@
 import { saveHooks } from './agent-settings'
 import { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker } from 'electron'
 import { openExternal } from './external-open'
+import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Bridge, BridgeError } from './bridge'
@@ -267,10 +268,12 @@ async function sendBotTurn(
   botHandles.set(session, held.slug)
   if (owes) owedCarryOver.add(session)
 
+  // Each call is one send, and the agent requires a new id for each (RPCVIEW-10).
+  const params: Record<string, unknown> = { session, prompt, messageId: randomUUID() }
   // `recall` is left off entirely in the ordinary case rather than sent as `true`. The agent
   // defaults it that way, and a parameter that only ever appears when it is doing something is a
   // parameter somebody reading the wire can see the point of.
-  const params: Record<string, unknown> = recall ? { session, prompt } : { session, prompt, recall }
+  if (!recall) params.recall = recall
   // Left off entirely for the ordinary case, for the same reason `recall` is: a person typed it,
   // and the agent's default for an absent tag says exactly that.
   if (composed) params.composed = composed

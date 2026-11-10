@@ -30,6 +30,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_ui_bridge::control_link::{self, Linked};
 use serde_json::{Value, json};
 use std::ffi::OsStr;
@@ -876,7 +878,7 @@ fn until_a_write_is_waiting<F: Front>(
     let session = front.open_session(&scratch.project());
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "do the work"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
     );
     let mut question = front.question();
     if approve_first {

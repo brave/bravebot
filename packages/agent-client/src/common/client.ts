@@ -171,7 +171,7 @@ class Session implements AgentSession {
     this.sending++
     let result: unknown
     try {
-      result = await this.connection.request('turn.send', this.params({ prompt: text }))
+      result = await this.connection.request('turn.send', this.params({ prompt: text, messageId: newMessageId() }))
     } finally {
       this.sending--
     }
@@ -254,6 +254,17 @@ class Session implements AgentSession {
     if (this.current !== null && this.current.ended === null) this.set(endView(this.current, 'detached', 'the bridge closed the session'))
     return { viewDetached: this.current?.ended?.reason === 'detached', workerTerminated: 'unknown', saved: 'unknown' }
   }
+}
+
+/**
+ * A new id for one send. The bridge refuses a send without one, and a later step reads a repeated
+ * id as the same send again. It needs only to differ from the session's other sends, so the time
+ * and 64 random bits are enough, and neither React Native nor this package's common code has
+ * `crypto.randomUUID` to rely on.
+ */
+function newMessageId(): string {
+  const random = (): string => Math.floor(Math.random() * 2 ** 32).toString(36)
+  return `${Date.now().toString(36)}-${random()}-${random()}`
 }
 
 type RawAccess = (client: RpcAgentClient, method: string, params: Record<string, unknown>) => Promise<unknown>

@@ -12,6 +12,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_agent::trusted::{Identity, Store};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -219,7 +221,7 @@ impl FrontEnd {
     fn turn(&mut self, session: &str) -> Value {
         self.call(
             "turn.send",
-            json!({"session": session, "prompt": "say done"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
         );
         loop {
             let message = self.next_message();
@@ -584,7 +586,7 @@ fn a_yes_is_written_once_and_an_unreadable_answer_answers_nothing() {
         front
             .refused(
                 "turn.send",
-                json!({"session": session, "prompt": "say done"})
+                message_ids::with_fresh(json!({"session": session, "prompt": "say done"}))
             )
             .contains("send trust.reply first"),
         "a refused answer answered the question"

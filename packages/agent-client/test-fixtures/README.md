@@ -9,7 +9,7 @@ runner plays the `steps` in order:
 | Step | Meaning |
 |---|---|
 | `start` + `call` (+ `session`, `args`) | begin a client operation without waiting for it: `describe`, `createSession`, `raw`, `unsupported`, `answerTrust`, `send`, `decide`, `answer`, `cancel`, `close` |
-| `expectRequest` + `method`, `params` | the next request the client wrote must match exactly; its id is bound to the name |
+| `expectRequest` + `method`, `params` | the next request the client wrote must match exactly; its id is bound to the name. A `messageId` of `"$fresh"` matches a message id the bridge takes that no earlier request of the scenario carried |
 | `expectNoRequest` | the client has written nothing since |
 | `send` | server lines to deliver; `"$name"` stands for a bound request id; a string is delivered as a raw line |
 | `await` (+ `result`, `error`, `bindSession`) | the operation's result matches, or it failed with the named error class and code |

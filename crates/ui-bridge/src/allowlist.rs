@@ -77,7 +77,7 @@ pub const OFFERED: &[Operation] = &[
     },
     Operation {
         method: "turn.send",
-        fields: &["session", "prompt"],
+        fields: &["session", "prompt", "messageId"],
     },
     Operation {
         method: "turn.cancel",
@@ -262,7 +262,10 @@ mod tests {
 
     #[test]
     fn an_offered_method_with_its_own_parameters_is_accepted() {
-        let asked = request("turn.send", json!({"session": "s1", "prompt": "hi"}));
+        let asked = request(
+            "turn.send",
+            json!({"session": "s1", "prompt": "hi", "messageId": "m1"}),
+        );
         assert_eq!(check(&asked).expect("offered").method, "turn.send");
     }
 

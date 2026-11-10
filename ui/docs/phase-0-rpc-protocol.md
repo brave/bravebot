@@ -634,6 +634,8 @@ than patching what it drew.
 
 #### `turn.send`
 
+`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10).
+
 The optional `model` parameter selects a model ID for this and subsequent turns on the
 open session handle. Provider IDs remain qualified (for example,
 `openrouter/anthropic/claude-haiku-4.5`). Omitting it or passing `null` retains the
@@ -655,6 +657,7 @@ with the configured default, or `null` when configuration is unavailable.
 ```json
 { "id": 5, "method": "turn.send",
   "params": { "session": "s1", "prompt": "why does the parser drop trailing commas?",
+              "messageId": "0b6f1c9e-3d2a-4f5e-9a71-2c4d8e6f0a13",
               "files": ["notes.md"], "dropped": ["/Users/me/briefing.md"],
               "attachments": ["/Users/me/Desktop/screenshot.png"],
               "images": [{ "media": "image/png", "data": "iVBORw0KGgo..." }] } }

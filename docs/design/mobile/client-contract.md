@@ -188,7 +188,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | List and open sessions | The target's sessions, newest first, and one of them opened by id. | `AgentClient.listSessions()` and `openSession(id)`, gated by `TargetInfo.sessionList`. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`, sending nothing. A target that has them says what each session shows in a `SessionSummary` and does not make the app read row content. |
 | Attach/view | Current control state and subscription for an authorized live session. | New host registry and snapshot operation; never `session.open` on a live record. |
 | Take control | Explicit authorized handoff using expected controller epoch. | New atomic host transition; old-epoch actions fail. |
-| Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |
+| Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send` with a required `messageId`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |
 | Answer | Typed reply to the exact session/turn/question under current control. | Existing reply kinds plus new bridge target checks; phone subset below. |
 | Cancel | Apply cancellation to an exact active turn or run. | Expected-target validation on `turn.cancel`; the target is never reused, unlike a turn number. |
 | Close | Enter `closing`; reach `closed` only after writer shutdown. | Existing `session.close` acknowledges before the worker necessarily finishes; add completion evidence. |
@@ -220,7 +220,7 @@ Reject unknown request fields. Unknown additive event fields may be ignored, but
 
 ## Send identity and uncertain outcomes
 
-Protect `send` with a client-generated message ID scoped to target, host instance, and live session. Before sending, the client saves that ID, original text, and target in a small protected pending-message record. This is not a generic mutation journal. Keep credentials separate; delete settled entries according to a defined retention rule and clear sensitive local pending data when revocation is learned, as best effort.
+Protect `send` with a client-generated message ID scoped to target, host instance, and live session. Every `turn.send` carries one, and a request without one is refused, so no caller is left unprotected by leaving it out. A client generates a new ID for each Send action. Before sending, the client saves that ID, original text, and target in a small protected pending-message record. This is not a generic mutation journal. Keep credentials separate; delete settled entries according to a defined retention rule and clear sensitive local pending data when revocation is learned, as best effort.
 
 The host records the normalized submission before bridge dispatch. States distinguish dispatching, accepted with turn identity, rejected, terminal outcome, and unknown. A duplicate ID with the same content returns the recorded state without dispatch; different content under the same ID is rejected. A send acknowledgement means the bridge accepted the turn, not that an effect completed or its history was saved.
 
