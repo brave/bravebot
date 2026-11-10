@@ -349,7 +349,8 @@ const REGISTRY: &[Advertised] = &[
         gate: None,
         summary: "For each item of a list a SERVER_READ step read, call tools of one server listed \
                   with apply: an isolated processor proposes the calls, and the person approves the \
-                  whole list before any is made",
+                  whole list before any is made, or, where every tool of the step is marked \
+                  plan-covered, approving the plan covers them",
         args: "server*, tools* (comma-separated tool names of that server), lists* (the slots \
                SERVER_READ steps filled, the first being the main one), entries (where each list \
                is in its reply, as a JSON pointer such as /items, or an object of pointers by \
