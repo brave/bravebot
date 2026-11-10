@@ -148,10 +148,10 @@ class ImplementIssues(unittest.TestCase):
         # (brave/bravebot#3591).
         self.env.pop("BRAVEBOT", None)
 
-    def start(self, argument, tty=True, client=None, notes=None):
+    def start(self, argument, tty=True, client=None, notes=None, flags=()):
         command = [
             sys.executable, str(SCRIPT), *(["--bravebot", client] if client else []),
-            *(["--notes", notes] if notes is not None else []), "--", argument,
+            *(["--notes", notes] if notes is not None else []), *flags, "--", argument,
         ]
         return self.spawn(command, self.root, tty)
 
@@ -227,9 +227,9 @@ class ImplementIssues(unittest.TestCase):
         out = bytes(running.seen) + (piped or "").encode()
         return SimpleNamespace(code=running.process.returncode, out=out.decode(errors="replace"), err=err)
 
-    def run_script(self, argument, tty=True, client=None, notes=None, **env):
+    def run_script(self, argument, tty=True, client=None, notes=None, flags=(), **env):
         self.env.update(env)
-        return self.finish(self.start(argument, tty, client, notes))
+        return self.finish(self.start(argument, tty, client, notes, flags))
 
     def searched(self):
         return [call for call in self.calls() if "search/issues" in call]
@@ -262,6 +262,7 @@ class ImplementIssues(unittest.TestCase):
         result = self.run_script("10, 11")
         self.assertNotEqual(result.code, 0)
         self.assertIn("#11 is assigned to alice", result.err)
+        self.assertIn("FORCE=1", result.err)
         self.assertEqual(self.writes(), [])
         self.assertIsNone(self.session())
         self.assertEqual(self.state()["10"], issue())
@@ -382,6 +383,37 @@ class ImplementIssues(unittest.TestCase):
         sent = self.session()["argv"][1]
         self.assertNotIn("zebra-marker", sent)
         self.assertNotIn("ignore the rest", sent)
+
+    def test_force_works_an_issue_assigned_to_somebody_else_and_leaves_that_assignee(self):
+        """#10 has no other assignee, and the session is told about #11 only, since naming both would tell it
+        every issue was contested."""
+        self.world["issues"]["11"] = issue(assignees=["alice"])
+        result = self.run_script("10, 11", flags=["--force"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertIn("working past another assignee, as asked:\r\n#11 is assigned to alice", result.out)
+        seen = self.session()["world"]["issues"]
+        self.assertEqual(seen["11"], issue(assignees=["alice", "netzenbot"], labels=[LABEL]))
+        self.assertEqual(self.state()["11"], issue(assignees=["alice", "netzenbot"]))
+        self.assertEqual(self.state()["10"], issue(assignees=["netzenbot"]))
+        line = self.told()[1]
+        self.assertIn("(FORCE=1): somebody else is also assigned to #11. That is no reason", line)
+        self.assertNotIn("alice", self.session()["argv"][1])
+
+    def test_a_forced_run_with_no_other_assignee_says_nothing_of_force(self):
+        result = self.run_script("10", flags=["--force"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertNotIn("working past", result.out)
+        self.assertNotIn("FORCE", self.session()["argv"][1])
+
+    def test_force_does_not_skip_the_checks_of_the_repository(self):
+        """The label is missing, so adding it would create it, whoever else is assigned."""
+        self.world["issues"]["10"] = issue(assignees=["alice"])
+        self.world["labels"] = ["bug"]
+        result = self.run_script("10", flags=["--force"])
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(f"no label {LABEL}", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
 
     def test_the_label_is_removed_when_the_session_fails(self):
         result = self.run_script("10", FAKE_EXIT="3")
@@ -578,12 +610,17 @@ class ImplementIssues(unittest.TestCase):
         self.assertIn("no open issue to implement", result.err)
         self.assertIsNone(self.session())
 
-    def test_the_make_target_passes_the_issues_and_the_client_through(self):
-        """The recipe takes ISSUES from the environment, so a quote or a `$` in it is not the shell's."""
+    def make_tree(self):
+        """A copy of the files the make target runs, so that it is run as a person runs it."""
         tree = self.root / "tree"
         (tree / "agents/skills/implement-issues").mkdir(parents=True)
         for name in ("Makefile", "agents/pr_worktree.py", "agents/issue_helper.py", "agents/skills/implement-issues/implement-issues.py"):
             shutil.copy(HERE.parents[2] / name, tree / name)
+        return tree
+
+    def test_the_make_target_passes_the_issues_and_the_client_through(self):
+        """The recipe takes ISSUES from the environment, so a quote or a `$` in it is not the shell's."""
+        tree = self.make_tree()
         client = self.root / "bin" / "other-client"
         shutil.copy(self.root / "bin" / "bravebot", client)
         argument = "10, it's \"a\" $$HOME"
@@ -597,10 +634,7 @@ class ImplementIssues(unittest.TestCase):
     def test_the_make_target_passes_the_notes_through(self):
         """The recipe takes NOTES from the environment, so a quote or a `$` in it is not the shell's, and
         `--notes=` keeps a note that starts with a dash from being read as a flag."""
-        tree = self.root / "tree"
-        (tree / "agents/skills/implement-issues").mkdir(parents=True)
-        for name in ("Makefile", "agents/pr_worktree.py", "agents/issue_helper.py", "agents/skills/implement-issues/implement-issues.py"):
-            shutil.copy(HERE.parents[2] / name, tree / name)
+        tree = self.make_tree()
         for given, passed in (
             ("group them, it's \"a\" $$HOME", "/implement-issues 10\nNotes: group them, it's \"a\" $HOME"),
             ("-quickly", "/implement-issues 10\nNotes: -quickly"),
@@ -611,6 +645,19 @@ class ImplementIssues(unittest.TestCase):
             result = self.finish(running)
             self.assertEqual(result.code, 0, result.err)
             self.assertEqual(self.told()[0], passed)
+
+    def test_the_make_target_forces_a_run_only_for_force_1(self):
+        """FORCE=0 and an empty FORCE are the likeliest ways to mean no, and `$(if)` alone reads both as yes."""
+        tree = self.make_tree()
+        self.world["issues"]["10"] = issue(assignees=["alice"])
+        for given in ("0", "", "yes"):
+            result = self.finish(self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", f"FORCE={given}"], tree))
+            self.assertNotEqual(result.code, 0, given)
+            self.assertIn("#10 is assigned to alice", result.err)
+            self.assertIsNone(self.session(), given)
+        result = self.finish(self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", "FORCE=1"], tree))
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.state()["10"]["assignees"], ["alice", "netzenbot"])
 
     def test_a_client_the_environment_names_is_not_the_one_the_make_target_runs(self):
         """brave/bravebot#3591: the recipe takes BRAVEBOT from the environment, so the notes test opened a

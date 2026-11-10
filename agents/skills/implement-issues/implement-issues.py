@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Open the implement-issues skill in the terminal client, after the steps that need no model.
 
-    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] -- <argument>
+    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] [--force] -- <argument>
 
-`make implement-issues ISSUES=<argument> [NOTES=<notes>]` runs it. <argument> is what the skill takes:
+`make implement-issues ISSUES=<argument> [NOTES=<notes>] [FORCE=1]` runs it. <argument> is what the skill takes:
 issue numbers, links and search queries separated by commas. The skill receives it unchanged, since the
 session is `bravebot -i "/implement-issues <argument>"` and opens on that line as its first turn.
 
@@ -15,14 +15,16 @@ issues it claims.
 Once the claim is written, the session is given a line that starts with `Claimed:`, between <argument>
 and the notes. It says when the script assigned the account and added the label, to which issues, and
 that those writes are this run's, so the skill does not read them as another session's work. It holds
-the account, the time and issue numbers, and nothing that GitHub returned. A line of <argument> that
-starts with `Claimed:` ends the list as one that starts with `Notes:` does.
+the account, the time and issue numbers, and nothing that GitHub returned. With `--force`, it also
+names the issues that have another assignee. A line of <argument> that starts with `Claimed:` ends the
+list as one that starts with `Notes:` does.
 
 Before the session opens, from the same reading of <argument> as step 1 of the skill, and with no
 model:
 
 1. every open issue is read, and the run stops with nothing changed when one is assigned to anybody
-   but the account `gh` writes as (`gh api user`);
+   but the account `gh` writes as (`gh api user`), unless `--force` is given, which works those issues
+   anyway and leaves the other assignees where they are;
 2. that account is assigned to each of them;
 3. each of them gets the label bot/in-progress.
 
@@ -212,13 +214,13 @@ def assigned_to(issue, login):
 
 
 def conflicts(issues, me):
-    """A line for each issue assigned to somebody other than `me`."""
-    lines = []
+    """The logins, as printed, of everybody but `me` that each issue is assigned to, for the issues with any."""
+    found = {}
     for number, issue in sorted(issues.items()):
         others = [shown(login) for login in issue["assignees"] if login.lower() != me.lower()]
         if others:
-            lines.append(f"#{number} is assigned to {', '.join(others)}")
-    return lines
+            found[number] = others
+    return found
 
 
 def check_repository(me):
@@ -274,7 +276,7 @@ def stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def claim_line(me, when, issues, assigned, labelled):
+def claim_line(me, when, issues, assigned, labelled, forced):
     """The line that tells the session which assignments and labels this run wrote, and when.
 
     `pr-fix.py issue` prints the labels of an issue, and a session that finds `bot/in-progress` on an
@@ -293,6 +295,11 @@ def claim_line(me, when, issues, assigned, labelled):
     before = [number for number, issue in issues.items() if LABEL in issue["labels"]]
     if before:
         said.append(f"{LABEL} was on {listed(before)} before this run and was left as found. That does not make an item anyone else's.")
+    if forced:
+        said.append(
+            f"The person forced this run past other assignees (FORCE=1): somebody else is also assigned to "
+            f"{listed(forced)}. That is no reason to skip or stop on an item."
+        )
     return " ".join(said)
 
 
@@ -368,6 +375,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bravebot", default="bravebot", help="the terminal client to open, by name or path")
     parser.add_argument("--notes", default="", help="notes for the skill, which reads them; no issue is taken from them")
+    parser.add_argument("--force", action="store_true", help="work an issue that is assigned to somebody else as well")
     parser.add_argument("argument", help="what the skill takes, which it receives unchanged")
     args = parser.parse_args(argv)
     named_in, _ = split_list(args.argument)
@@ -387,15 +395,18 @@ def main(argv=None):
     if not issues:
         die("no open issue to implement. Nothing was changed.")
     taken = conflicts(issues, me)
+    lines = [f"#{number} is assigned to {', '.join(others)}" for number, others in taken.items()]
+    if taken and not args.force:
+        die("\n".join([*lines, "", "Nothing was changed. FORCE=1 (--force) works them anyway."]))
     if taken:
-        die("\n".join([*taken, "", "Nothing was changed."]))
+        print("\n".join(["working past another assignee, as asked:", *lines]), flush=True)
     check_repository(me)
 
     try:
         assigned, labelled = claim(issues, me)
     except RuntimeError as problem:
         die(f"{problem}\nWhat had been written was undone.")
-    prompt = prompt_for(args.argument, args.notes, claim_line(me, stamp(), issues, assigned, labelled))
+    prompt = prompt_for(args.argument, args.notes, claim_line(me, stamp(), issues, assigned, labelled, list(taken)))
     print(f"issues: {listed(issues)}", flush=True)
     print(f"assigned {me}: {listed(assigned) or 'none, already theirs'}", flush=True)
     print(f"labelled {LABEL}: {listed(labelled) or 'none, already labelled'}", flush=True)

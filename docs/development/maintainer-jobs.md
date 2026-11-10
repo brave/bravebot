@@ -23,7 +23,9 @@ every issue a search returns, in one pull request, and `/pr-fix <pr>` handles it
 opens it refuses the whole run when an issue is assigned to anybody but the account `gh` writes as,
 assigns that account to each issue, and adds `bot/in-progress`, which it removes when the session
 ends. The session is told what was written and when, so it does not take the assignee or the label
-for another session's work. Fixing is a separate step from finding, and a run never does both.
+for another session's work. `FORCE=1` works the issues that have another assignee as well, leaves
+those assignees, and tells the session which issues they are. Fixing is a separate step from finding,
+and a run never does both.
 
 `ISSUES` is split on commas and newlines, and every piece that is not an issue number or a link is
 run as a search, so a sentence in it becomes a search for its words. Put instructions for the run in

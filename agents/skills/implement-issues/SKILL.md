@@ -33,7 +33,9 @@ starts with `Notes:` ([step 1](#1-resolve-the-list)). First, with no model,
 removes when the session ends. The `Claimed:` line says when it did that and to which issues. An
 assignee or a label that the line accounts for is this run's own, and a label it says was on an item
 before the run is not another session's either, so neither is a reason to skip or stop on the item.
-Leave the assignee and the label as they are.
+Leave the assignee and the label as they are. When the person gave `FORCE=1`, the script worked items
+that were assigned to somebody else as well and left those assignees, and the line names those items.
+That is the person's choice, so work them, and do not unassign or contact the other assignee.
 
 An **item** is one issue. The **ledger** is the file in step 0 that records every item's state and
 its checklist. A pull request number given alone, as the whole argument, asks for
