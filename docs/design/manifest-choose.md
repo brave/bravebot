@@ -24,6 +24,9 @@ processor's output takes the integrity of its inputs ([PROC-3](../specs/processo
 output derived from untrusted observations stays untrusted. `choose` applies that rule to deferred
 control flow and adds no new trust model.
 
+[`apply`](manifest-apply.md) applies the same rule to a set of effects: the planned tools, applied to
+each item a processor proposes, selected by a person's approval of the resolved list.
+
 ## The problem
 
 Some tasks cannot choose the correct branch before reading the data:
