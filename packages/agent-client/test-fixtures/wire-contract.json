@@ -135,6 +135,7 @@
     "detached"
   ],
   "update": {
+    "omitted": 2,
     "pending": {
       "data": {
         "host": "example.test",

@@ -1,7 +1,8 @@
 //! An opt-in display projection. Payloads are copied whole, including their labels.
 //!
 //! Only bridge-owned event names and identity/status fields select transitions. This module
-//! never reads released text, formats it, or returns display data to execution.
+//! never reads released text, formats it, or returns display data to execution. It takes each
+//! row's serialized length to bound the bytes it keeps, and nothing else of it.
 
 use crate::protocol::Event;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,9 @@ use std::collections::{BTreeMap, HashMap};
 /// How many of the most recent rows a view keeps for a snapshot. Older rows are left out of it,
 /// and the snapshot says how many.
 pub const RETAINED_ROWS: usize = 256;
+
+/// How many bytes of serialized rows a view keeps for a snapshot, beside [`RETAINED_ROWS`].
+pub const RETAINED_BYTES: usize = 4 << 20;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -68,14 +72,7 @@ pub struct Update {
     pub status: Status,
     pub pending: Option<Pending>,
     pub rows: Vec<Row>,
-}
-
-/// Where a view stands and its most recent rows, for a client that was not there for all of it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Snapshot {
-    #[serde(flatten)]
-    pub state: Update,
-    /// How many rows before the first in `rows` the snapshot leaves out.
+    /// How many rows, from the first, the view no longer keeps. A client leaves those out too.
     pub omitted: u64,
 }
 
@@ -91,8 +88,11 @@ pub(crate) struct View {
     pending: Option<Pending>,
     /// Calls that have started and not finished, by the call's id, with the row each is drawn on.
     running_calls: HashMap<u64, u64>,
-    /// The latest state of each row kept, by id. Ids are given in the order rows first appear.
-    retained: BTreeMap<u64, Row>,
+    /// The latest state of each row kept, and its length serialized, by id. Ids are given in the
+    /// order rows first appear.
+    retained: BTreeMap<u64, (Row, usize)>,
+    /// The sum of the serialized lengths in `retained`.
+    retained_bytes: usize,
     /// The id of the last row no longer kept. Rows are numbered from 1 and dropped oldest first,
     /// so this is also how many have been dropped.
     dropped_through: u64,
@@ -113,16 +113,14 @@ impl View {
             pending: None,
             running_calls: HashMap::new(),
             retained: BTreeMap::new(),
+            retained_bytes: 0,
             dropped_through: 0,
         }
     }
 
-    /// The current state with every row kept.
-    pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            state: self.update(self.retained.values().cloned().collect()),
-            omitted: self.dropped_through,
-        }
+    /// The current state with every row kept, for a client that was not there for all of it.
+    pub fn snapshot(&self) -> Update {
+        self.update(self.retained.values().map(|(row, _)| row.clone()).collect())
     }
 
     pub fn initial(&self) -> Update {
@@ -137,6 +135,7 @@ impl View {
             status: self.status,
             pending: self.pending.clone(),
             rows,
+            omitted: self.dropped_through,
         }
     }
 
@@ -145,11 +144,34 @@ impl View {
         // A later state of a row already dropped is sent and not kept, so the rows kept stay the
         // ones after `dropped_through`.
         for row in rows.iter().filter(|row| row.id > self.dropped_through) {
-            self.retained.insert(row.id, row.clone());
+            let bytes = serialized_len(row);
+            if let Some((_, was)) = self.retained.insert(row.id, (row.clone(), bytes)) {
+                self.retained_bytes -= was;
+            }
+            self.retained_bytes += bytes;
         }
-        // Ids rise with first appearance, so the first rows are the oldest.
-        while self.retained.len() > RETAINED_ROWS {
-            if let Some((id, _)) = self.retained.pop_first() {
+        // Ids rise with first appearance, so the first rows are the oldest. A row this update sends
+        // is kept whatever its size while the rows it does not send fit, so a client asking straight
+        // after a long reply is sent it. A sent row older than more than the budget of other rows is
+        // dropped with them. The rows kept are never more than the budget and this update's rows.
+        let sent: Vec<u64> = rows.iter().map(|row| row.id).collect();
+        let mut sent_bytes: usize = sent
+            .iter()
+            .filter_map(|id| self.retained.get(id))
+            .map(|(_, bytes)| bytes)
+            .sum();
+        while self.retained.len() > RETAINED_ROWS
+            || (self.retained_bytes > RETAINED_BYTES
+                && self.retained.len() > 1
+                && self.retained.first_key_value().is_some_and(|(id, _)| {
+                    !sent.contains(id) || self.retained_bytes - sent_bytes > RETAINED_BYTES
+                }))
+        {
+            if let Some((id, (_, bytes))) = self.retained.pop_first() {
+                if sent.contains(&id) {
+                    sent_bytes -= bytes;
+                }
+                self.retained_bytes -= bytes;
                 self.dropped_through = id;
             }
         }
@@ -293,6 +315,24 @@ impl View {
     }
 }
 
+/// How long `row` is written as JSON. Only the length is taken: nothing in the row is read.
+fn serialized_len(row: &Row) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    // Writing a `Value` to a writer that never fails cannot fail.
+    let _ = serde_json::to_writer(&mut count, row);
+    count.0
+}
+
 /// What a bridge promises about the targets of the actions that answer it (RPCVIEW-6). A bridge
 /// that does not advertise it numbers questions per turn, takes a cancel for whatever is running,
 /// and accepts a repeated trust answer.
@@ -426,13 +466,14 @@ mod tests {
                 data: json!({"request": 7, "url": "https://example.test/", "host": "example.test"}),
             }),
             rows,
+            omitted: 2,
         };
         json!({
             "capability": capability(),
             "actionTargets": action_targets(),
             "statuses": statuses.map(status_name),
             "rowKinds": kinds.map(row_kind_name),
-            "snapshot": Snapshot { state: update.clone(), omitted: 4 },
+            "snapshot": Update { omitted: 4, ..update.clone() },
             "update": update,
         })
     }
@@ -550,12 +591,12 @@ mod tests {
             .id;
 
         let snapshot = view.snapshot();
-        assert_eq!(snapshot.state.rows.len(), RETAINED_ROWS);
+        assert_eq!(snapshot.rows.len(), RETAINED_ROWS);
         assert_eq!(snapshot.omitted, last_call - RETAINED_ROWS as u64);
-        assert_eq!(snapshot.state.rows[0].id, snapshot.omitted + 1);
-        assert_eq!(snapshot.state.rows.last().unwrap().id, last_call);
-        assert!(snapshot.state.rows.iter().all(|row| row.id != question));
-        let pending = snapshot.state.pending.expect("the question is kept");
+        assert_eq!(snapshot.rows[0].id, snapshot.omitted + 1);
+        assert_eq!(snapshot.rows.last().unwrap().id, last_call);
+        assert!(snapshot.rows.iter().all(|row| row.id != question));
+        let pending = snapshot.pending.expect("the question is kept");
         assert_eq!((pending.row, pending.data), (question, asked.clone()));
 
         // Both calls finish: the one left out is sent and stays out, the one kept is replaced.
@@ -572,18 +613,143 @@ mod tests {
         assert_eq!(resolved.rows[0].data, asked);
 
         let snapshot = view.snapshot();
-        let ids: Vec<u64> = snapshot.state.rows.iter().map(|row| row.id).collect();
+        let ids: Vec<u64> = snapshot.rows.iter().map(|row| row.id).collect();
         assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
         assert_eq!(snapshot.omitted, last_call - RETAINED_ROWS as u64);
         assert_eq!(ids[0], snapshot.omitted + 1);
         assert!(!ids.contains(&first_call) && !ids.contains(&question));
-        let last = snapshot.state.rows.last().unwrap();
+        let last = snapshot.rows.last().unwrap();
         assert_eq!(
             (last.id, last.event.as_deref()),
             (last_call, Some("tool.finished"))
         );
-        assert!(snapshot.state.pending.is_none());
-        assert_eq!(snapshot.state.sequence, view.initial().sequence);
+        assert!(snapshot.pending.is_none());
+        assert_eq!(snapshot.sequence, view.initial().sequence);
+    }
+
+    fn serialized(rows: &[Row]) -> usize {
+        rows.iter()
+            .map(|row| serde_json::to_vec(row).unwrap().len())
+            .sum()
+    }
+
+    fn narrate(view: &mut View, bytes: usize) -> Update {
+        view.event(&Event::new(
+            "narration",
+            "s1",
+            json!({"text": "x".repeat(bytes)}),
+        ))
+        .unwrap()
+    }
+
+    /// Rows are kept within a byte budget as well as a count, so long replies cannot hold memory
+    /// without limit. The most recent rows are kept, and each update says how many rows the view
+    /// no longer keeps, so a client following the updates leaves out the same rows.
+    #[test]
+    fn a_view_keeps_its_most_recent_rows_within_a_byte_budget_and_says_how_many_it_left_out() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let mut last = None;
+        for _ in 0..20 {
+            last = Some(narrate(&mut view, RETAINED_BYTES / 8));
+        }
+        let last = last.unwrap();
+        let newest = last.rows[0].id;
+
+        let snapshot = view.snapshot();
+        assert!(serialized(&snapshot.rows) <= RETAINED_BYTES);
+        assert!(
+            snapshot.rows.len() < 20,
+            "{} rows kept",
+            snapshot.rows.len()
+        );
+        assert_eq!(snapshot.rows.last().unwrap().id, newest);
+        assert_eq!(snapshot.rows[0].id, snapshot.omitted + 1);
+        assert_eq!(snapshot.omitted, newest - snapshot.rows.len() as u64);
+        assert_eq!(last.omitted, snapshot.omitted);
+    }
+
+    /// The newest row is kept whatever its size, so a client that resyncs straight after a long
+    /// reply is sent it. The next row drops it.
+    #[test]
+    fn a_row_larger_than_the_byte_budget_is_kept_only_while_it_is_the_newest() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let large = narrate(&mut view, RETAINED_BYTES + 1).rows[0].id;
+        let snapshot = view.snapshot();
+        assert_eq!(snapshot.rows.len(), 1);
+        assert_eq!((snapshot.rows[0].id, snapshot.omitted), (large, large - 1));
+
+        let after = narrate(&mut view, 10);
+        assert_eq!(after.omitted, large);
+        let snapshot = view.snapshot();
+        assert_eq!(snapshot.rows.len(), 1);
+        assert_eq!((snapshot.rows[0].id, snapshot.omitted), (large + 1, large));
+    }
+
+    /// A row replaced by a later state counts once, at its latest size, so finishing calls does
+    /// not drop rows that fit.
+    #[test]
+    fn a_row_replaced_by_a_later_state_counts_once_toward_the_byte_budget() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let call = |call: u64| json!({"call": call, "verb": "read", "target": "x".repeat(RETAINED_BYTES / 8)});
+        for at in 1..=6 {
+            view.event(&Event::new("tool.started", "s1", call(at)));
+        }
+        for at in 1..=6 {
+            let finished = view
+                .event(&Event::new("tool.finished", "s1", call(at)))
+                .unwrap();
+            assert_eq!(finished.omitted, 0);
+        }
+        let snapshot = view.snapshot();
+        assert_eq!((snapshot.rows.len(), snapshot.omitted), (7, 0));
+    }
+
+    /// A later state too long for the budget is kept until a later update, so the client it is sent
+    /// to keeps it, and so does a snapshot taken straight after it.
+    #[test]
+    fn a_long_later_state_of_an_older_row_is_kept_by_the_update_that_sends_it() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let call = |target: String| json!({"call": 1, "verb": "read", "target": target});
+        view.event(&Event::new("tool.started", "s1", call("x".into())));
+        narrate(&mut view, 10);
+        let finished = view
+            .event(&Event::new(
+                "tool.finished",
+                "s1",
+                call("x".repeat(RETAINED_BYTES)),
+            ))
+            .unwrap();
+        assert_eq!((finished.rows[0].id, finished.omitted), (2, 1));
+        let snapshot = view.snapshot();
+        assert_eq!(
+            snapshot.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(narrate(&mut view, 10).omitted, 2);
+    }
+
+    /// Rows sent again beside long new ones cannot keep the rows after them past the budget: the
+    /// rows kept are never more than the budget and the rows of the latest update.
+    #[test]
+    fn rows_kept_stay_within_the_byte_budget_and_the_latest_update() {
+        let mut view = View::new(true);
+        let text = |bytes: usize| json!({"text": "x".repeat(bytes)});
+        let old = view.row(RowKind::Approval, None, text(10));
+        view.changed(vec![old.clone()]);
+        for _ in 0..6 {
+            let long = view.row(RowKind::Reply, None, text(RETAINED_BYTES * 3 / 5));
+            let update = view.changed(vec![old.clone(), long]);
+            let kept = serialized(&view.snapshot().rows);
+            assert!(
+                kept <= RETAINED_BYTES + serialized(&update.rows),
+                "{kept} bytes kept after an update of {}",
+                serialized(&update.rows)
+            );
+        }
     }
 
     /// A failed model request must not leave a client showing a running turn.

@@ -63,6 +63,8 @@ export interface ViewUpdate {
   status: Status
   pending: Pending | null
   rows: Row[]
+  /** How many rows, from the first, the runtime no longer keeps. Absent from an older runtime. */
+  omitted?: number
 }
 
 /** A `session.view.snapshot`: the whole view at one sequence, with its most recent rows. */
@@ -162,6 +164,7 @@ export function decodeUpdate(value: unknown): ViewUpdate {
   if (!isCount(value.sequence) || !isCount(value.turn) || !isCount(target)) {
     throw new ProtocolError('a view update needs numeric sequence and turn, and a numeric target if it has one')
   }
+  if (value.omitted !== undefined && !isCount(value.omitted)) throw new ProtocolError('a view update needs a numeric omitted count if it has one')
   if (!Array.isArray(value.rows)) throw new ProtocolError('a view update needs rows')
   return {
     sequence: value.sequence,
@@ -170,6 +173,7 @@ export function decodeUpdate(value: unknown): ViewUpdate {
     status: oneOf(STATUSES, value.status, 'a status'),
     pending: decodePending(value.pending),
     rows: value.rows.map(decodeRow),
+    ...(value.omitted === undefined ? {} : { omitted: value.omitted }),
   }
 }
 
