@@ -562,10 +562,12 @@ not seen, and a changed argv is a server they have not seen.
 
 A program named rather than given as a path is looked for only in `PATH` entries a stage may not
 write, and a file that is a link into such a directory is not taken
-([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). The digest holds the name, so an approval of the
-name must not start a file a confined stage wrote into an activated virtualenv's `bin` or a
-`node_modules/.bin` ahead of the installation the person was shown. A name found only in such a
-directory is not found, as for any absent program.
+([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). Those entries include the checkout holding a
+directory the session was opened on, added or moved to, the nearest of it and its ancestors with a
+`.git`, so a session opened below a checkout's root does not search the checkout's `bin`. The digest holds the
+name, so an approval of the name must not start a file a confined stage wrote into an activated
+virtualenv's `bin`, a `node_modules/.bin` or the `bin` of the checkout ahead of the installation the
+person was shown. A name found only in such a directory is not found, as for any absent program.
 
 **Why.** Same reason [CMDLINE-3](tools/command-line.md#CMDLINE-3) binds an endorsement to the
 compiled plan rather than the line: the thing a person read has to be the thing that runs, and an
@@ -593,6 +595,7 @@ rewritten. The session's question says *that* the declaration changed and not wh
 digest is kept of what was approved, and a digest names no field.
 
 `verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_planted_in_a_directory_a_stage_may_write`
+`verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session`
 `verified-by: bravebot_config::mcp::a_digest_covers_the_program_every_argument_the_names_and_the_directory`
 `verified-by: bravebot_config::mcp::a_digest_covers_every_stored_value_and_every_file_it_may_read`
 `verified-by: bravebot_config::mcp::a_declaration_storing_no_value_digests_as_it_did_before_values_could_be_stored`
@@ -1183,7 +1186,9 @@ the lookup of the programs bravebot starts itself, as a stage's rows are
 ([SANDBOX-30](sandboxing.md#SANDBOX-30)). A server is code we did not write, and a program it
 writes there would start with the person's access, which the confinement withholds from the server.
 The rows are recorded as the server is launched, and a server that is only described records none.
-The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record.
+The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record, and the
+record holds the checkout of each directory the session opens, adds or moves to
+([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **A server is given no directory inside a git repository.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, and a relative
@@ -1993,7 +1998,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   thing the declaration names. Digesting the resolved path would make an approval machine-specific,
   which is either the correct reading of what was approved or a re-approval every time a toolchain
   moves. [SERVERS-5](#SERVERS-5) keeps the name in the digest and closes the planting case another
-  way, by not searching a directory a stage may write (#2777).
+  way, by not searching a directory a stage may write or the checkout holding a directory the
+  session opened (#2777, #3893).
 
 ## Known costs
 

@@ -3869,11 +3869,18 @@ mod tests {
                 .expect("executable");
         }
         let path = std::env::join_paths([&granted]).expect("path");
+        // Only the rows inside the fixture: a workspace opened by another test in this process
+        // records the checkout holding `target/`, which would hide the planted program from the
+        // search whatever this policy records.
         let search = || {
+            let recorded: Vec<PathBuf> = bravebot_sandbox::programs::registered()
+                .into_iter()
+                .filter(|row| row.starts_with(&granted))
+                .collect();
             bravebot_sandbox::programs::find_in(
                 OsStr::new("bravebot-confine-probe"),
                 &path,
-                &bravebot_sandbox::programs::registered(),
+                &recorded,
             )
         };
         assert!(search().is_some(), "found before any policy is built");

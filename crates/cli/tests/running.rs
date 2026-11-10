@@ -13187,7 +13187,10 @@ fn a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_of
             .with_settings(&settings_for(&gateway))
             .with_file("src/a.rs", "pub struct Held;\n");
         // Outside the home and the working directory, which a confined stage may write: a program
-        // found only in a directory like that is not installed (SANDBOX-30).
+        // found only in a directory like that is not installed (SANDBOX-30). The working directory
+        // holds a `.git`, so it is its own checkout and the checkout above this repository's
+        // `target/`, which holds `installed`, is not left out with it.
+        let scratch = scratch.with_file(".git/HEAD", "ref: refs/heads/main\n");
         let installed = Scratch::new(&format!("cli-running-lsp-installed-{name}"));
         let program = installed.path.join("rust-analyzer");
         std::fs::write(&program, A_SERVER_THAT_COUNTS_ITS_STARTS).expect("write the server");

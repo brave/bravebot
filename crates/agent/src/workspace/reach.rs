@@ -343,7 +343,7 @@ impl Workspace {
 
         // Kept out before the directory is open, as it always was, so there is no moment when a
         // stage may write a directory the programs list does not hold.
-        bravebot_sandbox::programs::keep_out(&canonical);
+        bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         let mut added = locked(&self.added);
         if !added.iter().any(|open| open.path() == canonical) {
             // Asked again under the lock: two opens of two paths to one tree both pass the check in
@@ -599,7 +599,7 @@ impl Workspace {
 
         refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
 
-        bravebot_sandbox::programs::keep_out(&canonical);
+        bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
         self.root_made = ScratchDirectory::observed(canonical.clone());

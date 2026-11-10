@@ -68,6 +68,38 @@ pub fn keep_out(directory: &Path) {
     }
 }
 
+/// `directory` and the checkout holding it: the directory first, then the nearest ancestor that has
+/// a `.git`, if there is one. A directory that has a `.git` itself is the checkout, so nothing is
+/// added after it. A `.git` that is a file (a linked worktree or a submodule) counts as one that
+/// is a directory.
+///
+/// A confined stage opened in a subdirectory can write the `bin` of the checkout above it, and
+/// that `bin` can be first on `PATH`. Only the nearest `.git` is taken. Taking
+/// every one also leaves out an outer repository that merely contains the checkout: a dotfiles
+/// repository at the home directory, or the repository a worktree is nested in, and with it every
+/// installed `bin` under it. Nothing is recorded: [`keep_out_with_checkout`] does that.
+pub fn with_checkout(directory: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![directory.to_path_buf()];
+    directories.extend(
+        directory
+            .ancestors()
+            .find(|ancestor| ancestor.join(".git").exists())
+            .filter(|checkout| *checkout != directory)
+            .map(Path::to_path_buf),
+    );
+    directories
+}
+
+/// [`keep_out`] for `directory` and the checkout holding it ([`with_checkout`]).
+///
+/// A session calls this for the directory it opens, adds or moves to, and a command that opens
+/// no session calls it for the directory it ran in, so both leave out the same directories.
+pub fn keep_out_with_checkout(directory: &Path) {
+    for held in with_checkout(directory) {
+        keep_out(&held);
+    }
+}
+
 /// Record a path a stage may write wherever the account can, in both of its spellings.
 pub fn keep_out_where_writable(directory: &Path) {
     let mut held = WRITABLE_WHERE_THE_ACCOUNT_CAN

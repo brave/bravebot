@@ -3970,6 +3970,48 @@ mod tests {
         assert_eq!(program, &genuine);
     }
 
+    /// A session opened in a subdirectory leaves out the checkout holding it
+    /// ([`bravebot_sandbox::programs::with_checkout`]), so a name approved while it resolved to an
+    /// installed program does not start a file planted in that checkout's `bin` ahead of it. The
+    /// installation sits under the same repository's `target/` as the fixture and outside the
+    /// fixture's checkout, and is still found. Rejects a record of the session directory alone,
+    /// which starts the planted file, and one that leaves out every ancestor of the directory,
+    /// which loses the installation.
+    #[test]
+    fn an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session() {
+        let (home, project, declaration) = declared("cli-servers-checkout", &["weather-mcp"]);
+        let root = home.parent().unwrap();
+        // The scratch directory is under this repository, so the fixture needs a `.git` of its own
+        // for the checkout the session was opened in.
+        let checkout = root.join("checkout");
+        let session = checkout.join("sub");
+        std::fs::create_dir_all(checkout.join(".git")).expect("checkout");
+        std::fs::create_dir_all(&session).expect("session");
+        let real = root.join("real-bin");
+        let genuine = installed(&real, "weather-mcp");
+        installed(&checkout.join("bin"), "weather-mcp");
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", declaration.digest());
+        std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("approve");
+        let path = PathBuf::from(
+            std::env::join_paths([checkout.join("bin"), real.clone()]).expect("PATH"),
+        );
+
+        // What a session opened in `session` records, in the test's list of its own.
+        STAGE_WRITABLE.with(|writable| {
+            writable
+                .borrow_mut()
+                .extend(bravebot_sandbox::programs::with_checkout(&session))
+        });
+        let settled = settled(&home, &project, Asking::OneShot, false, true, "", &path);
+
+        assert_eq!(started(&settled), vec!["weather"]);
+        let Some((_, Plan::Stdio { program, .. })) = settled.plans.first() else {
+            panic!("a stdio plan");
+        };
+        assert_eq!(program, &genuine);
+    }
+
     #[test]
     fn skipping_permissions_starts_the_server_unasked_and_records_nothing() {
         let (home, project, _) = declared("cli-servers-bypass", &["weather-mcp"]);
