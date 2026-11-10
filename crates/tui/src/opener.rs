@@ -489,8 +489,11 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let name = variable.to_ascii_lowercase();
-        let session = crate::testutil::scratch_dir(&format!("opener-gnome-{name}-session"));
-        let installed = crate::testutil::scratch_dir(&format!("opener-gnome-{name}-installed"));
+        // The test's own name is part of the directory, since tests run in parallel and every test
+        // uses the same four variable names.
+        let label = test.rsplit("::").next().unwrap_or(test);
+        let session = crate::testutil::scratch_dir(&format!("opener-{label}-{name}-session"));
+        let installed = crate::testutil::scratch_dir(&format!("opener-{label}-{name}-installed"));
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&installed);
         let data = installed.join("data/applications");
