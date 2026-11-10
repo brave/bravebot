@@ -91,6 +91,8 @@ fn start_against(
             program,
             Inherits::All,
             SearchPath::Reduced,
+            // A clipboard or inhibitor tool other than PowerShell: the generic table alone
+            // (SANDBOX-30, empty-list starts).
             CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,

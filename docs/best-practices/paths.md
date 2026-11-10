@@ -218,7 +218,7 @@ the rest from what the start is for, and the diff says which it is when that is 
 entry does not say that a start the diff does not touch complies. The generic table
 (`CODE_SELECTORS` in `crates/sandbox/src/programs.rs`) is applied to every checked start, and a
 program's own names are the `CODE_SELECTORS` list in `crates/agent/src/gcloud.rs`,
-`crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
+`crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
 `crates/tui/src/opener.rs` or `crates/tui/src/powershell.rs`, so a diff that adds a start lists only the names its program reads that
 the table does not hold, or passes `Checked(&[])` and records the gap as
 [GAP-001](gaps.md#GAP-001) asks. A launcher that takes its handler from a list of commands, such as
@@ -233,9 +233,12 @@ program never reads it. A variable the launcher reads that is in neither breaks 
 program's names are passed to `start` and the check stays in shared code ([PATH-006](#PATH-006)).
 
 `make check-code-selectors` confirms that every call of `start` and `start_against` states
-`CodeSelectors::Kept` with a comment or `CodeSelectors::Checked`, and that every name in a
+`CodeSelectors::Kept` with a comment or `CodeSelectors::Checked`, that a start passing
+`CodeSelectors::Checked(&[])` has a comment and a row in the table of empty-list starts in
+SANDBOX-30, and that every name in a
 `CODE_SELECTORS` list (in `crates/sandbox/src/programs.rs`, `crates/agent/src/gcloud.rs`,
-`crates/bedrock/src/credentials.rs` and `crates/cli/src/push_identity.rs`) has one test that removes
+`crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
+`crates/tui/src/opener.rs` and `crates/tui/src/powershell.rs`) has one test that removes
 a value and one that keeps a value (an options variable needs only the first). A reviewer confirms
 the rest of these, and that the list is complete:
 
@@ -246,6 +249,13 @@ the rest of these, and that the list is complete:
 - An absolute path that exists outside every stage-writable directory is kept.
 - A value that is not UTF-8 is judged as the bytes it is ([PATH-003](#PATH-003)).
 - A variable the launcher does not read to choose code is left as set.
+
+The variables of the five programs the sandbox usability suite starts (`make`, `cargo`, `npm`, `go`
+and `python3`) are covered by a run of the real program with a planted helper. SANDBOX-30 records
+the versions, the names that ran a helper and the names that did not. The run covers the names
+found by reading each program's documentation and trying them on one macOS host. It does not show
+that no other name or version selects code, so a reviewer still reads the launcher for each change
+to the list.
 
 ```rust
 // Wrong: the variables are inherited as the person set them, so a value naming a file a stage

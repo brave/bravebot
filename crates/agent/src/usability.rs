@@ -13,7 +13,7 @@
 
 use crate::confine::Confinement;
 use bravebot_core::command::Step;
-use bravebot_sandbox::programs::Names;
+use bravebot_sandbox::programs::{Names, selectors};
 use bravebot_sandbox::rules::Lists;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
@@ -73,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 21] = [
+const CODE_SELECTORS: [(&str, Names); 57] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -84,6 +84,29 @@ const CODE_SELECTORS: [(&str, Names); 21] = [
     ("MAKEFLAGS", Names::Options),
     ("GNUMAKEFLAGS", Names::Options),
     ("MFLAGS", Names::Options),
+    // make: the program each built-in rule and recipe variable names (`CC` and `CXX` are in the go
+    // group below), and the flags that name a linker. An environment value replaces the default
+    // of these variables, so a value is a program with arguments and is judged as options.
+    ("MAKE", Names::Options),
+    ("RM", Names::Options),
+    ("AR", Names::Options),
+    ("AS", Names::Options),
+    ("FC", Names::Options),
+    ("PC", Names::Options),
+    ("M2C", Names::Options),
+    ("LEX", Names::Options),
+    ("YACC", Names::Options),
+    ("LINT", Names::Options),
+    ("TEXI2DVI", Names::Options),
+    ("MAKEINFO", Names::Options),
+    ("GET", Names::Options),
+    ("CO", Names::Options),
+    ("CFLAGS", Names::Options),
+    ("CPPFLAGS", Names::Options),
+    ("CXXFLAGS", Names::Options),
+    ("LDFLAGS", Names::Options),
+    ("LDLIBS", Names::Options),
+    ("TARGET_ARCH", Names::Options),
     // cargo and rustc: a compiler or wrapper to run first, and flags that load a plugin.
     ("RUSTC", Names::Program),
     ("RUSTC_WRAPPER", Names::Program),
@@ -97,18 +120,63 @@ const CODE_SELECTORS: [(&str, Names); 21] = [
     ("CARGO_ENCODED_RUSTFLAGS", Names::Options),
     ("CARGO_BUILD_RUSTFLAGS", Names::Options),
     ("RUSTDOCFLAGS", Names::Options),
-    // go: flags that name a tool to run (`-toolexec`).
+    ("CARGO_ENCODED_RUSTDOCFLAGS", Names::Options),
+    ("CARGO_BUILD_RUSTDOCFLAGS", Names::Options),
+    // cargo: the program `cargo login` and `cargo logout` run to store or read a registry token, for
+    // crates.io and for every registry. `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` is a family,
+    // matched by `names_a_target_program`.
+    ("CARGO_REGISTRY_CREDENTIAL_PROVIDER", Names::Options),
+    ("CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS", Names::Options),
+    // rustup, which the `cargo` on a machine with it is a proxy for: the toolchain to run, by
+    // name or by path, and the directory it finds toolchains and its default in.
+    ("RUSTUP_TOOLCHAIN", Names::Program),
+    ("RUSTUP_HOME", Names::Directory),
+    // cargo: the commands `cargo doc --open` opens the documentation with. The browser opener's
+    // start lists the same variable.
+    selectors::BROWSER,
+    // node and npm: directories searched for a module the project does not hold.
+    ("NODE_PATH", Names::Directories),
+    // python3: the program `sys.executable` names, which `-m venv` starts to make the environment.
+    ("PYTHONEXECUTABLE", Names::Program),
+    // go: flags that name a tool to run (`-toolexec`, `-exec`), a program that serves the build
+    // cache, and the C compiler, `pkg-config` and linker flags a package that uses cgo is built
+    // with. `CC` and `CXX` are also the compilers of make's built-in rules and of the `cc` crate in
+    // a cargo build script, which is why they are here and not in the generic table: no other
+    // checked start compiles. They may carry arguments, so they are judged as options.
     ("GOFLAGS", Names::Options),
+    ("GOCACHEPROG", Names::Options),
+    ("CC", Names::Options),
+    ("CXX", Names::Options),
+    ("PKG_CONFIG", Names::Program),
+    ("CGO_LDFLAGS", Names::Options),
+    ("CGO_CFLAGS", Names::Options),
+    ("CGO_CPPFLAGS", Names::Options),
 ];
 
-/// Whether the variable `name` gives cargo a program to run for a target: `CARGO_TARGET_<triple>_LINKER`
-/// and `CARGO_TARGET_<triple>_RUNNER`. The triple is part of the name, so these are matched as a
-/// family and not listed.
+/// Whether the variable `name` gives cargo a program to run for a target or a registry, or flags
+/// that name one: `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS`, and
+/// `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`. The triple or the registry is part of the name,
+/// so these are matched as a family and not listed.
 fn names_a_target_program(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
-        name.starts_with("CARGO_TARGET_")
-            && (name.ends_with("_LINKER") || name.ends_with("_RUNNER"))
+        (name.starts_with("CARGO_TARGET_")
+            && ["_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS"]
+                .iter()
+                .any(|end| name.ends_with(end)))
+            || (name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_CREDENTIAL_PROVIDER"))
     })
+}
+
+/// The prefix of the variables npm reads as configuration, in any case: `npm_config_script_shell`
+/// names the shell it runs a script with, `npm_config_userconfig` a file that can name it, and
+/// `npm_config_init_module` a script `npm init` runs. Every one is removed, since the workflows
+/// run npm with a scratch home and set none of them.
+const NPM_CONFIG_PREFIX: &str = "npm_config_";
+
+fn is_npm_config_name(name: &OsStr) -> bool {
+    name.as_encoded_bytes()
+        .get(..NPM_CONFIG_PREFIX.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(NPM_CONFIG_PREFIX.as_bytes()))
 }
 
 /// The variables the stored-login `gh` is not handed because they load code into it: the dynamic
@@ -628,10 +696,13 @@ fn stage_command(
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let holds_rustup_home = held
+        .iter()
+        .any(|(name, _)| name == OsStr::new("RUSTUP_HOME"));
     let target_programs: Vec<OsString> = held
         .iter()
         .map(|(name, _)| name.clone())
-        .filter(|name| names_a_target_program(name))
+        .filter(|name| names_a_target_program(name) || is_npm_config_name(name))
         .collect();
     let mut command = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
@@ -659,8 +730,13 @@ fn stage_command(
         .env("GIT_PAGER", "cat")
         .env("PAGER", "cat")
         .env("NO_COLOR", "1");
-    // The rustup proxy finds its toolchains from the account's home, which is not this one.
-    if std::env::var_os("RUSTUP_HOME").is_none()
+    // The rustup proxy finds its toolchains from the account's home, which is not this one. A
+    // value the check removed leaves the proxy the same need, and so does an environment that
+    // holds none.
+    let rustup_home_removed = command
+        .get_envs()
+        .any(|(name, now)| name == OsStr::new("RUSTUP_HOME") && now.is_none());
+    if (rustup_home_removed || !holds_rustup_home)
         && let Some(real) = std::env::var_os("HOME")
     {
         command.env("RUSTUP_HOME", Path::new(&real).join(".rustup"));
@@ -787,7 +863,8 @@ fn login_command(
         inherits,
         unconfined_path(confinement),
         // The stored-login `gh` is a program bravebot found, so the generic names that select
-        // code are checked. `gh auth token` reads none of its own that run code.
+        // code are checked. `gh auth token` reads none of its own that run code
+        // (SANDBOX-30, empty-list starts).
         bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
         held,
         outside_stage_writable,
@@ -1317,11 +1394,13 @@ mod tests {
     }
 
     /// Whether a stage's program is started without `name`, when the environment holds `value`.
+    ///
+    /// A name the start sets again to a value of its own, as `RUSTUP_HOME` is, counts as withheld
+    /// when that value is not the one given.
     fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
-        removed(
-            &stage_with(OsStr::new(name), value.as_os_str(), writable),
-            OsStr::new(name),
-        )
+        let command = stage_with(OsStr::new(name), value.as_os_str(), writable);
+        removed(&command, OsStr::new(name))
+            || set_to(&command, name).is_some_and(|now| now != value.as_os_str())
     }
 
     /// The regression it rejects: leaving the names that choose code out of `HOST_VARIABLES`, so a
@@ -1478,9 +1557,87 @@ mod tests {
             "CARGO_ENCODED_RUSTFLAGS",
             "CARGO_BUILD_RUSTFLAGS",
             "RUSTDOCFLAGS",
+            "CARGO_ENCODED_RUSTDOCFLAGS",
+            "CARGO_BUILD_RUSTDOCFLAGS",
+            "CARGO_REGISTRY_CREDENTIAL_PROVIDER",
+            "CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS",
+            "CARGO_REGISTRIES_BRAVEBOT_PROBE_CREDENTIAL_PROVIDER",
+            "MAKE",
+            "RM",
+            "AR",
+            "AS",
+            "FC",
+            "PC",
+            "M2C",
+            "LEX",
+            "YACC",
+            "LINT",
+            "TEXI2DVI",
+            "MAKEINFO",
+            "GET",
+            "CO",
+            "CFLAGS",
+            "CPPFLAGS",
+            "CXXFLAGS",
+            "LDFLAGS",
+            "LDLIBS",
+            "TARGET_ARCH",
+            "CGO_CFLAGS",
+            "CGO_CPPFLAGS",
             "GOFLAGS",
         ] {
             assert!(withheld(name, &genuine, &session), "{name}");
+        }
+    }
+
+    /// The regression it rejects: leaving the names found by running `cargo`, `npm`, `go` and
+    /// `python3` (brave/bravebot#3811) out of the start, matching `npm_config_` in one case only,
+    /// removing a name that only begins like one, or leaving a stage without the `RUSTUP_HOME` the
+    /// `cargo` proxy needs once a person's value is removed.
+    #[test]
+    fn the_names_found_by_running_cargo_npm_go_and_python_are_removed() {
+        let (session, planted, genuine) = planted_and_genuine("usability-found");
+
+        for name in [
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTDOCFLAGS",
+            "npm_config_script_shell",
+            "NPM_CONFIG_SCRIPT_SHELL",
+            "Npm_Config_Userconfig",
+            "npm_config_init_module",
+            "GOCACHEPROG",
+            "CC",
+            "CXX",
+            "CGO_LDFLAGS",
+        ] {
+            assert!(withheld(name, &genuine, &session), "{name}");
+        }
+        for name in [
+            "RUSTUP_TOOLCHAIN",
+            "RUSTUP_HOME",
+            "NODE_PATH",
+            "PKG_CONFIG",
+            "PYTHONEXECUTABLE",
+            "BROWSER",
+        ] {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+        for name in ["npm_config", "CARGO_TARGET_DIR", "CARGO_TARGET_X_FLAGS"] {
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+        if let Some(real) = std::env::var_os("HOME") {
+            let account = Path::new(&real).join(".rustup").into_os_string();
+            // A removed value is replaced.
+            let command = stage_with(OsStr::new("RUSTUP_HOME"), planted.as_os_str(), &session);
+            assert_eq!(set_to(&command, "RUSTUP_HOME"), Some(account.clone()));
+            // An environment that holds none is given the account's.
+            let command = stage_with(OsStr::new("NODE_PATH"), genuine.as_os_str(), &session);
+            assert_eq!(set_to(&command, "RUSTUP_HOME"), Some(account));
+            // A value that is kept is the one held, whatever this process's environment has.
+            let command = stage_with(OsStr::new("RUSTUP_HOME"), genuine.as_os_str(), &session);
+            assert_eq!(set_to(&command, "RUSTUP_HOME"), None);
+            assert!(!removed(&command, OsStr::new("RUSTUP_HOME")));
         }
     }
 

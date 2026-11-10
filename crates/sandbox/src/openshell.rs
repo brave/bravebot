@@ -156,6 +156,7 @@ where
         cli,
         Inherits::Only(CLI_INHERITS),
         SearchPath::Reduced,
+        // Given `HOME` alone, so no generic name reaches the CLI (SANDBOX-30, empty-list starts).
         CodeSelectors::Checked(&[]),
     );
     command.args(args);
@@ -484,6 +485,8 @@ impl Sandbox for OpenShell {
             &self.cli,
             Inherits::Only(CLI_INHERITS),
             SearchPath::Reduced,
+            // Given `HOME` alone, so no generic name reaches the CLI (SANDBOX-30, empty-list
+            // starts).
             CodeSelectors::Checked(&[]),
         );
         command
