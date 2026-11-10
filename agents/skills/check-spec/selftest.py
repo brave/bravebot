@@ -2356,6 +2356,28 @@ LABEL_GATES = [
 ]
 
 
+def derived_gates(labels, sources):
+    """The `Policy::` functions the labels spec counts that the security-audit skill finds building
+    a trusted or public label in `crates/core/src/policy.rs`, sorted.
+
+    `LABEL_GATES` is written by hand, and a ninth function written the same way is in neither it
+    nor any count until somebody remembers to add it. The security-audit check reports a builder no
+    spec counts; this reports one the labels spec counts and the list lacks, and a name on the list
+    that is no longer a builder."""
+    folder = Path(__file__).resolve().parent.parent / "security-audit"
+    if str(folder) not in sys.path:
+        sys.path.append(folder.as_posix())
+    audit = importlib.util.spec_from_file_location("security_audit", folder / "security-audit.py")
+    module = importlib.util.module_from_spec(audit)
+    audit.loader.exec_module(module)
+    builders = module.label_builders(sources)
+    return sorted(
+        symbol
+        for symbol in labels.allowlists
+        if symbol.startswith("Policy::") and symbol.partition("::")[2] in builders
+    )
+
+
 def label_gate_checks():
     """The eight gates in docs/specs/labels.md, against the real tree.
 
@@ -2386,6 +2408,11 @@ def label_gate_checks():
         (
             "every gate is pinned in the labels spec, with a sites list",
             all(symbol in here for symbol in LABEL_GATES),
+        ),
+        (
+            "LABEL_GATES is the set of functions in the policy layer that build a trusted or public "
+            "label and that the labels spec counts, so a ninth gate is added to it or reported",
+            derived_gates(labels, sources) == sorted(LABEL_GATES),
         ),
         (
             "no entry of the labels spec pins nothing beside the ones that do",
