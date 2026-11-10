@@ -292,31 +292,36 @@ struct Status {
 }
 
 /// `lstat` where `not_through_a_link`, `stat` otherwise. Allocates nothing.
-#[allow(
+#[expect(
     unsafe_code,
     reason = "`stat` and `lstat` are given a NUL-terminated path and a zeroed buffer of the type they fill"
 )]
 fn status_of(path: &CStr, not_through_a_link: bool) -> std::io::Result<Status> {
-    // SAFETY: `path` is NUL-terminated and outlives the call, and `found` is a zeroed `stat`,
-    // which is valid for every field, that the call fills.
+    // SAFETY: `stat` is a plain C struct of integers, for which every bit pattern, zero included,
+    // is a valid value.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    unsafe {
-        let mut found: libc::stat = std::mem::zeroed();
-        let result = match not_through_a_link {
-            true => libc::lstat(path.as_ptr(), &mut found),
-            false => libc::stat(path.as_ptr(), &mut found),
-        };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(Status {
-            kind: found.st_mode & libc::S_IFMT,
-            identity: Identity {
-                device: found.st_dev as u64,
-                inode: found.st_ino as u64,
-            },
-        })
+    let mut found: libc::stat = unsafe { std::mem::zeroed() };
+    let found_pointer: *mut libc::stat = &mut found;
+    let result = if not_through_a_link {
+        // SAFETY: `path` is NUL-terminated and outlives the call, and `found_pointer` points at
+        // `found`, which the call fills.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe { libc::lstat(path.as_ptr(), found_pointer) }
+    } else {
+        // SAFETY: as for `lstat` above.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe { libc::stat(path.as_ptr(), found_pointer) }
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
     }
+    Ok(Status {
+        kind: found.st_mode & libc::S_IFMT,
+        identity: Identity {
+            device: found.st_dev as u64,
+            inode: found.st_ino as u64,
+        },
+    })
 }
 
 /// Whether an OS error number says a name is gone: not found, under something that is no longer
@@ -361,7 +366,7 @@ impl ChildWork {
     }
 }
 
-#[allow(unsafe_code, reason = "`setsid` takes no argument")]
+#[expect(unsafe_code, reason = "`setsid` takes no argument")]
 fn lead_a_session() -> std::io::Result<()> {
     // SAFETY: `setsid` takes no pointers and is async-signal-safe.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -373,26 +378,28 @@ fn lead_a_session() -> std::io::Result<()> {
 
 /// Sets `no_new_privs` and restricts the calling thread with the ruleset at `ruleset`, which
 /// stays open. Fail closed: a kernel that refuses either is the error.
-#[allow(
+#[expect(
     unsafe_code,
     reason = "`prctl` takes integers and `landlock_restrict_self` takes a descriptor and flags, with no pointer"
 )]
 fn restrict_self(ruleset: libc::c_int) -> std::io::Result<()> {
-    // SAFETY: `prctl` takes integers. `landlock_restrict_self` takes the descriptor of a ruleset
-    // this process holds and a flags word, and reads no memory.
+    // SAFETY: `prctl` takes integers and reads no memory.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    unsafe {
-        if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1 as libc::c_ulong, 0, 0, 0) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if libc::syscall(
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1 as libc::c_ulong, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `landlock_restrict_self` takes the descriptor of a ruleset this process holds and a
+    // flags word, and reads no memory.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let restricted = unsafe {
+        libc::syscall(
             SYS_LANDLOCK_RESTRICT_SELF,
             libc::c_long::from(ruleset),
             0 as libc::c_ulong,
-        ) != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
+        )
+    };
+    if restricted != 0 {
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
 }
@@ -757,7 +764,7 @@ impl LandlockSandbox {
 
         // Landlock applies to the calling thread and is inherited across exec, so the ruleset is
         // applied in the child between fork and exec.
-        #[allow(
+        #[expect(
             unsafe_code,
             reason = "`pre_exec` is unsafe because its closure runs in the forked child; this one makes only system calls on memory built before the fork and allocates nothing"
         )]
