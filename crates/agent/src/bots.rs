@@ -11,8 +11,9 @@ mod operations;
 pub use operations::{
     Changes, NewBot, Noted, Saved, archive, archive_in, delete, delete_in, edit, edit_in,
     ensure_home, ensure_home_in, forget_conversation, forget_conversation_in, make, make_in,
-    record_archived, record_archived_in, record_conversation, record_conversation_in,
-    release_session, release_session_in, restore, restore_in, set_model, set_model_in,
+    migrate, owes_carry_over, record_archived, record_archived_in, record_conversation,
+    record_conversation_in, release_session, release_session_in, restore, restore_in, set_model,
+    set_model_in, works_in,
 };
 
 pub const CEILING: usize = 100;

@@ -327,7 +327,9 @@ impl Bridge {
             "bot.record_archived" => crate::bots::record_archived(request),
             "bot.release_session" => crate::bots::release_session(request),
             "bot.forget_conversation" => crate::bots::forget_conversation(request),
-            "bot.migrate" => crate::definitions::migrate(request),
+            "bot.migrate" => crate::bots::migrate(request),
+            "bot.owes_carry_over" => crate::bots::owes_carry_over(request),
+            "bot.works_in" => crate::bots::works_in(request),
             "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),

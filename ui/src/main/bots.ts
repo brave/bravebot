@@ -113,7 +113,7 @@ import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs
 import { join } from 'node:path'
 import { type Bot, botFolders, botOf, isSlug, withBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
-import { isOpenedDirectory } from './opened'
+import { chosenDirectories } from './opened'
 import { type BotRow, type BridgeWrite, bridgeRequest, readBots, updateBots, withoutFigures, writeThroughBridge } from './bot-store'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
@@ -169,54 +169,17 @@ export async function saveForm(value: unknown): Promise<Bot | null> {
   })
 }
 
-/**
- * The folder a bot made before definitions kept its old memory in.
- *
- * A bot that old was pinned to one folder, which is where its conversations were put when the
- * store was read, so the first of them names it. One with no conversation has no memory to record
- * and names its home.
- */
-function oldMemoryFolder(held: Bot): string {
-  return held.conversations[0]?.directory ?? held.home
+export async function carryStillOwed(slug: string, folder: string): Promise<boolean> {
+  const answer = (await bridgeRequest('bot.owes_carry_over', { slug, folder })) as { owes?: unknown } | null
+  if (typeof answer?.owes !== 'boolean') throw new Error('the agent did not say whether a carry-over is owed')
+  return answer.owes
 }
 
-/**
- * Whether a turn about to be sent in `folder` is the first for a bot that still has no definition,
- * in the one folder whose old notes `migrateBot` records as untrusted (MEMORY-11).
- *
- * The record holds that folder's path alone, so a turn told to read the old notes in any other
- * folder would read a file the trust map has not recorded.
- */
-export function owesCarryOver(held: Bot, folder: string): boolean {
-  return held.definition === null && folder === oldMemoryFolder(held)
-}
-
-/**
- * Give a bot made before definitions one, the first time it is opened (MEMORY-11).
- *
- * The agent writes the definition and records the bot's old memory, `.bravebot-ui/bots/<slug>.md`
- * in its folder, as untrusted in every later session. Nothing here reads that file: this process
- * sends the slug, the purpose, the model and the folder it holds for the bot, and keeps only the
- * name the agent answers with. A refusal, an absent agent or an answer that is not a slug throws
- * and the bot stays as it was, so it is tried again on the next open. A bot that has a definition
- * is returned as it is and the agent is not asked.
- */
-export async function migrateBot(
-  held: Bot,
-  migrate: ((method: 'bot.migrate', params: Record<string, unknown>) => Promise<unknown>) | null,
-): Promise<Bot> {
-  if (held.definition !== null) return held
-  if (!migrate) throw new Error('The agent is not running, so this bot cannot be opened.')
-  const made = (await migrate('bot.migrate', {
-    slug: held.slug,
-    purpose: held.purpose,
-    directory: oldMemoryFolder(held),
-    ...(held.model === null ? {} : { model: held.model }),
-  })) as { name?: unknown } | null
-  if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
-  const next = { ...held, definition: made.name }
-  await saveBot(next)
-  return next
+export async function definitionForTurn(slug: string): Promise<Bot> {
+  const answer = (await writeThroughBridge(() => ({ method: 'bot.migrate', params: { slug } }))) as { bot?: BotRow } | null
+  const row = answer?.bot
+  if (!row || !isSlug(row.definition)) throw new Error('The agent did not name the bot’s definition.')
+  return withoutFigures(row)
 }
 
 export function saveBotModel(slug: string, model: string | null): Promise<Bot> {
@@ -238,17 +201,14 @@ export async function ensureBotHome(slug: string): Promise<boolean> {
   }
 }
 
-/**
- * Whether a bot may work in this folder: its home, a folder it has already worked in, or one the
- * picker handed over in this run.
- *
- * The folder becomes the directory a confined helper seeds the memory in, so the same rule
- * `isOpenedDirectory` gives applies. A folder the window can name by opening a session there is
- * not one somebody chose for this bot.
- */
-export function worksIn(held: Bot, directory: string | undefined): directory is string {
+export async function worksIn(held: Bot, directory: string | undefined): Promise<boolean> {
   if (directory === undefined) return false
-  return botFolders(held).includes(directory) || isOpenedDirectory(directory)
+  const answer = (await bridgeRequest('bot.works_in', {
+    slug: held.slug,
+    directory,
+    opened: chosenDirectories(),
+  })) as { allowed?: unknown }
+  return answer.allowed === true
 }
 
 /** Record a durable conversation and the folder it ran in, without discarding any earlier ones. */
@@ -334,7 +294,7 @@ function ownDirectory(slug: string): string {
  *
  * A bot with a definition keeps its memory where the agent keeps every definition's, which the run
  * is told about and reads itself (MEMORY-4). A bot made before definitions existed has none until
- * `migrateBot` gives it one (MEMORY-11), and is named at the file this app made for it.
+ * it is given one (MEMORY-11), and until then is named at the file this app made for it.
  */
 export function memoryPath(bot: Pick<Bot, 'slug' | 'definition'>): string {
   return bot.definition === null ? `${HOME}/bots/${bot.slug}.md` : definitionMemoryPath(bot.definition)

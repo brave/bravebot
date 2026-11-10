@@ -18,7 +18,9 @@ together with them. Slice 3b is built on the branch `bots/slice-3b-archive`, sta
 `bots/slice-3b-archive`. There is no pull request. Slice 3c's branch is pushed and equals the local
 commit `17638de91c74c44291f51ba402b926a7b911e9f2`. The branches of the design, slice 1, slice 2a,
 slice 2b, slice 3a, slice 3b and slice 3c are pushed and equal the local ones. Slice 4 is built on
-`bots/slice-4-form`, stacked on `bots/slice-3c-record`. There is no pull request. Slices 5 to 11 are
+`bots/slice-4-form`, stacked on `bots/slice-3c-record`. Slice 4 is pushed and equals the local
+commit `2785e7695a70f6938ac760e516a6dda16ede79fc`. There is no pull request. Slice 5 is built on
+`bots/slice-5-turn`, stacked on `bots/slice-4-form`. There is no pull request. Slices 6 to 11 are
 not built. The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
@@ -297,7 +299,8 @@ slice 6, and that `bot.define` and `bot.redefine` stay. `bot.replace`, `updateBo
 Slice 3c is built on `bots/slice-3c-record`. There is no pull request, so the evidence is the tests
 on that branch. The plan does not repeat them.
 
-Slice 4 is built on `bots/slice-4-form`, stacked on `bots/slice-3c-record`. There is no pull request.
+Slice 4 is built on `bots/slice-4-form`, stacked on `bots/slice-3c-record`. The branch is pushed
+and equals `2785e7695a70f6938ac760e516a6dda16ede79fc`. There is no pull request.
 The terminal makes, edits, archives, restores and deletes a bot from the list. The form and the
 confirmation live on `bots_pane::State`, beside the listing. A form is make or edit, with plain
 string fields, the active field and a cursor into that string. A confirmation is archive or delete,
@@ -345,6 +348,61 @@ field, narrowing below 100 columns with a form open and then widening, narrowing
 open, `/layout` while a form or a confirmation is open including a form the narrow terminal does not
 draw, the first Ctrl-C on a confirmation, on a form that holds text and on an empty form, and Esc on
 a form that holds text.
+
+Slice 5 is built on `bots/slice-5-turn`, stacked on `bots/slice-4-form`. There is no pull request.
+The module holds where a turn runs and the migration of a bot, and the GUI calls both through the
+bridge. `works_in` allows a turn only in the bot's home, a folder the row records a conversation
+in, or a folder the main process recorded from its own directory picker in this run. The path is
+compared as the system gives it. A trailing slash or a dot segment does not match. A home that is
+not a directory is refused, and a recorded folder or a folder opened in this run is not refused
+for that reason. A folder whose name is not text is refused. The check sends nothing.
+`sendBotTurn` still sends the turn, with the files and pastes staged for it, and it calls the
+check with the folder the agent confirmed for the session. A bot that already has a definition
+is not migrated on the way in, so a lock wait or a file the module cannot read does not refuse
+that turn as a failed migration. `mayOpenSessionIn` is not changed. A
+folder it accepts because the main process offered it is still refused for a turn.
+
+`migrate` reads the row under the lock on `bots.json.lock`, calls `migrate_definition` with the
+slug, the purpose, the model and the old memory folder taken from the row, and writes the name
+the agent answers with onto the row before it releases the lock. The old memory folder is the
+directory of the first conversation, or the home when there is none. A bot that already has a
+definition is returned as it is, and the agent is not asked. A failure, or a name that is not a
+slug, writes no row. A row write that fails after the definition file was created removes that
+file before the lock is released, so another process waiting on the lock does not see it, and
+the next attempt uses the same name instead of `<slug>-2`. If that removal fails, the error
+names the file and the next attempt takes the next name. A `create_new_file` whose write fails
+removes the file it created. If that removal also fails, the name stays taken. The
+untrusted-memory record stays, and writing it again does not add a second line. `owes_carry_over` is true only for a bot with no definition when the
+confirmed folder is that old memory folder. `sendBotTurn` asks it before the migration. The
+bridge methods are `bot.works_in`, `bot.migrate` and `bot.owes_carry_over`. They are in `DENIED`,
+so the window cannot send them. `bot.migrate` now does this row write. The earlier bridge method
+that only wrote the definition stays as `definitions::migrate` for the test that does not touch
+the row. The GUI no longer has `migrateBot`, `owesCarryOver` or `oldMemoryFolder`.
+
+Two shapes were rejected. The GUI still computing the old memory folder and passing it to
+`bot.migrate`, then writing the row with `bot.replace`, would leave that folder in the GUI and
+the row write outside the lock. One bridge method that both checked the folder and sent the turn
+would send from the check, and `sendBotTurn` would no longer be the send.
+
+What this slice does not do. Slice 6 still removes the briefing and the counters.
+`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` still write through `bot.replace`.
+`bot.replace`, `bot.define` and `bot.redefine` stay. A migration of a legacy row rewrites the row
+without `remembered` or `quiet`, because the module's row has neither field. The nudge is decided
+before that rewrite, and the turn is addressed to the definition, so the dropped fields are not
+what is sent. The terminal does not begin a session as a bot. Enter on a bot still says that
+starting a session comes in a later release, and begins none. A folder moved to with `/cd` is not
+part of this check, because no terminal session runs as a bot yet. The GUI's refusal line stays
+the one it already used: the bot has not been given this folder.
+
+BOT-9 leaves `agents/unverified-clauses.txt` because the folder rule this slice builds is pinned.
+The terminal's check of a folder moved to with `/cd` is still not built, and the by-construction
+line of BOT-9 says so.
+
+The desktop was not launched. These cases were not run there: a turn of a bot shown unchanged, a
+turn requested for a folder outside the three refused in the running app before it is sent, and a
+legacy bot's first turn migrated and answered on a live model. The automated tests pin the three
+folders, the migration's row write, and that the source of `sendBotTurn` names the folder
+refusal before `turn.send`. That last check reads the function's text. It does not call it.
 
 Before a pull request. The stack is 141 commits behind `origin/main` and conflicts with it in most
 files slice 2b touches, so the whole stack is rebased and the gates run again. The rebase changes
@@ -636,7 +694,7 @@ for bots, so each terminal function is in the bots layout.
      Ctrl-C closes a confirmation with nothing done, leaves a form that holds text open and offers the way
      out, and closes an empty form, and only Esc closes a form that holds text.
 5. **The module holds where a turn runs and the migration of a bot, and the GUI calls them
-   through the bridge.**
+   through the bridge.** Built. The Status above describes it.
    - Add the rule for where a turn runs ([BOT-9](specs/bots.md#BOT-9)) to the module, checked before
      each turn of a bot is sent, with a bridge method the GUI's main process calls before it sends
      a bot's turn, and switch the GUI's copy of the rule to it. The GUI's separate check of

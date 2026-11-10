@@ -690,6 +690,7 @@ fn a_private_session_refuses_to_make_edit_or_ensure_a_bot_and_writes_nothing() {
         bravebot_agent::bots::edit(&data_folder, "dev", Changes::default()).map(|_| ()),
         bravebot_agent::bots::set_model(&data_folder, "dev", None).map(|_| ()),
         bravebot_agent::bots::ensure_home(&data_folder, "dev").map(|_| ()),
+        bravebot_agent::bots::migrate(&data_folder, "dev").map(|_| ()),
     ];
 
     for refused in refusals {

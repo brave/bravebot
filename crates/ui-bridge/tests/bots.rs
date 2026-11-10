@@ -287,6 +287,9 @@ fn the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_
         "bot.record_archived",
         "bot.release_session",
         "bot.forget_conversation",
+        "bot.migrate",
+        "bot.owes_carry_over",
+        "bot.works_in",
     ] {
         assert!(
             DENIED.contains(&method),
@@ -632,4 +635,184 @@ fn a_bad_slug_or_a_missing_row_refuses_before_a_folder_is_removed() {
     assert_eq!(std::fs::read(escape.join("marker")).unwrap(), b"stay");
     assert_eq!(std::fs::read(data.join("canary")).unwrap(), b"stay");
     assert_eq!(std::fs::read(ghost.join("history.json")).unwrap(), b"g");
+}
+
+fn legacy(
+    slug: &str,
+    home: &str,
+    purpose: &str,
+    model: Option<&str>,
+    directory: Option<&str>,
+) -> Value {
+    json!({
+        "slug": slug,
+        "name": slug,
+        "purpose": purpose,
+        "avatar": slug,
+        "model": model,
+        "home": home,
+        "definition": null,
+        "session": null,
+        "conversations": directory.map(|directory| vec![json!({"id": "s-1", "directory": directory})]).unwrap_or_default(),
+        "archived": 0,
+        "retired": 0,
+        "created": 5,
+        "updated": 6,
+    })
+}
+
+#[test]
+fn a_legacy_bot_migrated_through_the_bridge_keeps_the_definition_and_a_failure_leaves_the_row() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let state = bravebot_agent::home::directory().unwrap();
+    let mut bridge = bridge();
+    let project = data.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let broken = legacy("broken", "/gui/bot-homes/broken", "\u{85}", None, None);
+    call(
+        &mut bridge,
+        "bot.replace",
+        json!({"dataFolder": data, "bots": [broken]}),
+    )
+    .unwrap();
+    let before = std::fs::read(bots_file()).unwrap();
+    let refused = call(
+        &mut bridge,
+        "bot.migrate",
+        json!({"dataFolder": data, "slug": "broken"}),
+    )
+    .expect_err("a purpose with no line is refused");
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert_eq!(std::fs::read(bots_file()).unwrap(), before);
+    assert!(!state.join("agents/broken.md").exists());
+
+    let home = data.join("bot-homes/legacy");
+    call(
+        &mut bridge,
+        "bot.replace",
+        json!({"dataFolder": data, "bots": [legacy(
+            "legacy",
+            home.to_str().unwrap(),
+            "Keep the old notes.",
+            Some("provider/model-a"),
+            Some(project.to_str().unwrap()),
+        )]}),
+    )
+    .unwrap();
+    let migrated = call(
+        &mut bridge,
+        "bot.migrate",
+        json!({"dataFolder": data, "slug": "legacy"}),
+    )
+    .unwrap();
+    assert_eq!(migrated["bot"]["definition"], json!("legacy"));
+    assert_eq!(migrated["bot"]["model"], json!("provider/model-a"));
+    assert_eq!(migrated["bot"]["purpose"], json!("Keep the old notes."));
+    assert_eq!(migrated["bot"]["home"], json!(home.to_str().unwrap()));
+    let definition = std::fs::read_to_string(state.join("agents/legacy.md")).unwrap();
+    assert!(
+        definition.contains("model: 'provider/model-a'"),
+        "{definition}"
+    );
+    assert!(definition.contains("Keep the old notes."), "{definition}");
+    let again = call(
+        &mut bridge,
+        "bot.migrate",
+        json!({"dataFolder": data, "slug": "legacy"}),
+    )
+    .unwrap();
+    assert_eq!(again["bot"]["definition"], json!("legacy"));
+    let owes = call(
+        &mut bridge,
+        "bot.owes_carry_over",
+        json!({"dataFolder": data, "slug": "legacy", "folder": project.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(owes["owes"], json!(false));
+}
+
+#[test]
+fn a_turn_folder_checked_through_the_bridge_allows_only_the_three() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let mut bridge = bridge();
+    let home = data.join("bot-homes/legacy");
+    std::fs::create_dir_all(&home).unwrap();
+    let recorded = data.join("recorded");
+    let opened = data.join("opened");
+    let elsewhere = data.join("elsewhere");
+    call(
+        &mut bridge,
+        "bot.replace",
+        json!({"dataFolder": data, "bots": [legacy(
+            "legacy",
+            home.to_str().unwrap(),
+            "Keep the old notes.",
+            None,
+            Some(recorded.to_str().unwrap()),
+        )]}),
+    )
+    .unwrap();
+    let before = std::fs::read(bots_file()).unwrap();
+    let allowed = |bridge: &mut Bridge, directory: &str, opened: &[&str]| {
+        call(
+            bridge,
+            "bot.works_in",
+            json!({"dataFolder": data, "slug": "legacy", "directory": directory, "opened": opened}),
+        )
+        .unwrap()["allowed"]
+            .clone()
+    };
+
+    assert_eq!(
+        allowed(&mut bridge, home.to_str().unwrap(), &[]),
+        json!(true)
+    );
+    assert_eq!(
+        allowed(&mut bridge, recorded.to_str().unwrap(), &[]),
+        json!(true)
+    );
+    assert_eq!(
+        allowed(
+            &mut bridge,
+            opened.to_str().unwrap(),
+            &[opened.to_str().unwrap()]
+        ),
+        json!(true)
+    );
+    assert_eq!(
+        allowed(&mut bridge, elsewhere.to_str().unwrap(), &[]),
+        json!(false)
+    );
+    assert_eq!(
+        allowed(&mut bridge, &format!("{}/", home.to_str().unwrap()), &[]),
+        json!(false)
+    );
+    std::fs::remove_dir_all(&home).unwrap();
+    std::fs::write(&home, "not a directory").unwrap();
+    assert_eq!(
+        allowed(
+            &mut bridge,
+            home.to_str().unwrap(),
+            &[home.to_str().unwrap()]
+        ),
+        json!(false)
+    );
+    assert_eq!(
+        allowed(&mut bridge, recorded.to_str().unwrap(), &[]),
+        json!(true)
+    );
+    assert_eq!(std::fs::read(bots_file()).unwrap(), before);
+    let missing = call(
+        &mut bridge,
+        "bot.works_in",
+        json!({"dataFolder": data, "slug": "legacy", "opened": []}),
+    )
+    .expect_err("a directory is required");
+    assert_eq!(missing.code, ErrorCode::BadRequest);
 }

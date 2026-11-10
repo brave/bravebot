@@ -361,7 +361,12 @@ pub fn create_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         std::fs::OpenOptions::new().write(true).create_new(true),
         path,
     )?;
-    file.write_all(contents)
+    if let Err(error) = file.write_all(contents) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Open `path` to add to the end of it, readable only by this user.

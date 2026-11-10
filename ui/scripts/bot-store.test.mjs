@@ -322,7 +322,7 @@ test('the methods that make, edit and set the model of a bot, and ensure its hom
   assert.ok(allowed, 'the list of methods the window may send is still one literal')
   const methods = [...allowed[1].matchAll(/'([^']+)'/g)].map((each) => each[1])
   assert.ok(methods.includes('session.list'), 'the pattern read the list')
-  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home', 'bot.archive', 'bot.restore', 'bot.delete', 'bot.record_conversation', 'bot.record_archived', 'bot.release_session', 'bot.forget_conversation']) {
+  for (const method of ['bot.make', 'bot.edit', 'bot.set_model', 'bot.ensure_home', 'bot.archive', 'bot.restore', 'bot.delete', 'bot.record_conversation', 'bot.record_archived', 'bot.release_session', 'bot.forget_conversation', 'bot.migrate', 'bot.owes_carry_over', 'bot.works_in']) {
     assert.equal(methods.includes(method), false, `${method} is a method only the main process calls`)
   }
 })
@@ -332,7 +332,7 @@ test('the methods that list and replace the bots are not among those a window ma
   const allowed = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
   assert.ok(allowed, 'the list of methods the window may send is still one literal')
   const methods = [...allowed[1].matchAll(/'([^']+)'/g)].map((each) => each[1])
-  for (const method of ['bot.list', 'bot.replace', 'bot.define', 'bot.redefine', 'bot.migrate', 'bot.record_conversation', 'bot.record_archived', 'bot.release_session', 'bot.forget_conversation']) {
+  for (const method of ['bot.list', 'bot.replace', 'bot.define', 'bot.redefine', 'bot.migrate', 'bot.owes_carry_over', 'bot.works_in', 'bot.record_conversation', 'bot.record_archived', 'bot.release_session', 'bot.forget_conversation']) {
     assert.equal(methods.includes(method), false, `${method} is a method only the main process calls`)
   }
   assert.ok(methods.includes('session.list'), 'the pattern read the list')

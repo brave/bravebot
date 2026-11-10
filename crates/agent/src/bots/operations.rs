@@ -1,8 +1,8 @@
 use super::{
     AVATAR_MAX, CEILING, Conversation, LOCK_WAIT, MAX_SAFE_INTEGER, Parsed, Problem, Reading,
     Refused, Row, bots_file, composed_home, entries_of, is_absolute_path, is_identifier, is_model,
-    is_slug, is_text, list_waiting, lock, make_state_directory, move_with, now, parse_entries,
-    write_entries,
+    is_slug, is_text, list_in, list_waiting, lock, make_state_directory, move_with, now,
+    parse_entries, write_entries,
 };
 use crate::agents::{self, Made, MakeRefused, RedefineRefused};
 use std::collections::HashSet;
@@ -446,6 +446,161 @@ pub fn forget_conversation_in(
     })
 }
 
+pub fn migrate(data_folder: &Path, slug: &str) -> Result<Row, Refused> {
+    let home = writable_home()?;
+    migrate_in(&home, data_folder, slug, now(), LOCK_WAIT)
+}
+
+pub fn migrate_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    now: f64,
+    wait: Duration,
+) -> Result<Row, Refused> {
+    migrate_with(
+        home,
+        data_folder,
+        slug,
+        now,
+        wait,
+        agents::migrate_definition,
+    )
+}
+
+fn migrate_with(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    now: f64,
+    wait: Duration,
+    define: impl FnOnce(&Path, &str, &str, Option<&str>, &Path) -> Result<Made, MakeRefused>,
+) -> Result<Row, Refused> {
+    if !is_slug(slug) {
+        return Err(Refused::NoSuchBot(slug.to_string()));
+    }
+    require_text_data_folder(data_folder)?;
+    let created = std::cell::Cell::new(None);
+    let created_slot = &created;
+    revise(
+        home,
+        data_folder,
+        now,
+        wait,
+        move |rows| {
+            let held = rows
+                .iter_mut()
+                .find(|row| row.slug == slug)
+                .ok_or_else(|| Refused::NoSuchBot(slug.to_string()))?;
+            if held.definition.is_some() {
+                return Ok((held.clone(), false));
+            }
+            let folder = old_memory_folder(held).to_string();
+            let made = define(
+                home,
+                &held.slug,
+                &held.purpose,
+                held.model.as_deref(),
+                Path::new(&folder),
+            )
+            .map_err(|refused| make_refusal(home, refused))?;
+            created_slot.set(Some(made.file.clone()));
+            if !is_slug(&made.name) {
+                return Err(Refused::Definition(format!(
+                    "the agent named the definition {:?}, which is not a slug",
+                    made.name
+                )));
+            }
+            held.definition = Some(made.name);
+            held.updated = now;
+            Ok((held.clone(), true))
+        },
+        |_| Ok(()),
+        || remove_created(&created_slot.take()),
+    )
+}
+
+pub fn owes_carry_over(data_folder: &Path, slug: &str, folder: &str) -> Result<bool, Refused> {
+    let home = crate::home::directory().ok_or(Refused::NoFolder)?;
+    owes_carry_over_in(&home, data_folder, slug, folder)
+}
+
+pub fn owes_carry_over_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    folder: &str,
+) -> Result<bool, Refused> {
+    require_text_data_folder(data_folder)?;
+    let rows = rows_of(home, data_folder)?;
+    let Some(row) = rows.iter().find(|row| row.slug == slug) else {
+        return Ok(false);
+    };
+    Ok(row.definition.is_none() && folder == old_memory_folder(row))
+}
+
+pub fn works_in(
+    data_folder: &Path,
+    slug: &str,
+    directory: &Path,
+    opened: &[PathBuf],
+) -> Result<bool, Refused> {
+    let home = crate::home::directory().ok_or(Refused::NoFolder)?;
+    works_in_in(&home, data_folder, slug, directory, opened)
+}
+
+pub fn works_in_in(
+    home: &Path,
+    data_folder: &Path,
+    slug: &str,
+    directory: &Path,
+    opened: &[PathBuf],
+) -> Result<bool, Refused> {
+    let Some(directory) = directory.to_str() else {
+        return Ok(false);
+    };
+    if !is_absolute_path(directory) {
+        return Ok(false);
+    }
+    require_text_data_folder(data_folder)?;
+    let rows = rows_of(home, data_folder)?;
+    let Some(row) = rows.iter().find(|row| row.slug == slug) else {
+        return Ok(false);
+    };
+    Ok(turn_folder_allowed(row, directory, opened))
+}
+
+fn old_memory_folder(row: &Row) -> &str {
+    row.conversations
+        .first()
+        .map(|conversation| conversation.directory.as_str())
+        .unwrap_or(row.home.as_str())
+}
+
+fn turn_folder_allowed(row: &Row, directory: &str, opened: &[PathBuf]) -> bool {
+    if directory == row.home {
+        return Path::new(directory).is_dir();
+    }
+    if row
+        .conversations
+        .iter()
+        .any(|each| each.directory == directory)
+    {
+        return true;
+    }
+    opened
+        .iter()
+        .any(|path| path.to_str().is_some_and(|text| text == directory))
+}
+
+fn rows_of(home: &Path, data_folder: &Path) -> Result<Vec<Row>, Refused> {
+    let listing = list_in(home, false, data_folder, now());
+    match listing.unreadable {
+        Some(problem) => Err(Refused::Unreadable(problem)),
+        None => Ok(listing.rows),
+    }
+}
+
 fn whole_archived(value: f64) -> Option<u64> {
     if value.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&value) {
         Some(value as u64)
@@ -541,6 +696,7 @@ fn modify_keeping<T>(
         wait,
         |rows| change(rows).map(|value| (value, true)),
         and_then,
+        || Ok(()),
     )
 }
 
@@ -551,7 +707,17 @@ fn amend<T>(
     wait: Duration,
     change: impl FnOnce(&mut Vec<Row>) -> Result<(T, bool), Refused>,
 ) -> Result<T, Refused> {
-    revise(home, data_folder, now, wait, change, |_| Ok(()))
+    revise(home, data_folder, now, wait, change, |_| Ok(()), || Ok(()))
+}
+
+fn remove_created(file: &Option<PathBuf>) -> Result<(), Refused> {
+    let Some(file) = file else {
+        return Ok(());
+    };
+    if !file.is_absolute() {
+        return Ok(());
+    }
+    std::fs::remove_file(file).map_err(|error| Refused::DefinitionIo(Problem::new(file, error)))
 }
 
 fn revise<T>(
@@ -561,32 +727,41 @@ fn revise<T>(
     wait: Duration,
     change: impl FnOnce(&mut Vec<Row>) -> Result<(T, bool), Refused>,
     and_then: impl FnOnce(&T) -> Result<(), Refused>,
+    on_err: impl FnOnce() -> Result<(), Refused>,
 ) -> Result<T, Refused> {
     move_with(home, data_folder, wait, || {})?;
     make_state_directory(home)?;
     let _held = lock(home, wait)?;
-    let path = bots_file(home);
-    let mut rows = match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let entries = entries_of(&text)
-                .map_err(|reason| Refused::Unreadable(Problem::new(&path, reason)))?;
-            let Parsed { rows, .. } = parse_entries(&entries, &Reading { data_folder, now });
-            rows
+    let result = (|| -> Result<T, Refused> {
+        let path = bots_file(home);
+        let mut rows = match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let entries = entries_of(&text)
+                    .map_err(|reason| Refused::Unreadable(Problem::new(&path, reason)))?;
+                let Parsed { rows, .. } = parse_entries(&entries, &Reading { data_folder, now });
+                rows
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(Refused::Unreadable(Problem::new(&path, error))),
+        };
+        let (outcome, changed) = change(&mut rows)?;
+        if !changed {
+            return Ok(outcome);
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(Refused::Unreadable(Problem::new(&path, error))),
-    };
-    let (outcome, changed) = change(&mut rows)?;
-    if !changed {
-        return Ok(outcome);
+        if rows.len() > CEILING {
+            return Err(Refused::Ceiling);
+        }
+        rows.sort_by(|a, b| a.slug.cmp(&b.slug));
+        and_then(&outcome)?;
+        write_entries(&path, rows.iter().map(Row::to_value).collect())?;
+        Ok(outcome)
+    })();
+    if result.is_err()
+        && let Err(cleanup) = on_err()
+    {
+        return Err(cleanup);
     }
-    if rows.len() > CEILING {
-        return Err(Refused::Ceiling);
-    }
-    rows.sort_by(|a, b| a.slug.cmp(&b.slug));
-    and_then(&outcome)?;
-    write_entries(&path, rows.iter().map(Row::to_value).collect())?;
-    Ok(outcome)
+    result
 }
 
 fn change_row(
@@ -2677,5 +2852,429 @@ mod tests {
         assert_eq!(scratch.bots_text(), text);
         assert_eq!(scratch.row("untouched").updated, untouched.updated);
         assert_eq!(scratch.row("keeper").updated, NOW + 50.0);
+    }
+
+    fn legacy(
+        scratch: &Scratch,
+        slug: &str,
+        home: &str,
+        model: Option<&str>,
+        definition: Option<&str>,
+        conversations: &[(&str, &str)],
+    ) -> Value {
+        let mut entry = scratch.entry(slug);
+        entry["name"] = json!("Legacy");
+        entry["purpose"] = json!("Keep the old notes.");
+        entry["home"] = json!(home);
+        entry["model"] = json!(model);
+        entry["definition"] = json!(definition);
+        entry["avatar"] = json!("face");
+        entry["session"] = Value::Null;
+        entry["archived"] = json!(4);
+        entry["retired"] = json!(9);
+        entry["conversations"] = json!(
+            conversations
+                .iter()
+                .map(|(id, directory)| json!({"id": id, "directory": directory}))
+                .collect::<Vec<_>>()
+        );
+        entry
+    }
+
+    fn recorded_at(home: &Path, folder: &Path) -> Vec<String> {
+        let workspace = crate::workspace::Workspace::new(folder).unwrap();
+        let key = crate::workspace::key_of(workspace.root());
+        crate::memory::Record::new(home, &key).paths()
+    }
+
+    #[test]
+    fn a_legacy_bot_is_migrated_with_the_model_and_the_old_memory_folder_from_its_row() {
+        let scratch = Scratch::new("migrate-real");
+        let home_folder = scratch.data().join("bot-homes/fresh");
+        let first = scratch.data().join("work/site");
+        let second = scratch.data().join("work/other");
+        std::fs::create_dir_all(&home_folder).unwrap();
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let home_text = home_folder.to_str().unwrap();
+        let first_text = first.to_str().unwrap();
+        let second_text = second.to_str().unwrap();
+        scratch.write_bots(&[
+            legacy(
+                &scratch,
+                "fresh",
+                home_text,
+                Some("provider/model-a"),
+                None,
+                &[],
+            ),
+            legacy(
+                &scratch,
+                "worked",
+                home_text,
+                Some("provider/model-b"),
+                None,
+                &[("s-1", first_text), ("s-2", second_text)],
+            ),
+        ]);
+
+        let fresh = migrate_in(&scratch.home(), &scratch.data(), "fresh", NOW, WAIT).unwrap();
+        let worked = migrate_in(&scratch.home(), &scratch.data(), "worked", NOW, WAIT).unwrap();
+
+        assert_eq!(fresh.definition.as_deref(), Some("fresh"));
+        assert_eq!(worked.definition.as_deref(), Some("worked"));
+        assert_eq!(fresh.updated, NOW);
+        assert_eq!(fresh.created, 5.0);
+        assert_eq!(fresh.model.as_deref(), Some("provider/model-a"));
+        assert_eq!(fresh.name, "Legacy");
+        assert_eq!(fresh.purpose, "Keep the old notes.");
+        assert_eq!(fresh.avatar, "face");
+        assert_eq!(fresh.home, home_text);
+        assert_eq!(fresh.session, None);
+        assert_eq!((fresh.archived, fresh.retired), (4, 9.0));
+        assert!(fresh.conversations.is_empty());
+        assert_eq!(
+            worked
+                .conversations
+                .iter()
+                .map(|each| each.directory.as_str())
+                .collect::<Vec<_>>(),
+            [first_text, second_text]
+        );
+        let fresh_definition = scratch.definition("fresh").unwrap();
+        assert!(
+            fresh_definition.contains("model: 'provider/model-a'"),
+            "{fresh_definition}"
+        );
+        assert!(
+            fresh_definition.contains("Keep the old notes."),
+            "{fresh_definition}"
+        );
+        let worked_definition = scratch.definition("worked").unwrap();
+        assert!(
+            worked_definition.contains("model: 'provider/model-b'"),
+            "{worked_definition}"
+        );
+        assert_eq!(
+            recorded_at(&scratch.home(), &home_folder),
+            vec![format!(
+                "{}/.bravebot-ui/bots/fresh.md",
+                crate::workspace::key_of(
+                    crate::workspace::Workspace::new(&home_folder)
+                        .unwrap()
+                        .root()
+                )
+            )]
+        );
+        assert_eq!(
+            recorded_at(&scratch.home(), &first),
+            vec![format!(
+                "{}/.bravebot-ui/bots/worked.md",
+                crate::workspace::key_of(crate::workspace::Workspace::new(&first).unwrap().root())
+            )]
+        );
+        assert!(
+            recorded_at(&scratch.home(), &home_folder)
+                .iter()
+                .all(|path| !path.ends_with("/worked.md")),
+            "the home was recorded for a bot whose first conversation is elsewhere"
+        );
+        assert!(recorded_at(&scratch.home(), &second).is_empty());
+    }
+
+    #[test]
+    fn a_bot_that_already_has_a_definition_is_not_migrated_again() {
+        let scratch = Scratch::new("migrate-again");
+        let home = scratch
+            .data()
+            .join("bot-homes/dev")
+            .to_str()
+            .unwrap()
+            .to_string();
+        scratch.write_bots(&[legacy(
+            &scratch,
+            "dev",
+            &home,
+            Some("provider/model-a"),
+            Some("kept"),
+            &[],
+        )]);
+        let before = scratch.bots_text();
+        let calls = std::cell::Cell::new(0);
+        let define = |_: &Path, _: &str, _: &str, _: Option<&str>, _: &Path| {
+            calls.set(calls.get() + 1);
+            Ok(Made {
+                name: "dev-2".to_string(),
+                file: PathBuf::from("unused"),
+            })
+        };
+
+        let row = migrate_with(&scratch.home(), &scratch.data(), "dev", NOW, WAIT, define).unwrap();
+
+        assert_eq!(calls.get(), 0);
+        assert_eq!(row.definition.as_deref(), Some("kept"));
+        assert_eq!(row.updated, 6.0);
+        assert_eq!(scratch.bots_text(), before);
+        assert!(!scratch.home().join("agents").exists());
+    }
+
+    #[test]
+    fn a_failed_migration_or_a_name_that_is_not_a_slug_writes_no_row() {
+        let scratch = Scratch::new("migrate-fail");
+        let home = scratch
+            .data()
+            .join("bot-homes/dev")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let mut refused_purpose = legacy(&scratch, "dev", &home, None, None, &[]);
+        refused_purpose["purpose"] = json!("\u{85}");
+        scratch.write_bots(&[refused_purpose]);
+        let before = scratch.bots_text();
+
+        let refused = migrate_in(&scratch.home(), &scratch.data(), "dev", NOW, WAIT).unwrap_err();
+
+        assert!(matches!(refused, Refused::Definition(_)), "{refused}");
+        assert_eq!(scratch.bots_text(), before);
+        assert!(!scratch.home().join("agents").exists());
+
+        let not_a_slug = |_: &Path, _: &str, _: &str, _: Option<&str>, _: &Path| {
+            Ok(Made {
+                name: "Not A Slug".to_string(),
+                file: PathBuf::from("unused"),
+            })
+        };
+        let refused = migrate_with(
+            &scratch.home(),
+            &scratch.data(),
+            "dev",
+            NOW,
+            WAIT,
+            not_a_slug,
+        )
+        .unwrap_err();
+        assert!(matches!(refused, Refused::Definition(_)), "{refused}");
+        assert_eq!(scratch.bots_text(), before);
+        assert_eq!(scratch.row("dev").definition, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_migration_whose_row_cannot_be_saved_removes_the_definition_and_the_retry_uses_the_same_name()
+     {
+        let scratch = Scratch::new("migrate-row-fails");
+        let home_folder = scratch.data().join("bot-homes/dev");
+        std::fs::create_dir_all(&home_folder).unwrap();
+        let home_text = home_folder.to_str().unwrap().to_string();
+        scratch.write_bots(&[legacy(&scratch, "dev", &home_text, None, None, &[])]);
+        std::fs::create_dir_all(scratch.home().join("agents")).unwrap();
+        std::fs::create_dir_all(scratch.home().join("untrusted")).unwrap();
+        let before = scratch.bots_text();
+        if !state_is_read_only(&scratch) {
+            return;
+        }
+
+        let refused = migrate_in(&scratch.home(), &scratch.data(), "dev", NOW, WAIT);
+        state_is_writable_again(&scratch);
+
+        assert!(matches!(refused, Err(Refused::Io(_))), "{refused:?}");
+        assert_eq!(scratch.bots_text(), before);
+        assert!(scratch.definition("dev").is_none());
+        assert!(scratch.definition("dev-2").is_none());
+
+        let again = migrate_in(&scratch.home(), &scratch.data(), "dev", NOW, WAIT).unwrap();
+        assert_eq!(again.definition.as_deref(), Some("dev"));
+        assert!(scratch.definition("dev").is_some());
+        assert!(scratch.definition("dev-2").is_none());
+    }
+
+    #[test]
+    fn owes_carry_over_is_true_only_for_a_bot_with_no_definition_in_its_old_memory_folder() {
+        let scratch = Scratch::new("owes");
+        let home = "/tmp/bot-homes/web-dev";
+        let first = "/work/site";
+        let second = "/work/other";
+        scratch.write_bots(&[
+            legacy(&scratch, "fresh", home, None, None, &[]),
+            legacy(
+                &scratch,
+                "worked",
+                home,
+                None,
+                None,
+                &[("s-1", first), ("s-2", second)],
+            ),
+            legacy(
+                &scratch,
+                "defined",
+                home,
+                None,
+                Some("web-dev-2"),
+                &[("s-1", first)],
+            ),
+        ]);
+        let owes = |slug: &str, folder: &str| {
+            owes_carry_over_in(&scratch.home(), &scratch.data(), slug, folder).unwrap()
+        };
+
+        let before = scratch.bots_text();
+        assert!(owes("fresh", home));
+        assert!(!owes("fresh", first));
+        assert!(!owes("fresh", &format!("{home}/")));
+        assert!(owes("worked", first));
+        assert!(!owes("worked", second));
+        assert!(!owes("worked", home));
+        assert!(!owes("defined", first));
+        assert!(!owes("missing", home));
+        assert_eq!(scratch.bots_text(), before);
+    }
+
+    fn allow(scratch: &Scratch, slug: &str, directory: &Path, opened: &[PathBuf]) -> bool {
+        works_in_in(&scratch.home(), &scratch.data(), slug, directory, opened).unwrap()
+    }
+
+    #[test]
+    fn a_turn_runs_in_its_home_a_recorded_folder_or_a_folder_opened_in_this_run() {
+        let scratch = Scratch::new("works-in");
+        let home = scratch.data().join("bot-homes/dev");
+        let recorded = scratch.data().join("recorded");
+        let opened = scratch.data().join("opened");
+        std::fs::create_dir_all(&home).unwrap();
+        let home_text = home.to_str().unwrap().to_string();
+        let recorded_text = recorded.to_str().unwrap().to_string();
+        scratch.write_bots(&[legacy(
+            &scratch,
+            "dev",
+            &home_text,
+            None,
+            Some("dev"),
+            &[("s-1", recorded_text.as_str())],
+        )]);
+
+        assert!(allow(&scratch, "dev", &home, &[]));
+        assert!(allow(&scratch, "dev", &recorded, &[]));
+        assert!(allow(
+            &scratch,
+            "dev",
+            &opened,
+            std::slice::from_ref(&opened)
+        ));
+        assert!(!allow(&scratch, "dev", &scratch.data().join("beside"), &[]));
+        assert!(!allow(&scratch, "missing", &home, &[]));
+    }
+
+    #[test]
+    fn a_folder_outside_those_three_is_refused() {
+        let scratch = Scratch::new("works-outside");
+        let home = scratch.data().join("bot-homes/dev");
+        std::fs::create_dir_all(&home).unwrap();
+        let home_text = home.to_str().unwrap().to_string();
+        scratch.write_bots(&[legacy(&scratch, "dev", &home_text, None, Some("dev"), &[])]);
+        let elsewhere = scratch.data().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        assert!(!allow(&scratch, "dev", &elsewhere, &[]));
+        assert!(!allow(&scratch, "dev", Path::new("relative/folder"), &[]));
+        assert!(!allow(
+            &scratch,
+            "dev",
+            Path::new("relative/folder"),
+            &[PathBuf::from("relative/folder")]
+        ));
+    }
+
+    #[test]
+    fn a_path_that_differs_by_a_trailing_slash_or_a_dot_segment_is_refused() {
+        let scratch = Scratch::new("works-spelling");
+        let home = scratch.data().join("bot-homes/dev");
+        std::fs::create_dir_all(&home).unwrap();
+        let home_text = home.to_str().unwrap().to_string();
+        let recorded = scratch.data().join("recorded");
+        scratch.write_bots(&[legacy(
+            &scratch,
+            "dev",
+            &home_text,
+            None,
+            Some("dev"),
+            &[("s-1", recorded.to_str().unwrap())],
+        )]);
+        let dotted = format!(
+            "{}/./{}",
+            home.parent().unwrap().to_str().unwrap(),
+            home.file_name().unwrap().to_str().unwrap()
+        );
+
+        assert!(!allow(
+            &scratch,
+            "dev",
+            Path::new(&format!("{home_text}/")),
+            &[]
+        ));
+        assert!(!allow(&scratch, "dev", Path::new(&dotted), &[]));
+        assert!(!allow(
+            &scratch,
+            "dev",
+            Path::new(&format!("{}/", recorded.to_str().unwrap())),
+            &[]
+        ));
+        assert!(allow(&scratch, "dev", &home, &[]));
+    }
+
+    #[test]
+    fn a_home_that_is_not_a_directory_is_refused() {
+        let scratch = Scratch::new("works-home-file");
+        let home = scratch.data().join("bot-homes/dev");
+        std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+        std::fs::write(&home, "not a directory").unwrap();
+        let home_text = home.to_str().unwrap().to_string();
+        let recorded = scratch.data().join("recorded");
+        let opened = scratch.data().join("opened");
+        scratch.write_bots(&[legacy(
+            &scratch,
+            "dev",
+            &home_text,
+            None,
+            Some("dev"),
+            &[("s-1", recorded.to_str().unwrap())],
+        )]);
+
+        assert!(!allow(&scratch, "dev", &home, std::slice::from_ref(&home)));
+        assert!(allow(&scratch, "dev", &recorded, &[]));
+        assert!(allow(
+            &scratch,
+            "dev",
+            &opened,
+            std::slice::from_ref(&opened)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_whose_name_is_not_text_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let scratch = Scratch::new("works-not-text");
+        let mark = "\u{FFFD}";
+        let home = scratch.data().join(format!("home-{mark}"));
+        std::fs::create_dir_all(&home).unwrap();
+        let home_text = home.to_str().unwrap().to_string();
+        scratch.write_bots(&[legacy(&scratch, "dev", &home_text, None, Some("dev"), &[])]);
+        let replacement = "\u{FFFD}".as_bytes();
+        let utf8 = home_text.as_bytes();
+        let position = utf8
+            .windows(replacement.len())
+            .position(|window| window == replacement)
+            .unwrap();
+        let mut raw = utf8.to_vec();
+        raw.splice(position..position + replacement.len(), [0xff]);
+        let directory = PathBuf::from(std::ffi::OsStr::from_bytes(&raw));
+
+        assert!(directory.to_str().is_none());
+        assert_eq!(directory.to_string_lossy(), home_text);
+        assert!(!allow(
+            &scratch,
+            "dev",
+            &directory,
+            &[PathBuf::from(&home_text)]
+        ));
     }
 }

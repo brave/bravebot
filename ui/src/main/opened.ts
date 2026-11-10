@@ -55,6 +55,10 @@ export function isOpenedDirectory(value: unknown): value is string {
   return isProjectPath(value) && chosen.has(value)
 }
 
+export function chosenDirectories(): string[] {
+  return [...chosen]
+}
+
 /** Record folders this process is about to hand to the window, from a list it composed. */
 export function offerDirectories(values: unknown): void {
   if (!Array.isArray(values)) return

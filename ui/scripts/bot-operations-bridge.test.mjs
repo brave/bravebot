@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { loadMain } from './fake-bots.mjs'
+import { botRow, loadMain } from './fake-bots.mjs'
 
 const RPC = join(process.cwd(), '..', 'target', 'debug', process.platform === 'win32' ? 'bravebot-rpc.exe' : 'bravebot-rpc')
 const ENTRY = "export { Bridge } from './src/main/bridge'\nexport * from './src/main/bots'\nexport * from './src/main/bot-store'\n"
@@ -401,5 +401,50 @@ test('a recorded conversation, an archive length, a release and a forgotten conv
     assert.deepEqual(readFileSync(f.file), afterForget, 'a forget that matches nothing writes nothing')
     assert.equal(rowOf(untouched.slug).updated, untouchedBefore.updated)
     f.noBotsKey()
+  } finally { f.clean() }
+})
+
+test('a bot made before definitions is migrated through the bridge, and a failed migration leaves the row', async () => {
+  const f = await fixture()
+  try {
+    const project = join(f.profile, 'project')
+    mkdirSync(project)
+    await f.main.saveBot(botRow({
+      slug: 'legacy',
+      name: 'Legacy',
+      purpose: 'Keep the old notes.',
+      avatar: 'legacy',
+      model: 'provider/model-a',
+      home: f.home('legacy'),
+      definition: null,
+      conversations: [{ id: SESSION, directory: project }],
+    }))
+    mkdirSync(f.home('legacy'), { recursive: true })
+    const migrated = await f.main.definitionForTurn('legacy')
+    assert.equal(migrated.definition, 'legacy')
+    assert.equal(f.rows().find((row) => row.slug === 'legacy').definition, 'legacy')
+    assert.equal(f.rows().find((row) => row.slug === 'legacy').model, 'provider/model-a')
+    const text = f.definition('legacy')
+    assert.match(text, /^model: 'provider\/model-a'$/m)
+    assert.equal(bodyOf(text), 'Keep the old notes.\n')
+    assert.equal((await f.main.definitionForTurn('legacy')).definition, 'legacy')
+    assert.equal(await f.main.worksIn(migrated, f.home('legacy')), true)
+    assert.equal(await f.main.worksIn(migrated, project), true)
+    assert.equal(await f.main.worksIn(migrated, `${f.home('legacy')}/`), false)
+    assert.equal(await f.main.worksIn(migrated, join(f.profile, 'elsewhere')), false)
+
+    await f.main.saveBot(botRow({
+      slug: 'broken',
+      name: 'Broken',
+      purpose: '\u0085',
+      avatar: 'broken',
+      home: f.home('broken'),
+      definition: null,
+    }))
+    const before = readFileSync(f.file)
+    await assert.rejects(f.main.definitionForTurn('broken'))
+    assert.equal(readFileSync(f.file).equals(before), true, 'a failed migration leaves the row')
+    assert.equal(f.rows().find((row) => row.slug === 'broken').definition, null)
+    assert.equal(existsSync(join(f.agents, 'broken.md')), false)
   } finally { f.clean() }
 })
