@@ -138,9 +138,24 @@ RELEASE = "Labelled::declassify"
 
 # What `Labelled` is allowed to implement. Everything else would hand a caller a way to read or
 # compare content without a witness, which is the guarantee the absent implementations are.
-# `labels.md` states this as holding by construction, so nothing fails today if one is added.
+# `labels.md` states this as holding by construction, and `check_labelled_impls` fails an
+# implementation outside this list, an inherent function outside the next one, and an
+# implementation for another type that takes a `Labelled` as an argument of its trait.
 ALLOWED_IMPLS = {"fmt::Debug"}
+# The functions `Labelled` has of its own. One of any other name is an accessor, or a conversion
+# to the content, that a caller could use without a witness. A function on this list that changes
+# what it takes or returns is not seen: only a new name is.
+ALLOWED_FUNCTIONS = {"new", "trusted", "label", "declassify", "into_trusted", "relabel", "shape"}
 IMPL_START = re.compile(r"^\s*impl\b")
+# `Labelled` as the type an `impl` is for, bare or behind a reference, a lifetime or a path.
+LABELLED_SUBJECT = r"(?:&\s*(?:'\w+\s+)?(?:mut\s+)?)?(?:\w+::)*Labelled\b"
+# What a scan of an `impl` block steps over or stops at: a string or a character literal, which
+# may hold a brace or the word `fn`, then the name of a function and a brace.
+IMPL_TOKEN = re.compile(
+    r"(?P<string>\"(?:\\.|[^\"\\])*\")|(?P<char>'(?:\\.[^']*|[^'\\])')"
+    r"|\bfn\s+(?P<fn>\w+)|(?P<brace>[{}])",
+    re.S,
+)
 STRUCT_LABELLED = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+Labelled\b")
 # A derive writes the same implementation an `impl` does, inside the module that can see the
 # private fields, so it is held to the same list. `Clone` is the one the type derives.
@@ -263,6 +278,7 @@ KEY_FUNCTIONS = (
     ("crates/core/src/trust.rs", "normalise"),
     ("crates/core/src/trust.rs", "key"),
     ("crates/core/src/trust.rs", "fold_case"),
+    ("crates/core/src/trust.rs", "fold_simple"),
     ("crates/core/src/trust.rs", "canonical_form"),
     ("crates/core/src/file_authority.rs", "key"),
     ("crates/core/src/permissions.rs", "key_of"),
@@ -278,11 +294,11 @@ JOINING_NAMES = (
     "trim|trim_start|trim_end|trim_left|trim_right|trim_matches|trim_start_matches"
     "|trim_end_matches|to_lowercase|to_uppercase|to_ascii_lowercase|to_ascii_uppercase"
     "|make_ascii_lowercase|make_ascii_uppercase|eq_ignore_ascii_case|to_string_lossy"
-    "|from_utf8_lossy|fold_case|decompose|canonical_form|nfc|nfd|nfkc|nfkd"
+    "|from_utf8_lossy|fold_case|fold_simple|decompose|canonical_form|nfc|nfd|nfkc|nfkd"
 )
 JOINING_CONSTRUCT = re.compile(
     rf"(?:\.|::)({JOINING_NAMES})\b"
-    r"|(?<![.\w:])(?<!fn )(fold_case|fold|from_utf8_lossy|decompose|canonical_form)\s*\("
+    r"|(?<![.\w:])(?<!fn )(fold_case|fold_simple|fold|from_utf8_lossy|decompose|canonical_form)\s*\("
 )
 CHAR_LITERAL = re.compile(r"'(?:[^'\\]|\\.)'")
 # A construct a key function is allowed to keep, each with the reason a reader checks: a `path::fn
@@ -315,7 +331,7 @@ LANES = (
 # The calls that turn a name into a thing, or ask what a name is: the places a decision made on a
 # spelling and a use of the thing by that spelling can be separated by a stage or a clone.
 IDENTITY_CALLS = re.compile(
-    r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b"
+    r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b|\blibc::O_PATH\b"
 )
 # A deny rule asked about a path as it is spelled. A call that names one file is judged under every
 # name the file has, and a walk that asks the same question of each entry it meets judges the name
@@ -1346,7 +1362,14 @@ def check_exhaustive_reader_docs(sources):
 
 
 def _impl_header(text):
-    """The trait an `impl` header implements for `Labelled`, or None when it is not for it.
+    """What an `impl` header makes of `Labelled`, as `(kind, name)`, or None when it is not about it.
+
+    `kind` is "trait" for a trait implemented for `Labelled`, whatever reference or path the type
+    is written behind, with the trait as `name`. It is "inherent" for the type's own block, which
+    has no name. It is "argument" for an implementation for another type whose trait takes a
+    `Labelled`, such as `From<Labelled<String>> for String`, with the trait and its arguments as
+    `name`. A `Labelled` in the generics or the `where` clause is a bound on the implementation and
+    is not read.
 
     `text` starts at the `impl` keyword. Generics are skipped by counting angle brackets, so a
     bound such as `T: AsRef<str>` does not end them early, and the header runs to the first `{`
@@ -1363,10 +1386,36 @@ def _impl_header(text):
                 break
     header = re.split(r"\{|\bwhere\b", rest, maxsplit=1)[0]
     header = " ".join(header.split())
-    found = re.match(r"(.+?)\s+for\s+Labelled\b", header)
-    if not found or re.match(r"Labelled\b", header):
+    found = re.match(r"(.+?)\s+for\s+(.+)", header)
+    if found:
+        trait, subject = found.group(1).strip(), found.group(2)
+        if re.match(LABELLED_SUBJECT, subject):
+            return ("trait", trait)
+        if re.search(r"\bLabelled\b", trait):
+            return ("argument", trait)
         return None
-    return found.group(1).strip()
+    if re.match(LABELLED_SUBJECT, header):
+        return ("inherent", None)
+    return None
+
+
+def _inherent_functions(lines, start):
+    """The `(line index, name)` of each function declared directly in the block that the `impl`
+    on line `start` opens, found by brace depth. A function nested in another function's body is
+    not one the type has, and a brace in a string or character literal does not count.
+    """
+    text = "\n".join(lines[start:])
+    opened = text.find("{")
+    if opened < 0:
+        return
+    depth = 0
+    for token in IMPL_TOKEN.finditer(text, opened):
+        if token.group("brace"):
+            depth += 1 if token.group("brace") == "{" else -1
+            if depth == 0:
+                return
+        elif token.group("fn") and depth == 1:
+            yield start + text.count("\n", 0, token.start()), token.group("fn")
 
 
 ATTRIBUTES_AT_END = re.compile(r"(?:#!?\[(?:[^\[\]]|\[[^\]]*\])*\]\s*)+\Z")
@@ -1390,8 +1439,10 @@ def check_labelled_impls(sources):
     `Display`, so a caller cannot reach the value without a witness. `labels.md` records that as
     holding by construction, so the doctests on `Labelled` pin the common ones and this reads
     what they cannot: an implementation written with nested generics or a header wrapped over
-    several lines, and a `#[derive(...)]` above the struct, which expands inside the module that
-    sees the private fields.
+    several lines, a `#[derive(...)]` above the struct, which expands inside the module that
+    sees the private fields, a function of the type's own block that is not one of
+    `ALLOWED_FUNCTIONS`, and an implementation for another type whose trait takes a `Labelled`,
+    which converts it to something readable.
     """
     for path, lines in sources.items():
         stripped = mechanics.strip_comments(lines)
@@ -1399,27 +1450,55 @@ def check_labelled_impls(sources):
         for index, raw in enumerate(stripped):
             if IMPL_START.match(raw):
                 held = " ".join(stripped[index:index + 8])
-                trait = _impl_header(held.lstrip())
-                if trait is not None:
-                    candidates.append((index, trait, raw))
+                about = _impl_header(held.lstrip())
+                if about is None:
+                    continue
+                kind, trait = about
+                if kind == "inherent":
+                    for at, name in _inherent_functions(stripped, index):
+                        if name not in ALLOWED_FUNCTIONS:
+                            candidates.append((at, "function", name, stripped[at]))
+                else:
+                    candidates.append((index, kind, trait, raw))
             elif STRUCT_LABELLED.match(raw):
                 for name in _derives_above(stripped, index):
                     if name in ALLOWED_DERIVES:
                         continue
-                    candidates.append((index, name, f"#[derive({name})] on {raw.strip()}"))
-        for index, trait, raw in candidates:
-            if trait in ALLOWED_IMPLS:
+                    candidates.append((index, "trait", name, f"#[derive({name})] on {raw.strip()}"))
+        for index, kind, trait, raw in candidates:
+            if kind == "trait" and trait in ALLOWED_IMPLS:
                 continue
+            if kind == "function":
+                title = f"{trait} is a function of Labelled, so content may be read without a witness"
+                summary = (
+                    f"`{trait}` is declared in an inherent `impl` of `Labelled` and is not one of "
+                    "the functions the type has, so it may hand a caller a way to reach a label's "
+                    "content without a witness"
+                )
+                fix = f"remove it, or add it to `ALLOWED_FUNCTIONS` and record it in `{LABELS_SPEC}`"
+            elif kind == "argument":
+                title = f"{trait} is implemented with a Labelled as its argument, so content can be converted without a witness"
+                summary = (
+                    f"`{trait}` is implemented for another type with a `Labelled` as an argument, "
+                    "which converts a label's content into that type without a witness"
+                )
+                fix = f"remove it, or record it in `{LABELS_SPEC}` as an exception with what it costs"
+            else:
+                title = f"{trait} is implemented for Labelled, so content can be read without a witness"
+                summary = (
+                    f"`{trait}` is implemented for `Labelled`, which hands a caller a way to reach a "
+                    "label's content without a witness"
+                )
+                fix = f"remove it, or record it in `{LABELS_SPEC}` as an exception with what it costs"
             yield finding(
                 ERROR,
                 "labelled-impl",
-                f"{trait} is implemented for Labelled, so content can be read without a witness",
-                f"`{trait}` is implemented for `Labelled`, which hands a caller a way to reach a "
-                "label's content without a witness",
+                title,
+                summary,
                 "trust",
                 "high",
                 evidence=[f"{path}:{index + 1} {raw.strip()[:120]}"],
-                fix=f"remove it, or record it in `{LABELS_SPEC}` as an exception with what it costs",
+                fix=fix,
                 gain="content the planner may not read can be compared against a guess, one guess at "
                 "a time, which is how a quarantined secret is read out of a program that never "
                 "shows it",

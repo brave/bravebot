@@ -43,10 +43,10 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [cli.md](cli.md) | `CLI` | 43 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [schedule.md](schedule.md) | `SCHEDULE` | 8 | what a stored `bravebot schedule` entry does with nobody there: pausing it, stopping at a question, skipping an overlapping firing, which expressions and flags it may hold, where a run's result goes, and `/schedule` in a session |
 | [manifest.md](manifest.md) | `MANIFEST` | 15 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 50 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 51 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
-| [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 42 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
-| [session-view.md](session-view.md) | `RPCVIEW` | 8 | the opt-in shared Rust view for fresh local bridge sessions, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
+| [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 43 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
+| [session-view.md](session-view.md) | `RPCVIEW` | 10 | the opt-in shared Rust view for fresh local bridge sessions and its bounded snapshot, the message id every send carries, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
 | [local-host.md](local-host.md) | `HOST` | 12 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, when a session is closed, and the development relay that hands it to an app on loopback |
 | [watching.md](watching.md) | `WATCH` | 24 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, the mode Ctrl-L opens over the delegates and the questions, and `/outputs` and Alt-L, which open it over what commands printed |
 | [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
@@ -56,7 +56,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [xai-sign-in.md](xai-sign-in.md) | `XAI` | 22 | signing in to xAI with a SuperGrok subscription through a code a person enters on any device, from a typed command or the window's own sign-in, the file the tokens are kept in, replacing an access token before it expires, and how the account's models are named (proposed; the command, the turn's request and the account's models are built) |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 33 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 16 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
-| [mcp-servers.md](mcp-servers.md) | `SERVERS` | 24 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
+| [mcp-servers.md](mcp-servers.md) | `SERVERS` | 25 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 46 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
@@ -108,7 +108,7 @@ the routing-versus-content split they share.
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 6 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 8 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 30 | `run` |
-| [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
+| [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 17 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 6 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 6 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 9 | `fetch_url` |

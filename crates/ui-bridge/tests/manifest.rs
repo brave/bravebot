@@ -16,6 +16,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -511,7 +513,7 @@ fn a_run_leaves_the_conversation_as_it_was() {
 
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     let turn = front.question_or_the_end();
     assert_eq!(
@@ -746,7 +748,10 @@ fn a_session_is_busy_until_its_run_ends() {
 
     let question = front.plan(&session);
     for (method, params) in [
-        ("turn.send", json!({"session": session, "prompt": "hello"})),
+        (
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+        ),
         (
             "manifest.run",
             json!({"session": session, "task": "another"}),
@@ -769,7 +774,7 @@ fn a_session_is_busy_until_its_run_ends() {
 
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     let turn = front.question_or_the_end();
     assert_eq!(turn["event"], "turn.done", "{turn}");
@@ -875,7 +880,7 @@ fn a_run_is_listed_as_a_run_and_a_session_is_not() {
         .to_string();
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     let turn = front.question_or_the_end();
     assert_eq!(turn["event"], "turn.done", "{turn}");
@@ -994,7 +999,7 @@ fn a_run_cannot_be_opened_as_a_session() {
     for handle in ["s2", "s3"] {
         let sent = front.answered(
             "turn.send",
-            json!({"session": handle, "prompt": "carry on"}),
+            message_ids::with_fresh(json!({"session": handle, "prompt": "carry on"})),
         );
         assert_eq!(sent["error"]["code"], "no_such_session", "{sent}");
     }
@@ -1015,7 +1020,7 @@ fn only_a_run_is_read_as_a_run() {
 
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     // The stub answers its first two requests as a run's planning calls, which a turn takes as
     // its reply. Any reply ends the turn, and a record is all this test needs of it.
@@ -1103,7 +1108,7 @@ fn ordinary_manifest_endings_keep_file_trust_in_the_bridge() {
         );
         front.send(
             "turn.send",
-            json!({"session":session,"prompt":"inspect notes.md"}),
+            message_ids::with_fresh(json!({"session":session,"prompt":"inspect notes.md"})),
         );
         let mut turn = front.question_or_the_end();
         if turn["event"] == "vouch.request" {
@@ -1138,7 +1143,7 @@ fn ordinary_manifest_endings_keep_file_trust_in_the_bridge() {
         let resumed = opened["ok"]["session"].as_str().expect("resumed session");
         front.send(
             "turn.send",
-            json!({"session":resumed,"prompt":"inspect notes.md again"}),
+            message_ids::with_fresh(json!({"session":resumed,"prompt":"inspect notes.md again"})),
         );
         let mut turn = front.question_or_the_end();
         if turn["event"] == "vouch.request" {
@@ -1196,7 +1201,10 @@ fn a_downgrade_a_run_records_survives_close_and_resume_without_another_turn() {
         let session = front.session(&scratch, true);
 
         // One completed turn, so the session has a record holding the map from before the run.
-        front.send("turn.send", json!({"session":session,"prompt":"say done"}));
+        front.send(
+            "turn.send",
+            message_ids::with_fresh(json!({"session":session,"prompt":"say done"})),
+        );
         let turn = front.question_or_the_end();
         assert_eq!(turn["event"], "turn.done", "{turn}");
         let id = turn["data"]["id"].as_str().expect("a record").to_string();
@@ -1528,7 +1536,7 @@ fn a_turn_after_a_plan_run_finds_the_servers_the_run_started() {
 
     front.call(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     let turn = front.answering(&session, &[]);
 
@@ -1572,7 +1580,7 @@ fn a_plan_run_after_a_turn_finds_the_servers_the_turn_started() {
 
     front.call(
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     let turn = front.answering(
         &session,

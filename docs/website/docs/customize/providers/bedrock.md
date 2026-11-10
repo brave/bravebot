@@ -95,12 +95,17 @@ fails somewhere far from the mistake. An entry without one, or with one spelled 
 `AWS_REGION` is, configures no service at all, and `bravebot doctor` names a refused one.
 `options.profile` picks which credentials sign, exactly as `AWS_PROFILE` does, and is optional on the
 same terms.
-`options.maxRetries` and `options.idleTimeoutMs` state how many times a request is sent again and how
-long a reply may go quiet, as they do for a
+`options.maxRetries`, `options.retryWindowMs` and `options.idleTimeoutMs` state how many times a
+request is sent again, for how long after its first failure a failed connection is sent again, and
+how long a reply may go quiet, as they do for a
 [gateway](openai-compatible.md#retries-and-a-reply-gone-quiet). The tier variables have no block to
-state them in, so models they alone name keep two retries and two minutes. A throttled request waits
+state them in, so models they alone name keep the defaults: two retries, five minutes for a failed
+connection and two minutes of quiet, or five retries after a throttle that carried no wait. A
+throttled request waits
 as long as the service asked for with a `Retry-After`, never less than the usual pause, and a wait
-longer than two minutes ends the request at once instead of being sat through.
+longer than two minutes ends the request at once instead of being sat through. A throttled request
+that carried no wait is sent again up to five times where you state no count, after waits of 8, 16,
+32, 64 and 120 seconds. A `maxRetries` you state replaces that count as it replaces the other one.
 
 **There is no credential to name here.** Bedrock takes a signature over the request rather than a
 bearer token, so this entry reads neither `env` nor `options.apiKey`. Which AWS credentials sign

@@ -48,6 +48,8 @@ struct Session {
     cancelled: bool,
     tools: Vec<Tool>,
     next_tool: u64,
+    /// How many prompts this session has sent, which names the next one's `messageId`.
+    sent: u64,
 }
 
 /// A question put to the editor and not yet answered.
@@ -319,7 +321,7 @@ impl Acp {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let turn = match turn_params(&session, params.get("prompt")) {
+        let mut turn = match turn_params(&session, params.get("prompt")) {
             Ok(turn) => turn,
             Err(message) => {
                 self.lock().reply(id, Err((INVALID_PARAMS, message)));
@@ -341,6 +343,10 @@ impl Acp {
             }
             held.prompt = Some(id);
             held.cancelled = false;
+            // A new id for each prompt, made before a trust question can hold the turn back, so
+            // the turn that question releases is sent under it too.
+            held.sent += 1;
+            turn["messageId"] = json!(format!("acp-{}", held.sent));
             let directory = held.directory.clone();
             shared
                 .unasked

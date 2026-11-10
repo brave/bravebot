@@ -13,6 +13,8 @@
 )]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
@@ -79,7 +81,10 @@ impl Window {
 
     /// Send `prompt`, approve every question, and return the turn's final event.
     fn turn(&mut self, session: &str, prompt: &str) -> Event {
-        self.call("turn.send", json!({"session": session, "prompt": prompt}));
+        self.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
         let until = std::time::Instant::now() + endpoint::LIMIT;
         loop {
             assert!(std::time::Instant::now() < until, "the turn never ended");

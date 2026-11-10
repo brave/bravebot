@@ -38,6 +38,7 @@ pub mod file_preview;
 pub mod files_mode;
 mod from_worker;
 pub mod goals;
+mod hangup;
 pub mod help_command;
 pub mod hidden;
 pub mod history;

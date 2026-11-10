@@ -240,9 +240,11 @@ mod tests {
             return false;
         };
         bravebot_sandbox::programs::keep_out(Path::new(&session));
+        let address = std::env::var("BRAVEBOT_TEST_BROWSER_ADDRESS")
+            .unwrap_or_else(|_| "https://example.invalid/".to_string());
         let status = opening(
             &Resolved::found_earlier(std::path::PathBuf::from(opener)),
-            &["https://example.invalid/".to_string()],
+            &[address],
         )
         .status()
         .unwrap();
@@ -370,6 +372,166 @@ mod tests {
         }
     }
 
+    /// The installed `xdg-open` run under a GNOME session, which hands the address to `gio open`,
+    /// with `variable` naming a directory that selects the handler. Says whether the handler in a
+    /// directory a stage may write ran and whether the one in an installed directory ran.
+    ///
+    /// Each directory holds a `mimeapps.list` naming its own handler as the default for `https`.
+    /// `XDG_DATA_DIRS` names an installed directory that holds both handlers' entries, so a
+    /// `mimeapps.list` read from `variable` is the only thing that chooses. `HOME` is a scratch
+    /// directory, so the person's own defaults cannot start a browser.
+    ///
+    /// `XDG_DATA_DIRS` is the variable that cannot be run that way: with the planted value
+    /// removed, `gio open` reads the system's directories and starts the browser they name for
+    /// `https`. Its directories hold the entries and the `mimeapps.list` themselves, and the
+    /// address has the scheme `bravebot-test`, which no system handler opens, so a removed value
+    /// leaves `gio open` with no handler and starts nothing.
+    #[cfg(unix)]
+    fn gnome_handler_run_by(test: &str, variable: &str, opener: &Path) -> (bool, bool) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let name = variable.to_ascii_lowercase();
+        let session = crate::testutil::scratch_dir(&format!("opener-gnome-{name}-session"));
+        let installed = crate::testutil::scratch_dir(&format!("opener-gnome-{name}-installed"));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        let data = installed.join("data/applications");
+        let home = installed.join("home");
+        for directory in [&session, &data, &home] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let entry = |directory: &Path, marker: &str| {
+            let script = installed.join(format!("{marker}.sh"));
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(
+                directory.join(format!("{marker}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={marker}\nExec={} %u\n",
+                    script.display()
+                ),
+            )
+            .unwrap();
+        };
+        let scheme = if variable == "XDG_DATA_DIRS" {
+            "bravebot-test"
+        } else {
+            "https"
+        };
+        let default = |file: &Path, marker: &str| {
+            std::fs::write(
+                file,
+                format!("[Default Applications]\nx-scheme-handler/{scheme}={marker}.desktop\n"),
+            )
+            .unwrap();
+        };
+        let planted = session.join("selected");
+        let genuine = installed.join("selected");
+        for (directory, marker) in [(&planted, "planted-ran"), (&genuine, "genuine-ran")] {
+            if variable == "XDG_DATA_HOME" || variable == "XDG_DATA_DIRS" {
+                entry(&directory.join("applications"), marker);
+                default(&directory.join("applications/mimeapps.list"), marker);
+            } else {
+                entry(&data, marker);
+                std::fs::create_dir_all(directory).unwrap();
+                default(&directory.join("mimeapps.list"), marker);
+            }
+        }
+        for directory in [&planted, &genuine] {
+            let child = {
+                // nosemgrep: rust.lang.security.current-exe.current-exe
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", test, "--test-threads=1", "--nocapture"])
+                    .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
+                    .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
+                    .env(
+                        "BRAVEBOT_TEST_BROWSER_ADDRESS",
+                        format!("{scheme}://example.invalid/"),
+                    )
+                    .env("HOME", &home)
+                    .env_remove("BRAVEBOT_HOME")
+                    .env("XDG_CURRENT_DESKTOP", "GNOME")
+                    .env("XDG_DATA_DIRS", installed.join("data"))
+                    .env_remove("XDG_DATA_HOME")
+                    .env_remove("XDG_CONFIG_HOME")
+                    .env_remove("XDG_CONFIG_DIRS")
+                    .env_remove("BROWSER")
+                    .env_remove("XDG_SESSION_DESKTOP")
+                    .env_remove("DESKTOP_SESSION")
+                    .env_remove("GNOME_DESKTOP_SESSION_ID")
+                    .env_remove("KDE_FULL_SESSION")
+                    .env_remove("DISPLAY")
+                    .env_remove("WAYLAND_DISPLAY")
+                    .env(variable, directory)
+                    .output()
+                    .unwrap()
+            };
+            assert!(
+                child.status.success(),
+                "{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !session.join("genuine-ran").exists() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let ran = (
+            session.join("planted-ran").exists(),
+            session.join("genuine-ran").exists(),
+        );
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&installed);
+        ran
+    }
+
+    /// SANDBOX-30, through the installed `xdg-open` and `gio open` where this host has both. The
+    /// regression it rejects: the opener left `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`
+    /// or `XDG_DATA_DIRS` as the person set it, so a `mimeapps.list` a stage wrote in the directory it
+    /// names chooses the program `gio open` runs. The same directory in an installed place is read
+    /// and its handler runs, which shows the variable does choose the handler here. `XDG_DATA_DIRS`
+    /// is run with an address whose scheme only the planted and the installed entries handle,
+    /// since with the planted value removed `gio open` falls back to the system's handlers and
+    /// would start a browser for `https`. It prints `skipped` and passes where either program is
+    /// missing or the handler in the installed directory does not run.
+    #[cfg(unix)]
+    #[test]
+    fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome() {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let (Some(opener), Some(_gio)) = (
+            bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
+            bravebot_sandbox::programs::find(OsStr::new("gio")),
+        ) else {
+            println!("skipped: no xdg-open and gio on this host");
+            return;
+        };
+        for variable in [
+            "XDG_CONFIG_DIRS",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_DATA_DIRS",
+        ] {
+            let ran = gnome_handler_run_by(
+                "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome",
+                variable,
+                &opener,
+            );
+            match ran {
+                (_, false) => println!(
+                    "skipped {variable}: the xdg-open here does not run a handler chosen by it"
+                ),
+                ran => assert_eq!(ran, (false, true), "{variable}"),
+            }
+        }
+    }
+
     /// SANDBOX-30. The regression it rejects: the opener started with `Checked(&[])`, or with the
     /// list left out of the start, so `BROWSER` names a program `xdg-open` runs before it reads a
     /// desktop environment, and the `XDG_` directories name the handler it runs, from a file a stage
@@ -453,24 +615,32 @@ mod tests {
         let outside = |path: &Path| {
             bravebot_sandbox::programs::outside_stage_writable_with(path, &writable, &[])
         };
-        let removed = |value: &Path| {
+        let removed_for = |name: &str, value: &OsStr| {
             opening_against(
                 &Resolved::found_earlier("/usr/bin/open"),
                 &[],
-                [(
-                    OsString::from("XDG_DATA_HOME"),
-                    value.as_os_str().to_os_string(),
-                )],
+                [(OsString::from(name), value.to_os_string())],
                 &outside,
             )
             .get_envs()
-            .any(|(set, now)| set == OsStr::new("XDG_DATA_HOME") && now.is_none())
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
         };
+        let removed = |value: &Path| removed_for("XDG_DATA_HOME", value.as_os_str());
 
         assert!(removed(&planted));
         assert!(removed(&link));
         assert!(removed(&safe.join("missing")));
         assert!(!removed(&genuine));
+
+        // A list is judged entry by entry. The regression it rejects: a list judged as one path,
+        // which names no directory on the disk, so a person's list of installed directories is
+        // removed.
+        let genuine_list = std::env::join_paths([&genuine, &safe]).unwrap();
+        let mixed_list = std::env::join_paths([&genuine, &link]).unwrap();
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(!removed_for(name, &genuine_list), "{name}: a genuine list");
+            assert!(removed_for(name, &mixed_list), "{name}: a list with a link");
+        }
     }
 
     /// What a command was told to unset, which is how `env_remove` reads back.

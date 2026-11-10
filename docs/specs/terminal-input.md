@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/terminal.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/hangup.rs
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
@@ -559,6 +560,13 @@ person may be reading it, and cutting it would take away text they are in the mi
 then waits for the next boundary as above, or becomes a turn of its own when the reply ends the
 turn. The sentence before a call does not hold the cut off once the call has opened.
 
+**A request waiting to be sent again is cut for it.** An attempt that failed in transit is thrown
+away, and the request waits out a pause before the next attempt goes out. That request has said
+nothing, so a prompt sent during the pause ends the wait and the request goes out at once with the
+prompt in front of it, as for a reply that is only thinking. The pause a service asked for
+([BACKEND-54](backends.md#BACKEND-54)) is ended the same way as one the client chose. The request
+that replaces it is a call of its own and starts its own attempts.
+
 Stopping the turn ends a request that a prompt could have cut, as INPUT-4 says for any request:
 the request answers to a token of its own, which also reads as cancelled once the turn is. A cut
 that finds no prompt left to take, because the person took it back first, is not repeated for the
@@ -711,6 +719,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_thinking_is_in_the_next_request_at_once`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_a_call_is_being_written_is_in_the_next_request_at_once`
+`verified-by: bravebot_agent::cutting::a_line_typed_while_a_failed_request_waits_to_be_sent_again_goes_out_at_once`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_writing_prose_waits_for_the_reply`
 `verified-by: bravebot_agent::cutting::stopping_the_turn_still_ends_a_request_that_a_line_could_have_cut`
 `verified-by: bravebot_agent::cutting::a_cut_that_finds_no_line_is_not_repeated`
@@ -3260,3 +3269,27 @@ reads and edits it, since a rewrite a model wrote is the person's message only o
 `verified-by: bravebot_ui_bridge::enhancing::a_running_turn_refuses_a_rewrite_and_asks_nothing_of_the_service`
 `verified-by: bravebot_ui_bridge::enhancing::cancelling_a_rewrite_that_is_out_ends_it_as_stopped`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/enhancing.test.mjs drives the window's own functions with the bridge's answers: a rewrite replaces only the line it was asked for and keeps that line to put back, a draft typed since is left alone, a second rewrite still puts back the first line, an answer that offers nothing leaves the box and says why, the box is refused for a staged marker, the one refusal the bridge cannot make, and emptying the box ends the rewrite; make check-ui runs the test)`
+
+<a id="INPUT-51"></a>
+### INPUT-51: a session ends when its terminal hangs up
+
+A terminal that closes ends the session by the signal it sends. A session whose terminal is a pty it
+was only handed as standard input and output, as a launcher or a test with no session of its own
+hands one, is sent no signal when that pty closes, and reading the terminal then returns nothing for
+ever. The interface that draws looks at its terminal twice a second, from a thread of its own
+because the thread that reads does not come back from a terminal that has gone, and ends with status
+129, which a shell reports for a program ended by SIGHUP, the first time the other end has closed.
+The look begins before the terminal is taken, so the questions asked of it on the way in are
+covered. A key waiting to be read is not a hangup, and nothing is looked at where standard input is
+not a terminal.
+
+**Why.** crossterm takes a read of nothing for no event yet and reads again, so a session whose
+terminal has gone spins at a core's worth of CPU for as long as it lives, and every other process on
+the machine slows with it. Sessions left behind this way add up, one core each.
+
+**Known costs.** The session ends as the signal ends it, without the cleanup of a normal exit.
+
+`verified-by: bravebot_tui::hangup::a_terminal_that_is_idle_or_has_a_key_waiting_has_not_hung_up`
+`verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
+`verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
+`verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`

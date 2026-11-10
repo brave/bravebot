@@ -25,6 +25,7 @@ issue number it was given in DIR/filed.json, which `record` reads.
 
 import argparse
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -87,10 +88,23 @@ def sessions_root():
     return Path.home() / ".bravebot" / "sessions"
 
 
+MOST_KEY_BYTES = 200
+KEY_DIGEST_BYTES = 16
+
+
 def key_for(project):
-    """The directory name for a working directory: crates/agent/src/home.rs `key_for`."""
+    """The directory name for a working directory: crates/agent/src/home.rs `key_for`.
+
+    A name longer than MOST_KEY_BYTES is cut and ends in a dash and the first 16 bytes, in hex, of the
+    SHA-256 of the path's own bytes.
+    """
     mangled = "".join(c if re.fullmatch(r"[A-Za-z0-9._]", c) else "-" for c in str(project))
-    return mangled if mangled.strip("-") else "root"
+    if not mangled.strip("-"):
+        return "root"
+    if len(mangled) <= MOST_KEY_BYTES:
+        return mangled
+    digest = hashlib.sha256(os.fsencode(project)).digest()[:KEY_DIGEST_BYTES].hex()
+    return f"{mangled[: MOST_KEY_BYTES - 1 - len(digest)]}-{digest}"
 
 
 def read_marker(directory, session):

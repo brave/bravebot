@@ -1333,6 +1333,29 @@ mod tests {
         assert!(!withheld("BROWSER", &genuine, &session));
     }
 
+    /// SANDBOX-30. A list in `XDG_DATA_DIRS` or `XDG_CONFIG_DIRS` is judged entry by entry on the
+    /// disk. The regression it rejects: a list judged as one path, which names no directory, so a
+    /// person's list of installed directories is removed from the sign-in.
+    #[test]
+    fn an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept() {
+        let (session, planted, _genuine, safe) = planted_and_genuine("credentials-xdg-list");
+        let inner = safe.join("share");
+        std::fs::create_dir_all(&inner).unwrap();
+        let genuine_list = std::env::join_paths([&inner, &safe]).unwrap();
+        let mixed_list = std::env::join_paths([&inner, planted.parent().unwrap()]).unwrap();
+
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(
+                !withheld(name, Path::new(&genuine_list), &session),
+                "{name}: a genuine list"
+            );
+            assert!(
+                withheld(name, Path::new(&mixed_list), &session),
+                "{name}: a list with a directory a stage may write"
+            );
+        }
+    }
+
     /// The directories the CLI's bundled OpenSSL loads engines, providers and included
     /// configuration from are held to the same check as the file that names them.
     #[test]
@@ -1459,6 +1482,120 @@ mod tests {
         assert_eq!(
             handed("AWS_SHARED_CREDENTIALS_FILE"),
             genuine.to_string_lossy()
+        );
+    }
+
+    /// The installed `aws` CLI, not a stand-in, runs a `credential_process` helper that a profile in
+    /// `AWS_CONFIG_FILE` names when the file is outside every directory a stage may write, and does
+    /// not run one in a file inside. With the planted file's variable removed the CLI reads its
+    /// default files, which hold no such profile, so the export is refused and the report is
+    /// [`BACKEND-23`](../../../docs/specs/backends.md#BACKEND-23)'s, a profile that is not
+    /// configured, not a sign-in.
+    ///
+    /// Skipped, with a message on stderr, where no `aws` is installed in a directory the lookup
+    /// accepts. `HOME` is a scratch directory with no `.aws` in it, so the person's own files are
+    /// not read, and nothing else of the person's environment reaches the CLI.
+    #[cfg(unix)]
+    #[test]
+    fn the_installed_cli_runs_a_credential_process_outside_a_stage_and_not_one_inside() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "credentials::tests::the_installed_cli_runs_a_credential_process_outside_a_stage_and_not_one_inside";
+        const SESSION: &str = "BRAVEBOT_TEST_REAL_AWS_SESSION";
+
+        const RESULTS: &str = "BRAVEBOT_TEST_REAL_AWS_RESULTS";
+
+        if let Some(session_directory) = std::env::var_os(SESSION) {
+            bravebot_sandbox::programs::keep_out(Path::new(&session_directory));
+            let results = PathBuf::from(std::env::var_os(RESULTS).unwrap());
+            let exported = export(Some("helper")).map(|credentials| credentials.access_key_id);
+            std::fs::write(results.join("exported"), format!("{exported:?}")).unwrap();
+            let diagnosis = session(Some("helper"))
+                .map_err(|failure| matches!(failure, CredentialError::NoSuchProfile { .. }));
+            std::fs::write(results.join("diagnosis"), format!("{diagnosis:?}")).unwrap();
+            return;
+        }
+
+        let real = installed();
+        if absent(&command_for(&real)) {
+            eprintln!(
+                "skipped: no `aws` is installed in a directory the lookup accepts, so no \
+                 credential_process helper was run by the real CLI"
+            );
+            return;
+        }
+
+        // A profile named `helper` whose `credential_process` is a script that notes it ran and
+        // prints a credential in the shape the CLI reads.
+        let helper_in = |directory: &Path| -> (PathBuf, PathBuf) {
+            let marker = directory.join("helper-ran");
+            let script = directory.join("helper.sh");
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nprintf ran > '{}'\nprintf '%s' '{{\"Version\":1,\"AccessKeyId\":\"AKIAHELPER\",\"SecretAccessKey\":\"secret\"}}'\n",
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let config = directory.join("config");
+            std::fs::write(
+                &config,
+                format!(
+                    "[profile helper]\ncredential_process = {}\n",
+                    script.display()
+                ),
+            )
+            .unwrap();
+            (config, marker)
+        };
+        let run = |config: &Path, session_directory: &Path, results: &Path| {
+            let home = fresh_directory("credentials-real-home");
+            let path = std::env::join_paths([
+                real.parent().unwrap().to_path_buf(),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ])
+            .unwrap();
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+                .env_clear()
+                .env(SESSION, session_directory)
+                .env(RESULTS, results)
+                .env("PATH", &path)
+                .env("HOME", &home)
+                .env("AWS_CONFIG_FILE", config)
+                .env("AWS_EC2_METADATA_DISABLED", "true")
+                .output()
+                .unwrap();
+            let said = String::from_utf8_lossy(&child.stderr).into_owned();
+            assert!(child.status.success(), "{said}");
+            let read = |name: &str| std::fs::read_to_string(results.join(name)).unwrap_or_default();
+            (read("exported"), read("diagnosis"))
+        };
+
+        let results = fresh_directory("credentials-real-results");
+        let stage = fresh_directory("credentials-real-stage");
+        let genuine = fresh_directory("credentials-real-genuine");
+        let (config, marker) = helper_in(&genuine);
+        let (exported, diagnosis) = run(&config, &stage, &results);
+        assert_eq!(exported, r#"Ok("AKIAHELPER")"#, "the CLI was not run");
+        assert_eq!(diagnosis, "Ok(())");
+        assert!(marker.exists(), "the helper was not run by the CLI");
+
+        let planted = fresh_directory("credentials-real-planted");
+        let (config, marker) = helper_in(&planted);
+        let results = fresh_directory("credentials-real-results-planted");
+        let (exported, diagnosis) = run(&config, &planted, &results);
+        assert!(
+            !marker.exists(),
+            "the CLI ran a helper named by a file a stage may write"
+        );
+        assert!(exported.starts_with("Err("), "{exported}");
+        assert_eq!(
+            diagnosis, "Err(true)",
+            "a profile the CLI does not have was not reported as one"
         );
     }
 

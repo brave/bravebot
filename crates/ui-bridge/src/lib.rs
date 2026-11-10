@@ -29,6 +29,10 @@
     )
 )]
 
+#[cfg(test)]
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
+
 mod account_words;
 mod accounts;
 pub mod acp;

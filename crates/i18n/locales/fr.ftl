@@ -717,8 +717,8 @@ sandbox-rule-climbs = il sort du dossier dont il est lu, ou contient .. là où 
 sandbox-rule-glob-on-a-write = un joker s'applique aux lectures et pas aux écritures
 sandbox-rule-confines-nothing = une écriture sur le dossier personnel ou sur tout le système de fichiers ne confine rien
 sandbox-rule-private-key = aucune liste n'ajoute d'accès à ~/.ssh, où se trouve une clé privée
-sandbox-rule-state-directory = aucune liste n'ajoute d'accès à ~/.bravebot, où se trouvent les clés de la passerelle, sauf pour lire ~/.bravebot/sessions
-sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou ~/.bravebot
+sandbox-rule-state-directory = aucune liste n'ajoute d'accès au dossier d'état, où se trouvent les clés de la passerelle (~/.bravebot, ou le dossier que BRAVEBOT_HOME désigne à la place), sauf pour lire son dossier sessions
+sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou le dossier d'état
 sandbox-rule-too-broad = son joker a regardé plus du disque qu'un motif ne le peut, donc ce qu'il désigne est inconnu
 sandbox-rule-overridden = une autre entrée décide de ce chemin : un refus au même chemin, ou un refus écrit par le fichier géré
 sandbox-rule-cannot-subtract = cette plateforme ne peut pas retenir un chemin situé dans un dossier accordé à chaque étape, donc une étape est refusée au lieu d'être lancée avec le chemin accessible
@@ -2569,6 +2569,8 @@ indicator-checking = { $lines ->
    *[other] Vérification de { $lines } lignes
     }
 indicator-waiting-on-delegate = En attente de { $delegate }
+indicator-reconnecting-in = Reconnexion, prochain essai dans { $wait }
+indicator-reconnecting-until = Reconnexion, prochain essai dans { $wait }, abandon dans { $left }
 indicator-hook = Exécution du hook : { $program } ({ $moment })
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
@@ -3233,6 +3235,11 @@ failure-with-attempts = { $what }, après { $attempts } tentatives
 failure-with-next = { $what }. { $next }
 failure-unauthorized-next = Lancez `bravebot auth status` pour voir la connexion ou la clé utilisée, et `bravebot doctor` pour voir le point d'accès
 failure-premium-key-next = Lancez `bravebot auth login brave` pour remplacer la clé premium, ou `bravebot auth logout brave` pour envoyer les requêtes au point d'accès gratuit à la place. `bravebot auth status` montre la clé utilisée
+# Dit en dernier après une limite de débit. La première phrase est pour une requête vers une entrée
+# `provider`, qui peut indiquer `maxRetries` dans ses options, et la seconde pour tout service sans
+# entrée où l'indiquer.
+failure-rate-limited-entry-next = Augmentez `maxRetries` dans les options de cette entrée de fournisseur pour attendre plus longtemps, ou définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle
+failure-rate-limited-next = Définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle, ou réessayez plus tard
 failure-account-not-signed-in = pas connecté à un compte ChatGPT. Lancez `bravebot auth login chatgpt` pour vous connecter
 failure-account-ended = la connexion ChatGPT a pris fin. Lancez `bravebot auth login chatgpt` pour vous reconnecter
 failure-account-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT. Lancez `bravebot auth login chatgpt` pour vous reconnecter

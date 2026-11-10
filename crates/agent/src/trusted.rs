@@ -659,6 +659,76 @@ mod tests {
         }
     }
 
+    /// TRUST-23: a directory whose path is longer than a file name can be is still kept, read back
+    /// by the next session there, and withdrawn. The record's name is bounded whatever the length
+    /// of the path (here three components of 255 bytes). The directory is made only on Unix, where
+    /// a path of that length can be created.
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_about_a_directory_with_a_very_long_path_is_kept_read_back_and_forgotten() {
+        let scratch = Scratch::new("trusted-long-path");
+        let directory = ["a", "b", "c"]
+            .iter()
+            .fold(scratch.path.join("work"), |path, letter| {
+                path.join(letter.repeat(255))
+            });
+        std::fs::create_dir_all(&directory).expect("a directory with a very long path");
+        let Some(identity) = Identity::of(&directory) else {
+            return;
+        };
+        let home = scratch.path.join("home");
+        let store = Store::new(&home, &directory);
+        let name = store.path().file_name().expect("a file name").len();
+        assert!(name <= 255, "the record's file name is {name} bytes");
+
+        assert!(
+            store.keep(&identity, "the-first", 1_000, true),
+            "a yes about {} was not written",
+            directory.display()
+        );
+
+        let kept = Store::new(&home, &directory).kept(&identity);
+        assert_eq!(
+            kept,
+            Some(Kept {
+                session: "the-first".to_string(),
+                at: 1_000,
+                root: directory.clone(),
+                confined_lines: true,
+            })
+        );
+        assert!(store.forget().expect("withdrawn"));
+        assert_eq!(store.kept(&identity), None);
+        assert!(!store.path().exists(), "the emptied record was left");
+    }
+
+    /// TRUST-23: two long directories whose names agree for the first part of the key have their own
+    /// records, so a yes about one is no answer for the other. The directories are made only on
+    /// Unix, where a path of that length can be created.
+    #[cfg(unix)]
+    #[test]
+    fn a_long_directory_is_not_answered_by_a_record_kept_for_another_long_directory() {
+        let scratch = Scratch::new("trusted-long-neighbours");
+        let stem = scratch.path.join("work").join("p".repeat(255));
+        let (one, two) = (stem.join("one"), stem.join("two"));
+        for directory in [&one, &two] {
+            std::fs::create_dir_all(directory).expect("a directory");
+        }
+        let (Some(first), Some(second)) = (Identity::of(&one), Identity::of(&two)) else {
+            return;
+        };
+        let home = scratch.path.join("home");
+        assert!(Store::new(&home, &one).keep(&first, "a-session", 1, false));
+
+        assert_ne!(
+            Store::new(&home, &one).path(),
+            Store::new(&home, &two).path(),
+            "two directories shared a record"
+        );
+        assert_eq!(Store::new(&home, &two).kept(&second), None);
+        assert!(Store::new(&home, &one).kept(&first).is_some());
+    }
+
     /// TRUST-23: the key a directory reduces to is lossy, so two directories can share a file. The
     /// full path in every entry is what keeps one directory's answer out of the other's session.
     #[test]

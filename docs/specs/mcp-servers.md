@@ -22,12 +22,14 @@ governs:
   - crates/agent/src/mcp.rs
   - crates/agent/src/permission_mode.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/main.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/confirm/mcp.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/status.rs
   - crates/tui/src/mcp_command.rs
   - crates/ui-bridge/src/connectors.rs
+  - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
@@ -2033,9 +2035,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   runner whose program loads from somewhere other than the installation it came from, such as a
   version manager's shim that hands over to a program elsewhere in the home, is not given that
   somewhere, and does not start confined.
-- **The full-screen interface discards a server's stderr.** It owns the screen, and a server's
-  diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
-  the plain interface pass it through to their own stderr.
+- **No interface shows a server's stderr.** A server's diagnostics are discarded in the full-screen
+  interface, the plain interface, a one-shot run and the desktop application ([SERVERS-25](#SERVERS-25)).
+  A server that fails says only what its failure's code and method say, and the way to read its
+  own output is to run it by hand.
 - **A server too slow for its handshake is left out.** A stdio server that has not answered
   `initialize`, `tools/list` or, where it declared prompts, `prompts/list` within its startup bound is
   stopped and left out of the session ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request
@@ -2084,7 +2087,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   before the model is asked anything, and the window says it is starting servers while it does. A
   turn or run stopped while they start starts none of them, and the next turn or run asks again. A
   reopened or forked session starts its own, since what a session started is not written to its
-  record. A server's stderr is discarded, as the full-screen interface discards it.
+  record. A server's stderr is discarded, as in every other front end.
 
 <a id="SERVERS-19"></a>
 ### SERVERS-19: `/mcp` shows the servers, starts one that is not running, turns one off for the session, and removes one
@@ -2469,3 +2472,38 @@ an approval given for a sandbox.
 `verified-by: bravebot_mcp::openshell::a_recorded_sandbox_of_an_ended_process_is_removed_and_no_other`
 `verified-by: bravebot_sandbox::openshell::the_version_and_the_gateway_are_read_from_what_openshell_prints`
 `verified-by: bravebot_cli::mcp::doctor_is_told_the_servers_declared_for_openshell_and_no_others`
+
+<a id="SERVERS-25"></a>
+### SERVERS-25: a stdio server's stderr is discarded in every front end
+
+What a stdio server writes to its standard error is not shown. The full-screen interface, the plain
+interface (`--plain`), a one-shot run (`-p`) and the desktop application each start the server with
+its stderr going nowhere, a server in an OpenShell sandbox ([SERVERS-24](#SERVERS-24)) included.
+Nothing reads it, so none of it reaches the terminal, the run's stderr, a message the planner is
+sent or a record. A server's own words are shown only where this spec draws them behind the margin
+with control characters replaced ([SERVERS-8](#SERVERS-8), [LAYER-3](layering.md#LAYER-3)).
+
+**Why.** A terminal acts on the escape sequences in the bytes it is given. The plain interface and a
+one-shot run draw the questions of [SERVERS-4](#SERVERS-4) and [SERVERS-8](#SERVERS-8), and every
+notice, on the stream a server's stderr would share, so an approved server that wrote there could set
+the window title, write the clipboard (OSC 52) and erase the rows of a question the person is about
+to answer. The question is what the person approves on, and a server is third-party code that the
+approval does not vouch for beyond its tools.
+
+**A known cost.** A server's diagnostics are lost to the person, so a server that does not start is
+read by running it by hand.
+
+A server in an OpenShell sandbox receives the stream it is given like any other
+([SERVERS-24](#SERVERS-24)).
+
+**What the tests pin.** `--plain` and `-p` are pinned by running a server that writes escape
+sequences and reading the transcript. The OpenShell backend is pinned by a fake `openshell` that
+records whether its own stderr is the null device. The full-screen interface (the start in
+`crates/cli/src/main.rs` and `/mcp` in `crates/tui/src/mcp_command.rs`) and the desktop application
+(`crates/ui-bridge/src/bridge.rs`) also pass `Stream::Null`, and no test pins those three call
+sites, since each starts a confined server inside a front end that has no harness for reading what
+the server wrote. A change of one of them to `Stream::Inherited` is found by a reviewer.
+
+`verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`

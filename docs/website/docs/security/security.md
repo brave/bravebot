@@ -122,8 +122,10 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   `allowRead` entry, scope or `/reach` grant lifts, except that a program reads, and never writes,
   the session records in `~/.bravebot/sessions`) and can write only the directories the session
   was opened on, its scratch directory, the system temporary directory (unless you [hold it back](sandbox.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
-  command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
-  agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
+  command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` is lent
+  the agent socket, never a private key. The socket is lent only where the path `SSH_AUTH_SOCK` leads
+  to is a socket outside the credential and persistence locations; a name relinked to anything else,
+  and a session with no home directory, lend none, and the push still runs. The files a tool reads by name to do its job, such as the `gh`
   login, `~/.npmrc` and `~/.netrc`, are readable. So are the shell startup files, `~/.gitconfig`,
   `~/.pgpass`, `~/.my.cnf`, `~/.vault-token` and the configuration of tools such as `helm`, `glab`,
   `doctl` and `rclone`.
@@ -420,8 +422,7 @@ directory as not in force.
 
 **More places a stage cannot reach.** The browser relay's default directory `~/.bravebot-browser`,
 which holds the secret that drives the browser, is refused like `~/.bravebot` (a relay told to use
-another directory is not covered, and neither is a state directory that `BRAVEBOT_HOME` puts
-somewhere other than `~/.bravebot`). On Windows `gcloud` and `gpg` keep their data under
+another directory is not covered). On Windows `gcloud` and `gpg` keep their data under
 `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, and those are refused too, with the browser
 profiles under `~/AppData/Local` (`BraveSoftware`, `Google/Chrome`, `Chromium`, `Microsoft/Edge`) and
 `~/AppData/Roaming/Mozilla`, and the Windows stores for credentials, keys and vaults under

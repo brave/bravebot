@@ -84,7 +84,7 @@ help:
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
-	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer, longest waiting first; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
 	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [NOTES=\"<instructions for the run>\"] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
@@ -178,6 +178,8 @@ check:
 	@python3 contrib/check-code-selectors.py --selftest
 	@python3 contrib/check-code-selectors.py
 	@python3 contrib/check-toolchain.py
+	@python3 contrib/check-fuzz-lints.py --selftest
+	@python3 contrib/check-fuzz-lints.py
 
 # Whether every call of programs::start and programs::start_against states CodeSelectors, and every
 # variable in a CODE_SELECTORS list (crates/sandbox/src/programs.rs, crates/agent/src/gcloud.rs,
@@ -458,10 +460,21 @@ fuzz-cmin: fuzz-prerequisites fuzz-named-target
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz cmin -a $(TARGET) fuzz/corpus/$(TARGET) -- -max_len=$(call fuzz_max_len,$(TARGET))
 
 # Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
+# Whether fuzz/Cargo.toml's [lints.clippy] table still matches the root workspace's
+# [workspace.lints.clippy]. The fuzz crate cannot inherit it with `[lints] workspace = true`: it
+# declares its own `[workspace]` so the root workspace never compiles libFuzzer, and a package in
+# a workspace of its own has no outer table to inherit from. Run by `check` and by `check-fuzz`,
+# and first in both, since it answers at once and needs no toolchain.
+.PHONY: check-fuzz-lints
+check-fuzz-lints:
+	@python3 contrib/check-fuzz-lints.py --selftest
+	@python3 contrib/check-fuzz-lints.py
+
+# Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
 # replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
 # FUZZ_SECONDS. Stops at the first failure.
 .PHONY: check-fuzz
-check-fuzz: fuzz-prerequisites
+check-fuzz: fuzz-prerequisites check-fuzz-lints
 	cargo +$(FUZZ_TOOLCHAIN) fmt --manifest-path fuzz/Cargo.toml -- --check
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) test --manifest-path fuzz/Cargo.toml --lib --locked
@@ -549,8 +562,9 @@ docs-updated-to-sha:
 # how many are read. GitHub reports mergeable as UNKNOWN for every open pull request after main
 # moves, until each has been read, so contrib/review-ready.py reads the list again every few seconds
 # while an approved, passing, non-draft pull request is UNKNOWN, for WAIT seconds in total, and
-# names on stderr any still UNKNOWN at the end. Each ready pull request is printed as soon as it is
-# seen.
+# names on stderr any still UNKNOWN at the end. The ready pull requests are printed after the last
+# read, the one that has waited longest first and the most recent last. A pull request waits from the
+# reviewer's latest approval, or from when it was opened if that has no time.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500

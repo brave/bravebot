@@ -37,7 +37,8 @@ was, and the conversation budget stays where it was too.
 | | `blacklist` | model ids; of a fetched roster, these are not offered |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
-| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
+| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated, or 5 after a rate limit that named no wait (bravebot's own field) |
+| | `retryWindowMs` | how long after its first failure a request whose connection failed is still sent again, in milliseconds, 300000 where neither this nor `maxRetries` is stated (bravebot's own field) |
 | | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
 | | `setCacheKey` | `true` to send a `prompt_cache_key` in each chat-completions request, the same value for every request of a session and another value in the next session, for a service that routes by it to serve a session's prompt cache. Off where unstated, since it lets the host tie a session's requests together (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
@@ -318,11 +319,17 @@ differently shows nothing. It is not saved to the session and is not sent back i
 
 A request that fails because the connection gave out, because the name of the host did not resolve,
 because the network is down or unreachable, or because the service said it was busy, is sent again
-twice, after a pause of one second and then two. With the default count, a mistyped host is therefore sent three times before
-the failure is reported, since a name that does not exist and a network that is not up yet cannot be
-told apart by the failure. A reply that is still arriving is given
-up on when nothing has come for two minutes. Both are figures you can change for one gateway in its
-`options`:
+for five minutes after the first failure. The pause before each attempt doubles from one second and
+stops growing at one minute, so a machine that wakes without a network, a VPN that reconnects or a
+service that recovers within a few minutes is reached without anyone asking again. Typing a message
+while it waits sends that message at once instead of waiting for the next attempt. A mistyped host is
+therefore sent again for those five minutes before the failure is reported, since a name that does
+not exist and a network that is not up yet cannot be told apart by the failure.
+
+A reply that stopped before it was finished, or that the service reported as failing part way
+through, is sent again twice, because each attempt is billed. A reply that is still arriving is
+given up on when nothing has come for two minutes. All three are figures you can change for one
+gateway in its `options`:
 
 ```json
 {
@@ -331,6 +338,7 @@ up on when nothing has come for two minutes. Both are figures you can change for
       "options": {
         "baseURL": "https://gateway.example/v1",
         "maxRetries": 4,
+        "retryWindowMs": 3600000,
         "idleTimeoutMs": 300000
       }
     }
@@ -339,20 +347,30 @@ up on when nothing has come for two minutes. Both are figures you can change for
 ```
 
 `maxRetries` is how many times a request is sent *again*, so `4` is five requests in all and `0`
-sends each one once. It is at most 7. `idleTimeoutMs` is for a model that thinks for longer than two
-minutes before it writes; it is at most 600000, ten minutes. Both are written as numbers: `"0"` in
-quotes, a fraction, a negative figure and a gap of `0` leave the figure at what it was, and a figure
+sends each one once. It is at most 7. `retryWindowMs` is how long after its first failure a request
+whose connection failed, or that the service said to try again later, is still sent again: stated,
+it applies to those failures whatever `maxRetries` says, and it is at most 3600000, one hour. Stating
+`maxRetries` and no window leaves only the count in force, so `maxRetries: 0` still sends each
+request once. `idleTimeoutMs` is for a model that thinks for longer than two minutes before it
+writes; it is at most 600000, ten minutes. All three are written as numbers: `"0"` in quotes, a
+fraction, a negative figure and a window or gap of `0` leave the figure at what it was, and a figure
 above its limit is the limit.
 
-Only the count and the wait change. Which failures are sent again does not: a refused credential or
+Only the count and the waits change. Which failures are sent again does not: a refused credential or
 a model the service does not have is refused the same way each time, whatever count you gave. A wait
 the service asked for with a `Retry-After`, up to two minutes, is taken before each retry in place of
-the pause, so a large count against a service that keeps asking for it is a long wait.
+the pause, so a large count or window against a service that keeps asking for it is a long wait.
+
+A rate limit (HTTP 429) that carries no usable `Retry-After` is sent again up to five times where you
+state no `maxRetries`, after waits of 8, 16, 32, 64 and 120 seconds, 240 seconds in all. A count you
+state replaces that figure as it replaces the two retries of every other failure, so `2` sends a rate
+limit three times and `0` once, and each wait of the schedule is taken before each retry, up to two
+minutes. A count of `7` against a limit that never lifts is held for about eight minutes of waiting.
 
 A gateway on this machine, such as a local Ollama, is waited on through any silence while you can
 stop the turn, so `idleTimeoutMs` does not reach it. `maxRetries` does.
 
-These two are read from your own `settings.json`, from a file `--settings` names, and from the
+These three are read from your own `settings.json`, from a file `--settings` names, and from the
 machine-level file an administrator keeps. A `.bravebot/settings.json` in a checkout cannot set them,
 as it cannot name a gateway: `bravebot doctor` says so when one tries. Brave's own endpoint and the
 models you reach through the Bedrock tier variables alone have no entry to put them in and keep the

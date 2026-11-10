@@ -7,6 +7,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
@@ -228,7 +230,7 @@ fn a_turn_is_refused_until_trust_has_been_answered() {
         call(
             &mut bridge,
             "turn.send",
-            json!({ "session": &handle, "prompt": "hello" })
+            message_ids::with_fresh(json!({ "session": &handle, "prompt": "hello" }))
         ),
         Err(ErrorCode::BadRequest),
         "no turn before the question is answered"
@@ -249,7 +251,7 @@ fn a_turn_is_refused_until_trust_has_been_answered() {
     let after = call(
         &mut bridge,
         "turn.send",
-        json!({ "session": &handle, "prompt": "hello" }),
+        message_ids::with_fresh(json!({ "session": &handle, "prompt": "hello" })),
     );
     assert_ne!(
         after,
@@ -465,7 +467,7 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
     let bare = call(
         &mut bridge,
         "turn.send",
-        json!({ "session": &handle, "prompt": "hello" }),
+        message_ids::with_fresh(json!({ "session": &handle, "prompt": "hello" })),
     );
     assert_ne!(
         bare,
@@ -483,12 +485,12 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
     let named = call(
         &mut bridge,
         "turn.send",
-        json!({
+        message_ids::with_fresh(json!({
             "session": &handle,
             "prompt": "hello",
             "files": ["README.md"],
             "dropped": [briefing.display().to_string()],
-        }),
+        })),
     );
     assert_ne!(
         named,
@@ -516,11 +518,11 @@ fn a_dropped_path_that_names_no_file_is_refused() {
         call(
             &mut bridge,
             "turn.send",
-            json!({
+            message_ids::with_fresh(json!({
                 "session": &handle,
                 "prompt": "hello",
                 "dropped": [missing.display().to_string()],
-            })
+            }))
         ),
         Err(ErrorCode::BadRequest),
         "nothing is at that path, so nobody dropped it",
@@ -532,11 +534,11 @@ fn a_dropped_path_that_names_no_file_is_refused() {
         call(
             &mut bridge,
             "turn.send",
-            json!({
+            message_ids::with_fresh(json!({
                 "session": &handle,
                 "prompt": "hello",
                 "dropped": [held.path().display().to_string()],
-            })
+            }))
         ),
         Err(ErrorCode::BadRequest),
         "a directory is not a file anybody dropped",
@@ -559,11 +561,11 @@ fn a_relative_dropped_path_is_refused() {
         call(
             &mut bridge,
             "turn.send",
-            json!({
+            message_ids::with_fresh(json!({
                 "session": &handle,
                 "prompt": "hello",
                 "dropped": ["Cargo.toml"],
-            })
+            }))
         ),
         Err(ErrorCode::BadRequest),
         "a path inside the project belongs in `files`",
@@ -616,7 +618,9 @@ fn a_malformed_dropped_list_costs_the_files_and_not_the_turn() {
         let sent = call(
             &mut bridge,
             "turn.send",
-            json!({ "session": &handle, "prompt": "hello", "dropped": wrong }),
+            message_ids::with_fresh(
+                json!({ "session": &handle, "prompt": "hello", "dropped": wrong }),
+            ),
         );
         assert_ne!(
             sent,

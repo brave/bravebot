@@ -78,7 +78,7 @@ a violation wherever it sits.
 **Why.** The dependency graph makes `core` look like the safe place to put things, and it is not.
 The kernel is where decisions derived from content are *taken*, not where they become allowed.
 
-`verified-by: by-construction (a labelled value exposes no accessor for its contents, so reading one takes either a witness the policy layer alone mints or a conversion that refuses anything not already trusted and public, and labels.md pins that witness's use file by file across both crates, and check-spec fails on a use written in a form the count cannot read, so a release of the bytes added in the kernel moves a pinned count rather than escaping one, while a decision taken from bytes an already counted release produced, inside a function that holds one, moves none and is found by reading the diff as reviewing-for-the-rule.md describes; the one thing a labelled value answers without a witness is how many bytes it holds, which is a number labels.md already shows the planner)`
+`verified-by: by-construction (a labelled value exposes no accessor for its contents, which the compile_fail doctests on Labelled and the labelled-impl check in the security-audit skill hold, the check failing a function of the type's own impl blocks that is not one of the seven it has and an impl for another type that takes a labelled value as an argument of its trait, so reading one takes either a witness the policy layer alone mints or a conversion that refuses anything not already trusted and public, and labels.md pins that witness's use file by file across both crates, and check-spec fails on a use written in a form the count cannot read, so a release of the bytes added in the kernel moves a pinned count rather than escaping one, while a decision taken from bytes an already counted release produced, inside a function that holds one, moves none and is found by reading the diff as reviewing-for-the-rule.md describes; the one thing a labelled value answers without a witness is how many bytes it holds, which is a number labels.md already shows the planner)`
 `verified-by: by-construction (the one class of untrusted bytes the kernel holds outside a labelled value is the address a slot carries, which is a bare string, so every accessor returning one takes a witness minted only inside the policy module, bar the single gate that releases the sentence for the screen asking about the slot, and labels.md pins their uses file by file as well; a decision on a slot's address relocated into another module of bravebot-core either does not compile or moves that one gate's pinned count, and one relocated into the policy module moves a pinned count only where it adds a use of a witness, since the counts pin releases and not the decisions taken from what they released)`
 
 <a id="LAYER-3"></a>
@@ -90,6 +90,32 @@ Everything shown is marked with a margin the renderer draws, and has its control
 replaced, so the content cannot draw its own. A complete colour code in output drawn for reading is
 taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 
+`verified-by: bravebot_tui::render::transcript::a_mcp_note_quoting_an_alias_with_an_escape_is_drawn_with_the_escape_made_visible`
+`verified-by: bravebot_cli::background::the_start_of_an_id_a_line_shows_is_drawn`
+`verified-by: bravebot_cli::mcp::an_alias_pasted_into_approve_or_enable_is_not_printed_with_its_control_characters`
+`verified-by: bravebot_cli::mcp::a_control_character_in_a_name_an_mcp_command_prints_is_drawn_as_its_picture`
+`verified-by: bravebot_cli::mcp::a_name_typed_into_a_refused_declaration_is_not_printed_with_its_control_characters`
+`verified-by: bravebot_agent::servers::the_path_in_an_approval_that_was_not_recorded_is_drawn`
+`verified-by: bravebot_agent::servers::the_path_in_a_note_about_unreadable_declarations_is_drawn`
+`verified-by: bravebot_cli::background::a_bidirectional_control_in_a_session_name_or_directory_is_written_out`
+`verified-by: bravebot_cli::auth::the_aws_failure_a_sign_in_prints_is_drawn`
+`verified-by: bravebot_cli::auth::a_key_file_path_with_control_characters_is_drawn_where_it_is_named`
+`verified-by: bravebot_cli::auth::the_path_named_when_a_kept_key_cannot_be_read_again_is_drawn`
+`verified-by: bravebot_cli::auth::the_ids_a_stored_key_is_held_for_are_drawn_on_the_list_of_ways`
+`verified-by: bravebot_cli::auth::a_row_is_worded_with_what_a_checkout_chose_drawn`
+`verified-by: bravebot_cli::brave::a_path_naming_a_control_character_is_drawn_in_the_refusal`
+`verified-by: bravebot_cli::import::a_refused_write_is_worded_with_its_control_characters_drawn`
+`verified-by: bravebot_cli::doctor::the_aws_profiles_the_cli_lists_are_drawn_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_paths_of_a_client_certificate_that_loaded_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_managed_files_path_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_development_root_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_state_directory_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_a_checkouts_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_the_home_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_state_directory_and_key_files_the_environment_names_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_client_certificate_paths_the_environment_names_as_pictures`
+`verified-by: bravebot_cli::running::what_sessions_import_prints_about_a_foreign_session_is_drawn_as_pictures`
+`verified-by: bravebot_cli::session_import::the_title_and_id_of_a_session_another_program_wrote_are_drawn_as_pictures`
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_cli::progress::quarantined_content_is_shown_and_marked_on_every_line`
@@ -116,7 +142,6 @@ taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::running::doctor_draws_a_vouched_projects_skill_keys_and_directory_name_as_pictures`
 `verified-by: bravebot_cli::running::the_output_schema_refusal_draws_the_model_it_names_as_pictures`
-`verified-by: bravebot_agent::scratch::a_directory_that_cannot_be_made_is_the_systems_error_and_names_no_path`
 `verified-by: bravebot_cli::running::doctor_draws_the_model_the_settings_name_as_pictures`
 `verified-by: bravebot_cli::running::the_refusal_of_a_definitions_model_draws_the_definitions_name_as_pictures`
 `verified-by: bravebot_cli::running::the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures`
@@ -128,6 +153,26 @@ taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 `verified-by: bravebot_cli::running::doctor_draws_the_endpoint_the_configuration_quotes_as_pictures`
 `verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
 `verified-by: bravebot_cli::xai::a_file_that_cannot_be_used_is_a_sentence_with_the_remedy_and_a_detail_that_is_one_line`
+`verified-by: bravebot_cli::chatgpt::the_path_the_sign_in_is_stored_in_is_drawn`
+`verified-by: bravebot_cli::flags::the_files_a_refused_sandbox_mode_names_are_drawn`
+`verified-by: bravebot_cli::sandbox_check::doctor_sandbox_draws_the_log_path_and_the_platform_detail`
+
+The error from making a session's scratch directory is shown as the operating system gave it, without
+the drawing. `SessionScratch::create` returns the error of the call that failed and wraps it in no
+text of its own, so it names neither the directory nor the `TMPDIR` value that chose it. The
+terminal session's note and the one-shot run's notice both rely on that.
+
+`verified-by: bravebot_agent::scratch::a_directory_that_cannot_be_made_is_the_systems_error_and_names_no_path`
+
+The text the desktop bridge builds about connectors, such as the path of the declarations file
+or of the settings file, goes to the window as JSON and is not drawn for a terminal. It names the
+state directory, which the person's environment chooses, and the window that shows it is not a
+terminal. The one name in a connector question that a checkout can choose is the settings file
+that requested the server, which the bridge sends as `requestedBy`. `servers::named` follows
+links, so a checkout that links its settings file to a file with control characters in its name
+chooses the followed name, and `named` draws it with `shown_path` before the bridge sends it.
+
+`verified-by: bravebot_agent::servers::the_settings_file_a_question_names_is_drawn_when_a_link_leads_to_an_odd_name`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe
@@ -276,11 +321,13 @@ turn it is the context that turn worked from.
 `verified-by: bravebot_agent::conversation::a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut`
 `verified-by: bravebot_ui_bridge::wire::a_message_the_agent_composed_crosses_as_a_tag_and_no_prose`
 `verified-by: bravebot_ui_bridge::wire::a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose`
+`verified-by: bravebot_ui_bridge::wire::a_plan_mode_notice_crosses_as_plain_text_and_takes_no_ordinal`
 `verified-by: bravebot_ui_bridge::wire::a_front_end_may_name_its_own_tag_and_none_of_the_agents`
 `verified-by: bravebot_tui::state::a_replayed_composed_message_is_drawn_as_the_message_it_was`
 `verified-by: bravebot_ui_bridge::fork::a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt`
 `verified-by: bravebot_ui_bridge::fork::a_prompt_that_reads_like_a_composed_message_is_still_where_the_cut_lands`
 `verified-by: bravebot_ui_bridge::fork::a_typed_prompt_that_opens_like_a_note_is_a_fork_point`
+`verified-by: bravebot_ui_bridge::fork::a_plan_mode_notice_is_not_a_fork_point`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one, the app's own house-keeping included, is drawn as the prompt somebody typed and keeps the ordinal a fork of it cuts on, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; make check-ui and the Front end CI job both run it, while the governs list above holds the file's existence to make check-spec)`
 
 ## Open questions

@@ -50,16 +50,22 @@ def load_script():
 review_ready = load_script()
 
 
-def pr(number, mergeable="MERGEABLE", draft=False, reviews=None, checks=None):
-    """A pull request the reviewer can pick up unless an argument says otherwise."""
+def pr(number, mergeable="MERGEABLE", draft=False, reviews=None, checks=None, created="2026-10-01T00:00:00Z",
+       approved=None):
+    """A pull request the reviewer can pick up unless an argument says otherwise. `created` is when it was
+    opened and `approved` when the reviewer approved it, which is left out of the review when None."""
     if reviews is None:
-        reviews = [{"author": {"login": REVIEWER}, "state": "APPROVED"}]
+        review = {"author": {"login": REVIEWER}, "state": "APPROVED"}
+        if approved:
+            review["submittedAt"] = approved
+        reviews = [review]
     if checks is None:
         checks = [{"conclusion": "SUCCESS"}]
     return {
         "number": number,
         "title": f"title {number}",
         "url": f"https://github.com/brave/bravebot/pull/{number}",
+        "createdAt": created,
         "mergeable": mergeable,
         "isDraft": draft,
         "latestReviews": reviews,
@@ -136,8 +142,9 @@ class ReviewReady(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.out.splitlines(), [line(1), line(2)])
 
-    def test_a_ready_pull_request_is_printed_before_the_next_read(self):
-        """The ready ones are not held back until the pending ones resolve or the wait ends."""
+    def test_a_ready_pull_request_is_printed_after_the_last_read_in_the_order_of_waiting(self):
+        """A pull request seen on a later read can have waited longer than one seen earlier, so nothing is
+        printed until the reads end, and then the list is in the order of waiting."""
         printed = []
 
         class Out:
@@ -151,15 +158,36 @@ class ReviewReady(unittest.TestCase):
                 pass
 
         seen_at_second_read = []
-        reads = iter([[pr(1), pr(2, "UNKNOWN")], [pr(1), pr(2)]])
+        reads = iter([[pr(1, created="2026-10-05T00:00:00Z"), pr(2, "UNKNOWN")],
+                      [pr(1, created="2026-10-05T00:00:00Z"), pr(2, created="2026-10-02T00:00:00Z")]])
 
         def fetch():
             seen_at_second_read.append("".join(printed))
             return next(reads)
 
         review_ready.watch(fetch, REVIEWER, 30, 0, Out(printed), Out([]), sleep=lambda seconds: None)
-        self.assertEqual(seen_at_second_read[1], line(1) + "\n")
-        self.assertEqual("".join(printed), line(1) + "\n" + line(2) + "\n")
+        self.assertEqual(seen_at_second_read[1], "")
+        self.assertEqual("".join(printed), line(2) + "\n" + line(1) + "\n")
+
+    def test_the_list_runs_from_the_longest_waiting_to_the_most_recent(self):
+        """A pull request waits from the reviewer's approval, so one opened early but approved late is
+        after one opened later and approved earlier. Without an approval time it waits from when it was
+        opened, and a tie goes by number."""
+        self.serve([
+            pr(1, created="2026-10-01T00:00:00Z", approved="2026-10-09T00:00:00Z"),
+            pr(2, created="2026-10-08T00:00:00Z", approved="2026-10-03T00:00:00Z"),
+            pr(3, created="2026-10-04T00:00:00Z"),
+            pr(5, created="2026-10-10T00:00:00Z"),
+            pr(4, created="2026-10-10T00:00:00Z"),
+        ])
+        self.assertEqual(self.run_script().out.splitlines(), [line(2), line(3), line(1), line(4), line(5)])
+
+    def test_the_reviewers_latest_approval_is_when_the_wait_began(self):
+        """An approval by somebody else does not start the wait."""
+        other = {"author": {"login": "other"}, "state": "APPROVED", "submittedAt": "2026-10-20T00:00:00Z"}
+        mine = {"author": {"login": REVIEWER}, "state": "APPROVED", "submittedAt": "2026-10-06T00:00:00Z"}
+        self.serve([pr(1, reviews=[other, mine]), pr(2, created="2026-10-07T00:00:00Z")])
+        self.assertEqual(self.run_script().out.splitlines(), [line(1), line(2)])
 
     def test_one_that_stays_unknown_for_the_whole_wait_is_named_as_missing_from_the_list(self):
         """The list is incomplete, and the person is told which pull requests it leaves out."""

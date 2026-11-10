@@ -36,7 +36,8 @@ a copy of those bytes instead ([VET-4](#VET-4)).
 
 `expects` is the planner's own words. It is sent to the check, so that a page can be judged
 against what it was supposed to be, and it is drawn on the prompt, so that a person can see why
-the planner wants this. It is not a destination and must not be private.
+the planner wants this. It is not a destination, and a private sentence is sent and drawn as a
+public one is ([CHECK-3](../vetting.md#CHECK-3)).
 
 Where the content came from is said in the driver's words rather than in the planner's, and it is
 said as a path, a URL or a command rather than as a reference name. A reference means something to
@@ -44,7 +45,7 @@ the planner and nothing at all to the person being asked about it.
 
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
 `verified-by: bravebot_agent::turn::a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
-`verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
+`verified-by: bravebot_core::policy::a_private_expectation_is_put_to_the_check`
 `verified-by: bravebot_core::policy::a_check_says_where_the_content_came_from_and_not_which_slot_it_is_in`
 `verified-by: bravebot_core::policy::a_check_over_a_file_reference_says_the_path_and_not_the_reference`
 `verified-by: bravebot_agent::turn::a_processors_output_is_vetted_under_the_file_it_was_made_from`
@@ -54,8 +55,7 @@ the planner and nothing at all to the person being asked about it.
 <a id="VET-2"></a>
 ### VET-2: what it refuses
 
-A reference to nothing, since there is nothing to check or to show. A private sentence, per VET-1.
-A call from a delegate, which is neither offered the tool nor answered when it names it anyway. And
+A reference to nothing, since there is nothing to check or to show. A call from a delegate, which is neither offered the tool nor answered when it names it anyway. And
 a picture, a PDF included, in the cases [VET-4](#VET-4) lists and in no others: otherwise a check
 looks at the file itself ([CHECK-15](../vetting.md#CHECK-15)) and the person is handed a copy of it.
 
@@ -76,7 +76,9 @@ a reference names `vet_content` only to a run whose list of tools holds it, so a
 definition or command line left it out is not sent to it either. The refusal of `read_output` for
 a reference no program printed names `vet_content` on the same condition, and the description of
 `vet_content` names `spawn_processor` only where the list holds it
-([TOOL-6](tool-surface.md#TOOL-6)).
+([TOOL-6](tool-surface.md#TOOL-6)). The planner is told in the `spawn_agent` description that a
+delegate cannot call `vet_content`, so a reference that has to be read whole is read by the planner
+and not left to a task ([AGENT-1](spawn-agent.md#AGENT-1)).
 
 `verified-by: bravebot_core::policy::a_check_over_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_picture_is_never_promoted_as_text_whoever_endorsed_it`
@@ -91,6 +93,7 @@ a reference no program printed names `vet_content` on the same condition, and th
 `verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
 `verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
 `verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
 <a id="VET-3"></a>
 ### VET-3: the result is the bytes, or a refusal that says to work without them
@@ -347,8 +350,7 @@ statement is made once in each.
 
 The other text the planner reads that names `vet_content` is the same for every session, so it says
 only that `vet_content` is the question to ask to read a reference, and never who answers it: the
-descriptions of the browser tools whose result is quarantined, and the refusal of a processor in a
-conversation that holds private content.
+descriptions of the browser tools whose result is quarantined.
 
 **Why.** A sentence that is the same for every session tells a planner that the user sees the content
 and decides. Where a safe verdict releases the content with no prompt, or permissions are bypassed,
@@ -361,7 +363,6 @@ never in a result, which a planner could aim at.
 `verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
 `verified-by: bravebot_agent::tools::who_answers_vet_content_is_stated_only_on_a_list_that_holds_it`
 `verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
-`verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`
 
 <a id="VET-6"></a>
 ### VET-6: a fetch or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
@@ -389,6 +390,11 @@ nobody asked, in a mode that asks as in one that does not: the person is asked w
 `vet_content`, as it would have been without `read`. The result then carries the sentence that names
 `vet_content` as the way to see the content, and a sentence saying that `read: true` did not return
 it, and nothing of the word or the reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)).
+
+A check that said `unsafe` for this slot is not made again by the `vet_content` call that follows in
+the turn. The call uses the word as it would have after a second check, and the trail says the word
+was reused ([CHECK-12](../vetting.md#CHECK-12)). A `safe` word, a check that could not be made and a
+check the person stopped are not kept, so `vet_content` makes its own check after each.
 
 The size bounds the release as [RUN-21](run.md#RUN-21) bounds a run's. A slot larger than the
 task's output cap stays behind its reference, no check is made, and the result says the content is
@@ -439,3 +445,4 @@ planner and takes no `read`.
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
 `verified-by: bravebot_agent::turn::a_fetch_whose_read_is_not_a_boolean_is_refused_before_anything_is_fetched`
 `verified-by: bravebot_agent::turn::a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch`
+`verified-by: bravebot_agent::turn::vet_content_does_not_check_again_a_page_the_fetchs_read_found_unsafe`

@@ -539,6 +539,9 @@ pub struct Tools<'a> {
     /// How many lines ran with a sandbox in this turn and did not exit zero, which a request for
     /// a line with no sandbox is accepted after and not before (SANDBOX-29).
     pub confined_failures: &'a mut ConfinedFailures,
+    /// The slots a check has already said `unsafe` about in this turn, so `read_output` and
+    /// `vet_content` do not check them again (OUTPUT-3).
+    pub objections: &'a mut Objections,
     /// The session whose run prompts may have their answers remembered past it.
     ///
     /// `None` for a turn with nobody to put a prompt to, which reads no record and writes none:
@@ -634,6 +637,38 @@ pub(crate) mod scripted_hosts {
     }
 }
 
+/// The filesystem lists a unit test sets for the runs on its thread, read in place of the settled
+/// ones, for the reason [`scripted_hosts`] is.
+#[cfg(all(test, unix))]
+pub(crate) mod scripted_filesystem {
+    use bravebot_sandbox::rules::Lists;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HELD: RefCell<Option<Lists>> = const { RefCell::new(None) };
+    }
+
+    /// Hold the runs on this thread to `lists` until the returned guard is dropped.
+    pub(crate) fn hold(lists: Lists) -> Held {
+        HELD.with(|held| *held.borrow_mut() = Some(lists));
+        Held
+    }
+
+    pub(super) fn held() -> Option<Lists> {
+        HELD.with(|held| held.borrow().clone())
+    }
+
+    /// Clears the lists when dropped, so a test that fails part way leaves nothing for the next
+    /// test on this thread.
+    pub(crate) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            HELD.with(|held| *held.borrow_mut() = None);
+        }
+    }
+}
+
 impl<'a> Tools<'a> {
     /// The facts this turn's calls reach outside the workspace under (MODE-4).
     pub(crate) fn reach_facts(&self) -> ReachFacts<'_> {
@@ -661,21 +696,28 @@ impl<'a> Tools<'a> {
         if !self.confines_programs() {
             return None;
         }
+        // Held to the directories the session recorded, so a name a stage has relinked since is
+        // given no row (SANDBOX-18). The paths are the same names, for the callers that read them.
+        let recorded = self.workspace.session_directories();
         let roots = std::iter::once(self.workspace.root().to_path_buf())
-            .chain(self.workspace.added_directories().iter().cloned())
+            .chain(self.workspace.added_directories())
             .collect();
         let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
         #[cfg(all(test, unix))]
         let scripted = scripted_hosts::held();
         #[cfg(all(test, unix))]
         let hosts = scripted.as_ref().or(hosts);
+        let lists = bravebot_config::sandbox_filesystem();
+        #[cfg(all(test, unix))]
+        let lists = scripted_filesystem::held().unwrap_or(lists);
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch_made(), self.profile)?
+                .with_session_directories(&recorded)
                 .with_network(bravebot_config::run_network())
                 .with_hosts(hosts)
                 .with_mode(self.sandbox)
                 .with_temporary_held_back(bravebot_config::holds_back_temporary_directory())
-                .with_filesystem(&bravebot_config::sandbox_filesystem())
+                .with_filesystem(&lists)
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(
                     self.permission_mode.get() == crate::PermissionMode::Bypass
@@ -687,7 +729,8 @@ impl<'a> Tools<'a> {
                 )
                 .with_withheld_writes(self.workspace.checkout_exclusions())
                 .with_host_grants(&self.workspace.granted_hosts())
-                .with_identities(bravebot_config::git_identities::settled());
+                .with_identities(bravebot_config::git_identities::settled())
+                .with_state_directory(self.home.map(std::path::Path::to_path_buf));
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -752,6 +795,33 @@ impl ConfinedFailures {
                 true
             }
         }
+    }
+}
+
+/// The slots a check said `unsafe` about in this turn, which `read_output` and `vet_content` do
+/// not check again (OUTPUT-3).
+///
+/// Holds the slot and nothing else: the word is `unsafe` by being here, the reason the check wrote
+/// is never kept, and a check that could not be made or was stopped leaves nothing, because those
+/// say nothing about the content and the next ask has to check. Filled by the check a `run`,
+/// `fetch_url` or a server's tool makes for `read: true` and read by `read_output` and
+/// `vet_content` before either would make one of its own. Held by the turn, so it ends with it.
+#[derive(Debug, Default)]
+pub struct Objections(std::collections::BTreeSet<SlotId>);
+
+impl Objections {
+    fn note(&mut self, slot: &SlotId) {
+        self.0.insert(slot.clone());
+    }
+
+    /// Whether a check in this turn already said `unsafe` about `slot`, in which case the trail
+    /// says the word was reused and the caller makes no check of its own.
+    fn reuse<S: Sink>(&self, policy: &mut Policy<'_, S>, slot: &SlotId) -> bool {
+        let held = self.0.contains(slot);
+        if held {
+            policy.record_reused_verdict(slot, Verdict::Unsafe);
+        }
+        held
     }
 }
 
@@ -3941,10 +4011,9 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // nothing to hand back but another name for the same thing, which reads as the read having
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
     if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
-        // No processor can be started once the context holds private content, so the move that
-        // names one is left out rather than offered and refused, as it is where the run is not
-        // offered `spawn_processor`. The result goes back to the file as `path_ref`, which a run
-        // that cannot write is not told of.
+        // The move that names a processor is left out where the run is not offered
+        // `spawn_processor`, rather than offered and refused. The result goes back to the file as
+        // `path_ref`, which a run that cannot write is not told of.
         let work_on_it = match (policy.processors_offered(), policy.writing_is_offered()) {
             (true, true) => format!(
                 " Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
@@ -7696,21 +7765,29 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // Skipped only where nothing would read the word: bypassing with no screening asked for answers
     // this question yes without showing anybody anything, so a check there is a model call nobody
     // reads. A verdict is still filled in, and it is the one that claims nothing.
+    //
+    // Not made again for a slot a check in this turn already said `unsafe` about: the run's read
+    // made it, and a second look at the same bytes costs a model request to hear the same word
+    // (OUTPUT-3). The reason that check wrote was not kept, so the prompt is drawn with the word
+    // alone. Only `unsafe` is kept, because a check that could not be made says nothing about the
+    // content.
     let mut spent = Usage::default();
     let mut waited = None;
     let mut unanswered = false;
-    let spec = match tools
+    let checks = tools
         .permission_mode
         .get()
-        .checks_before_promoting(tools.auto_vetting)
-    {
-        false => None,
-        true => match policy.before_vetting(&slot, None, tools.slots) {
+        .checks_before_promoting(tools.auto_vetting);
+    let objected = checks && tools.objections.reuse(policy, &slot);
+    let spec = match (checks, objected) {
+        (false, _) | (true, true) => None,
+        (true, false) => match policy.before_vetting(&slot, None, tools.slots) {
             Ok(spec) => Some(spec),
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
     };
     let (verdict, said) = match &spec {
+        None if objected => (Verdict::Unsafe, (None, None)),
         None => (
             Verdict::Inconclusive("the check was not made"),
             (None, None),
@@ -8072,6 +8149,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     chat: &mut Chat<'_>,
     reporter: &mut R,
+    objections: &mut Objections,
     slot: &SlotId,
 ) -> ReadInTheResult {
     let nothing = |text| ReadInTheResult {
@@ -8122,6 +8200,11 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     };
     let usage = checked.usage;
     let completed = checked.completed;
+    // The word, and only when it is `unsafe`, is kept for `read_output` to reuse. A check that
+    // could not be made is not kept: it says nothing about the content.
+    if checked.verdict == Verdict::Unsafe {
+        objections.note(slot);
+    }
     // Before `release_output`, which would put anything but `safe` to the person: nobody is
     // shown this output here.
     let text = if checked.verdict.is_safe() {
@@ -8472,6 +8555,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     chat: &mut Chat<'_>,
     reporter: &mut R,
+    objections: &mut Objections,
     slot: &SlotId,
     beside: Beside,
 ) -> ReadInTheResult {
@@ -8534,6 +8618,10 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     };
     let usage = checked.usage;
     let completed = checked.completed;
+    // Kept for `vet_content` to reuse, as `read_in_the_result` keeps it for `read_output`.
+    if checked.verdict == Verdict::Unsafe {
+        objections.note(slot);
+    }
     // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
     // shown this result here.
     let text = if checked.verdict.is_safe() {
@@ -8638,9 +8726,15 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // `read_output` carries, and the exemption `docs/specs/permission-modes.md` MODE-4 states from
     // the other side. The vouch offer in `read_file` keeps the plain one: no screening answers it,
     // so under bypass nothing reads that word whatever was asked for.
-    let spec = match mode.checks_before_promoting(tools.auto_vetting) {
-        false => None,
-        true => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
+    //
+    // Not made again for a slot a check in this turn already said `unsafe` about, which is the
+    // check a `fetch_url` or a server's tool made for `read: true` (OUTPUT-3). The reason that
+    // check wrote was not kept, so the prompt is drawn with the word alone.
+    let checks = mode.checks_before_promoting(tools.auto_vetting);
+    let objected = checks && tools.objections.reuse(policy, &slot);
+    let spec = match (checks, objected) {
+        (false, _) | (true, true) => None,
+        (true, false) => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
             Ok(spec) => Some(spec),
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
@@ -8651,6 +8745,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     let mut unanswered = false;
     let mut said = None;
     let verdict = match &spec {
+        None if objected => Verdict::Unsafe,
         None => Verdict::Inconclusive("the check was not made"),
         Some(spec) => {
             let asked_at = std::time::Instant::now();
@@ -9284,6 +9379,7 @@ impl ReachFacts<'_> {
         let person = bravebot_sandbox::rules::resolve(
             &bravebot_config::sandbox_filesystem(),
             self.profile,
+            workspace.state_directory(),
             workspace.root(),
         );
         Some(crate::workspace::BypassReach {
@@ -9427,6 +9523,7 @@ fn request_path<S: Sink, C: Confirmer>(
         std::path::Path::new(&path),
         write,
         tools.profile,
+        tools.home,
         confinement.filesystem(),
     );
     let resolved = match judged {
@@ -10738,7 +10835,20 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // which is an answer about the machine in place of the person's own decision, and it arrives
     // without the "do not retry" a rule's refusal owes the planner.
     let mut rules = |program: &str, args: &[String]| policy.before_command_rules(program, args);
-    let mut plan = match crate::cmdline::compile(&line, &directory, tools.profile, &mut rules) {
+    // Only bypass mode may write `NAME=$VAR` or `NAME="$(cmd)"` in front of a program; every other
+    // mode refuses `$` as it always has (CMDLINE-2).
+    let expansions = if tools.permission_mode.get() == crate::PermissionMode::Bypass {
+        crate::cmdline::Expansions::Assignments
+    } else {
+        crate::cmdline::Expansions::Refused
+    };
+    let mut plan = match crate::cmdline::compile_with(
+        &line,
+        &directory,
+        tools.profile,
+        &mut rules,
+        expansions,
+    ) {
         Ok(plan) => plan,
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
@@ -10983,11 +11093,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
-        return match crate::exec::start_steps(
+        return match crate::exec::start_steps_within(
             steps,
             &plan.directory,
             tools.workspace.scratch(),
             confinement.as_ref(),
+            tools.cancel,
+            limit,
         ) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
@@ -12540,7 +12652,7 @@ fn spawn_processor<S: Sink>(
     };
 
     // The planner's words, at the label of the context it wrote them in, so an instruction
-    // written after private content was let out for the planner is private and refused.
+    // written after private content was let out for the planner is private, and so is the answer.
     let instruction = match policy.adopt_model_output("spawn_processor", instruction) {
         Ok(instruction) => instruction,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
@@ -16700,14 +16812,7 @@ mod tests {
              directory and run the program that sends it with the file's path as an argument, so \
              it reads the body from the file. The recipient and the subject are yours and only \
              the body comes from the processor. Your final message says what was sent and to \
-             whom. Call the text a summary in your final message only if a processor wrote one. \
-             Once your context \
-             holds private content, as it does after read_output or vet_content shows you some, \
-             after a delegate reports some, in a conversation resumed with some, and in a \
-             delegate started while its parent's context held some, every later \
-             spawn_processor call is refused for the rest of the conversation: what you write is \
-             private from then on, and a processor takes no private instruction. run, \
-             read_output and the file tools keep working."
+             whom. Call the text a summary in your final message only if a processor wrote one."
         );
         assert_eq!(
             description_of(&everything, "read_output"),
@@ -16716,8 +16821,7 @@ mod tests {
              run's output is quarantined by default, so `which`, `find`, `uname` and the like \
              tell you nothing until you ask for the result. Ask for the errors too when a run \
              fails, or you will not know why it failed and must not claim it succeeded. Only for \
-             output from run; a quarantined file is not readable this way. Being shown output \
-             closes spawn_processor for you and for every delegate you start afterwards. For \
+             output from run; a quarantined file is not readable this way. For \
              anything else you \
              are holding a reference to, vet_content is the question to ask. Output you were \
              shown the beginning and end of, because the whole was too long for one result, is \
@@ -16748,12 +16852,11 @@ mod tests {
     }
 
     /// A run is not told in the description of `spawn_processor` to use a tool it is not offered:
-    /// `write_file` is not on a reader's list, `vet_content` is on no delegate's, and a definition's
-    /// tools line can leave out `run` and `read_output`. Each is taken off alone, and the
-    /// description keeps naming the ones that remain.
+    /// `write_file` is not on a reader's list, and a definition's tools line can leave out `run`.
+    /// Each is taken off alone, and the description keeps naming the one that remains.
     #[test]
     fn the_processor_description_names_only_the_tools_the_list_holds() {
-        let all = ["write_file", "vet_content", "read_output", "run"];
+        let all = ["write_file", "run"];
         for gone in all {
             let described = description_of(&the_table_without(&[gone]), "spawn_processor");
             assert!(
@@ -16766,12 +16869,6 @@ mod tests {
                     "taking {gone} off took {kept} out of the description too: {described}"
                 );
             }
-            assert!(
-                described.contains("every later spawn_processor call is refused")
-                    && described.contains("a processor takes no private instruction")
-                    && described.contains("the file tools keep working"),
-                "taking {gone} off took the rule about private content out: {described}"
-            );
         }
 
         // Everything taken off at once leaves a sentence that still reads, naming none of them.
@@ -16779,16 +16876,6 @@ mod tests {
         for gone in all {
             assert!(!names_the_tool(&bare, gone), "{gone} remains: {bare}");
         }
-        assert!(
-            bare.contains(
-                "as it does after a delegate reports some, in a conversation resumed with some, \
-                 and in a delegate started while its parent's context held some, every later \
-                 spawn_processor call is refused"
-            ) && bare.ends_with(
-                "a processor takes no private instruction. The file tools keep working."
-            ),
-            "{bare}"
-        );
         // Nothing is written, so the description does not say what is written.
         assert!(
             !bare.contains("before it is written") && !bare.contains("contents_ref"),
@@ -16796,30 +16883,122 @@ mod tests {
         );
     }
 
-    /// A planner is told before it starts a delegate that one started after private content was
-    /// shown cannot run processors, that being shown output is what closes them for it and for
-    /// its delegates, and that a task needing a picture or a file looked at goes first or to the
-    /// person. A reader's kind text does not promise processors without condition.
+    /// A planner writes a delegate's task, so the description of `spawn_agent` tells it, after the
+    /// sentence on approvals, that a delegate cannot call `vet_content`, `ask_user`, `fetch_url`
+    /// or `download_url` and that work needing one is the planner's own to do before delegating or
+    /// instead. Each of the four is named only where the turn's list holds it (TOOL-6), and a
+    /// delegate's own list, which holds none, is told nothing of it.
     ///
-    /// Rejects: a `spawn_agent` or `read_output` description that is silent about the closure,
-    /// and a kind text that says a reader runs processors with no condition.
+    /// Rejects: a description silent about the tools, one that names them but gives no way on, one
+    /// that names all four in every list, and one that is written for the planner's list and left
+    /// as it was on a delegate's.
     #[test]
-    fn the_planner_is_told_a_delegate_started_after_private_content_has_no_processors() {
+    fn the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch() {
+        use bravebot_core::delegate::{Definition, Definitions, Kind};
+
+        // What follows the sentence on approvals, up to the sentence on cost.
+        fn lacks(description: &str) -> String {
+            let (_, after) = description
+                .split_once("so this saves you context and never an approval.")
+                .expect("the approvals sentence is in the description");
+            let (lacks, _) = after
+                .split_once(" Do not use it for something one read would answer")
+                .expect("the sentence on cost is in the description");
+            lacks.to_string()
+        }
+
+        let everything = lacks(&description_of(&the_table_without(&[]), "spawn_agent"));
+        assert_eq!(
+            everything,
+            " A delegate cannot call vet_content, ask_user, fetch_url or download_url, so do \
+             work that needs one of them yourself, before you delegate or instead of \
+             delegating. A reference that has to be read whole is read by you with vet_content."
+        );
+
+        let four = ["vet_content", "ask_user", "fetch_url", "download_url"];
+        for gone in four {
+            let said = lacks(&description_of(&the_table_without(&[gone]), "spawn_agent"));
+            assert!(
+                !names_the_tool(&said, gone),
+                "{gone} is not on the list: {said}"
+            );
+            for kept in four.iter().filter(|kept| **kept != gone) {
+                assert!(
+                    names_the_tool(&said, kept),
+                    "taking {gone} off the list dropped {kept}: {said}"
+                );
+            }
+            assert_eq!(
+                names_the_tool(&said, "vet_content"),
+                gone != "vet_content",
+                "{said}"
+            );
+            assert_eq!(
+                said.contains("read by you with vet_content"),
+                gone != "vet_content",
+                "{said}"
+            );
+        }
+        let one = lacks(&description_of(
+            &the_table_without(&["ask_user", "fetch_url", "download_url"]),
+            "spawn_agent",
+        ));
+        assert_eq!(
+            one,
+            " A delegate cannot call vet_content, so do work that needs it yourself, before you \
+             delegate or instead of delegating. A reference that has to be read whole is read by \
+             you with vet_content."
+        );
+        let none = description_of(&the_table_without(&four), "spawn_agent");
+        assert!(!none.contains("A delegate cannot call"), "{none}");
+        assert_eq!(lacks(&none), "");
+
+        // A delegate that may delegate is offered none of the four, so it is told nothing of them.
+        let mut delegates = Definitions::default();
+        delegates.insert(Definition::from_file(
+            "rule-reviewer",
+            "Checks a diff against the rule.",
+            Kind::Reader,
+            None,
+            "",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+        let mut held = for_delegate(
+            &Kind::Worker.capabilities(),
+            None,
+            Some(&delegates),
+            Deadlines::BUILT_IN,
+        );
+        state_what_is_beside(&mut held);
+        let delegate = description_of(&held, "spawn_agent");
+        assert!(!delegate.contains("A delegate cannot call"), "{delegate}");
+        assert_eq!(lacks(&delegate), "");
+    }
+
+    /// Being shown private content does not close the processor, so no description tells the
+    /// planner it does: not the tools that show output, not `spawn_agent`, and not the kind text
+    /// that says what a reader does.
+    ///
+    /// Rejects: a description that sends the planner round a closure the policy no longer makes,
+    /// so that it plans around a tool that is open.
+    #[test]
+    fn no_description_says_that_private_content_closes_processors() {
         let everything = the_table_without(&[]);
-        let spawn = description_of(&everything, "spawn_agent");
-        assert!(
-            spawn.contains("cannot run processors")
-                && spawn.contains("looked at before then, or leave it to the person"),
-            "{spawn}"
-        );
-        let read_output = description_of(&everything, "read_output");
-        assert!(
-            read_output.contains("closes spawn_processor for you and for every delegate you start"),
-            "{read_output}"
-        );
-        // Not told of a tool it is not offered.
-        let without = description_of(&the_table_without(&["spawn_processor"]), "read_output");
-        assert!(!without.contains("spawn_processor"), "{without}");
+        for tool in &everything {
+            let described = description_of(&everything, &tool.function.name);
+            for stale in [
+                "closes spawn_processor",
+                "cannot run processors",
+                "a processor takes no private instruction",
+                "spawn_processor call is refused",
+            ] {
+                assert!(
+                    !described.contains(stale),
+                    "{} says {stale:?}: {described}",
+                    tool.function.name
+                );
+            }
+        }
 
         let kind = everything
             .iter()
@@ -16831,11 +17010,10 @@ mod tests {
             .expect("a kind description")
             .to_string();
         assert!(
-            kind.contains(
-                "while the context that started it holds nothing private, runs processors"
-            ),
+            kind.contains("lists, searches and runs processors: use it to find something out"),
             "{kind}"
         );
+        assert!(!kind.contains("holds nothing private"), "{kind}");
     }
 
     /// SPAWN-6. A processor's answer about a reference that is no file is written to a new file with
@@ -17598,51 +17776,6 @@ mod tests {
         }
     }
 
-    /// A conversation shown private content refuses every later processor call for the rest of it,
-    /// and the tool's description is where a planner learns that before it earns the refusal. The
-    /// description names the one tool that is refused and the tools that keep working, because a
-    /// sentence that names none reads as a cost of calling `read_output` and a planner that reads
-    /// it that way stops instead of reading a command's output. Each way a context comes to hold
-    /// private content is named, so a planner can tell it is in one.
-    #[test]
-    fn the_processor_is_described_as_refused_once_private_content_has_been_shown() {
-        let offered = available(
-            Scheduling::ArrangingALook,
-            crate::watch::Arming::Unavailable,
-            Deadlines::BUILT_IN,
-            Running::Offered,
-        );
-        let processor = offered
-            .iter()
-            .find(|t| t.function.name == "spawn_processor")
-            .expect("the turn is offered a processor");
-        let description = &processor.function.description;
-        assert!(
-            description.contains(
-                "every later spawn_processor call is refused for the rest of the conversation"
-            ),
-            "{description}"
-        );
-        assert!(
-            !description.contains("every call is refused"),
-            "{description}"
-        );
-        assert!(
-            description.contains("run, read_output and the file tools keep working"),
-            "{description}"
-        );
-        assert!(
-            description.contains("a processor takes no private instruction"),
-            "{description}"
-        );
-        assert!(
-            ["read_output", "vet_content", "delegate", "resumed"]
-                .iter()
-                .all(|way| description.contains(way)),
-            "{description}"
-        );
-    }
-
     /// The processor's description as the turn it is read in is offered it.
     fn processor_description(running: Running) -> String {
         available(
@@ -17706,18 +17839,11 @@ mod tests {
                 "the description still tells the planner '{gone}': {description}"
             );
         }
-        // PROC-4 pins the closing sentence, and the paragraph above is not the last thing said.
-        assert!(
-            description.ends_with("run, read_output and the file tools keep working."),
-            "the description no longer closes on the refusal after private content: {description}"
-        );
     }
 
     /// TOOL-6. The same description is read by a turn that holds no `run`: a reader delegate, and a
     /// turn addressed to a definition that dropped it. It is told who writes derived text and what
-    /// to call the result, and is not sent to a program that sends it. The one `run` the sentence
-    /// about private content has always named is the gap `tool-surface.md` records, and is taken
-    /// out first so the rest is checked.
+    /// to call the result, and is not sent to a program that sends it.
     #[test]
     fn the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one() {
         let withheld = processor_description(Running::Withheld);
@@ -17732,7 +17858,6 @@ mod tests {
                 "a turn without run is not told '{stated}': {withheld}"
             );
         }
-        let rest = withheld.replace("run, read_output and the file tools keep working", "");
         let offered = processor_description(Running::Offered);
         for run_only in ["run", "script", "stdin_ref", "sends it"] {
             assert!(
@@ -17741,7 +17866,7 @@ mod tests {
                  nothing: {offered}"
             );
             assert!(
-                !rest.contains(run_only),
+                !withheld.contains(run_only),
                 "a turn without run is sent to '{run_only}': {withheld}"
             );
         }
@@ -25139,7 +25264,7 @@ mod tests {
         use super::*;
         use bravebot_core::capability::{Capability, CapabilitySet};
         use bravebot_core::event::RecordingSink;
-        use bravebot_core::label::{Confidentiality, Label};
+        use bravebot_core::label::Label;
         use bravebot_core::policy::{ReleasePlan, Routing};
 
         const NOTEBOOK: &str = "refused: the outputs of this notebook are closed to read_file, \
@@ -25165,19 +25290,17 @@ mod tests {
         /// one out of a turn that has it.
         #[test]
         fn the_notebook_refusal_names_only_the_routes_the_turn_holds() {
-            let cases: [(&str, bool, bool, bool, &str); 5] = [
+            let cases: [(&str, bool, bool, &str); 4] = [
                 (
                     "everything offered",
                     true,
                     true,
-                    false,
                     "Read the file with read_file and no output_of for a reference to give to \
                      spawn_processor, read it through run, or ask the person to vouch for the path",
                 ),
                 (
                     "no run",
                     true,
-                    false,
                     false,
                     "Read the file with read_file and no output_of for a reference to give to \
                      spawn_processor, or ask the person to vouch for the path",
@@ -25186,25 +25309,16 @@ mod tests {
                     "no spawn_processor",
                     false,
                     true,
-                    false,
                     "Read it through run, or ask the person to vouch for the path",
                 ),
                 (
                     "neither",
                     false,
                     false,
-                    false,
                     "Only the person can open it, by vouching for the path",
                 ),
-                (
-                    "spawn_processor offered, context private",
-                    true,
-                    true,
-                    true,
-                    "Read it through run, or ask the person to vouch for the path",
-                ),
             ];
-            for (what, spawning, running, private, routes) in cases {
+            for (what, spawning, running, routes) in cases {
                 let mut sink = RecordingSink::new();
                 let mut policy = policy(&mut sink);
                 if !spawning {
@@ -25212,9 +25326,6 @@ mod tests {
                 }
                 if !running {
                     policy.without_running();
-                }
-                if private {
-                    policy = policy.holding(Confidentiality::Private);
                 }
                 assert_eq!(
                     closed_to_reading_outputs(&policy, Label::untrusted_public()),
@@ -26884,8 +26995,10 @@ mod tests {
             .expect("policy")
         }
 
-        /// A backend nothing in these tests reaches, since every one of them stops at an
-        /// argument. It exists because `Tools` carries the model a processor would run on.
+        /// A backend that cannot be reached. It exists because `Tools` carries the model a
+        /// processor would run on, and the one test that makes a request ends on the failed lookup,
+        /// so it states two retries: the count decides how many attempts that takes, and not the
+        /// window of BACKEND-55.
         fn config() -> bravebot_config::Config {
             bravebot_config::Config::from_lookup(|key| {
                 match key {
@@ -26897,6 +27010,10 @@ mod tests {
                 .map(str::to_string)
             })
             .expect("configured")
+            .with_patience(bravebot_config::provider::Patience {
+                max_retries: Some(2),
+                ..bravebot_config::provider::Patience::default()
+            })
         }
 
         /// The turn's tool state, assembled for one call. A closure rather than a value because
@@ -26936,6 +27053,7 @@ mod tests {
             let mut jobs = Jobs::default();
             let mut run_directory = RunDirectory::at(workspace.root());
             let mut confined_failures = ConfinedFailures::default();
+            let mut objections = Objections::default();
             body(&mut Tools {
                 workspace,
                 output_cap: OUTPUT_CAP,
@@ -26965,6 +27083,7 @@ mod tests {
                 auto_vetting: false,
                 run_directory: &mut run_directory,
                 confined_failures: &mut confined_failures,
+                objections: &mut objections,
                 confine_runs: false,
                 sandbox: bravebot_sandbox::SandboxMode::default(),
                 asks_about_unconfined: false,
@@ -26997,6 +27116,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
 
@@ -27056,6 +27176,130 @@ mod tests {
             }
         }
 
+        /// SANDBOX-12, #2917: the confinement of a turn is told the state directory the session
+        /// runs under (`Tools::home`, which is `home::directory()` in production), so a stage is
+        /// refused it where `BRAVEBOT_HOME` moved it out of `~/.bravebot`. The regression it
+        /// rejects: a confinement built from the profile directory alone, which refuses only the
+        /// default. A turn with no state directory refuses none, which is the control.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_refuses_the_state_directory_the_turn_runs_under() {
+            let project = Scratch::new("turn-state-project");
+            let outer = Scratch::new("turn-state-outer");
+            let moved = outer.path.join("state");
+            std::fs::create_dir_all(&moved).expect("the state directory");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let workspace = Workspace::new(&project.path).expect("workspace");
+            let profile: &'static std::path::Path =
+                Box::leak(project.path.clone().into_boxed_path());
+            let state: &'static std::path::Path = Box::leak(moved.clone().into_boxed_path());
+            let refused = |home: Option<&'static std::path::Path>| {
+                let policy = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(profile);
+                    tools.home = home;
+                    tools
+                        .confinement(true)
+                        .expect("a platform with a base")
+                        .policy(&step, workspace.root(), &[])
+                });
+                let spellings = [moved.clone(), moved.canonicalize().expect("canonical")];
+                policy
+                    .unreadable
+                    .iter()
+                    .any(|row| spellings.iter().any(|spelling| row == spelling))
+            };
+            assert!(!refused(None), "the control: no state directory in force");
+            assert!(refused(Some(state)), "the state directory is not refused");
+        }
+
+        /// SANDBOX-12, #2917: a person's own `sandbox.filesystem` allow entry at, or over, the state
+        /// directory the turn runs under is refused as one at `~/.bravebot` is, and that is judged
+        /// whichever of the lists and the state directory the confinement was given first. The
+        /// regression it rejects: the lists resolved before the state directory is known (the
+        /// builder order in `Tools::confinement`), which leaves the moved directory a row a stage is
+        /// granted. The turn with no state directory is the control that the entries are fine.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under() {
+            use bravebot_sandbox::rules::{Entry, List, Lists, Reason, State};
+            let project = Scratch::new("turn-list-project");
+            let outer = Scratch::new("turn-list-outer");
+            let moved = outer.path.join("state");
+            std::fs::create_dir_all(&moved).expect("the state directory");
+            let moved = moved.canonicalize().expect("canonical");
+            let entry = |path: &std::path::Path| Entry {
+                path: path.to_string_lossy().into_owned(),
+                by: None,
+                pinned: false,
+            };
+            let _held = scripted_filesystem::hold(Lists {
+                allow_read: vec![entry(&moved), entry(&moved.join("gateway-keys.json"))],
+                allow_write: vec![entry(&moved.join("logs"))],
+                ..Lists::default()
+            });
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let workspace = Workspace::new(&project.path).expect("workspace");
+            let profile: &'static std::path::Path =
+                Box::leak(project.path.clone().into_boxed_path());
+            let state: &'static std::path::Path = Box::leak(moved.clone().into_boxed_path());
+            let judged = |home: Option<&'static std::path::Path>| {
+                with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(profile);
+                    tools.home = home;
+                    let confinement = tools.confinement(true).expect("a platform with a base");
+                    let in_force = confinement.filesystem().in_force().count();
+                    let refused: Vec<(List, Reason)> = confinement
+                        .filesystem()
+                        .items()
+                        .iter()
+                        .filter_map(|item| match item.state {
+                            State::Refused(reason) => Some((item.list, reason)),
+                            State::InForce(_) => None,
+                        })
+                        .collect();
+                    let policy = confinement.policy(&step, workspace.root(), &[]);
+                    (in_force, refused, policy)
+                })
+            };
+            let (in_force, refused, _) = judged(None);
+            assert_eq!((in_force, refused.len()), (3, 0), "the control");
+            let (in_force, refused, policy) = judged(Some(state));
+            assert_eq!(in_force, 0, "an entry on the state directory is in force");
+            assert_eq!(
+                refused,
+                [
+                    (List::AllowRead, Reason::StateDirectory),
+                    (List::AllowRead, Reason::StateDirectory),
+                    (List::AllowWrite, Reason::StateDirectory),
+                ]
+            );
+            assert!(
+                !policy
+                    .writable
+                    .iter()
+                    .any(|row| row.path.starts_with(&moved)),
+                "{policy:?}"
+            );
+        }
+
         /// SANDBOX-18: the confinement of a turn holds the session's scratch directory to the
         /// directory the session made, which the workspace carries from the session's own claim.
         /// The regression it rejects: a confinement given the identity of whatever the name leads
@@ -27073,6 +27317,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
             let mut workspace = Workspace::new(&project.path).expect("workspace");
@@ -27118,6 +27363,78 @@ mod tests {
             assert!(refused_for_the_scratch_directory(&workspace));
             let _ = std::fs::remove_file(session.path());
             let _ = std::fs::remove_dir_all(&aside);
+        }
+
+        /// SANDBOX-18: the confinement of a turn holds the working directory and every added
+        /// directory to the directory the workspace recorded when it was opened or added. The
+        /// regressions it rejects: a confinement built from the names alone, which grants wherever
+        /// a name leads when the line starts, and one that records the directory when the line
+        /// starts, which takes the identity of whatever directory stands at the name then and so
+        /// grants a directory made again in place of the one added.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded() {
+            let project = Scratch::new("session-directories-project");
+            let added = Scratch::new("session-directories-added");
+            let elsewhere = Scratch::new("session-directories-elsewhere");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let mut workspace = Workspace::new(&project.path).expect("workspace");
+            let named = workspace
+                .add_directory(added.path.to_str().expect("utf-8 path"))
+                .expect("the directory is added");
+            let target = elsewhere.path.canonicalize().expect("canonical");
+            let policy = |workspace: &Workspace| {
+                with_tools(workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools
+                        .confinement(true)
+                        .expect("a platform with a base")
+                        .policy(&step, workspace.root(), &[])
+                })
+            };
+            let writes = |policy: &bravebot_sandbox::policy::SandboxPolicy,
+                          path: &std::path::Path| {
+                policy.writable.iter().any(|row| row.path == path)
+            };
+            let before = policy(&workspace);
+            assert!(writes(&before, &named), "no row for the directory added");
+            assert!(
+                writes(&before, &project.path.canonicalize().expect("canonical")),
+                "no row for the working directory"
+            );
+
+            // The directory added is moved aside and kept, not removed: a filesystem can give a
+            // freed inode number to the next directory made, and the one made again below would
+            // then have the identity recorded.
+            let aside = crate::testutil::moved_aside_and_replaced(&named, |name| {
+                std::os::unix::fs::symlink(&target, name).expect("link")
+            });
+            let after = policy(&workspace);
+            assert!(!writes(&after, &named), "a row for the name of a link");
+            assert!(!writes(&after, &target), "a row for where the link leads");
+            assert!(
+                !after.readable.contains(&target),
+                "a read row for where the link leads"
+            );
+
+            std::fs::remove_file(&named).expect("the link removed");
+            std::fs::create_dir(&named).expect("a directory made again in its place");
+            let again = policy(&workspace);
+            assert!(
+                !writes(&again, &named),
+                "a row for a directory made again at the name"
+            );
+            let _ = std::fs::remove_dir(&named);
+            let _ = std::fs::remove_dir_all(&aside);
+            workspace.close_added_directories();
         }
 
         /// The reach a person remembered is read from the state directory for the session that has
@@ -27167,6 +27484,7 @@ mod tests {
                 started_as: "/bin/ls".into(),
                 args: Vec::new(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             };
             let profile: &'static std::path::Path =
@@ -28051,6 +28369,132 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+
+        /// CMDLINE-17: only bypass mode lets `NAME=$VAR` in front of a program through `run`. The
+        /// regressions it rejects: the choice inverted (bypass refused, the others let through) and
+        /// the choice made once for every mode (the line always accepted, or always refused). The
+        /// program leaves a file when it starts, so "accepted" is the program having run and not
+        /// only a plan having compiled.
+        #[cfg(unix)]
+        #[test]
+        fn a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Bypass, Plan};
+            use std::os::unix::fs::PermissionsExt;
+
+            for (mode, runs) in [
+                (Bypass, true),
+                (Ask, false),
+                (AcceptEdits, false),
+                (Plan, false),
+            ] {
+                let scratch = Scratch::new("run-assignment-by-mode");
+                let program = scratch.path.join("probe.sh");
+                std::fs::write(&program, "#!/bin/sh\ntouch ran\n").expect("a program");
+                std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                    .expect("executable");
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+
+                let produced = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(mode);
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveRuns,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"command": "BRAVEBOT_TEST_ASSIGNED=$PATH ./probe.sh"}),
+                    )
+                });
+                let said = told(&mut policy, &produced.text);
+
+                assert_eq!(
+                    scratch.path.join("ran").exists(),
+                    runs,
+                    "{mode:?}: the program's having run is not what the mode allows: {said}"
+                );
+                assert_eq!(produced.ran_a_program, runs, "{mode:?}: {said}");
+                let refusal = crate::cmdline::Reason::Variable.to_string();
+                assert_eq!(
+                    said.contains(&refusal),
+                    !runs,
+                    "{mode:?}: the `$` refusal is not what the mode allows: {said}"
+                );
+            }
+        }
+
+        /// CMDLINE-17: the `run` tool's background branch gives the call's own cancellation and
+        /// deadline to the substitution it works out before the job starts. A cancel that arrives
+        /// while `NAME=$(slow) cmd` is being worked out ends it, and a deadline shorter than the
+        /// substitution refuses the line naming it; in both the program that would have used the
+        /// value never starts and no job is left behind. The regression it rejects is the branch
+        /// passing a fresh `Cancel` and the built-in five minutes, which the tests that call
+        /// `start_steps_within` directly would not notice.
+        #[cfg(unix)]
+        #[test]
+        fn a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused()
+         {
+            use crate::PermissionMode::Bypass;
+            use std::os::unix::fs::PermissionsExt;
+
+            for (cancelled, expected) in [
+                (true, "stopped because the turn was cancelled"),
+                (false, "ran out of time"),
+            ] {
+                let scratch = Scratch::new("run-background-substitution");
+                for (name, body) in [
+                    ("probe.sh", "#!/bin/sh\ntouch ran\n"),
+                    ("slow.sh", "#!/bin/sh\nsleep 30\n"),
+                ] {
+                    let program = scratch.path.join(name);
+                    std::fs::write(&program, body).expect("a program");
+                    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                        .expect("executable");
+                }
+                let workspace = Workspace::new(&scratch.path).expect("workspace");
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let started = std::time::Instant::now();
+
+                let produced = with_tools(&workspace, |tools| {
+                    tools.permission_mode = crate::LiveMode::new(Bypass);
+                    let stopper = tools.cancel.clone();
+                    std::thread::scope(|scope| {
+                        if cancelled {
+                            scope.spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                stopper.cancel();
+                            });
+                        }
+                        run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut crate::report::IgnoreReports,
+                            &json!({
+                                "command": "BRAVEBOT_TEST_ASSIGNED=$(./slow.sh) ./probe.sh",
+                                "background": true,
+                                "deadline_seconds": 1,
+                            }),
+                        )
+                    })
+                });
+                let said = told(&mut policy, &produced.text);
+
+                assert!(
+                    said.contains("did not start") && said.contains(expected),
+                    "cancelled={cancelled}: {said}"
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(20),
+                    "cancelled={cancelled}: the substitution was not ended"
+                );
+                assert!(
+                    !scratch.path.join("ran").exists(),
+                    "cancelled={cancelled}: the program started"
+                );
             }
         }
 

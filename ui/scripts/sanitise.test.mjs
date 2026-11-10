@@ -41,6 +41,13 @@ test('a window’s turn reaches the agent addressed to no definition it named fo
   assert.deepEqual(forwarded, { session: 's1', prompt: 'look', files: [] })
 })
 
+// RPCVIEW-10: the agent refuses a send without the id the window gave it.
+test('a window’s turn reaches the agent with the message id it gave', () => {
+  const forwarded = sanitised('turn.send', { session: 's1', prompt: 'look', messageId: 'm-1' })
+
+  assert.equal(forwarded.messageId, 'm-1')
+})
+
 test('a window naming a path where an attachment id goes sends nothing', () => {
   assert.throws(() => sanitised('turn.send', { session: 's1', prompt: 'look', attachments: ['/Users/me/Pictures/private.png'] }))
 })

@@ -14,6 +14,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -284,7 +286,10 @@ impl Window {
     /// Start a turn, without waiting for it to end.
     fn start(&mut self, prompt: &str) {
         let session = self.session.clone();
-        self.call("turn.send", json!({"session": session, "prompt": prompt}));
+        self.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
     }
 
     /// The event that ends the running turn.

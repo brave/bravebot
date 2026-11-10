@@ -618,6 +618,7 @@ impl RunRequest {
                 started_as: std::path::PathBuf::from(path),
                 args: stage.args.clone(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             })
             .collect();
@@ -1247,6 +1248,7 @@ pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
         started_as,
         args: _,
         environment: _,
+        expansions: _,
         routes: _,
     } = step;
     shown_through(started_as, resolved)
@@ -3758,6 +3760,7 @@ mod tests {
                 started_as: std::path::PathBuf::from("/usr/bin/gh"),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             writes: Vec::new(),

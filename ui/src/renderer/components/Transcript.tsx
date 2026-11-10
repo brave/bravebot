@@ -37,6 +37,7 @@ import { LabelChip } from './LabelChip'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
+import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
@@ -54,6 +55,8 @@ interface Live {
   todos: TodoRow[]
   quarantine: Shown[]
   phase: Waiting | null
+  /** When a failed request waiting to be sent again will be, while the phase is `reconnecting` (VIEW-43). */
+  retry?: RetryDue | null
   checking: Checking | null
   hook: Hook | null
   composing: string | null
@@ -847,7 +850,7 @@ export function Transcript({
           <WorkingRow
             key={live.handle}
             bot={answering}
-            word={workingWord(live.phase, live.checking, live.composing, live.hook)}
+            word={(now) => workingWord(live.phase, live.checking, live.composing, live.hook, live.retry ?? null, now)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
@@ -1034,11 +1037,20 @@ function waitedWord(waited: number | null): string {
  * change, and one function serves both places the word is drawn so they cannot disagree. A call
  * being written follows the check: the phase is the same for the whole wait, which can be minutes.
  */
-export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null, hook: Hook | null = null): string {
+export function workingWord(
+  phase: Waiting | null,
+  checking: Checking | null,
+  composing: string | null = null,
+  hook: Hook | null = null,
+  retry: RetryDue | null = null,
+  now: number = Date.now(),
+): string {
   if (hook !== null) return `Running hook: ${hook.program} (${hook.moment})`
   if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
   if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
   if (composing !== null) return `Preparing a call: ${composing}`
+  // A request waiting to be sent again says when, until the wait is over (VIEW-43).
+  if (phase === 'reconnecting' && retry !== null) return reconnectingWords(retry, now) ?? phaseWord(phase)
   return phase ? phaseWord(phase) : 'Working'
 }
 
@@ -1050,7 +1062,8 @@ export function workingWord(phase: Waiting | null, checking: Checking | null, co
 export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThinking, offerThinking, onThinking }: {
   /** The face of the bot answering, or `null` for a turn no bot answers. */
   bot: { avatar: string } | null
-  word: string
+  /** The word for the time given, so a countdown ticks with the row's own clock (VIEW-43). */
+  word: (now: number) => string
   tokens: number
   turn: number | null
   onAudit: OpenAudit
@@ -1081,7 +1094,7 @@ export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThi
       ) : (
         <ProgressRing mode="indeterminate" className="working-ring" data-test="working-ring" />
       )}
-      <span className="working-word">{word}…</span>
+      <span className="working-word">{word(now)}…</span>
       <span className="count">
         {seconds > 0 && elapsed}
         {tokens > 0 && `${seconds > 0 ? ' · ' : ''}${tokens.toLocaleString()} tokens written`}

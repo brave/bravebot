@@ -16,7 +16,7 @@
     {"await": "trust"},
     {"expectView": "a", "sequence": 1, "status": "idle"},
     {"start": "send", "call": "send", "session": "a", "args": {"text": "read the docs"}},
-    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "read the docs"}},
+    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "read the docs", "messageId": "$fresh"}},
     {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "target": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "read the docs"}, "resolved": false}]}}, {"id": "$send", "ok": {"turn": 1, "target": 1}}]},
     {"await": "send", "result": {"turn": 1, "target": 1}},
     {"send": [{"event": "tool.started", "session": "s1", "data": {"id": "t1"}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 3, "turn": 1, "target": 1, "status": "running", "pending": null, "rows": [{"id": 2, "turn": 1, "kind": "activity", "event": "tool.started", "data": {"id": "t1"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 4, "turn": 1, "target": 1, "status": "waiting", "pending": {"row": 3, "request": 7, "kind": "fetch", "supported": true, "data": {"request": 7, "url": "https://example.test/docs", "host": "example.test"}}, "rows": [{"id": 3, "turn": 1, "kind": "approval", "event": "fetch.request", "data": {"request": 7, "url": "https://example.test/docs", "host": "example.test"}, "resolved": false}]}}]},

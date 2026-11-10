@@ -28,7 +28,9 @@ missing either is skipped with a note saying so. `argument-hint` is drawn after 
 in the box to say what it takes, as in `argument-hint: '[low|high] <pr#>'`, and is never shown to
 the planner. A key nothing here reads stops nothing, so a skill written for another agent works
 here; `bravebot doctor` lists such keys, so a line you expected to do something and that does
-nothing is somewhere you can find it. A file with no front matter is not a skill.
+nothing is somewhere you can find it. A file with no front matter is not a skill. The file must be
+spelled exactly `SKILL.md`: on a volume that does not tell upper and lower case apart, a directory
+holding `skill.md` is still not a skill, and it is not listed or loaded.
 
 A value may wrap over the lines indented beneath it, however the file spells the wrap: folded or
 literal with `>` or `|`, quoted and carried over, or plain text continued. A folded value is

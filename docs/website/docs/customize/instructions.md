@@ -49,7 +49,8 @@ ordinary file, read only when something asks for it by name, or when the source 
 system. On a volume that does not tell upper and lower case apart, such as the default one on macOS
 and Windows, a page called `docs/agents.md` can be opened as `docs/AGENTS.md`, but it is still an
 ordinary file: it is not loaded, it adds nothing to the system prompt, and you are not told it is
-large. Rename it to `AGENTS.md` to make it instructions.
+large. Rename it to `AGENTS.md` to make it instructions. The same holds for a skill: a directory
+holding `skill.md` is not a skill, and `SKILL.md` must be spelled that way.
 
 **A project's skills are read from three directories, at the project root only.**
 `.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`

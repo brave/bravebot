@@ -403,7 +403,10 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
-    let keys = bravebot_sandbox::scope::candidate_public_keys(&home);
+    let keys = bravebot_sandbox::scope::candidate_public_keys(
+        &home,
+        bravebot_agent::home::directory().as_deref(),
+    );
     if keys.is_empty() {
         return fail(Ending::Failed, t!(doctor_push_no_keys));
     }
@@ -430,15 +433,19 @@ fn chosen_for(
     home: &Path,
 ) -> Option<(PathBuf, ChosenBy)> {
     if let Some(entry) = settings.git_identities().for_address(address) {
-        return bravebot_sandbox::scope::identity_key(&entry.key, home)
-            .map(|key| (key, ChosenBy::Settings));
+        return bravebot_sandbox::scope::identity_key(
+            &entry.key,
+            home,
+            bravebot_agent::home::directory().as_deref(),
+        )
+        .map(|key| (key, ChosenBy::Settings));
     }
     let state = bravebot_agent::home::directory()?;
     let chosen = bravebot_agent::reach::Store::new(&state)
         .chosen_keys()
         .into_iter()
         .find(|held| held.address.same_as(address))?;
-    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home)
+    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home, Some(&state))
         .map(|key| (key, ChosenBy::Prompt))
 }
 
@@ -840,6 +847,30 @@ mod tests {
         let genuine = made.pop().unwrap();
         let planted = made.pop().unwrap();
         (session, safe, planted, genuine)
+    }
+
+    /// SANDBOX-30. A list in `XDG_DATA_DIRS` or `XDG_CONFIG_DIRS` is judged entry by entry on the
+    /// disk. The regression it rejects: a list judged as one path, which names no directory, so a
+    /// person's list of installed directories is removed from the programs started here.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here()
+     {
+        let (session, safe, planted, _genuine) = planted_and_genuine("xdg-list");
+        let inner = safe.path.join(".venv");
+        let genuine_list = std::env::join_paths([&inner, &safe.path]).unwrap();
+        let mixed_list = std::env::join_paths([&inner, planted.parent().unwrap()]).unwrap();
+
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(
+                !withheld(name, Path::new(&genuine_list), &session.path),
+                "{name}: a genuine list"
+            );
+            assert!(
+                withheld(name, Path::new(&mixed_list), &session.path),
+                "{name}: a list with a directory a stage may write"
+            );
+        }
     }
 
     /// The regression it rejects: starting `ssh` with `SSH_ASKPASS` as the person set it, so a

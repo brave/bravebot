@@ -10,6 +10,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_agent::workspace::{MAX_SEARCH_FILES, Workspace};
 use bravebot_config::{Managed, Settings};
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -411,7 +413,9 @@ mod through_a_turn {
             &mut child,
             3,
             "turn.send",
-            json!({"session": session, "prompt": "find the needle"}),
+            super::message_ids::with_fresh(
+                json!({"session": session, "prompt": "find the needle"}),
+            ),
         );
         let finished = until(&said, |message| {
             message["event"] == "tool.finished" || message["event"] == "turn.error"

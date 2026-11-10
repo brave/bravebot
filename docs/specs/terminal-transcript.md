@@ -36,6 +36,7 @@ governs:
   - ui/src/renderer/apply.ts
   - ui/src/renderer/transcript.ts
   - ui/src/renderer/live.ts
+  - ui/src/renderer/retry.ts
   - ui/src/renderer/components/Agents.tsx
   - ui/src/renderer/components/Sidebar.tsx
   - ui/src/renderer/App.tsx
@@ -668,7 +669,8 @@ text and the backend's known status and request count. A refused request also na
 that sent it, the model the turn ran on and the request fields the retries left out, and ends
 with the next step ([BACKEND-37](backends.md#BACKEND-37)); those words are the program's own,
 except the model, which is the name the person configured and is written with control characters
-made visible. It remains visible with the audit expanded
+made visible. A rate-limited request also ends with the next step ([BACKEND-37](backends.md#BACKEND-37)), in the
+program's own words. It remains visible with the audit expanded
 or collapsed, after resizing, and while reading older scrollback. Long reasons wrap within the
 available space. Terminal control characters are not drawn.
 
@@ -1452,6 +1454,46 @@ person reading what was decided has to read what the planner made of it.
 
 `verified-by: bravebot_tui::render::a_settled_ask_user_call_shows_each_question_and_its_answer_without_a_reply`
 `verified-by: bravebot_tui::render::a_series_nobody_could_be_asked_draws_no_rows`
+
+<a id="VIEW-43"></a>
+### VIEW-43: a request waiting to be sent again says when
+
+While a request that failed in transit waits out the pause before its next attempt, the interactive
+terminal's working indicator says how long is left, in place of the bare word `Reconnecting`:
+`Reconnecting, next try in 38s`. Where a window decides how long the request goes on being sent
+([BACKEND-55](backends.md#BACKEND-55)), it also says how long is left before the request is given up
+on: `Reconnecting, next try in 38s, giving up in 52m 10s`. Both count down on the screen as the wait
+goes on, in whole seconds rounded up, so a time reaches the second it names and does not read `0s`
+while an attempt is still to come. When the pause is over, and while the attempt that follows it is
+out, the indicator reads `Reconnecting` as before. The next phase of the turn takes the countdown
+away.
+
+The bridge sends the same figures to the desktop window in the `phase` event as `retry`, which is
+`{ attempt, in_ms, gives_up_in_ms }` while a request waits and `null` for every other phase and for an
+attempt that is out. They are milliseconds from the moment the event is sent, because the two ends
+share no clock, and `gives_up_in_ms` is `null` where a count and not a window decides. The window
+counts them from the moment the event arrives and draws the same words in its working row, on the
+row's own clock and in tabular figures so the line does not move as the seconds change. A running
+hook, a check and a call being written keep the row ahead of the wait, as they do ahead of the
+phase.
+
+**Why.** A pause of a minute that reads `Reconnecting` looks the same as a hang, and a person cannot
+tell a wait that ends in seconds from one that goes on for the rest of the hour. A message typed
+while the request waits is sent at once ([INPUT-10](terminal-input.md#INPUT-10)), which a person can
+only choose to do if they can see there is a wait to cut short.
+
+The figures are counts and timers the driver worked out, and the longest wait a service can ask for
+is a number this program parsed and bounded ([BACKEND-54](backends.md#BACKEND-54)). Nothing a
+service wrote is read to make them, and the line is built from fixed words.
+
+`verified-by: bravebot_tui::indicator::a_wait_to_retry_counts_down_to_the_attempt_and_to_giving_up`
+`verified-by: bravebot_tui::indicator::a_wait_with_no_window_names_no_time_to_give_up_and_ends_with_the_pause`
+`verified-by: bravebot_tui::state::a_request_waiting_to_be_sent_again_says_when_and_gives_the_word_back`
+`verified-by: bravebot_ui_bridge::reporting::a_request_waiting_to_be_sent_again_crosses_with_its_times`
+`verified-by: bravebot_aichat::call::a_retry_is_announced_with_its_pause_and_the_time_left_in_the_window`
+`verified-by: bravebot_aichat::call::a_retry_governed_by_a_count_names_no_time_to_give_up`
+`verified-by: bravebot_agent::turn::a_turn_survives_a_connection_that_died_mid_request`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/retry-countdown.test.mjs drives the window's own event reducer and word function with the bridge's events: the wait is counted from the moment the event arrives and down to the second it names, a count with no window names no time to give up, the pause being over or the next phase takes the countdown away, and a hook or a check keeps the row; make check-ui runs the test)`
 
 ## Known costs
 

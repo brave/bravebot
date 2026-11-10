@@ -627,7 +627,7 @@ everything beneath it:
 
 | Where | Refused |
 | --- | --- |
-| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium key, the ChatGPT and xAI sign-ins and the server list are, and where a `leo-premium.json` that an earlier version wrote and this one does not is refused with the rest, so a file left from an earlier version stays protected (a directory `BRAVEBOT_HOME` moves it to is not covered, [Known costs](state-directory.md#known-costs)); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
+| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium key, the ChatGPT and xAI sign-ins and the server list are, and where a `leo-premium.json` that an earlier version wrote and this one does not is refused with the rest, so a file left from an earlier version stays protected (a directory `BRAVEBOT_HOME` moves it to is refused in the same way, with the same `sessions` exception, unless it is the home directory, a place above it or a filesystem root, which would refuse the home itself); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
 | Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold; the browser profiles `~/AppData/Local/BraveSoftware`, `~/AppData/Local/Google/Chrome`, `~/AppData/Local/Chromium`, `~/AppData/Local/Microsoft/Edge` and `~/AppData/Roaming/Mozilla`; and the platform's own stores, Credential Manager's files `~/AppData/Local/Microsoft/Credentials` and `~/AppData/Roaming/Microsoft/Credentials`, the keys the data protection API encrypts with `~/AppData/Roaming/Microsoft/Protect`, the account's private keys `~/AppData/Roaming/Microsoft/Crypto`, and the vault `~/AppData/Local/Microsoft/Vault` and `~/AppData/Roaming/Microsoft/Vault` (an application data directory moved out of the home is not covered) |
 | macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
 | Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
@@ -650,7 +650,12 @@ public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_
 so that a script can read past sessions (`session-review` is one). It is lifted for reading only, and
 the rest of the directory stays refused with everything beneath it, including a file a later
 version adds, since the refusal covers the whole directory and no list of files has to be kept in
-step with what the program writes. Nothing under `~/.bravebot` is written by a stage. A transcript
+step with what the program writes. Nothing under `~/.bravebot` is written by a stage. Every refusal
+of `~/.bravebot` in this clause, and in the clauses that cite it, is of the state directory in force:
+`~/.bravebot`, and the directory `BRAVEBOT_HOME` puts elsewhere ([STATE-2](state-directory.md#STATE-2)),
+the home directory, a directory above it and a filesystem root excepted, since a refusal of one of
+those would refuse the account's own files. A link is judged where it leads, for the moved directory
+as for the default. A transcript
 can hold what a person pasted, so a stage that reads the records is one the plan has to be willing
 to let read them; the network is where they could leave, and the plan decides that
 ([SANDBOX-3](#SANDBOX-3)). A public key at another name is read by a stage that carries the remote
@@ -783,6 +788,27 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_agent::home::the_state_directory_is_the_one_the_sandbox_refuses`
+`verified-by: bravebot_sandbox::base::the_run_base_refuses_a_state_directory_that_is_moved_as_it_refuses_the_default`
+`verified-by: bravebot_sandbox::base::a_moved_state_directory_that_would_refuse_more_than_itself_adds_no_row`
+`verified-by: bravebot_sandbox::base::a_moved_state_directory_that_leads_to_the_default_adds_no_row`
+`verified-by: bravebot_sandbox::base::a_moved_state_directory_that_is_a_link_to_the_home_or_above_adds_no_row`
+`verified-by: bravebot_sandbox::base::the_windows_table_holds_a_moved_state_directory_and_its_base_is_unchanged`
+`verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_a_state_directory_that_is_moved`
+`verified-by: bravebot_sandbox::rules::a_request_for_the_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_sandbox::rules::a_state_directory_that_is_a_link_is_refused_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_state_directory_that_is_a_link_reads_its_session_records_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_directory_added_inside_or_above_the_state_directory_that_is_moved_is_refused`
+`verified-by: bravebot_sandbox::rules::a_windows_row_over_a_directory_holding_the_state_directory_that_is_moved_is_refused`
+`verified-by: bravebot_sandbox::rules::the_rows_written_without_a_request_leave_out_the_state_directory_that_is_moved`
+`verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_sandbox::scope::a_name_inside_a_state_directory_that_is_moved_through_a_link_is_refused`
+`verified-by: bravebot_agent::confine::a_session_inside_a_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_agent::confine::a_scratch_directory_inside_a_state_directory_that_is_moved_gets_no_row`
+`verified-by: bravebot_agent::confine::a_stage_cannot_read_a_state_directory_that_is_moved_out_of_the_default`
+`verified-by: bravebot_agent::confine::a_stage_cannot_read_a_state_directory_that_lies_inside_its_session_directory`
+`verified-by: bravebot_agent::tools::a_turns_confinement_refuses_the_state_directory_the_turn_runs_under`
+`verified-by: bravebot_agent::tools::a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under`
+`verified-by: bravebot_agent::servers::a_servers_confinement_does_not_read_a_state_directory_that_is_moved`
 `verified-by: bravebot_sandbox::policy::a_refusal_is_recorded_and_changes_nothing_else`
 `verified-by: bravebot_sandbox::policy::a_policy_made_nameable_keeps_its_refusals`
 `verified-by: bravebot_sandbox::policy::a_refusal_nothing_grants_is_not_meaningful`
@@ -890,7 +916,13 @@ through the directory holding it, so no list reaches the file a tool keeps its t
 directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. Each write row says what it
 names, so a backend that cannot name an absent path has the cache created as the directory or file
 the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
-What decides a row is the table and the platform: nothing on the machine is read, so `CARGO_HOME`,
+A cache row is judged again where its name leads each time a stage starts: a name with a link
+below the home directory is given at the place it leads to, and is given no row, with the stage
+still started, where that place is, holds or lies inside a credential or persistence location or the
+state directory in force ([SANDBOX-12](#SANDBOX-12)), or
+where it is a file for a directory row or a directory for a file row ([SANDBOX-18](#SANDBOX-18)).
+What decides a row is the table, the platform and where its name leads: the environment is not
+read, so `CARGO_HOME`,
 `GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
 package managers, pip, go, mvn and gradle fetch, and `node`, `python3` and a program no list knows
@@ -912,6 +944,7 @@ runs. Cargo's configuration is read at all because cargo fails every invocation 
 file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise meets on every build.
 
 `verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_a_program_resolved_to`
+`verified-by: bravebot_sandbox::toolchain::a_cache_linked_into_a_state_directory_that_is_moved_is_given_no_row`
 `verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_without_a_windows_executable_extension`
 `verified-by: bravebot_sandbox::programs::a_windows_executable_extension_is_not_part_of_a_programs_name`
 `verified-by: bravebot_sandbox::toolchain::a_program_no_list_knows_brings_none`
@@ -924,6 +957,12 @@ file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise mee
 `verified-by: bravebot_sandbox::toolchain::no_list_names_a_directory_that_holds_other_programs_files`
 `verified-by: bravebot_sandbox::toolchain::a_missing_cache_is_created_as_what_the_toolchain_expects_there`
 `verified-by: bravebot_sandbox::toolchain::a_list_leaves_the_policy_it_is_added_to_as_it_was`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_has_become_a_link_to_somewhere_refused_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_linked_to_somewhere_ordinary_is_granted_there_and_held_to_that_name`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_nowhere_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::an_install_or_configuration_that_has_become_a_link_to_a_refused_place_is_given_no_row`
 `verified-by: bravebot_sandbox::macos::a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install`
 
 <a id="SANDBOX-16"></a>
@@ -1047,7 +1086,8 @@ host said.
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
 agent's socket, and never the private key. The signing scope reads that file and the stage may write
-the socket `SSH_AUTH_SOCK` names, as the remote scope may. It is carried only where the person's own
+the socket `SSH_AUTH_SOCK` names, as the remote scope may, judged as the remote scope's is
+([SANDBOX-18](#SANDBOX-18)). It is carried only where the person's own
 `~/.gitconfig` or `~/.config/git/config` sets `gpg.format` to `ssh`, so an account that does not sign
 with ssh sees no difference, the network under a closed setting included. The later file and the last
 assignment win, section and variable names are matched without regard to case, a quoted value is
@@ -1451,14 +1491,24 @@ stage the reach Linux gives every stage.
 On Linux and macOS a stage of a session that names a home directory has as its policy the run base
 ([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed where the stage's program is git (below),
 plus: the cache rows of every toolchain, written, since the machine is already read and a
-cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential scope its argv names
+cache is where any build may write ([SANDBOX-15](#SANDBOX-15)), each judged where its name leads
+as each stage starts and opened on Linux without following a link in its last component, so a
+cache relinked to `~/.ssh` or a startup file gets no row; the credential scope its argv names
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
 No row names the directories its program is read from or the two files the step names, since the
 machine is read. A local MCP server, which is not a stage, also reads the installation above its
 program's `bin` directory when that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)).
 Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
-own environment is a write row ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no write outside
+own environment is a write row ([SANDBOX-3](#SANDBOX-3)), and the row is the path the name leads
+to once its links are followed, so a name is granted as the file it leads to when the row is made. The row is made only where that path is a socket, is not or inside a credential
+location or a persistence location, and passes the refusals a path in a variable gets (not
+`~/.ssh` or the state directory, and not the home directory or above it). Where it is refused the
+stage still starts, with no row, and its profile line says no agent was lent. The same judgement
+is made for the signing scope and for a requested scope that lends the agent, and for the sentence
+that says whether the agent was lent, and is made as each stage starts. A name relinked after
+that check and before the sandbox opens the row is not caught. A session that names no home
+directory has no location to compare with, so it lends no agent socket. Nothing else is in it: no write outside
 those, no credential location the stage's scope does not name, and no socket for a stage without
 the remote scope.
 
@@ -1480,7 +1530,10 @@ access without it; a write row there is written, and fails for an account that c
 named without the `\\?\` prefix a canonical form carries there, so it compares with the rows, unless
 the plain spelling would be 260 characters or more. Where the stage
 carries the remote scope, the socket `SSH_AUTH_SOCK` names in its own environment is a write row,
-since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no
+since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)), judged as on Linux and macOS
+except that the path is not checked to be a socket, since the agent there can be a named pipe, and
+that a session that names no home directory lends no agent socket, having no location to compare
+the path with. Nothing else is in it: no
 credential directory, no directory above a session directory, and no socket for a stage without the
 remote scope.
 
@@ -1536,6 +1589,24 @@ is given in the same place. Where no identity is recorded, as on Windows, the na
 a directory and not a link, so a directory made in place of the original is given the row. The
 refusal lasts for the session, and a new session makes a new scratch directory.
 
+Each directory the session was opened on, the working directory and every directory added with
+`/add-dir`, `--add-dir` or `additionalDirectories` or reopened by a resume, is held the same way.
+The workspace records its device and inode as it is opened, added or reopened
+([TRUST-14](trust-map.md#TRUST-14)), the stage's confinement is built from those records, and a
+directory is a row only while its name leads to that directory. Every stage may write the temporary
+directory, so a stage can move a session directory that lies directly under it and put a link in
+its place, and a row written from the name would then grant wherever the link leads. The name is
+resolved once, the resolved path is compared with the record, and that same path is the row. A name
+that leads to another directory, or to nothing, is given no row, and the stages that follow still
+start. A name that leads to a link or a file refuses the stage, and the refusal names the
+directory. The check is made as each stage starts, so a later stage of one line is held too, and a
+name already changed when a line's confinement is built is given no row. A directory that lies in
+or is a credential location is judged as before, by where its name leads. Where no identity is
+recorded, as on Windows, the name is held to being a directory and not a link, so a directory made
+in place of the original is given the row. The file tools hold the name the workspace stored and
+do not follow a link made later. The interval between the check and the sandbox opening the row
+remains: a name relinked in it is not caught, as for the scratch directory.
+
 A stage's program is git where the file it resolved to, with its links followed, is named `git`, or
 `git.exe` in any case on Windows, and lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
@@ -1583,6 +1654,10 @@ stay out of the write rows, so the reach is to caches only. A person who wants e
 to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)). Under `read-only` no cache is
 written.
 
+A cache row is judged where its name leads, so a person who moved `~/.cargo/registry` aside and linked
+it to a directory inside a credential location, or to a file, gets no write row for it: the stage
+starts and a build that writes that cache fails at the write.
+
 **What the scratch directory check costs.** The check and the start of a stage are two steps. A
 program that is already running when another stage starts, such as an earlier stage of a pipeline or
 one left running, can change the name between them, and on Linux the row is then opened by the name
@@ -1629,6 +1704,8 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_macos_session_with_no_home_is_refused_a_directory_in_the_system_keychains`
 `verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
+`verified-by: bravebot_agent::confine::an_agent_socket_name_is_granted_only_where_it_leads_to_a_socket_outside_the_credential_locations`
+`verified-by: bravebot_agent::confine::a_session_with_no_home_lends_no_agent_socket`
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
@@ -1660,11 +1737,33 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_line_that_relinks_the_scratch_directory_is_refused_at_the_stage_after`
 `verified-by: bravebot_agent::confine::a_scratch_directory_made_again_by_a_program_does_not_stop_the_stages_after`
 `verified-by: bravebot_agent::tools::a_turns_confinement_holds_the_scratch_directory_to_the_one_the_session_made`
+`verified-by: bravebot_agent::confine::a_session_directory_whose_name_leads_elsewhere_gets_no_row`
+`verified-by: bravebot_agent::confine::a_session_directory_as_recorded_is_a_row_and_starts_a_stage`
+`verified-by: bravebot_agent::confine::a_working_directory_that_leads_elsewhere_is_not_replaced_by_an_added_one_as_the_place`
+`verified-by: bravebot_agent::workspace::the_session_directories_are_the_directories_recorded_as_they_were_opened`
+`verified-by: bravebot_agent::workspace::a_delegates_checkout_records_its_own_root_and_carries_its_parents_records`
+`verified-by: bravebot_agent::confine::a_stage_that_relinks_an_added_directory_hands_the_next_stage_nothing`
+`verified-by: bravebot_agent::confine::a_line_that_relinks_an_added_directory_is_refused_at_the_stage_after`
+`verified-by: bravebot_agent::confine::a_line_that_relinks_the_primary_root_is_refused_at_the_stage_after`
+`verified-by: bravebot_agent::confine::an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after`
+`verified-by: bravebot_agent::tools::a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded`
+`verified-by: bravebot_tui::sessions::a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopened`
 `verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
 `verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
 `verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`
 `verified-by: bravebot_sandbox::rules::a_credential_location_is_compared_where_it_and_the_home_lead`
 `verified-by: bravebot_sandbox::rules::a_credential_location_under_a_home_that_is_not_text_is_not_matched_by_its_lookalike`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_has_become_a_link_to_somewhere_refused_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_nowhere_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_linked_to_somewhere_ordinary_is_granted_there_and_held_to_that_name`
+`verified-by: bravebot_agent::confine::a_cache_relinked_to_a_credential_or_a_startup_file_is_given_no_row`
+`verified-by: bravebot_agent::confine::a_cache_relinked_between_two_stages_is_judged_again_on_every_route_to_its_row`
+`verified-by: bravebot_sandbox::policy::a_row_marked_as_judged_stays_marked_through_the_resolution`
+`verified-by: bravebot_sandbox::policy::a_judged_row_above_a_refusal_that_became_a_link_is_an_error_and_one_not_judged_is_listed`
+`verified-by: bravebot_sandbox::linux::a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed`
+`verified-by: bravebot_sandbox::linux::a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -2007,13 +2106,41 @@ moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARG
 an agent socket removed. The suite starts its programs as a checked start
 ([SANDBOX-30](#SANDBOX-30)), so the generic table applies to a stage, and the suite adds the
 variables the programs it starts read to choose code: `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`,
-`GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT` are removed whatever they hold; `GIT_SSH`,
-`GIT_EXTERNAL_DIFF`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and
-`CARGO_BUILD_RUSTC_WRAPPER` are kept only when they name a program outside every directory a stage
-may write; `GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`,
-`GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` and `GOFLAGS` are removed, as are
-`GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER` and
-`CARGO_TARGET_<triple>_RUNNER`.
+`GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR`, `GOROOT` and `GOENV` are removed whatever they hold,
+and so is `CARGO_HOME` (a host variable that moves a read row, above); `GOENV` names a file that sets
+`GOFLAGS`, `GOTOOLCHAIN` and more, and `CARGO_HOME` holds the `config.toml` that names a wrapper, a
+linker or a credential provider. `GIT_SSH`,
+`GIT_EXTERNAL_DIFF`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`,
+`CARGO_BUILD_RUSTC`, `CARGO_BUILD_RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`,
+`CARGO_BUILD_RUSTDOC`, `RUSTUP_TOOLCHAIN`, `PKG_CONFIG` and `PYTHONEXECUTABLE` are kept only when they name a
+program outside every directory a stage may write, `BROWSER` (the commands `cargo doc --open` runs)
+only when each command is one such program, and `RUSTUP_HOME` and `NODE_PATH` only when they
+name a directory (`NODE_PATH` a list of them) outside every one; `GIT_SSH_COMMAND`,
+`GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`,
+`CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS`, `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTDOCFLAGS`,
+`CARGO_BUILD_RUSTDOCFLAGS`, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
+`CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS`, `GOFLAGS`, `GOCACHEPROG`, `CC`, `CXX`, `CGO_LDFLAGS`,
+`CGO_CFLAGS`, `CGO_CPPFLAGS`, the make variables `MAKE`, `RM`, `AR`, `AS`, `FC`, `PC`, `M2C`, `LEX`,
+`YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET` and `CO`, and the make flag variables `CFLAGS`,
+`CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` are removed, as
+are `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER`,
+`CARGO_TARGET_<triple>_RUNNER`, `CARGO_TARGET_<triple>_RUSTFLAGS`,
+`CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` and every name that begins `npm_config_` in any case (this includes `npm_config_prefix`). A
+`RUSTUP_HOME` that is removed, or that the environment checked does not hold, is set to the account's `.rustup`, since the `cargo` proxy finds
+its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX` and
+`NODE_OPTIONS` are in the generic table ([SANDBOX-30](#SANDBOX-30)), which a stage is given too.
+
+A session records the directories a stage may write when its first confined stage starts, which is
+after the setup stages, so a setup stage's start has none of them. The tests that plant a file under
+a variable that names a directory or a program therefore record the directory the helper is in as
+one a stage wrote, as the session would. Every such test also runs the program with the variable as
+the person set it. Where the helper does not run, the test prints that it skipped, since a helper
+the program never reaches through that variable does not make the test pass. `RUSTC_WRAPPER` and `PYTHONPATH` each have a second test that a value
+outside every directory a stage may write is kept. `GOENV`, `GOCACHEPROG`, `PKG_CONFIG`, `CXX`,
+`CGO_LDFLAGS`, `GOTOOLCHAIN`, `NODE_OPTIONS`, `NODE_PATH`, `BROWSER`, `npm_config_` names, `PYTHONHOME`,
+`PYTHONPYCACHEPREFIX`, `PYTHONEXECUTABLE`, `PYTHONSTARTUP`, `MAKEFLAGS` with `-I`, the make rule
+variables and linker flags, `CGO_CFLAGS`, `CGO_CPPFLAGS` and the cargo credential providers each have a
+test of the same kind against the real program.
 
 The variables below were examined for the programs the suite starts and are not removed, because
 planting a file under each and running the program as a stage runs it ran nothing. `xcrun` and the
@@ -2022,11 +2149,38 @@ planting a file under each and running the program as a stage runs it ran nothin
 directory without one, and `TOOLCHAINS` and `XCODE_DEVELOPER_DIR_PATH` change nothing it finds), while
 the same planted file ran under `DEVELOPER_DIR`. `vim -es -u NONE`, which the editor workflow
 starts, did not run the command in `VIMINIT`, and `vim` without `-es` did, so a workflow that starts
-an interactive `vim` needs `VIMINIT` added. `python3 -c` and `python3 -m unittest` did not run the
-file in `PYTHONSTARTUP`, which only an interactive interpreter reads, and `sh -c` and a shell script
+an interactive `vim` needs `VIMINIT` added. `python3 -c`, `python3 -m unittest` and `python3 -m venv` did not run the
+file in `PYTHONSTARTUP`, which only an interactive interpreter reads (`python3 -i` with stdin
+closed did, on 3.15.0), and `sh -c` and a shell script
 did not run the file in `ENV`, which only an interactive `sh` reads. No workflow starts an
 interactive `python3` or `sh`, so none of the three is removed. `GOROOT` is removed, since
-`go vet` ran a `vet` planted under it.
+`go vet` ran a `vet` planted under it. `GOENV` is removed, since `go vet` ran the program named by a
+`GOFLAGS=-toolexec=` line in the file `GOENV` names (go 1.27.3). Planting a file under `GOPATH`,
+`GOBIN`, `GOWORK`, `GOPROXY`, `PYTHONBREAKPOINT`,
+`npm_config_node_options`, and `GNUMAKEFLAGS` and `MFLAGS` on GNU Make 3.81 ran nothing
+([SANDBOX-30](#SANDBOX-30) has the versions); the two make names and `GOTOOLCHAIN` stay listed or
+set by the suite because other versions read them.
+
+The other names in git(1) (Apple Git 2.54.0), GNU Make 3.81's manual and xcrun(1) that can name
+code were each tested with a script that appends a marker file, planted under the name and run
+against the git, `make` and `xcrun` commands of the workflows (init, add, commit, branch, merge,
+stash, worktree, diff, status, push, clone, fetch, pull, `make`). It ran only under `DEVELOPER_DIR`,
+`GIT_EXTERNAL_DIFF` (`git diff`), `MAKEFILES` and `MAKEFLAGS` with `SHELL=` or `-I`, which are
+handled above. It did not run under
+`GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PAGER`, `PAGER`, `GIT_EDITOR`,
+`EDITOR`, `VISUAL`, `GIT_SEQUENCE_EDITOR`, `GIT_ATTR_SOURCE`, `GIT_CEILING_DIRECTORIES`, `GIT_SSH`,
+`GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_TRACE`, `GIT_TRACE2`, `GIT_TRACE2_EVENT`,
+`GIT_TRACE_CURL`, `GIT_DIFF_OPTS`, `GIT_SSL_NO_VERIFY`, `GIT_ALLOW_PROTOCOL`, `GIT_SSH_VARIANT`,
+`GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`,
+`GIT_REDIRECT_STDERR`, `GIT_NO_REPLACE_OBJECTS`, `TOOLCHAINS`, `SDKROOT`, `XCODE_DEVELOPER_DIR_PATH`,
+or, for `make`, `MFLAGS`, `GNUMAKEFLAGS`, `MAKEOVERRIDES`, `MAKELEVEL`, `SHELL` and
+`MAKEFILE_LIST`. Those commands start no rebase, so they do not settle `GIT_SEQUENCE_EDITOR`, which
+stays in the suite's list, as do `GIT_SSH`, `GIT_SSH_COMMAND` and `GIT_PROXY_COMMAND`, which only a
+remote transport reads and a local remote does not use. `GIT_ASKPASS` and `SSH_ASKPASS` are removed
+as host variables. The pager and editor names are
+read only when git has a terminal to page on or an editor to start, and no stage has a terminal or
+starts a commit without its message. A name in neither list reaches the programs as set, so a
+workflow that starts a terminal or an editor, or reaches a remote, needs the names it reads added.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
 `~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
@@ -2058,10 +2212,18 @@ since it depends on the host's login. Token variables are removed from the envir
 runs, so the row measures the stored login. The `gh` that reads the stored login is also a checked
 start with no names of its own, and every variable that begins `DYLD_` or `LD_` is removed from it
 whatever it holds, since a library the dynamic loader loads into it runs with the account's home.
-The two prefixes are a list in `crates/agent/src/usability.rs` and not in
-`CODE_SELECTOR_PREFIXES`, because the shared prefixes are applied to every checked start and a
-start that kept `LD_DEBUG` ([SANDBOX-30](#SANDBOX-30)) would lose it; `make check-code-selectors`
-covers only the shared lists, so a reviewer reads this one.
+The two prefixes are `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs`, removed with
+`withhold_prefixed`. They are not in `CODE_SELECTOR_PREFIXES`, which every checked start applies
+and which would remove `LD_DEBUG` from the starts that keep it ([SANDBOX-30](#SANDBOX-30)).
+`make check-code-selectors` reads `LOADER_PREFIXES` and `HOST_VARIABLES`
+([checks.md](../development/checks.md)). It does not apply the prefixes to other starts, so a
+reviewer reads any other start that holds the loader's names.
+
+The two loader tests start a copy of the host's shell that keeps the loader's names, since the
+`gh` on a host can be built without the protection that ignores them. A host that cannot make that
+copy prints `skipped`, and a run with `CI` set fails instead, so a green run on a CI machine means
+the check ran. The `LD_` test uses a shell that records the names it is given. It has not been run
+against a Linux loader, which [SANDBOX-30](#SANDBOX-30) records as #3810.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -2100,11 +2262,40 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_parameters`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_signing_program`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_an_exec_path`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_common_directory`
 `verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makefiles`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makeflags_that_name_a_shell`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_wrapper_or_target_flags`
+`verified-by: bravebot_agent::usability::a_setup_cargo_keeps_a_wrapper_no_stage_can_write`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_compiler_or_a_workspace_wrapper`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_flags_or_a_target_program_that_name_a_linker_or_runner`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_rustdoc_or_documentation_flags`
+`verified-by: bravebot_agent::usability::a_setup_cargo_doc_open_is_not_handed_a_browser`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_cargo_home_that_holds_configuration`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_toolchain_or_a_toolchain_directory`
+`verified-by: bravebot_agent::usability::a_setup_npm_is_not_handed_configuration`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_flags_or_a_compiler`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_an_environment_file_or_a_cache_program`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_a_pkg_config_linker_flags_or_a_cxx_compiler`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_a_toolchain_named_in_its_environment`
+`verified-by: bravebot_agent::usability::a_setup_node_is_not_handed_options_or_a_module_path`
+`verified-by: bravebot_agent::usability::a_setup_npm_is_not_handed_a_configuration_file_or_an_initialiser`
+`verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_an_installation_or_a_compiled_module_tree`
+`verified-by: bravebot_agent::usability::a_setup_python_venv_is_not_handed_an_executable`
+`verified-by: bravebot_agent::usability::a_setup_python_the_workflows_start_does_not_read_a_startup_file`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_an_include_directory`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_the_program_or_linker_flags_of_a_built_in_rule`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_credential_provider`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler`
+`verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_a_module_path`
+`verified-by: bravebot_agent::usability::a_setup_python_keeps_a_module_path_no_stage_can_write`
+`verified-by: bravebot_agent::usability::the_names_found_by_running_cargo_npm_go_and_python_are_removed`
+`verified-by: bravebot_agent::usability::a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
+`verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_settings_file`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
@@ -2855,7 +3046,7 @@ a session that names no home directory is refused. Each path is judged where it 
 part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
-which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` or anything inside it, which is
+which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) or anything inside it, which is
 where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), except that an `allowRead` entry may name
 `~/.bravebot/sessions` or a path inside it, which the run base reads already, and no list can set the `.git` writes
 [SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. On Windows, where a
@@ -3148,7 +3339,7 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
 
 - **The same refusals as an `allowWrite` row** ([SANDBOX-25](#SANDBOX-25)), for a read as for a
   write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
-  `~/.bravebot` and anything inside either (a request to read `~/.bravebot/sessions` or a path
+  `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) and anything inside either (a request to read `~/.bravebot/sessions` or a path
   inside it is not refused), a credential location of the table
   ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
   `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. A
@@ -3175,17 +3366,48 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   settings layer, project file or permission rule grants one in advance, because none names it.
 - **Shown and recorded.** `/status` lists each path held, with its access, and the
   trace carries one `path_reach` record for each yes, naming the path and the access.
-- **Judged once.** The path is stored as it was judged and is not resolved or judged again when a
-  line starts. A path later replaced by a link keeps its row for the stored path, and what the
-  sandbox backend does with a row that has become a link is that backend's. No test replaces a
-  held path with a link on either backend. For macOS, a comment in `crates/sandbox/src/macos.rs`
-  about refusal rows says the path a process ends up opening is the one matched, and no test checks
-  that. For Linux, the risk is that the row is opened by following the link, so it may widen to the
-  link's target. That has not been checked either.
-  [#2914](https://github.com/brave/bravebot/issues/2914) tracks the case and the two missing
-  tests. This differs from a directory given by `/reach`,
-  which is judged again when it is used ([SANDBOX-23](#SANDBOX-23)). The session holds the grant
-  only, so a `git switch` changes what is at the path and leaves the grant in place.
+- **Judged again when a stage starts.** The grant records the device and inode of what was at
+  the path, read without following a link. Each time a stage's policy is built the row is judged
+  again, and it is given no row, with the stage still started, when something is at the path and
+  the name is a link, a parent of it is a link, it is not the device and inode approved, or it is
+  refused as a new request for the same access would be: at, inside or above a credential location
+  ([SANDBOX-12](#SANDBOX-12)), `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), a persistence location for a write
+  ([SANDBOX-18](#SANDBOX-18)), or the home directory and any directory above it. A name with
+  nothing at it keeps its row, since a row opens nothing. A grant made while nothing was at the
+  name has no identity to compare, so the directory made there later is judged as each stage
+  starts, as a new request for the same access would be. The grant is still held and listed by
+  `/status`, so a name restored to the directory approved gives its row again, and the count the
+  profile states is of the rows given. The comparison reads file system metadata and the path
+  alone. A directory replaced by another ordinary directory, or by a link to one, loses its row
+  until the person asks again. The check is made when the policy is built, so a name changed after
+  that and before the program opens it is not caught by this clause; the backend opens a row by the
+  path it was given. On Linux that is a handle that follows links, so a row opened after its name
+  became a link is attached to the link's target, except a toolchain row (a cache, an install or a configuration file), which the policy
+  marks as judged and the backend opens without following a link in its last component
+  ([SANDBOX-15](#SANDBOX-15)); a link above the last component is still followed. On macOS the profile matches the path a process
+  ends up opening, so a row whose name became a link gives the target nothing. Both are recorded
+  by tests in `crates/sandbox`, the Linux one built and run only on Linux. The Windows backend
+  does not refuse a link at a judged row. It writes its entry through the name, which the platform
+  follows, so a name that became a link after the policy was built and before the entry is written
+  is given the entry at its new target. The judgement made as each stage's policy is built is the
+  only check there, and a test of this on Windows does not exist. This is the same judgement a directory given by
+  `/reach` receives ([SANDBOX-23](#SANDBOX-23)). The session holds the grant only, so a `git
+  switch` that changes what is at the path leaves the grant in place and the row follows the
+  directory approved.
+  The comparison with the credential and persistence locations folds case where the platform's
+  names are not case sensitive (macOS and Windows), so a name spelled `.SSH` is refused as `.ssh`
+  is, and does not where they are (Linux).
+  `verified-by: bravebot_agent::confine::a_path_let_reach_is_given_no_row_once_its_name_leads_elsewhere`
+  `verified-by: bravebot_agent::confine::a_path_let_reach_is_compared_with_the_credential_locations_as_the_platform_does`
+  `verified-by: bravebot_agent::confine::a_path_let_reach_does_not_reach_its_parent_or_a_sibling`
+  `verified-by: bravebot_agent::confine::a_path_let_reach_made_before_it_existed_is_judged_when_a_stage_starts`
+  `verified-by: bravebot_sandbox::macos::a_granted_row_replaced_by_a_link_gives_its_target_nothing`
+  `verified-by: bravebot_sandbox::linux::a_granted_row_replaced_by_a_link_is_attached_to_what_the_name_leads_to_when_opened`
+  `verified-by: bravebot_sandbox::linux::a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed`
+  `verified-by: bravebot_sandbox::policy::a_row_marked_as_judged_stays_marked_through_the_resolution`
+  `verified-by: bravebot_agent::confine::a_cache_relinked_to_a_credential_or_a_startup_file_is_given_no_row`
+  `verified-by: bravebot_agent::confine::a_cache_relinked_between_two_stages_is_judged_again_on_every_route_to_its_row`
+  `verified-by: bravebot_sandbox::linux::a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next`
 - **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
   as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
   a sub-task is reach the person never set up.
@@ -3196,7 +3418,7 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   Linux, the stages of a `run` are given at the start what a request for writing
   would be granted, those of a delegate included: every path the account can write, except `/`, a drive root, the home
   directory and any directory above it as a whole (the entries already in them stay writable, and
-  no new entry is made directly in one), `~/.ssh`, `~/.bravebot` and everything inside either, each
+  no new entry is made directly in one), `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) and everything inside either, each
   credential location of the table ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one,
   each persistence location ([SANDBOX-18](#SANDBOX-18)) and any directory that holds one, and every
   path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,
@@ -3244,8 +3466,10 @@ not covered until the next. A program directory on the account's search path, su
 `~/.local/bin`, `~/.cargo/bin` or a Homebrew prefix, is written like any other, so a program a stage
 leaves there runs unconfined when the person's shell finds it before the one they meant; refusing
 them would refuse `pip install --user`, `cargo install` and `brew` under bypass. A stage cannot run
-`git config --global`, since git's configuration is a persistence location. The refusals above are
-the whole of what is held back.
+`git config --global`, since git's configuration is a persistence location. A row of a `request_path`
+grant is also withheld while its name leads somewhere other than where the person approved
+(above), and the grant stays listed. This and the refusals above are the whole of what is held
+back.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
@@ -3266,6 +3490,7 @@ the whole of what is held back.
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_where_a_write_runs_later`
+`verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_gives_a_link_beside_the_home_no_row`
 `verified-by: bravebot_sandbox::rules::a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not`
 `verified-by: bravebot_agent::confine::a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory`
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
@@ -3662,19 +3887,41 @@ file. A new spawn that looks a name up through
   helper that git's configuration names can do the same. The desktop application deletes the same
   five names from its own environment before it asks Electron to open an address or a file, since
   it starts the opener through Electron and not through this start. The names another program
-  reads are added to its start when that program is audited. The usability suite's list adds the
-  names `git`, `make`, `cargo`, `go` and `xcrun` read to choose code, and its stored-login `gh`
-  removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite also removes
-  `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT`
-  whatever they hold, and records the names it examined and left (`TOOLCHAINS`, `SDKROOT`,
+  reads are added to its start when that program is audited. The usability suite's list
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
+  `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
+  (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`) and `go` (with the C compiler, `pkg-config` and
+  linker flags a cgo build reads) read to choose code, and it matches by form
+  `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS` and every
+  `npm_config_` name in any case. `python3` is also given the generic table.
+  `CC`, `CXX` and `PKG_CONFIG` are in this list and not in the generic table, because the generic
+  table is applied to every checked start and only these starts compile or link. A run with a
+  planted helper on the host recorded in the last bullet of "What a checked start does not cover"
+  found: go cgo ran `CC`, `CXX` and `PKG_CONFIG`; make's
+  built-in rules ran `CC` (compile and link) and `CXX` and never run `pkg-config`; the `cc` crate
+  1.2.62 in a cargo build script ran `CC`, `CXX` and `AR`, and the `pkg-config` crate 0.3.33 ran
+  `PKG_CONFIG`. `CC` and `CXX` hold a program and arguments, so they are options and removed whatever
+  they hold; `PKG_CONFIG` is a program and is kept when it names one outside every directory a stage
+  may write. The `cc` crate also ran the helper through `CC_<triple>`, `CXX_<triple>`, `AR_<triple>`,
+  `HOST_CC`, `CFLAGS_<triple>`, `CXXFLAGS_<triple>` and `HOST_CFLAGS`, and the suite does not remove those:
+  the names are a family that this list does not match yet. No workflow of the suite builds a crate
+  with a build script that uses the `cc` crate, so the gap is not reached by a workflow that exists.
+  It is tracked by #3859. Configuration files that can name code, such as `.npmrc` and
+  `.cargo/config.toml` in a directory a stage may write, are not examined by the suite or by the
+  lists; that is tracked by #3858.
+  The stored-login `gh` removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite
+  also removes `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR`,
+  `GOROOT`, `GOENV` and `CARGO_HOME` whatever they hold, and records the names it examined and
+  left (`TOOLCHAINS`, `SDKROOT`,
   `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`, `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and
-  `LD_` prefixes are a list in `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES`
-  applies to every checked start and would remove `LD_DEBUG` from gcloud and the browser opener;
-  `make check-code-selectors` does not read that prefix list. `make check-code-selectors` runs
-  `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
+  `LD_` prefixes are `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs`, kept out of
+  `CODE_SELECTOR_PREFIXES`, which applies to every checked start and would remove `LD_DEBUG` from
+  gcloud and the browser opener. `make check-code-selectors` runs
+  `contrib/check-code-selectors.py` ([checks.md](../development/checks.md)). It fails a call of `start` or `start_against`
   whose fourth argument is not written at the call as `CodeSelectors::Kept` or
   `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
-  reason, and a name in any `CODE_SELECTORS` list that lacks a test that keeps a safe value or a
+  reason, a start in production code that passes `CodeSelectors::Checked(&[])` with no comment at
+  the call or whose file has no row in the table below, and a name in any `CODE_SELECTORS` list that lacks a test that keeps a safe value or a
   test that removes a value a stage may write. A list of options needs only the second. The check
   cannot tell that a list is complete, which [PATH-008](../best-practices/paths.md#PATH-008) leaves
   to a reviewer.
@@ -3706,6 +3953,15 @@ file. A new spawn that looks a name up through
   credential authority, the client the host starts, the delivery program of a scheduled entry, the
   `sysctl` that reads a machine identifier with an empty environment, and this program started
   again. A start added to either list is added here in the same change.
+- **A dependency starts no program.** crossterm 0.29.0 started `tput` by bare name, with the whole
+  environment and `PATH`, when a terminal-size query failed. That start did not go through
+  `programs::start`, which `clippy.toml` cannot see into a dependency. The tree keeps crossterm in
+  `third_party/crossterm` with that fallback removed, so a failed query is an error and nothing is
+  started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
+  draw both end there. A dependency is audited for a bare-name start when it is added or
+  raised. `ratatui-image` 11.1.0 (`src/picker.rs`) starts `tmux` with the whole environment when
+  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853, and the `git` and `sh` starts
+  compiled in from `gix-path` 0.13.0, which nothing in the tree calls, by #3852.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -3744,8 +4000,8 @@ file. A new spawn that looks a name up through
   use for. A variable not listed is left as set. A variable that
   more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
   in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
-  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs` and in
-  `crates/tui/src/powershell.rs`:
+  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs`, in
+  `crates/tui/src/opener.rs`, in `crates/tui/src/powershell.rs` and in `crates/agent/src/usability.rs`:
 
   | `gcloud` variable | Names | Why it selects code |
   |---|---|---|
@@ -3783,6 +4039,9 @@ file. A new spawn that looks a name up through
   executable and its bundled `libcrypto`, and cannot show that no other variable selects code
   ([PATH-008](../best-practices/paths.md#PATH-008)). `gcloud` is a Python program started without
   `-E` or `-I`, which is why its list holds the `PYTHON*` variables and the AWS CLI's does not.
+  The test that runs the installed CLI with a `credential_process` helper is skipped on a machine
+  with no `aws` in a directory the lookup accepts, so its `verified-by` line holds only where the
+  CLI is installed.
 
   The `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` starts are all built by `started`
   in `crates/cli/src/push_identity.rs`, so one list covers the three:
@@ -3823,8 +4082,27 @@ file. A new spawn that looks a name up through
   environment and read the one it gives the program, so they run on every platform and start no real
   `powershell`. One of them reads `clipboard.rs` and `caffeinate.rs` as text and fails when either
   starts a program other than through `powershell::start`, because no test on a host without
-  Windows runs those starts. The other programs bravebot starts for itself, apart from the ones
-  with a list above, have no list yet.
+  Windows runs those starts.
+
+  Every other start that passes `CodeSelectors::Checked(&[])` is given the generic table and no
+  names of its own. Each file with one has a row here that says what the program was read for, and
+  `make check-code-selectors` fails when a production start passes an empty list with no comment at
+  the call or with no row for its file. A row is not a finding that no other variable selects code:
+  the basis column says how each program was read, and none of these was shown by running the
+  program with a name planted.
+
+  <!-- empty-list-starts -->
+
+  | File | Start | Names read | Basis |
+  |---|---|---|---|
+  | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` is not read on macOS and is tracked by #3810 | the strings of the macOS binaries. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
+  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. The Linux tools are tracked by #3810 | the strings of the macOS binaries, for those two only |
+  | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
+
+  The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
+  not in this table, because they pass a list of their own.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3862,8 +4140,8 @@ launch that records the directory and not by a later resolution in the same proc
 reconnect. A program named by an absolute path is not judged by any lookup and starts as before.
 
 **What a checked start does not cover.** A checked start removes the generic names and the names its
-caller lists, and a name nobody listed reaches the program. The lists were read from the programs'
-documentation and launchers, and these were not shown by running the program:
+caller lists, and a name nobody listed reaches the program. Each bullet says what was read from a
+program's documentation or launcher and what was run. These were not shown by running the program:
 
 - The Windows `powershell` starts of the clipboard tool (`crates/tui/src/clipboard.rs`) and of the
   inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table and the list in
@@ -3878,14 +4156,105 @@ documentation and launchers, and these were not shown by running the program:
 - A Homebrew or pip `aws` script, an asdf or pyenv shim and `gio open` and `kde-open` start an
   interpreter or another program by variables of their own, which are not listed. It is tracked by
   #3809.
+- The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
+  were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
+  mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
+  and `xdg-mime query default` returned a handler planted in a directory named by each of
+  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS`. With
+  `XDG_CURRENT_DESKTOP=GNOME`, `xdg-open` runs `gio open`, and `gio open` started a handler planted
+  in a directory named by each of those four, so each selects the program that opens the address.
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs
+  that for each of the four and fails when any one of them is left out of the list. For
+  `XDG_DATA_DIRS` it opens an address with the scheme `bravebot-test`, which no system handler
+  opens: with the planted value removed `gio open` reads the system's directories and finds no
+  handler, where an address with the scheme `https` would start the host's real browser. It sets
+  `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
+  Electron 44.9.3 on Linux, run under Xvfb, was made to call `openExternal` and `openPath` of
+  `ui/src/main/external-open.ts` with all five names set to directories and a script a stage could
+  have written. It started `xdg-open` for each call with none of the five in its environment. The
+  same two calls made on Electron's `shell` without the deletion started `xdg-open` with all five,
+  so Electron hands its environment to `xdg-open` and the deletion is what removes them.
+  `ui/scripts/external-open-electron.test.mjs` repeats that run, with both the calls through
+  `external-open.ts` and the control, and fails when `openPath` skips the deletion. It prints
+  `skipped` where there is no Linux, `xvfb-run` or Electron binary. It needed `--no-sandbox` and
+  `--disable-dev-shm-usage` on the host that ran it.
+  The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
+  the five names, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
+  `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
+  launchers whose names are fixed, `KDE_SESSION_VERSION` to complete the name `kde-open5`,
+  `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`, and `XDG_RUNTIME_DIR`
+  for a `flatpak-info` file that switches to `gdbus`. None of those names a file to run.
+  `HOME` is not removed and does choose the handler: with `XDG_CURRENT_DESKTOP=GNOME` and no other
+  name set, an `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a
+  `.desktop` entry started the planted handler through `gio open`. It is tracked by #3849.
+  These were not run: the Windows `rundll32` start, which was read and is tracked by #3860;
+  `kde-open` and a KDE session, because `kde-open` is not installed on the host that ran the rest
+  and installing it there with apt would add 152 packages, so what it reads is unobserved; and a
+  logged-in GNOME session. They are tracked by #3822.
 - `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
   tracked by #3809.
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
-  are given the generic table. The names `make`, `git` and `xcrun` read are added by #3797. Running
-  each of the others with a name planted is tracked by #3811.
-- `tput` is started by bare name by crossterm 0.29.0 (`src/terminal/sys/unix.rs`, line 273) when a
-  terminal-size query fails. The dependency makes that start and it does not go through
-  `programs::start`, so it has no `CodeSelectors` argument. It is tracked by #3802.
+  are given the generic table and the suite's own list ([SANDBOX-21](#SANDBOX-21)). Each name was
+  found by running the program with a helper planted under it on macOS 26 (arm64) with GNU Make
+  3.81, cargo 1.99.0, npm 11.19.1, go 1.27.3 and python3 3.15.0. The helper ran under
+  `MAKEFLAGS` (`SHELL=` and `-I`), `MAKEFILES`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTC`,
+  `RUSTDOC`, the `CARGO_BUILD_` forms of those, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`,
+  `RUSTDOCFLAGS`, `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS`,
+  `CARGO_HOME`, `RUSTUP_TOOLCHAIN` and `RUSTUP_HOME`, every `npm_config_` name in any case
+  (`script_shell`, `userconfig`, `globalconfig`, `prefix`, `init_module`), `NODE_OPTIONS`,
+  `NODE_PATH`, `GOFLAGS`, `GOENV`, `GOCACHEPROG`, `GOTOOLCHAIN=path`, `CC`, `CXX`,
+  `PKG_CONFIG`, `CGO_LDFLAGS` (`-fuse-ld=`), `CGO_CFLAGS` and `CGO_CPPFLAGS` (`-fno-integrated-as -B<dir>`
+  with an `as` in the directory; the go build cache hides this unless `-a` is given), the make rule
+  variables `AS`, `FC`, `PC`, `M2C`, `LEX`, `YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET`, `CO`, `AR`, `RM`
+  and `MAKE`, make's `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` with
+  `-B<dir>` and a linker in the directory, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
+  `CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS` and `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` (for
+  `cargo logout`), `CARGO_ENCODED_RUSTDOCFLAGS` and `CARGO_BUILD_RUSTDOCFLAGS` (`cargo test --doc` with
+  `--test-runtool=`), `BROWSER` (`cargo doc --open`, in the suite's list as well as the browser opener's),
+  `PYTHONPATH` and `PYTHONUSERBASE` (a `sitecustomize`
+  under the first and a `usercustomize` under the second), `PYTHONHOME` (a `sitecustomize` in the
+  standard library it names), `PYTHONPYCACHEPREFIX` (an unchecked-hash `.pyc`), `PYTHONEXECUTABLE`
+  (`-m venv`) and `PYTHONSTARTUP` (`python3 -i` only), and `GOTOOLCHAIN=go1.99.0+path` ran a
+  `go1.99.0` found on `PATH`. It did not run under
+  `GNUMAKEFLAGS` or `MFLAGS` with `-f`, `-I` or `SHELL=` on 3.81, and `MAKEFLAGS` with `-f` in any
+  spelling (`-f <file>`, `-f<file>`, `--file=`, `--makefile=`, `f <file>`, `-s -f <file>`), `-C`,
+  `--directory=` or `-o`, none of which read the file or change directory when they come from
+  `MAKEFLAGS` on 3.81 (the same file passed on the command line does run, so the control holds),
+  `make` implicit-rule variables `ASFLAGS`, `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
+  built-in rule; a recipe that uses `$(CPP)` runs it), `CGO_CXXFLAGS`,
+  `CGO_FFLAGS`, the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
+  `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
+  through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
+  `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
+  `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `CARGO`, `RUSTFMT`, `COMPILER_PATH`,
+  `CARGO_REGISTRIES_CRATES_IO_CREDENTIAL_PROVIDER` for `cargo login`, `GOPATH` or `GOMODCACHE` holding a
+  toolchain (`go` tried to download it), `GOBIN`, `GOWORK`, `GOAUTH`, `GOPROXY`, `PYTHONSTARTUP` (for `-c`, `-m unittest` and `-m venv`),
+  `__PYVENV_LAUNCHER__`, `PYTHONBREAKPOINT`, `npm_config_node_options`,
+  `npm_config_cache`, `npm_config_git` or `npm_config_prefix` (set to a directory holding the helper as
+  `bin/npm` and `bin/node`, for `npm run`, `root -g`, `bin -g`, `prefix -g`, `config get prefix`, `ls`,
+  `pack --dry-run`, `install --offline` and `-v`; it is removed anyway as an `npm_config_` name).
+  `GNUMAKEFLAGS` and `MFLAGS` are in the suite's list because other versions of `make` read them.
+  `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
+  `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it. Windows was not run:
+  the suite runs nothing there. The names a Linux build of `make`, `cargo`, `npm`, `go` and
+  `python3` reads, and their versions, are not recorded; a Linux run of them is tracked by #3811
+  and #3863.
+  Each test runs the program with the variable as the person set it first. Where the program does
+  not run the helper, the test prints that it skipped and why, and asserts nothing further: a helper
+  the program never reaches proves nothing. Where the control passes, the strict check runs on every
+  host. A test also skips, and says so, in these cases: the program is not installed (a `go` that a
+  stage starts through `sh` included); the `CARGO_TARGET_<triple>_` cases when the host is not
+  macOS or Linux on aarch64 or x86_64, the hosts whose triple the tests know; and the toolchain and
+  `RUSTUP_HOME` cases on a host whose triple is not known or where `rustup` is not installed.
+  The `PYTHONUSERBASE` test takes
+  the directory of `usercustomize.py` from `site.getusersitepackages()`, since the directory under a
+  base is `lib/python/site-packages` for a macOS framework build and
+  `lib/python3.<minor>/site-packages` for other builds. A skipped name stays in the lists and is
+  removed on every host. The results for the `cc` and `pkg-config`
+  crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
+  `GOAUTH`, `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `COMPILER_PATH`, `RANLIB`,
+  `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
+  repeats them.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
@@ -3935,6 +4304,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_bedrock::credentials::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_bedrock::credentials::an_aws_value_that_selects_no_code_is_left_as_set`
 `verified-by: bravebot_bedrock::credentials::the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one`
+`verified-by: bravebot_bedrock::credentials::the_installed_cli_runs_a_credential_process_outside_a_stage_and_not_one_inside`
 `verified-by: bravebot_sandbox::programs::a_file_that_names_code_must_exist_as_a_file_outside_every_directory_a_stage_may_write`
 `verified-by: bravebot_sandbox::programs::a_code_selector_is_taken_off_unless_its_value_passes`
 `verified-by: bravebot_sandbox::programs::a_list_of_directories_passes_only_when_every_entry_does_and_options_never_do`
@@ -3946,6 +4316,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
 `verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_cli::terminal_size::a_failed_size_query_starts_no_tput`
 `verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
 `verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
 `verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
@@ -3994,6 +4365,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_sandbox::programs::a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup`
 `verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
+`verified-by: bravebot_sandbox::programs::the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
 `verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
@@ -4003,6 +4375,7 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_tui::opener::a_browser_entry_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+`verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
@@ -4019,6 +4392,9 @@ documentation and launchers, and these were not shown by running the program:
 `verified-by: bravebot_cli::push_identity::a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::the_variables_the_programs_started_here_are_run_to_read_are_kept`
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
+`verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
+`verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the five names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the five names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
@@ -4375,7 +4751,8 @@ and the stores an https helper reads:
 file is read by the base whatever scope a stage carries ([SANDBOX-12](#SANDBOX-12)), and the
 system service that holds it is reached whatever scope a stage carries (the last section's list of
 what has to exist first). The agent socket `$SSH_AUTH_SOCK`
-names is a write row for a stage that carries the remote scope and for no other
+names is a write row for a stage that carries the remote scope and for no other, and only where
+the path it leads to is a socket outside the credential and persistence locations
 ([SANDBOX-18](#SANDBOX-18)), and on macOS it is reached only while the profile leaves egress open. On macOS, where the backend creates
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
 without one records no host a confined push meets. A push signs through the agent and needs no
@@ -4482,8 +4859,9 @@ reported as what it is.
   and writes nothing to the record of what a person vouched for.
 - The agent socket is a write row because a socket is reached only through the second list
   ([SANDBOX-3](#SANDBOX-3)), which is wider than a row that carried a connect and no write. A
-  policy row for a connect alone would narrow it. The row has not been exercised against a running
-  agent.
+  policy row for a connect alone would narrow it. The row is the socket the name leads to, judged
+  as each stage starts, and the check is not repeated when the sandbox opens it, so a link swapped
+  in between is not caught. The row has not been exercised against a running agent.
 - The Windows base is empty, on the ground that a container reads the system directories through
   an entry the platform already wrote. The Windows job starts `cmd.exe /c` and the compiler on
   its `PATH` under it, and `git`. `git` opens `/dev/null`, which is `NUL`, before it reads its

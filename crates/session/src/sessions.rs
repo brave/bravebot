@@ -824,7 +824,6 @@ pub fn failure_reason_with_model(
     model: Option<&str>,
 ) -> String {
     use bravebot_agent::Category;
-    use bravebot_aichat::OpenCall;
     // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8), with the
     // status of a refusal that came with one after it, as the one-shot run says it: from the one
     // function both call. No count of tries follows, since the sentence says what to do and the
@@ -857,28 +856,7 @@ pub fn failure_reason_with_model(
         // anything the service reported, and without it the sentence names no remedy.
         // What the reply was writing is said as well, since a reply that spent the ceiling on one
         // file's worth of argument is asked for in parts, and one that spent it thinking is not.
-        Category::TooLong => match (diagnosis.ceiling, cut_off) {
-            (None, _) => t!(failure_too_long).into(),
-            (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
-            (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
-                (
-                    Some(OpenCall {
-                        tool: Some(tool), ..
-                    }),
-                    _,
-                ) => t!(
-                    failure_too_long_in_call,
-                    tokens = tokens,
-                    tool = tool.as_str()
-                )
-                .into(),
-                (Some(OpenCall { tool: None, .. }), _) => {
-                    t!(failure_too_long_in_a_call, tokens = tokens).into()
-                }
-                (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
-                (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
-            },
-        },
+        Category::TooLong => too_long_words(diagnosis.ceiling, cut_off),
         Category::Unconfigured => t!(failure_unconfigured).into(),
         Category::Blocked => t!(failure_blocked).into(),
         Category::Workspace => t!(failure_workspace).into(),
@@ -936,6 +914,23 @@ pub fn failure_reason_with_model(
             next = t!(failure_refused_next)
         );
     }
+    // A rate limit ends with the settings that lengthen the wait or move the turn to another model.
+    // Which of the two sentences is chosen by whether the backend that sent the request has a
+    // `provider` entry, a fact the driver set from the variant, and nothing the service wrote is in
+    // either (BACKEND-37). A wait past the longest one the client sits through ends the call on its
+    // first request, so no `maxRetries` changes the outcome and only the other two remedies are
+    // named (BACKEND-54).
+    if diagnosis.category == Category::RateLimited {
+        let past_the_ceiling = diagnosis
+            .retry_after
+            .is_some_and(|wait| wait > bravebot_aichat::LONGEST_WAIT);
+        let next = if diagnosis.retry_setting && !past_the_ceiling {
+            t!(failure_rate_limited_entry_next)
+        } else {
+            t!(failure_rate_limited_next)
+        };
+        said = t!(failure_with_next, what = said, next = next);
+    }
     // After the status and the count, so a refused credential says what was refused first and
     // what to do about it last. The commands are this program's own words, chosen by the category
     // and by whether the request carried the premium key, and nothing the service wrote is in them
@@ -949,6 +944,37 @@ pub fn failure_reason_with_model(
         said = t!(failure_with_next, what = said, next = next);
     }
     t!(session_error, problem = said)
+}
+
+/// The sentence for a reply that spent its ceiling, naming the ceiling where it is known and what
+/// the reply was writing where the cut-off says. See [`failure_reason_with_model`].
+fn too_long_words(
+    ceiling: Option<u64>,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+) -> std::borrow::Cow<'static, str> {
+    use bravebot_aichat::OpenCall;
+    match (ceiling, cut_off) {
+        (None, _) => t!(failure_too_long).into(),
+        (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
+        (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
+            (
+                Some(OpenCall {
+                    tool: Some(tool), ..
+                }),
+                _,
+            ) => t!(
+                failure_too_long_in_call,
+                tokens = tokens,
+                tool = tool.as_str()
+            )
+            .into(),
+            (Some(OpenCall { tool: None, .. }), _) => {
+                t!(failure_too_long_in_a_call, tokens = tokens).into()
+            }
+            (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
+            (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
+        },
+    }
 }
 
 /// A model name as a failure line says it: every character that would draw as nothing or act on a
@@ -4345,6 +4371,83 @@ mod tests {
         assert!(said(Some(Duration::from_secs(5))).contains("(HTTP 429)"));
     }
 
+    /// BACKEND-37: a rate-limited line ends with the next step. A request to a provider entry is
+    /// told to raise `maxRetries` in that entry and to set `fallbackModel`; a request to any
+    /// backend with no entry is told only `fallbackModel` and to try later, because there is no
+    /// `maxRetries` to raise. Other categories do not carry the sentence.
+    ///
+    /// The faults this rejects: no next step, `maxRetries` named for the Brave endpoint or a
+    /// tier-variable account, and the same sentence for a rate limit and a refusal.
+    #[test]
+    fn a_rate_limit_ends_with_the_setting_that_lengthens_the_wait() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let rate_limited = || {
+            Diagnosis::of(Category::RateLimited)
+                .with_status(429)
+                .after(7)
+        };
+
+        let entry = failure_reason(rate_limited().with_retry_setting(), None);
+        assert!(entry.contains("`maxRetries`"), "{entry}");
+        assert!(entry.contains("`fallbackModel`"), "{entry}");
+        assert!(entry.starts_with("error: "), "{entry}");
+
+        let no_entry = failure_reason(rate_limited(), None);
+        assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(no_entry.contains("`fallbackModel`"), "{no_entry}");
+        assert!(no_entry.contains("try again later"), "{no_entry}");
+
+        let unavailable = failure_reason(
+            Diagnosis::of(Category::Unavailable)
+                .with_status(503)
+                .with_retry_setting(),
+            None,
+        );
+        assert!(!unavailable.contains("maxRetries"), "{unavailable}");
+    }
+
+    /// BACKEND-37, BACKEND-54: a 429 that asked for a wait past the longest one the client sits
+    /// through ends the call on its first request, so a rate-limited line for it never tells the
+    /// person to raise `maxRetries`, even for a request to a provider entry. A wait the client
+    /// would sit through (the ceiling itself included) keeps the sentence that names it.
+    ///
+    /// The fault this rejects: choosing the sentence from the provider entry alone, which sends a
+    /// person to raise a count that has no effect on a call that is never sent again.
+    #[test]
+    fn a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::LONGEST_WAIT;
+        use std::time::Duration;
+
+        let said = |wait: Duration, entry: bool| {
+            let mut diagnosis = Diagnosis::of(Category::RateLimited)
+                .with_status(429)
+                .asking_for_a_wait_of(wait);
+            if entry {
+                diagnosis = diagnosis.with_retry_setting();
+            }
+            failure_reason(diagnosis, None)
+        };
+
+        let past = said(LONGEST_WAIT + Duration::from_secs(1), true);
+        assert!(!past.contains("maxRetries"), "{past}");
+        assert!(past.contains("`fallbackModel`"), "{past}");
+        assert!(past.contains("try again later"), "{past}");
+        assert!(past.contains("about 3 minutes"), "{past}");
+
+        let at = said(LONGEST_WAIT, true);
+        assert!(at.contains("`maxRetries`"), "{at}");
+        assert!(at.contains("`fallbackModel`"), "{at}");
+
+        let under = said(Duration::from_secs(5), true);
+        assert!(under.contains("`maxRetries`"), "{under}");
+
+        let no_entry = said(LONGEST_WAIT + Duration::from_secs(1), false);
+        assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(no_entry.contains("try again later"), "{no_entry}");
+    }
+
     /// A refusal that names the account, with neither a status nor a wait.
     fn refused(
         refusal: bravebot_aichat::responses::protocol::Refusal,
@@ -4497,6 +4600,7 @@ mod tests {
                 context_tokens: None,
                 conceded: Default::default(),
                 backend: None,
+                retry_setting: false,
                 cause: Box::new(BackendError::from(ChatError::Account(failure))),
             };
             failure_reason(error.diagnosis(), None)
@@ -4969,6 +5073,25 @@ mod tests {
     #[test]
     fn a_path_with_nothing_in_it_still_names_a_directory() {
         assert_eq!(key_for(Path::new("/")), "root");
+    }
+
+    /// The session directory of a deep working directory has to be a name a file system takes, or
+    /// no session could be written for it. The path is rooted at `/`, so the test runs on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn a_working_directory_too_deep_for_a_file_name_still_has_a_session_directory() {
+        let deep = Path::new("/")
+            .join("a".repeat(255))
+            .join("b".repeat(255))
+            .join("c".repeat(255));
+        let key = key_for(&deep);
+        assert!(key.len() <= 200, "{} bytes", key.len());
+        assert_eq!(key, bravebot_agent::home::key_for(&deep));
+        let home = tempfile::tempdir().expect("a scratch directory");
+        let directory = home.path().join(&key);
+        std::fs::create_dir(&directory).expect("a directory named by the key is created");
+        std::fs::write(directory.join(format!("{}.jsonl", new_id())), "{}\n")
+            .expect("a record in it is written");
     }
 
     #[test]

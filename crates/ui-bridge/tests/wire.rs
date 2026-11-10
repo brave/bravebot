@@ -22,7 +22,7 @@ fn every_enum_has_the_tag_the_protocol_promises() {
     assert_eq!(wire::phase(Phase::Planning), "planning");
     assert_eq!(wire::phase(Phase::Thinking), "thinking");
     assert_eq!(wire::phase(Phase::Compacting), "compacting");
-    assert_eq!(wire::phase(Phase::Reconnecting), "reconnecting");
+    assert_eq!(wire::phase(Phase::Reconnecting(None)), "reconnecting");
 
     assert_eq!(wire::reach(Reach::NotThePlanner), "not_the_planner");
     assert_eq!(wire::reach(Reach::NoModel), "no_model");
@@ -580,6 +580,26 @@ fn a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose() {
     );
 }
 
+/// LAYER-6: a plan-mode notice has no row of its own, so it crosses as a plain message and takes no
+/// prompt ordinal, which keeps the prompts after it numbered as `fork::cut` counts them.
+#[test]
+fn a_plan_mode_notice_crosses_as_plain_text_and_takes_no_ordinal() {
+    let said = wire::recounted(&[
+        Said::User("first".into(), None),
+        Said::Composed {
+            why: Composed::ModeNotice { plan: true },
+            text: "Plan mode is on".into(),
+        },
+        Said::User("second".into(), None),
+    ]);
+    assert_eq!(
+        said[1],
+        json!({ "kind": "user", "text": "Plan mode is on" })
+    );
+    assert_eq!(said[0]["prompt"], json!(0));
+    assert_eq!(said[2]["prompt"], json!(1));
+}
+
 /// LAYER-6: a request may say the front end composed its own prompt, and may not say the agent
 /// composed one.
 ///
@@ -610,6 +630,41 @@ fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
             "a front end may not claim {refused}",
         );
     }
+}
+
+/// RPCVIEW-10: a send's id is 1 to 64 ASCII letters, digits, `-` or `_`, and anything else,
+/// including no id at all, is refused.
+#[test]
+fn a_message_id_is_a_short_ascii_word_and_is_required() {
+    let longest = "a".repeat(wire::MESSAGE_ID_LENGTH);
+    for taken in [
+        "0f1e2d3c-aaaa-4bbb-8ccc-123456789abc",
+        "acp_1",
+        "7",
+        longest.as_str(),
+    ] {
+        assert_eq!(wire::message_id(Some(&json!(taken))).expect("an id"), taken);
+    }
+    let longer = "a".repeat(wire::MESSAGE_ID_LENGTH + 1);
+    for refused in [
+        json!(""),
+        json!(longer),
+        json!("a.b"),
+        json!("a b"),
+        json!("a\nb"),
+        json!("é"),
+        json!(7),
+        Value::Null,
+    ] {
+        assert!(
+            wire::message_id(Some(&refused)).is_err(),
+            "{refused} was taken as an id"
+        );
+    }
+    assert!(
+        wire::message_id(None).is_err(),
+        "a send without an id was taken"
+    );
 }
 
 /// MSG-11: a message between sessions crosses as its own kind with the session, the name, the
@@ -1206,6 +1261,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
         started_as: "/usr/bin/printf".into(),
         args: vec!["hello world".into()],
         environment: vec![("MODE".into(), "preview".into())],
+        expansions: Vec::new(),
         routes: vec![Route::Stdout {
             path: "/tmp/result.txt".into(),
             append: false,
@@ -1529,6 +1585,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
                 started_as: "/bin/sh".into(),
                 args: vec!["deploy.sh".into()],
                 environment: vec![],
+                expansions: vec![],
                 routes: vec![],
             }]),
             writes: vec![],
@@ -1583,6 +1640,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
                 started_as: "/usr/bin/wc".into(),
                 args: vec!["-l".into(), "notes.txt".into(), "report.txt".into()],
                 environment: vec![],
+                expansions: vec![],
                 routes: vec![],
             }]),
             writes: vec![],
@@ -1626,6 +1684,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
                 started_as: "/bin/ls".into(),
                 args: vec!["-1".into()],
                 environment: vec![],
+                expansions: vec![],
                 routes: vec![],
             }]),
             writes: vec![],
@@ -1748,6 +1807,25 @@ fn approval_evidence_is_kept_beside_the_decision() {
         },
     );
     assert_eq!(output["vetting"]["detail"], "offline");
+    // A word reused from an earlier check carries no sentence: the field is null, not missing, and
+    // the verdict is still the word.
+    let reused = wire::output_request(
+        8,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: "content".into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 0,
+            reference: "1".into(),
+            verdict: Verdict::Unsafe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(reused["vetting"]["verdict"], "unsafe");
+    assert!(reused["vetting"]["reason"].is_null());
+    assert!(reused["vetting"]["label"].is_null());
     let vouch = wire::vouch_request(
         9,
         &VouchRequest {

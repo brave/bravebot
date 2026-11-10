@@ -1,4 +1,5 @@
 import type { Enhancement } from './enhancing'
+import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
 import type { Staged, Staging } from './staging'
 import type {
@@ -71,6 +72,12 @@ export interface Live {
   notes?: SessionNote[]
   quarantine: Shown[]
   phase: Waiting | null
+  /**
+   * When a failed request waiting to be sent again will be, while the phase is `reconnecting`
+   * (VIEW-43). Set by the `phase` event that announces the wait and by every later one, so it never
+   * outlives the wait it names.
+   */
+  retry?: RetryDue | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
   hook: Hook | null

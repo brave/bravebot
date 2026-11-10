@@ -52,10 +52,12 @@ governs:
 key_step_allowed:
   - crates/core/src/trust.rs::fold_case to_uppercase: a key is folded to upper case and then to lower, so two spellings a volume that folds case opens as one file are one key, and only a map told the volume folds compares them so (TRUST-2, Case)
   - crates/core/src/trust.rs::fold_case to_lowercase: the second half of that fold, taken after upper case so a letter whose lower case is itself still meets the letter the volume folds it to (TRUST-2, Case)
+  - crates/core/src/trust.rs::fold_simple to_uppercase: a key is folded one letter to one letter, so a trust compares two names as one only where every volume that folds case does, and `claß.md` stays apart from `class.md` (TRUST-2, Case)
+  - crates/core/src/trust.rs::fold_simple to_lowercase: the second half of that fold, taken after upper case for the reason `fold_case` is (TRUST-2, Case)
   - crates/core/src/trust.rs::canonical_form fold_case x2: a key is folded before its form is taken, again only where the volume folds case (TRUST-2, Case)
   - crates/core/src/trust.rs::canonical_form decompose x2: a name is compared in the form every canonically equivalent spelling shares, which joins the NFC and NFD spellings of a name for a refusal and a writer on purpose and never for a trust (TRUST-2, Normalization)
   - crates/core/src/permissions.rs::key_of fold: a rule and a path are compared in one case only where the volume folds case, which joins two spellings that volume opens as one file (TRUST-2, Case)
-  - crates/core/src/permissions.rs::fold fold_case: a rule and a path are folded a segment at a time, so the separators and the anchor are left as they were (TRUST-2, Case)
+  - crates/core/src/permissions.rs::fold fold_simple: a rule and a path are folded a segment at a time, one letter to one letter, so the separators and the anchor are left as they were and a grant about `claß.md` stays apart from `class.md` (TRUST-2, Case)
   - crates/core/src/permissions.rs::drive_in_upper_case make_ascii_uppercase: a drive letter is one drive in either case on a host that separates with a backslash, and a directory called `d:` elsewhere is left as written (TRUST-2, Drive letter row)
 guards:
   - symbol: TrustStore::trust
@@ -132,7 +134,13 @@ telling files apart), the map also compares bytes: the answer only widens what a
 a map that does not fold has never made trust cover a path it was not written about. A map made
 without the answer compares bytes, and a map moved to another directory takes that directory's
 answer. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
-as `src` and `ſ` is its own lower case. Where two rules differ only in case on a volume that folds,
+as `src` and `ſ` is its own lower case. A letter whose upper or lower case is more than one
+character, such as `ß` (`SS`), is the one place volumes differ: APFS opens `class.md` as `claß.md`
+and NTFS holds them apart. The map is not told which, and the volume cannot be asked without
+creating a file, so a distrust and an undecided boundary compare under the full fold and reach both
+spellings, and a trust compares under a fold that leaves such a letter as it is and reaches only
+the spellings every volume that folds case joins (`claß.md` and `CLAß.md`, `claẞ.md`). A trust of
+`claß.md` leaves `class.md` undecided. Where two rules differ only in case on a volume that folds,
 the weaker decides every spelling, whichever sorts first and whichever was written last: untrusted
 over undecided, and undecided over trusted. A decision about one spelling replaces the rule about
 that spelling and leaves a lower rule about another in force, since a name that folds the same is
@@ -193,6 +201,7 @@ that is not text is judged as the bytes it is, which a test of each start pins.
 | Drive letter, `\` and `\\?\` prefix | `C:\work\a.md` | one key where the host separates with `\` (TRUST-18) | covered | `bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates` |
 | Letter case | `SRC/a.md` | one rule where the volume folds case | covered, in either case the file is stored in | `bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted` |
 | Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
+| Letter whose case is two letters | `claß.md` and `class.md` | a distrust, an undecided boundary and the writer reservation join the two; a trust reaches only the spelling it was written about | covered | `bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`, `bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other` |
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
 | Symbolic link | a link to the file, or on the way to it | not handled (Known cost) | covered | #2328 |
 | Hard link | a second entry for the file | not handled (Known cost) | covered on Unix, by device and inode | #2328 |
@@ -212,7 +221,11 @@ accepted, since it names that one directory.
 rule too: two names a volume holds apart are two files, so the step that turns a name into a key
 gives them two keys, and a rule about one decides nothing about the other. Only a refusal and a
 writer in flight reach a name on purpose, and only the canonically equivalent spellings of the NFC
-and NFD row. Whitespace, a trailing dot, a leading `-`, a glob character, a backslash, a colon and
+and NFD row, and the pair `claß.md` and `class.md` (Letter whose case is two letters) on a volume
+that folds case. That pair is one group in the tables of the tests: a refusal and a writer in flight
+about one name reach the other, and a trust and an allow rule do not. On a volume that does not fold
+case it is two files that nothing reaches across. Whitespace, a trailing dot, a leading `-`, a glob
+character, a backslash, a colon and
 a character Unicode gives no width are part of a name where a path is bytes. A step that trims,
 folds case or decodes lossily joins two such files, and no row of the table lists a join of two
 files.
@@ -242,6 +255,27 @@ asks them as `Read("./name")`. A name with whitespace at its start is written fr
 A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
 a listing of the other only within a group.
 
+APFS holds `claß.md` and `class.md` as one file and NTFS as two, so no host has the pair both ways,
+and the pair tests skip it on a host that opens them as one.
+`the_sharp_s_pair_is_one_group_for_a_refusal_and_two_names_for_a_trust`
+asks the pair the same questions without a volume, once with the map folding case and once without.
+The copy of the map and of the rules for a checkout is pinned by
+`bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`:
+a refusal is copied under both spellings and a trust only under the one it was written about.
+A refusal is copied where either fold joins its name with the checkout's, since `ẞ` and `ß` are one
+name to the one-letter fold a refusal is read by and two to the full fold:
+`bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins` pins a
+distrust and an undecided boundary at `claẞ` copied under a checkout of `claß` and the reverse. Rules
+that land on one path under the checkout are copied as the weakest of them, a distrust before an
+undecided boundary before a trust: a distrust at `claß/x` and a trust at `claẞ/x` are one path to the
+one-letter fold, the working directory reads it as untrusted, and so does the checkout, whichever
+spelling sorts later. A copy also keeps a rule already at a path it lands on when that rule grants
+less. The same pair is one writer slot, one root a refusal names and one rule copied for a checkout.
+A checkout withdrawn drops a trust that either fold joins with its name: `ẞ` and `ß` are one name to
+the one-letter fold a trust is decided by and two to the full fold, and a trust under either still
+decides a path beneath the checkout, so a withdrawal by the full fold alone would leave it. A
+distrust stays.
+
 A pair is two files when a write through the second name leaves the first as it was, so no host
 needs a file identity to say so. A Windows host leaves out the names of `AWKWARD_NAMES` it cannot
 hold as written (`*`, `\`, a control character) or that the workspace refuses before a key is made
@@ -251,7 +285,7 @@ is what compiles that arm locally, since no local target runs it.
 
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
 in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
-`fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
+`fold_case`, `fold_simple`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
 `drive_in_upper_case`. One those functions keep is listed under `key_step_allowed` in this spec's
 front matter, for the number of calls it names, with the files it joins and why. A step in any
 other function is for a reviewer to find.
@@ -279,6 +313,18 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
 `verified-by: bravebot_agent::workspace::a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule`
+`verified-by: bravebot_agent::workspace::the_sharp_s_pair_is_one_group_for_a_refusal_and_two_names_for_a_trust`
+`verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_full_case_folding_joins_and_not_a_trust`
+`verified-by: bravebot_core::trust::a_copy_places_a_rule_by_its_segments_when_the_spellings_differ_in_length`
+`verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins`
+`verified-by: bravebot_core::trust::a_copy_of_a_distrust_and_a_trust_under_the_pair_the_simple_fold_joins_is_untrusted`
+`verified-by: bravebot_core::trust::a_copy_of_two_rules_that_share_a_destination_is_the_weakest_of_them`
+`verified-by: bravebot_core::trust::a_copy_does_not_replace_a_refusal_already_at_its_destination`
+`verified-by: bravebot_core::trust::a_refusal_under_a_name_only_the_simple_fold_joins_narrows_a_read_beneath`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
+`verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_a_name_only_full_case_folding_joins`
+`verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_full_fold`
 `verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
@@ -288,6 +334,9 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
 `verified-by: bravebot_core::trust::a_folding_volume_lets_the_weakest_case_variant_decide_every_spelling`
 `verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
+`verified-by: bravebot_core::trust::a_trust_does_not_reach_a_spelling_only_full_case_folding_joins`
+`verified-by: bravebot_core::trust::a_refusal_about_a_spelling_only_full_case_folding_joins_decides_the_other`
+`verified-by: bravebot_core::trust::withdrawing_a_trust_reaches_a_spelling_only_full_case_folding_joins`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
 `verified-by: bravebot_agent::workspace::a_volume_answering_to_either_spelling_folds_case`
@@ -412,6 +461,7 @@ name may be refused, and on one that does not, no second writer to the one file 
 `verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
 `verified-by: bravebot_core::file_authority::an_untrusted_write_through_another_spelling_is_read_untrusted_under_both`
 `verified-by: bravebot_core::file_authority::a_second_writer_through_another_spelling_is_refused_while_the_first_is_open`
+`verified-by: bravebot_core::file_authority::a_second_writer_through_the_other_sharp_s_is_refused_while_the_first_is_open`
 `verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
 `verified-by: bravebot_core::file_authority::readers_hold_the_boundary_at_the_same_time`
 `verified-by: bravebot_core::file_authority::an_effect_cannot_enter_while_a_reader_holds_the_boundary`
@@ -1155,6 +1205,12 @@ change, and a grant of the directory holds only while the name still leads to th
 made ([SANDBOX-18](sandboxing.md#SANDBOX-18)). A session that cannot read that identity has no
 scratch directory to grant.
 
+The workspace keeps the same record for the directory it was opened on and for each directory added
+with `/add-dir`, `--add-dir` or `additionalDirectories` or reopened by a resume: the device and
+inode of the directory at the time it was opened, added or reopened, with the name. A copy of the
+workspace made for a delegate or a checkout carries the records. A stage's grant of such a directory
+holds only while its name still leads to that directory ([SANDBOX-18](sandboxing.md#SANDBOX-18)).
+
 `verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
 `verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
@@ -1165,6 +1221,8 @@ scratch directory to grant.
 `verified-by: bravebot_agent::scratch::an_account_directory_that_cannot_be_written_is_put_back_to_private`
 `verified-by: bravebot_agent::scratch::a_name_that_leads_anywhere_but_to_the_directory_made_is_not_that_directory`
 `verified-by: bravebot_agent::scratch::a_directory_is_observed_only_where_the_name_leads_to_one`
+`verified-by: bravebot_agent::workspace::the_session_directories_are_the_directories_recorded_as_they_were_opened`
+`verified-by: bravebot_agent::workspace::a_delegates_checkout_records_its_own_root_and_carries_its_parents_records`
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
 `verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`
@@ -1585,7 +1643,11 @@ there waits on the rows it shows, as above. A no
 writes nothing, and the question once answered offers nothing more.
 
 **Kept.** A yes writes the rule a yes writes, for this session, and appends one line to
-`~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The line names the
+`~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The key is the
+directory's path with every character outside letters, digits, `.` and `_` turned into `-`. A path
+whose key would be longer than 200 bytes is cut there and ends in `-` and 32 hex digits of a digest of
+the path's own bytes, so a key is at most 200 bytes, and two long directories that the turning into
+`-` would join have two files. A key of up to 200 bytes is unchanged. The line names the
 directory in full, which directory is at that path (when it was made and, where the platform has one,
 its number on the volume), the session and when. A desktop session is named on its first turn, so a
 line kept before one names no session; the name decides nothing. A line that cannot be written
@@ -1645,6 +1707,17 @@ grant elsewhere: this directory, this one of the directories that has had that n
 yes writes rather than everything the session went on to record.
 
 `verified-by: bravebot_agent::trusted::a_kept_answer_is_read_back_by_the_next_session_there`
+`verified-by: bravebot_agent::trusted::an_answer_about_a_directory_with_a_very_long_path_is_kept_read_back_and_forgotten`
+`verified-by: bravebot_agent::trusted::a_long_directory_is_not_answered_by_a_record_kept_for_another_long_directory`
+`verified-by: bravebot_agent::home::a_path_of_any_length_has_a_key_that_fits_a_file_name`
+`verified-by: bravebot_agent::home::a_path_whose_name_fits_keeps_it_and_the_next_byte_is_the_first_cut`
+`verified-by: bravebot_agent::home::a_long_path_has_the_same_key_each_time`
+`verified-by: bravebot_agent::home::the_key_of_a_long_path_is_a_fixed_string_the_session_review_script_also_pins`
+`verified-by: bravebot_agent::home::two_long_paths_that_differ_only_late_have_two_keys`
+`verified-by: bravebot_agent::home::long_paths_the_mangling_would_join_have_two_keys`
+`verified-by: bravebot_agent::home::a_long_name_that_is_not_text_and_its_lossy_lookalike_have_two_keys`
+`verified-by: bravebot_agent::home::the_key_of_a_long_path_can_name_a_file_and_a_directory`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_yes_about_a_directory_with_a_very_long_path_is_kept_and_forgotten`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::trusted::an_answer_kept_about_one_directory_answers_for_no_other`
 `verified-by: bravebot_agent::trusted::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
@@ -1703,7 +1776,7 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks that a record holding confined_lines is written only for a yes given after the sentence was on screen; make check-ui runs them)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks, for a directory of three 255-character components, that a record holding confined_lines is written only for a yes given after the sentence was on screen; make check-ui runs them)`
 
 <a id="TRUST-24"></a>
 ### TRUST-24: a kept answer is shown with the session's rules and taken back where they are
@@ -1894,6 +1967,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   the time is all there is, and it is one the owner can set and NTFS can carry over (tunnelling) to
   a name made again within seconds of being removed, so a clone deleted and replaced that quickly
   there is taken for the one answered about.
+- **A directory whose key is longer than 200 bytes loses its earlier records.** A key longer
+  than 200 bytes is cut and ends in a digest ([TRUST-23](#TRUST-23)), including a key of up to 255
+  bytes that a file system took whole before. For such a directory the earlier kept answer, granted
+  rules, remembered command lines, findings, untrusted paths, checkout record and session directory
+  filed under the longer key are not found under the new name. Its startup question is asked again
+  and its earlier sessions are not listed there. Nothing migrates them.
 - **Withdrawing can lose an answer being kept at the same moment.** `/forget-trust` reads the record
   and writes back what is left, so a line another session appends to the same file in between goes
   with the lines withdrawn. That directory is asked about next time, which is the direction every

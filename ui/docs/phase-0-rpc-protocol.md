@@ -634,6 +634,8 @@ than patching what it drew.
 
 #### `turn.send`
 
+`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10).
+
 The optional `model` parameter selects a model ID for this and subsequent turns on the
 open session handle. Provider IDs remain qualified (for example,
 `openrouter/anthropic/claude-haiku-4.5`). Omitting it or passing `null` retains the
@@ -655,6 +657,7 @@ with the configured default, or `null` when configuration is unavailable.
 ```json
 { "id": 5, "method": "turn.send",
   "params": { "session": "s1", "prompt": "why does the parser drop trailing commas?",
+              "messageId": "0b6f1c9e-3d2a-4f5e-9a71-2c4d8e6f0a13",
               "files": ["notes.md"], "dropped": ["/Users/me/briefing.md"],
               "attachments": ["/Users/me/Desktop/screenshot.png"],
               "images": [{ "media": "image/png", "data": "iVBORw0KGgo..." }] } }
@@ -1069,7 +1072,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
 | `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
-| `phase` | `{ phase }` | `Reporter::phase` |
+| `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
 | `narration` | `{ text }`, or `{ text, command }` | `Reporter::narration`, **empty ones dropped**; the bridge's own notices (a summary the ChatGPT account could not make, a move to the fallback model after it failed) carry `command`, the words of `text` that are a command to run, or `null` |
@@ -1802,8 +1805,7 @@ answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6): `{
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
-or saving succeeded. A gap or lost connection ends the view: version 1 has no reconnect or history
-recovery. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
 within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
@@ -1819,7 +1821,8 @@ block. The stdio TypeScript client for it is `packages/agent-client`, which answ
 | `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
 | `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
 | `session.close` | `session` | `{ "state": "closing" }` |
-| `session.attach` | `session` | `{ "version": 1, "sequence": number, "history": "omitted" }` |
+| `session.attach` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
+| `session.view.resync` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 
 `instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
 
@@ -1827,5 +1830,5 @@ A session has one controller, the connection that opened it or took it over, and
 
 A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
 
-`session.attach` sends the connection `session.view.snapshot`, then the answer. The event carries the `session.view.initial` shape with the session's current sequence, turn, target, status and pending question, no rows, and `"history": "omitted"`: the host keeps no transcript for a client that was not there. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+`session.attach` sends the connection `session.view.snapshot`, then the answer. The event is the snapshot `session.view.resync` sends, with the rows produced while no client was connected among the most recent. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
 

@@ -337,6 +337,8 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
                 &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
                 crate::programs::Inherits::All,
                 crate::programs::SearchPath::Inherited,
+                // `xcode-select -p`: its own variable, `DEVELOPER_DIR`, is removed below, and no
+                // other is known to select code (SANDBOX-30, empty-list starts).
                 crate::programs::CodeSelectors::Checked(&[]),
             );
             command
@@ -1832,6 +1834,83 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// A granted row whose name is later replaced by a link to a directory outside the grants:
+    /// Seatbelt matches the path a process ends up opening, so the row gives the link's target
+    /// nothing. SANDBOX-28 relies on this for the window between a stage's policy being built and
+    /// its program opening the row. The control is the same row left as the directory, which is
+    /// read and written, so the refusals mean something. The regression it rejects is a profile
+    /// that resolves the row's name when the program starts and so attaches the grant to the
+    /// target.
+    #[test]
+    fn a_granted_row_replaced_by_a_link_gives_its_target_nothing() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let scratch = crate::testutil::scratch_dir("bravebot-sandbox-row-relinked");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("kept")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(scratch.join("shared"))
+            .expect("the scratch directory is creatable");
+        std::fs::create_dir_all(scratch.join("outside"))
+            .expect("the scratch directory is creatable");
+        let scratch = scratch
+            .canonicalize()
+            .expect("the scratch directory is there");
+        std::fs::write(scratch.join("kept").join("file"), "kept").expect("writable");
+        std::fs::write(scratch.join("outside").join("file"), "outside").expect("writable");
+        // The name is made to lead elsewhere after the policy names it.
+        std::fs::remove_dir_all(scratch.join("shared")).expect("removable");
+        std::os::unix::fs::symlink(scratch.join("outside"), scratch.join("shared"))
+            .expect("the scratch link is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(scratch.join("kept"))
+            .allow_read(scratch.join("shared"))
+            .allow_write(scratch.join("kept"))
+            .allow_write(scratch.join("shared"));
+        let run = |program: &str, path: PathBuf| {
+            sandbox
+                .spawn(
+                    OsStr::new(program),
+                    &[path.into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .success()
+        };
+
+        assert!(
+            run("/bin/cat", scratch.join("kept").join("file")),
+            "a granted directory was not read, so the refusals below mean nothing"
+        );
+        assert!(
+            run("/usr/bin/touch", scratch.join("kept").join("new")),
+            "a granted directory was not written, so the refusals below mean nothing"
+        );
+        assert!(
+            !run("/bin/cat", scratch.join("shared").join("file")),
+            "a row replaced by a link read the link's target"
+        );
+        assert!(
+            !run("/usr/bin/touch", scratch.join("shared").join("new")),
+            "a row replaced by a link wrote the link's target"
+        );
+        assert!(
+            !scratch.join("outside").join("new").exists(),
+            "the target was written"
+        );
+        assert!(
+            !run("/bin/cat", scratch.join("outside").join("file")),
+            "the target was read by its own name"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// A confined process stops a child it started, so a test runner or a `timeout` that gives up
     /// on a child does not wait on it until it ends by itself.
     #[test]
@@ -2936,7 +3015,7 @@ int main(int argc, char **argv) {
             ),
             (
                 "the run base",
-                crate::base::run_base(prelude, &temporary, Some(&home)),
+                crate::base::run_base(prelude, &temporary, Some(&home), None),
             ),
         ];
         let mut live = Command::new("/bin/sleep")
@@ -3282,7 +3361,8 @@ int main(int argc, char **argv) {
                 .expect("the scratch home is creatable");
             std::fs::write(&file, "contents").expect("the scratch home is writable");
         }
-        let policy = crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let policy =
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let code = |program: &str, path: PathBuf| {
             exit_code_under(
                 &policy,
@@ -3349,7 +3429,7 @@ int main(int argc, char **argv) {
         std::fs::create_dir_all(cache.join("mds")).expect("the scratch cache is creatable");
         let cache = cache.canonicalize().expect("the scratch cache is there");
         let policy = crate::base::with_security_cache(
-            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None),
             &cache,
         );
         let code = |path: PathBuf| {
@@ -3400,6 +3480,7 @@ int main(int argc, char **argv) {
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             crate::base::Prelude::MacOs,
             &home,
+            None,
         );
         let at = |path: PathBuf| path.display().to_string();
         let code = |program: &str, path: PathBuf| {
@@ -3460,6 +3541,7 @@ int main(int argc, char **argv) {
         let policy = crate::scope::Scope::Remote.grant(
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         let at = |path: PathBuf| path.display().to_string();
@@ -3552,8 +3634,9 @@ int main(int argc, char **argv) {
         )
         .expect("the scratch home is writable");
         let policy = crate::scope::Scope::Remote.grant(
-            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         let code = |path: PathBuf| {
@@ -3647,7 +3730,7 @@ int main(int argc, char **argv) {
         std::fs::write(&message, "a commit").expect("the scratch directory is writable");
 
         let run_base =
-            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
         let sign = |policy: &SandboxPolicy| {
             let _ = std::fs::remove_file(temporary.join("message.sig"));
@@ -3676,6 +3759,7 @@ int main(int argc, char **argv) {
         let key_only = crate::scope::Scope::Signing.grant(
             run_base(),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         assert_ne!(sign(&key_only), Some(0), "signed with no agent");
@@ -3749,7 +3833,7 @@ int main(int argc, char **argv) {
         std::fs::write(&message, "a commit").expect("the scratch directory is writable");
 
         let run_base =
-            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
         let sign = |policy: &SandboxPolicy, key: &str| {
             let _ = std::fs::remove_file(temporary.join("message.sig"));
@@ -3774,12 +3858,13 @@ int main(int argc, char **argv) {
             )
         };
         let without_the_agent = crate::scope::Scope::Signing
-            .grant(run_base(), &home, &crate::signing::Place::default())
+            .grant(run_base(), &home, None, &crate::signing::Place::default())
             .allow_write(&socket);
         let asking_the_agent = crate::scope::Scope::Signing
             .grant(
                 run_base(),
                 &home,
+                None,
                 &crate::signing::Place {
                     agent: Some(socket.clone()),
                     ..crate::signing::Place::default()

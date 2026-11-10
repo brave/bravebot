@@ -582,6 +582,16 @@ fn loader_fixture(name: &str, script: &str) -> Option<(PathBuf, PathBuf, PathBuf
     Some((run, gh, home))
 }
 
+/// A test that cannot run on this machine says so. On a CI machine it fails instead, since a skip
+/// there reports green for a check that never ran.
+fn skipped(why: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "a CI machine must run this check, and cannot: {why}"
+    );
+    eprintln!("skipped: {why}");
+}
+
 /// SANDBOX-21: `gh auth token` is given none of the dynamic loader's variables, in the run outside
 /// the sandbox, whose failure gives no row, and in the run under it, whose failure is the row's.
 /// The values are files that exist outside every directory a stage writes, which the check every
@@ -595,7 +605,7 @@ fn the_gh_the_login_row_starts_is_not_handed_a_dyld_variable() {
     let script =
         r#"test -z "$DYLD_INSERT_LIBRARIES" && test -z "$DYLD_FALLBACK_LIBRARY_PATH" || exit 1"#;
     let Some((root, gh, home)) = loader_fixture("login-dyld", script) else {
-        eprintln!("skipped: no shell that keeps DYLD_ names can be made here");
+        skipped("no shell that keeps DYLD_ names can be made here");
         return;
     };
     let _environment = Environment::held(
@@ -623,7 +633,7 @@ fn the_gh_the_login_row_starts_is_not_handed_an_ld_variable() {
     }
     let script = r#"test -z "$LD_PRELOAD" && test -z "$LD_LIBRARY_PATH" && test -z "$LD_DEBUG" && test -z "$LD_BIND_NOW" || exit 1"#;
     let Some((root, gh, home)) = loader_fixture("login-ld", script) else {
-        eprintln!("skipped: no shell that keeps loader names can be made here");
+        skipped("no shell that keeps loader names can be made here");
         return;
     };
     let _environment = Environment::held(
@@ -696,6 +706,743 @@ fn run_with_planted(name: &str, set: &[(&'static str, &str)], workflow: Workflow
         report.rows
     );
     assert!(report.is_green(), "{:?}", report.rows);
+}
+
+/// Starts `program` with `args` over `files` directly, with `set` in its environment and nothing
+/// removed, and says whether it ran the file that writes `marker`. `None` where the machine has no
+/// such program. The control for a test that a program was not handed a variable: a helper that
+/// the program never reaches through the variable passes that test whatever the start does.
+fn runs_the_helper_when_given(
+    name: &str,
+    program: &str,
+    args: &[&str],
+    files: &[(&str, &str)],
+    set: &[(&'static str, &str)],
+    marker: &Path,
+) -> Option<bool> {
+    let directory = root(&format!("{name}-control"));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("control directory");
+    let directory = directory.canonicalize().expect("control directory");
+    let fill = |text: &str| text.replace("{session}", &directory.to_string_lossy());
+    for (path, contents) in files {
+        let file = directory.join(path);
+        std::fs::create_dir_all(file.parent().expect("a directory")).expect("directory");
+        std::fs::write(&file, fill(contents)).expect("file");
+    }
+    let resolved = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new(program))?;
+    // The environment belongs to this process, so a control that runs beside a test holding other
+    // variables would be started with those too. Holding the same lock keeps them out of it, and
+    // it is held before the start, which reads the environment.
+    let _environment = Environment::held(set, &[]);
+    let mut command = bravebot_sandbox::programs::start_against(
+        &resolved,
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+        std::iter::empty(),
+        &|_: &Path| true,
+    );
+    command
+        .args(args.iter().map(|arg| fill(arg)))
+        .current_dir(&directory)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Err(error) = command.status() {
+        panic!("{program} did not start: {error}");
+    }
+    let ran = marker.exists();
+    let _ = std::fs::remove_file(marker);
+    Some(ran)
+}
+
+/// Runs the setup stage `program args` over `files` with `set` held in this process, and asserts it
+/// did not run the file that writes `marker` ([`run_with_planted`]), after a control that the
+/// program does run it when handed `set` as it is ([`runs_the_helper_when_given`]). Where the
+/// control shows the installed program does not read the names, the test proves nothing on this host
+/// and says it skipped.
+///
+/// `writable` is the directory the helper is in when the variable names a path. A start keeps a
+/// path outside every directory a stage may write, and a session records its own directories only
+/// when its first confined stage starts, which is after the setup stages. It is recorded here, as
+/// the directory a stage wrote the helper into.
+fn withheld_from_a_setup_stage(
+    name: &str,
+    program: &str,
+    args: &[&str],
+    files: &[(&str, &str)],
+    set: &[(&'static str, &str)],
+    marker: &Path,
+    writable: Option<&Path>,
+) {
+    let workflow = files
+        .iter()
+        .fold(
+            Workflow::new("test", "a setup stage"),
+            |workflow, (path, contents)| workflow.file(path, contents),
+        )
+        .setup(Stage::new(program, args))
+        .stage(Stage::new("true", &[]));
+    match runs_the_helper_when_given(name, program, args, files, set, marker) {
+        None => {
+            eprintln!("skipped {name}: {program} is not installed");
+            return;
+        }
+        Some(false) => {
+            let names: Vec<&str> = set.iter().map(|(variable, _)| *variable).collect();
+            eprintln!(
+                "skipped {name}: {program} on {} {} does not run the helper when handed {names:?}",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return;
+        }
+        Some(true) => {}
+    }
+    if let Some(directory) = writable {
+        bravebot_sandbox::programs::keep_out(directory);
+    }
+    run_with_planted(name, set, workflow, marker);
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 ran the shell named by `SHELL=` in `MAKEFLAGS`
+/// for a recipe. The regression it rejects: a setup `make` started with the `MAKEFLAGS` the
+/// person's shell holds.
+#[test]
+fn a_setup_make_is_not_handed_makeflags_that_name_a_shell() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("makeflags");
+    let marker = planted.join("ran");
+    let shell = planted.join("shell");
+    plant(&shell, &marker);
+
+    withheld_from_a_setup_stage(
+        "makeflags",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n")],
+        &[("MAKEFLAGS", &format!("SHELL={}", shell.display()))],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 ran the program in `RUSTC_WRAPPER` and in
+/// `CARGO_TARGET_<triple>_RUSTFLAGS` (as a linker). The regression it rejects: a setup `cargo`
+/// started with a wrapper or target flags the person's shell holds.
+#[test]
+fn a_setup_cargo_is_not_handed_a_wrapper_or_target_flags() {
+    if !usability::available() {
+        return;
+    }
+    // A wrapper is a `Names::Program`, so it is removed when it names a file in a directory a
+    // stage may write, and the helper is put in one. The target flags are removed whatever they
+    // hold, so the helper is left where no stage can write.
+    // A triple that is not the host's is never read by cargo, so the target-flags case names the
+    // host's.
+    let mut cases: Vec<(&str, &'static str, &str, bool)> =
+        vec![("cargo-wrapper", "RUSTC_WRAPPER", "", true)];
+    if let Some(variable) = host_target_variable("RUSTFLAGS") {
+        cases.push(("cargo-target-flags", variable, "-C linker=", false));
+    }
+    for (name, variable, value, writable) in cases {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        withheld_from_a_setup_stage(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &[
+                (
+                    "demo/Cargo.toml",
+                    "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+                ),
+                ("demo/src/main.rs", "fn main() {}\n"),
+            ],
+            &[(variable, &format!("{value}{}", helper.display()))],
+            &marker,
+            writable.then_some(planted.as_path()),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): npm 11.19.1 ran the shell named by `npm_config_script_shell`
+/// and `NPM_CONFIG_SCRIPT_SHELL` for a script, and read a file named by `npm_config_userconfig`
+/// that names one. The regression it rejects: removing the lower-case prefix only.
+#[test]
+fn a_setup_npm_is_not_handed_configuration() {
+    if !usability::available() {
+        return;
+    }
+    for (name, variable) in [
+        ("npm-lower", "npm_config_script_shell"),
+        ("npm-upper", "NPM_CONFIG_SCRIPT_SHELL"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let shell = planted.join("shell");
+        plant(&shell, &marker);
+        withheld_from_a_setup_stage(
+            name,
+            "npm",
+            &["--prefix", "{session}", "run", "-s", "start"],
+            &[(
+                "package.json",
+                "{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{\"start\":\"true\"}}\n",
+            )],
+            &[(variable, shell.to_str().expect("utf-8"))],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 ran the program in `-toolexec` of `GOFLAGS` and the
+/// program in `CC` for a package that uses cgo. The regression it rejects: a setup `go` started
+/// with flags or a C compiler the person's shell holds.
+#[test]
+fn a_setup_go_is_not_handed_flags_or_a_compiler() {
+    if !usability::available() {
+        return;
+    }
+    for (name, variable, cgo) in [("go-flags", "GOFLAGS", false), ("go-compiler", "CC", true)] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let source = if cgo {
+            "package main\n\n/*\n#include <stdio.h>\n*/\nimport \"C\"\n\nfunc main() {}\n"
+        } else {
+            "package main\n\nfunc main() {}\n"
+        };
+        let value = if cgo {
+            helper.display().to_string()
+        } else {
+            format!("-toolexec={}", helper.display())
+        };
+
+        withheld_from_a_setup_stage(
+            name,
+            "go",
+            &["-C", "{session}", "build", "./..."],
+            &[
+                ("go.mod", "module example.invalid/app\n\ngo 1.18\n"),
+                ("main.go", source),
+            ],
+            &[(variable, &value), ("CGO_ENABLED", "1")],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// Runs `workflow` with `set` held in this process, and asserts that the program it starts as a setup
+/// stage ran the file planted to write `marker`. For a value a start is meant to keep: it shows
+/// that a name is not removed whatever it holds.
+fn run_keeping(name: &str, set: &[(&'static str, &str)], workflow: Workflow, marker: &Path) {
+    let report = {
+        let _environment = Environment::held(set, &[]);
+        run(name, &[workflow])
+    };
+    if !report.skipped().is_empty() {
+        eprintln!("skipped {name}: {:?}", report.skipped());
+        return;
+    }
+    assert!(
+        marker.exists(),
+        "a value that names a file no stage can write was removed: {:?}",
+        report.rows
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): a `RUSTC_WRAPPER` that names a program no stage can write is
+/// run, because a person's wrapper such as `sccache` is one. The regression it rejects: removing
+/// `RUSTC_WRAPPER` for every value, which breaks a build the person set up.
+#[test]
+fn a_setup_cargo_keeps_a_wrapper_no_stage_can_write() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("cargo-wrapper-kept");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+    let workflow = Workflow::new("test", "a setup cargo")
+        .file(
+            "demo/Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+        )
+        .file("demo/src/main.rs", "fn main() {}\n")
+        .setup(Stage::new(
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+        ))
+        .stage(Stage::new("true", &[]));
+
+    run_keeping(
+        "cargo-wrapper-kept",
+        &[("RUSTC_WRAPPER", helper.to_str().expect("utf-8"))],
+        workflow,
+        &marker,
+    );
+}
+
+/// Whether `go` is installed, for a test whose stage starts it through `sh`, where the skip by the
+/// name of the stage's program sees `sh`. Says so when it is not.
+fn go_is_installed(name: &str) -> bool {
+    let found = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("go")).is_some();
+    if !found {
+        eprintln!("skipped {name}: go is not installed");
+    }
+    found
+}
+
+/// The target triple of the host in the lower-case form rustup names a toolchain by, for a host
+/// the tests below know. `None` elsewhere, where the tests that need it are skipped.
+fn host_triple() -> Option<&'static str> {
+    if host_is("macos", "aarch64") {
+        Some("aarch64-apple-darwin")
+    } else if host_is("macos", "x86_64") {
+        Some("x86_64-apple-darwin")
+    } else if host_is("linux", "x86_64") {
+        Some("x86_64-unknown-linux-gnu")
+    } else if host_is("linux", "aarch64") {
+        Some("aarch64-unknown-linux-gnu")
+    } else {
+        None
+    }
+}
+
+/// Whether the host runs `os` on `arch`, read at run time from the constants std states. A
+/// `cfg!` on the architecture would select code that no lint job compiles
+/// (`crates/cli/tests/cfg_targets.rs`).
+fn host_is(os: &str, arch: &str) -> bool {
+    std::env::consts::OS == os && std::env::consts::ARCH == arch
+}
+
+/// The name of the `CARGO_TARGET_<triple>_<end>` variable for the host. Says so when the host is
+/// one the tests do not know, and the case that needs it is skipped.
+fn host_target_variable(end: &str) -> Option<&'static str> {
+    let Some(triple) = host_triple() else {
+        eprintln!(
+            "skipped the CARGO_TARGET_<triple>_{end} case: the host is {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        return None;
+    };
+    let triple = triple.replace('-', "_").to_uppercase();
+    Some(Box::leak(
+        format!("CARGO_TARGET_{triple}_{end}").into_boxed_str(),
+    ))
+}
+
+/// Runs a setup `cargo` with `subcommand` over a package that has a library with a documentation
+/// test and a binary, and asserts it did not run the file planted to write `marker`, after the
+/// control that it does when handed `set` as it is ([`withheld_from_a_setup_stage`]).
+fn withheld_from_a_setup_cargo(
+    name: &str,
+    subcommand: &[&str],
+    set: &[(&'static str, &str)],
+    marker: &Path,
+    writable: Option<&Path>,
+) {
+    let mut args: Vec<&str> = subcommand.to_vec();
+    args.push("--manifest-path={session}/demo/Cargo.toml");
+    withheld_from_a_setup_stage(
+        name,
+        "cargo",
+        &args,
+        &[
+            (
+                "demo/Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+            ),
+            ("demo/src/main.rs", "fn main() {}\n"),
+            (
+                "demo/src/lib.rs",
+                "/// ```\n/// assert!(true);\n/// ```\npub fn f() {}\n",
+            ),
+        ],
+        set,
+        marker,
+        writable,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 and rustc 1.99.0 on macOS arm64 ran the program
+/// in `RUSTC`, `CARGO_BUILD_RUSTC`, `RUSTC_WORKSPACE_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER` and
+/// `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER` in place of the compiler or before it. They are programs,
+/// so a start removes each when it names a file in a directory a stage may write, and the helper is
+/// put in one. The regression it rejects: a setup `cargo` started with one of the five names the
+/// person's shell holds, for a name missing from the list.
+#[test]
+fn a_setup_cargo_is_not_handed_a_compiler_or_a_workspace_wrapper() {
+    if !usability::available() {
+        return;
+    }
+    for (name, variable) in [
+        ("cargo-rustc", "RUSTC"),
+        ("cargo-build-rustc", "CARGO_BUILD_RUSTC"),
+        ("cargo-workspace-wrapper", "RUSTC_WORKSPACE_WRAPPER"),
+        ("cargo-build-wrapper", "CARGO_BUILD_RUSTC_WRAPPER"),
+        (
+            "cargo-build-workspace-wrapper",
+            "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+        ),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        withheld_from_a_setup_cargo(
+            name,
+            &["build", "-q", "--offline"],
+            &[(variable, helper.to_str().expect("utf-8"))],
+            &marker,
+            Some(&planted),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 ran the program named as the
+/// linker by `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS` and
+/// `CARGO_TARGET_<triple>_LINKER`, and the program in `CARGO_TARGET_<triple>_RUNNER` for
+/// `cargo run`. Flags are options, which a start always removes, and the target names are a family
+/// matched by their ends, so the helper is left where no stage can write. The regression it
+/// rejects: a setup `cargo` started with flags or a target linker or runner the person's shell
+/// holds, from a name missing from the list or from the family not matching `_LINKER` or `_RUNNER`.
+#[test]
+fn a_setup_cargo_is_not_handed_flags_or_a_target_program_that_name_a_linker_or_runner() {
+    if !usability::available() {
+        return;
+    }
+    let mut cases: Vec<(&str, &'static str, &str, &[&str])> = vec![
+        (
+            "cargo-rustflags",
+            "RUSTFLAGS",
+            "-C linker=",
+            &["build", "-q", "--offline"],
+        ),
+        (
+            "cargo-encoded-rustflags",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "-Clinker=",
+            &["build", "-q", "--offline"],
+        ),
+        (
+            "cargo-build-rustflags",
+            "CARGO_BUILD_RUSTFLAGS",
+            "-C linker=",
+            &["build", "-q", "--offline"],
+        ),
+    ];
+    if let Some(variable) = host_target_variable("LINKER") {
+        cases.push((
+            "cargo-target-linker",
+            variable,
+            "",
+            &["build", "-q", "--offline"],
+        ));
+    }
+    if let Some(variable) = host_target_variable("RUNNER") {
+        cases.push((
+            "cargo-target-runner",
+            variable,
+            "",
+            &["run", "-q", "--offline"],
+        ));
+    }
+    for (name, variable, prefix, subcommand) in cases {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        withheld_from_a_setup_cargo(
+            name,
+            subcommand,
+            &[(variable, &format!("{prefix}{}", helper.display()))],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 ran the program in `RUSTDOC` and
+/// `CARGO_BUILD_RUSTDOC` for a documentation test, and the program named by `--test-runtool` in
+/// `RUSTDOCFLAGS`, `CARGO_BUILD_RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTDOCFLAGS` and in
+/// `CARGO_TARGET_<triple>_RUSTDOCFLAGS`. The two programs are removed when
+/// they name a file in a directory a stage may write, the flags always. The regression it
+/// rejects: a setup `cargo test --doc` started with a `rustdoc` or documentation flags the person's
+/// shell holds.
+#[test]
+fn a_setup_cargo_is_not_handed_a_rustdoc_or_documentation_flags() {
+    if !usability::available() {
+        return;
+    }
+    let mut cases: Vec<(&str, &'static str, &str, bool)> = vec![
+        ("cargo-rustdoc", "RUSTDOC", "", true),
+        ("cargo-build-rustdoc", "CARGO_BUILD_RUSTDOC", "", true),
+        (
+            "cargo-rustdocflags",
+            "RUSTDOCFLAGS",
+            "--test-runtool=",
+            false,
+        ),
+        (
+            "cargo-build-rustdocflags",
+            "CARGO_BUILD_RUSTDOCFLAGS",
+            "--test-runtool=",
+            false,
+        ),
+        (
+            "cargo-encoded-rustdocflags",
+            "CARGO_ENCODED_RUSTDOCFLAGS",
+            "--test-runtool=",
+            false,
+        ),
+    ];
+    if let Some(variable) = host_target_variable("RUSTDOCFLAGS") {
+        cases.push((
+            "cargo-target-rustdocflags",
+            variable,
+            "--test-runtool=",
+            false,
+        ));
+    }
+    for (name, variable, prefix, writable) in cases {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        withheld_from_a_setup_cargo(
+            name,
+            &["test", "-q", "--offline", "--doc"],
+            &[(variable, &format!("{prefix}{}", helper.display()))],
+            &marker,
+            writable.then_some(planted.as_path()),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 ran the command `BROWSER` names
+/// for `cargo doc --open`, in place of the opener it otherwise uses. It is a list of commands, kept
+/// only when each is one program outside every directory a stage may write, so the helper is put in
+/// one. The regression it rejects: a setup `cargo doc --open` started with the `BROWSER` the
+/// person's shell holds.
+#[test]
+fn a_setup_cargo_doc_open_is_not_handed_a_browser() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("cargo-browser");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+
+    withheld_from_a_setup_cargo(
+        "cargo-browser",
+        &["doc", "-q", "--offline", "--no-deps", "--open"],
+        &[("BROWSER", helper.to_str().expect("utf-8"))],
+        &marker,
+        Some(planted.as_path()),
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 read `config.toml` in the
+/// directory `CARGO_HOME` names, and ran the program its `build.rustc` and `build.rustc-wrapper`
+/// name. `CARGO_HOME` is removed whatever it holds, so the helper is left where no stage can write.
+/// The regression it rejects: a setup `cargo` started with the cargo home the person's shell holds,
+/// from `CARGO_HOME` missing from the variables every start removes.
+#[test]
+fn a_setup_cargo_is_not_handed_a_cargo_home_that_holds_configuration() {
+    if !usability::available() {
+        return;
+    }
+    for (name, key) in [
+        ("cargo-home-rustc", "rustc"),
+        ("cargo-home-wrapper", "rustc-wrapper"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let home = planted.join("home");
+        std::fs::create_dir_all(&home).expect("cargo home");
+        std::fs::write(
+            home.join("config.toml"),
+            format!("[build]\n{key} = \"{}\"\n", helper.display()),
+        )
+        .expect("configuration");
+        withheld_from_a_setup_cargo(
+            name,
+            &["build", "-q", "--offline"],
+            &[("CARGO_HOME", home.to_str().expect("utf-8"))],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): the `cargo` of an account that uses rustup is a proxy, and
+/// rustup 1.29 on macOS arm64 ran the `cargo` in the toolchain that `RUSTUP_TOOLCHAIN` names by
+/// path, and the one in a toolchain found under `RUSTUP_HOME`. Both are kept only outside every
+/// directory a stage may write, so the helper is put in one. The regression it rejects: a setup
+/// `cargo` started with the toolchain or the toolchain directory the person's shell holds. A
+/// machine whose `cargo` is not a rustup proxy does not read either name, so the control skips it.
+#[test]
+fn a_setup_cargo_is_not_handed_a_toolchain_or_a_toolchain_directory() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        eprintln!(
+            "skipped the rustup cases: the host is {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        return;
+    };
+    if bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("rustup")).is_none() {
+        eprintln!("skipped: rustup is not installed");
+        return;
+    }
+    for (name, by_home) in [("cargo-toolchain", false), ("cargo-rustup-home", true)] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let toolchain = if by_home {
+            planted.join(format!("rustup/toolchains/stable-{triple}"))
+        } else {
+            planted.join("toolchain")
+        };
+        plant(&toolchain.join("bin/cargo"), &marker);
+        plant(&toolchain.join("bin/rustc"), &marker);
+        let (variable, value) = if by_home {
+            std::fs::write(
+                planted.join("rustup/settings.toml"),
+                format!("version = \"12\"\ndefault_toolchain = \"stable-{triple}\"\nprofile = \"default\"\n"),
+            )
+            .expect("settings");
+            ("RUSTUP_HOME", planted.join("rustup"))
+        } else {
+            ("RUSTUP_TOOLCHAIN", toolchain)
+        };
+        withheld_from_a_setup_cargo(
+            name,
+            &["build", "-q", "--offline"],
+            &[(variable, value.to_str().expect("utf-8"))],
+            &marker,
+            Some(&planted),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): python3 3.15.0 imported a `sitecustomize` found under
+/// `PYTHONPATH`, and a `usercustomize` found under the user site directory of `PYTHONUSERBASE`, at
+/// start. Both are in the generic table, which keeps a value naming a directory no stage can write
+/// ([PATH-008]), so the directory is recorded as one a stage wrote into, as a session records its own
+/// ones. The regression it rejects: a setup `python3` started with the module directory the
+/// person's shell holds.
+///
+/// [PATH-008]: ../../../docs/best-practices/paths.md
+#[test]
+fn a_setup_python_is_not_handed_a_module_path() {
+    if !usability::available() {
+        return;
+    }
+    for (name, variable, user_base) in [
+        ("python-path", "PYTHONPATH", false),
+        ("python-user-base", "PYTHONUSERBASE", true),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let value = planted.join(if user_base { "base" } else { "modules" });
+        // The user site directory under a base is named by the interpreter: it is
+        // `lib/python/site-packages` for a macOS framework build and `lib/python3.<minor>/site-packages`
+        // for a Linux one.
+        let directory = if user_base {
+            let Some(site) = python_output(
+                &["-c", "import site; print(site.getusersitepackages())"],
+                &[(variable, value.to_str().expect("utf-8"))],
+            ) else {
+                eprintln!("skipped {name}: python3 is not installed");
+                continue;
+            };
+            PathBuf::from(site.trim())
+        } else {
+            value.clone()
+        };
+        assert!(
+            directory.starts_with(&value),
+            "the user site directory {directory:?} is not under the base {value:?}"
+        );
+        let file = directory.join(if user_base {
+            "usercustomize.py"
+        } else {
+            "sitecustomize.py"
+        });
+        std::fs::create_dir_all(&directory).expect("modules");
+        std::fs::write(
+            &file,
+            format!("open('{}', 'w').write('x')\n", marker.display()),
+        )
+        .expect("module");
+
+        withheld_from_a_setup_stage(
+            name,
+            "python3",
+            &["-c", "print(1)"],
+            &[],
+            &[(variable, value.to_str().expect("utf-8"))],
+            &marker,
+            Some(&planted),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): the same `sitecustomize` under a `PYTHONPATH` that no stage can
+/// write is imported. The regression it rejects: removing `PYTHONPATH` for every value, which
+/// would break a person's own modules, or a test above that passes because the name is always
+/// removed and not because the directory is one a stage wrote.
+#[test]
+fn a_setup_python_keeps_a_module_path_no_stage_can_write() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-path-kept");
+    let marker = planted.join("ran");
+    let modules = planted.join("modules");
+    std::fs::create_dir_all(&modules).expect("modules");
+    std::fs::write(
+        modules.join("sitecustomize.py"),
+        format!("open('{}', 'w').write('x')\n", marker.display()),
+    )
+    .expect("module");
+    let workflow = Workflow::new("test", "a setup python")
+        .setup(Stage::new("python3", &["-c", "print(1)"]))
+        .stage(Stage::new("true", &[]));
+
+    run_keeping(
+        "python-path-kept",
+        &[("PYTHONPATH", modules.to_str().expect("utf-8"))],
+        workflow,
+        &marker,
+    );
 }
 
 /// SANDBOX-21: `git init` copies the hooks of `GIT_TEMPLATE_DIR` into the repository a setup stage
@@ -772,6 +1519,35 @@ fn a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program
     );
 }
 
+/// SANDBOX-21: `git` signs a commit by running the program `gpg.program` names when
+/// `commit.gpgsign` is true, and both can arrive as configuration through the environment. The
+/// setup `git commit` is the one that would run it. The regression it rejects: leaving the
+/// `GIT_CONFIG_` names on a setup stage's `git`, which runs a program a stage could have written
+/// with the person's access.
+#[test]
+fn a_setup_commit_is_not_handed_configuration_that_names_a_signing_program() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("config-gpg");
+    let marker = planted.join("ran");
+    let program = planted.join("gpg");
+    plant(&program, &marker);
+
+    run_with_planted(
+        "config-gpg",
+        &[
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "commit.gpgsign"),
+            ("GIT_CONFIG_VALUE_0", "true"),
+            ("GIT_CONFIG_KEY_1", "gpg.program"),
+            ("GIT_CONFIG_VALUE_1", program.to_str().expect("utf-8")),
+        ],
+        a_setup_commit(),
+        &marker,
+    );
+}
+
 /// SANDBOX-21: `GIT_CONFIG_PARAMETERS` is read as configuration the way the numbered pairs are. The
 /// regression it rejects: removing `GIT_CONFIG_COUNT` and the pairs and leaving this one.
 #[test]
@@ -825,6 +1601,11 @@ fn a_setup_commit_is_not_handed_a_common_directory() {
     let marker = planted.join("ran");
     let common = planted.join("common");
     plant(&common.join("hooks/pre-commit"), &marker);
+    // Enough of a repository that `git` accepts the directory, so the hook is what a handed
+    // variable would run and not a failure to read the directory.
+    std::fs::create_dir_all(common.join("objects")).expect("objects");
+    std::fs::create_dir_all(common.join("refs")).expect("refs");
+    std::fs::write(common.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
 
     run_with_planted(
         "common-dir",
@@ -846,16 +1627,84 @@ fn a_setup_make_is_not_handed_makefiles() {
     let marker = planted.join("ran");
     let extra = planted.join("extra.mk");
     std::fs::write(&extra, format!("$(shell : > '{}')\n", marker.display())).expect("makefile");
-    let workflow = Workflow::new("test", "a setup make")
-        .file("Makefile", "all:\n\t@true\n")
-        .setup(Stage::new("make", &["-s", "-C", "{session}"]))
-        .stage(Stage::new("true", &[]));
+
+    withheld_from_a_setup_stage(
+        "makefiles",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n")],
+        &[("MAKEFILES", extra.to_str().expect("utf-8"))],
+        &marker,
+        None,
+    );
+}
+
+/// A repository whose tracked file has a change, and a setup `git diff`, which starts the program
+/// `GIT_EXTERNAL_DIFF` names.
+fn a_setup_diff() -> Workflow {
+    Workflow::new("test", "a setup diff")
+        .file("work/a.txt", "one\n")
+        .setup(Stage::new("git", &["init", "-q", "work"]))
+        .setup(Stage::new("git", &["-C", "work", "add", "a.txt"]))
+        .setup(Stage::new(
+            "git",
+            &["-C", "work", "commit", "-q", "-m", "first"],
+        ))
+        .setup(Stage::new("sh", &["-c", "echo two >> work/a.txt"]))
+        .setup(Stage::new("git", &["-C", "work", "diff"]))
+        .stage(Stage::new("true", &[]))
+}
+
+/// SANDBOX-30: a variable that names a program is kept when the program is outside every
+/// directory a stage may write and removed when it is inside one, so a stage or contributor that
+/// can plant the file does not get it run with the person's access. Both halves run the real `git
+/// diff` with `GIT_EXTERNAL_DIFF`. The regression it rejects: a check that judges nothing, which
+/// runs the file in the writable directory, and a removal of the name whatever it holds, which
+/// would not run the file outside them either.
+#[test]
+fn a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let outside = planted_dir("external-diff-outside");
+    let outside_marker = outside.join("ran");
+    let outside_program = outside.join("diff");
+    plant(&outside_program, &outside_marker);
+    let writable = planted_dir("external-diff-writable");
+    let writable_marker = outside.join("ran-from-writable");
+    let writable_program = writable.join("diff");
+    plant(&writable_program, &writable_marker);
+    bravebot_sandbox::programs::keep_out(&writable);
+
+    let report = {
+        let _environment = Environment::held(
+            &[(
+                "GIT_EXTERNAL_DIFF",
+                outside_program.to_str().expect("utf-8"),
+            )],
+            &[],
+        );
+        run("external-diff-outside", &[a_setup_diff()])
+    };
+    if !report.skipped().is_empty() {
+        skipped("git is not installed");
+        return;
+    }
+    assert!(report.is_green(), "{:?}", report.rows);
+    assert!(
+        outside_marker.exists(),
+        "a program outside every directory a stage may write was removed, so the variable is not judged by where it points: {:?}",
+        report.rows
+    );
 
     run_with_planted(
-        "makefiles",
-        &[("MAKEFILES", extra.to_str().expect("utf-8"))],
-        workflow,
-        &marker,
+        "external-diff-writable",
+        &[(
+            "GIT_EXTERNAL_DIFF",
+            writable_program.to_str().expect("utf-8"),
+        )],
+        a_setup_diff(),
+        &writable_marker,
     );
 }
 
@@ -874,6 +1723,683 @@ fn a_setup_go_vet_is_not_handed_a_go_root() {
     for platform in ["darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64"] {
         plant(&root.join("pkg/tool").join(platform).join("vet"), &marker);
     }
+    withheld_from_a_setup_stage(
+        "go-root",
+        "go",
+        &["-C", "{session}", "vet", "./..."],
+        &[
+            ("go.mod", "module probe\n\ngo 1.20\n"),
+            ("main.go", "package main\n\nfunc main() {}\n"),
+        ],
+        &[
+            ("GOROOT", root.to_str().expect("utf-8")),
+            ("GOTOOLCHAIN", "local"),
+        ],
+        &marker,
+        None,
+    );
+}
+
+/// The module a `node` that loads it runs: it writes `marker`.
+fn plant_module(path: &Path, marker: &Path) {
+    std::fs::create_dir_all(path.parent().expect("a directory")).expect("directory");
+    std::fs::write(
+        path,
+        format!(
+            "require('fs').writeFileSync('{}', 'x');\nmodule.exports = {{}};\n",
+            marker.display()
+        ),
+    )
+    .expect("planted module");
+}
+
+/// Starts `python3 args` with `set` held and nothing removed, and returns what it printed. `None`
+/// where the machine has no `python3`.
+fn python_output(args: &[&str], set: &[(&'static str, &str)]) -> Option<String> {
+    let resolved = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("python3"))?;
+    let _environment = Environment::held(set, &[]);
+    let mut command = bravebot_sandbox::programs::start_against(
+        &resolved,
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+        std::iter::empty(),
+        &|_: &Path| true,
+    );
+    let output = command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .expect("python3 starts");
+    assert!(output.status.success(), "python3 {args:?} failed");
+    Some(String::from_utf8(output.stdout).expect("utf-8"))
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 on macOS arm64 took `GOFLAGS=-toolexec=<helper>` from
+/// the file `GOENV` names, and ran the program `GOCACHEPROG` names as the build cache. `GOENV` is
+/// removed whatever it holds and `GOCACHEPROG` is an option, so the helper is left where no stage
+/// can write. The regression it rejects: a setup `go` started with the environment file or the
+/// cache program the person's shell holds, from a name missing from the lists.
+#[test]
+fn a_setup_go_is_not_handed_an_environment_file_or_a_cache_program() {
+    if !usability::available() {
+        return;
+    }
+    for (name, variable) in [
+        ("go-env-file", "GOENV"),
+        ("go-cache-program", "GOCACHEPROG"),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let value = if variable == "GOENV" {
+            let file = planted.join("env");
+            std::fs::write(&file, format!("GOFLAGS=-toolexec={}\n", helper.display()))
+                .expect("environment file");
+            file
+        } else {
+            helper
+        };
+        withheld_from_a_setup_stage(
+            name,
+            "go",
+            &["-C", "{session}", "build", "./..."],
+            &[
+                ("go.mod", "module example.invalid/app\n\ngo 1.18\n"),
+                ("main.go", "package main\n\nfunc main() {}\n"),
+            ],
+            &[(variable, value.to_str().expect("utf-8"))],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 on macOS arm64 ran the program in `PKG_CONFIG` for a
+/// package with `#cgo pkg-config:`, the linker named by `-fuse-ld=` in `CGO_LDFLAGS`, and the program
+/// in `CXX` for a package with a C++ file. `PKG_CONFIG` is a program, so the helper is put in a
+/// directory a stage may write; the other two are options. The `pkg-config` the stage gets when the
+/// variable is removed is not installed on every machine, so that case ends its `go` with `|| true`
+/// and builds with `-a`, since `go` caches the result of a `pkg-config` run and a second build calls
+/// nothing: the test is whether the helper ran. The regression it rejects: a setup `go` started with the
+/// `pkg-config` program, linker flags or C++ compiler the person's shell holds.
+#[test]
+fn a_setup_go_is_not_handed_a_pkg_config_linker_flags_or_a_cxx_compiler() {
+    if !usability::available() || !go_is_installed("go-pkg-config") {
+        return;
+    }
+    let plain = "package main\n\n/*\n#include <stdio.h>\n*/\nimport \"C\"\n\nfunc main() {}\n";
+    let configured =
+        "package main\n\n/*\n#cgo pkg-config: absent\n*/\nimport \"C\"\n\nfunc main() {}\n";
+    for (name, variable, source, cxx) in [
+        ("go-pkg-config", "PKG_CONFIG", configured, false),
+        ("go-cgo-ldflags", "CGO_LDFLAGS", plain, false),
+        ("go-cxx", "CXX", plain, true),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let value = if variable == "CGO_LDFLAGS" {
+            format!("-fuse-ld={}", helper.display())
+        } else {
+            helper.display().to_string()
+        };
+        let mut files = vec![
+            ("go.mod", "module example.invalid/app\n\ngo 1.18\n"),
+            ("main.go", source),
+        ];
+        if cxx {
+            files.push(("extra.cpp", "int extra() { return 1; }\n"));
+        }
+        let (program, args): (&str, &[&str]) = if variable == "PKG_CONFIG" {
+            ("sh", &["-c", "go -C {session} build -a ./... || true"])
+        } else {
+            ("go", &["-C", "{session}", "build", "./..."])
+        };
+        withheld_from_a_setup_stage(
+            name,
+            program,
+            args,
+            &files,
+            &[(variable, &value), ("CGO_ENABLED", "1")],
+            &marker,
+            (variable == "PKG_CONFIG").then_some(planted.as_path()),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 on macOS arm64 given `GOTOOLCHAIN=go1.99.0` ran the
+/// `go1.99.0` it found on `PATH`, and did not run a `bin/go` planted in the module cache of
+/// `GOPATH` or `GOMODCACHE` (it tried to download the toolchain). The stage start sets
+/// `GOTOOLCHAIN=local`, so a person's value never reaches `go`; `PATH` keeps the planted directory
+/// here, since it is not recorded as one a stage wrote into. The regression it rejects: a setup
+/// `go` started with the `GOTOOLCHAIN` the person's shell holds, which would run a file a stage
+/// could have written.
+#[test]
+fn a_setup_go_is_not_handed_a_toolchain_named_in_its_environment() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("go-toolchain");
+    let marker = planted.join("ran");
+    plant(&planted.join("bin/go1.99.0"), &marker);
+    let search = std::env::join_paths(std::iter::once(planted.join("bin")).chain(
+        std::env::split_paths(&std::env::var_os("PATH").expect("a PATH")),
+    ))
+    .expect("a PATH");
+
+    withheld_from_a_setup_stage(
+        "go-toolchain",
+        "go",
+        &["-C", "{session}", "build", "./..."],
+        &[
+            ("go.mod", "module example.invalid/app\n\ngo 1.18\n"),
+            ("main.go", "package main\n\nfunc main() {}\n"),
+        ],
+        &[
+            ("GOTOOLCHAIN", "go1.99.0+path"),
+            ("PATH", search.to_str().expect("utf-8")),
+        ],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): node v24.22.1 and npm 11.19.1 on macOS arm64 loaded the module
+/// `--require` names in `NODE_OPTIONS` for `node` and for a script `npm run` starts, and loaded a
+/// module found under `NODE_PATH`. `NODE_OPTIONS` is an option, so the module is left where no
+/// stage can write; `NODE_PATH` is a list of directories, so it is put in one. The regression it
+/// rejects: a setup `node` or `npm` started with the options or module path the person's shell
+/// holds.
+#[test]
+fn a_setup_node_is_not_handed_options_or_a_module_path() {
+    if !usability::available() {
+        return;
+    }
+    let package = |script: &str| {
+        format!("{{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{{\"start\":\"{script}\"}}}}\n")
+    };
+    for (name, variable, program, npm) in [
+        ("node-options", "NODE_OPTIONS", "node", false),
+        ("node-options-npm", "NODE_OPTIONS", "npm", true),
+        ("node-path", "NODE_PATH", "node", false),
+        ("node-path-npm", "NODE_PATH", "npm", true),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let module = planted.join("modules/planted/index.js");
+        plant_module(&module, &marker);
+        let value = if variable == "NODE_OPTIONS" {
+            format!("--require={}", module.display())
+        } else {
+            planted.join("modules").display().to_string()
+        };
+        let script = if variable == "NODE_PATH" {
+            "node main.js"
+        } else {
+            "true"
+        };
+        let args: &[&str] = if npm {
+            &["--prefix", "{session}", "run", "-s", "start"]
+        } else {
+            &["main.js"]
+        };
+        withheld_from_a_setup_stage(
+            name,
+            program,
+            args,
+            &[
+                ("package.json", &package(script)),
+                (
+                    "main.js",
+                    if variable == "NODE_PATH" {
+                        "try { require('planted'); } catch (error) {}\n"
+                    } else {
+                        "\n"
+                    },
+                ),
+            ],
+            &[(variable, &value)],
+            &marker,
+            (variable == "NODE_PATH").then_some(planted.as_path()),
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): npm 11.19.1 on macOS arm64 ran the shell a configuration file
+/// named by `npm_config_userconfig`, `NPM_CONFIG_USERCONFIG` or `npm_config_globalconfig` set as
+/// `script-shell`, and ran the module `npm_config_init_module` names for `npm init`. The regression
+/// it rejects: a setup `npm` started with a configuration file or initialiser the person's shell
+/// holds, from the `npm_config_` prefix matching some names or one case only.
+#[test]
+fn a_setup_npm_is_not_handed_a_configuration_file_or_an_initialiser() {
+    if !usability::available() {
+        return;
+    }
+    for (name, variable, init) in [
+        ("npm-userconfig", "npm_config_userconfig", false),
+        ("npm-userconfig-upper", "NPM_CONFIG_USERCONFIG", false),
+        ("npm-globalconfig", "npm_config_globalconfig", false),
+        ("npm-init-module", "npm_config_init_module", true),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let module = planted.join("init.js");
+        plant_module(&module, &marker);
+        let configuration = planted.join("npmrc");
+        std::fs::write(
+            &configuration,
+            format!("script-shell={}\n", helper.display()),
+        )
+        .expect("configuration");
+        let value = if init { &module } else { &configuration };
+        let (args, files): (&[&str], Vec<(&str, &str)>) = if init {
+            (&["init", "-y"], vec![])
+        } else {
+            (
+                &["--prefix", "{session}", "run", "-s", "start"],
+                vec![(
+                    "package.json",
+                    "{\"name\":\"a\",\"version\":\"1.0.0\",\"scripts\":{\"start\":\"true\"}}\n",
+                )],
+            )
+        };
+        withheld_from_a_setup_stage(
+            name,
+            "npm",
+            args,
+            &files,
+            &[(variable, value.to_str().expect("utf-8"))],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): python3 3.15.0 on macOS arm64 imported a `sitecustomize` found
+/// in the standard library under `PYTHONHOME`, and ran a compiled module found under
+/// `PYTHONPYCACHEPREFIX` that was written with an unchecked hash, in place of the standard library's
+/// `colorsys`. Both are directories in the generic table, so the planted ones are recorded as
+/// directories a stage wrote into. The regression it rejects: a setup `python3` started with the
+/// installation or the compiled-module tree the person's shell holds.
+#[test]
+fn a_setup_python_is_not_handed_an_installation_or_a_compiled_module_tree() {
+    if !usability::available() {
+        return;
+    }
+    let Some(layout) = python_output(
+        &[
+            "-c",
+            "import sysconfig; print(sysconfig.get_paths()['stdlib'])",
+        ],
+        &[],
+    ) else {
+        eprintln!("skipped: python3 is not installed");
+        return;
+    };
+    let standard = PathBuf::from(layout.trim());
+
+    let planted = planted_dir("python-home");
+    let marker = planted.join("ran");
+    let home = planted.join("home");
+    let library = home.join("lib").join(standard.file_name().expect("a name"));
+    std::fs::create_dir_all(library.join("site-packages")).expect("library");
+    for entry in std::fs::read_dir(&standard).expect("standard library") {
+        let entry = entry.expect("entry");
+        if entry.file_name() != "site-packages" && entry.file_name() != "sitecustomize.py" {
+            std::os::unix::fs::symlink(entry.path(), library.join(entry.file_name()))
+                .expect("link");
+        }
+    }
+    std::fs::write(
+        library.join("sitecustomize.py"),
+        format!("open('{}', 'w').write('x')\n", marker.display()),
+    )
+    .expect("module");
+    withheld_from_a_setup_stage(
+        "python-home",
+        "python3",
+        &["-c", "print(1)"],
+        &[],
+        &[("PYTHONHOME", home.to_str().expect("utf-8"))],
+        &marker,
+        Some(&planted),
+    );
+
+    let planted = planted_dir("python-cache-prefix");
+    let marker = planted.join("ran");
+    let source = planted.join("source.py");
+    std::fs::write(
+        &source,
+        format!("open('{}', 'w').write('x')\n", marker.display()),
+    )
+    .expect("source");
+    let cache = planted.join("cache");
+    let compiled = python_output(
+        &[
+            "-c",
+            "import importlib.util, os, py_compile, sys\n\
+             target = importlib.util.cache_from_source(importlib.util.find_spec('colorsys').origin)\n\
+             os.makedirs(os.path.dirname(target), exist_ok=True)\n\
+             py_compile.compile(sys.argv[1], cfile=target, doraise=True, \
+             invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)\n\
+             print(target)",
+            source.to_str().expect("utf-8"),
+        ],
+        &[("PYTHONPYCACHEPREFIX", cache.to_str().expect("utf-8"))],
+    )
+    .expect("python3 is installed");
+    assert!(Path::new(compiled.trim()).exists(), "{compiled}");
+    withheld_from_a_setup_stage(
+        "python-cache-prefix",
+        "python3",
+        &["-c", "import colorsys"],
+        &[],
+        &[("PYTHONPYCACHEPREFIX", cache.to_str().expect("utf-8"))],
+        &marker,
+        Some(&planted),
+    );
+}
+
+/// SANDBOX-21 (brave/bravebot#3811): python3 3.15.0 on macOS arm64 ran the file `PYTHONSTARTUP`
+/// names when started with `-i` and stdin closed, and did not for `-c`, `-m unittest` or `-m venv`,
+/// the three ways the workflows start it. The name is in no list, because no stage starts an
+/// interactive interpreter. The regression it rejects: a workflow's `python3` that reads the file,
+/// which would run one a stage could have written with the person's access; the control shows the
+/// variable is read by this interpreter, so the other three passing is not a variable it ignores.
+#[test]
+fn a_setup_python_the_workflows_start_does_not_read_a_startup_file() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-startup");
+    let marker = planted.join("ran");
+    let startup = planted.join("startup.py");
+    std::fs::write(
+        &startup,
+        format!("open('{}', 'w').write('x')\n", marker.display()),
+    )
+    .expect("startup file");
+    let set = [("PYTHONSTARTUP", startup.to_str().expect("utf-8"))];
+    match runs_the_helper_when_given("python-startup", "python3", &["-i"], &[], &set, &marker) {
+        None => {
+            eprintln!("skipped: python3 is not installed");
+            return;
+        }
+        Some(false) => {
+            eprintln!(
+                "skipped python-startup: python3 -i on {} {} does not read PYTHONSTARTUP",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return;
+        }
+        Some(true) => {}
+    }
+    for (name, args) in [
+        ("python-startup-c", vec!["-c", "print(1 + 1)"]),
+        ("python-startup-unittest", vec!["-m", "unittest", "-q"]),
+        ("python-startup-venv", vec!["-m", "venv", ".venv"]),
+    ] {
+        let workflow = Workflow::new("test", "a setup python")
+            .file(
+                "test_a.py",
+                "import unittest\n\nclass A(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(True)\n",
+            )
+            .setup(Stage::new("python3", &args))
+            .stage(Stage::new("true", &[]));
+        run_with_planted(name, &set, workflow, &marker);
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): python3 3.15.0 on macOS arm64 started the program
+/// `PYTHONEXECUTABLE` names, in place of its own executable, for `python3 -m venv`. It is a program,
+/// so the helper is put in a directory a stage may write. The regression it rejects: a setup
+/// `python3 -m venv` started with the executable the person's shell holds.
+#[test]
+fn a_setup_python_venv_is_not_handed_an_executable() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-executable");
+    let marker = planted.join("ran");
+    let helper = planted.join("helper");
+    plant(&helper, &marker);
+
+    withheld_from_a_setup_stage(
+        "python-executable",
+        "python3",
+        &["-m", "venv", ".venv"],
+        &[],
+        &[("PYTHONEXECUTABLE", helper.to_str().expect("utf-8"))],
+        &marker,
+        Some(&planted),
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 on macOS arm64 searched the directories of `-I` in
+/// `MAKEFLAGS` for a makefile named by `-include`, and ran the `$(shell ...)` in it. `GNUMAKEFLAGS`
+/// and `MFLAGS` are not read by 3.81, so they are not covered here. The regression it rejects: a
+/// setup `make` started with the `MAKEFLAGS` the person's shell holds, for an include directory.
+#[test]
+fn a_setup_make_is_not_handed_an_include_directory() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-include-directory");
+    let marker = planted.join("ran");
+    std::fs::write(
+        planted.join("extra.mk"),
+        format!("$(shell : > '{}')\n", marker.display()),
+    )
+    .expect("makefile");
+
+    withheld_from_a_setup_stage(
+        "make-include-directory",
+        "make",
+        &["-s", "-C", "{session}"],
+        &[("Makefile", "all:\n\t@true\n-include extra.mk\n")],
+        &[("MAKEFLAGS", &format!("-I {}", planted.display()))],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 on macOS arm64 ran the program in each of the
+/// variables its built-in rules and recipes read (`AS`, `FC`, `PC`, `M2C`, `LEX`, `YACC`, `LINT`,
+/// `TEXI2DVI`, `MAKEINFO`, `GET`, `CO`, `AR`, `RM`, `MAKE`), and the linker `-B<directory>` finds in
+/// `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` when the built-in rule
+/// links a program. `CC` and `CXX` do the same and are tested with go. `ASFLAGS`, `ARFLAGS`, `LD`,
+/// `F77`, `SHELL` and `CPP` ran nothing from a built-in rule, so they are not listed. All are
+/// options, so a start removes them whatever they hold and the helper is left where no stage can
+/// write. The stage ends its `make` with `|| true`, since a rule whose real tool is not installed
+/// makes `make` fail: the test is whether the helper ran. The regression it rejects: a setup `make`
+/// started with a rule program or linker flags the person's shell holds.
+#[test]
+fn a_setup_make_is_not_handed_the_program_or_linker_flags_of_a_built_in_rule() {
+    if !usability::available() {
+        return;
+    }
+    const LINK: &str = "int main(void) { return 0; }\n";
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static [(&'static str, &'static str)],
+    );
+    let cases: [Case; 20] = [
+        ("AS", "all: x.o\n", "", &[("x.s", "")]),
+        ("FC", "all: x.o\n", "", &[("x.f", "x\n")]),
+        ("PC", "all: x.o\n", "", &[("x.p", "x\n")]),
+        ("M2C", "all: x.o\n", "", &[("x.mod", "x\n")]),
+        ("LEX", "all: x.c\n", "", &[("x.l", "%%\n")]),
+        ("YACC", "all: x.c\n", "", &[("x.y", "%%\n")]),
+        ("LINT", "all: x.ln\n", "", &[("x.c", "int x;\n")]),
+        ("TEXI2DVI", "all: x.dvi\n", "", &[("x.texi", "")]),
+        ("MAKEINFO", "all: x.info\n", "", &[("x.texi", "")]),
+        ("GET", "all: x.c\n", "", &[("s.x.c", "")]),
+        ("CO", "all: x.c\n", "", &[("x.c,v", "")]),
+        (
+            "AR",
+            "all: l.a\nl.a: l.a(x.o)\n",
+            "",
+            &[("x.c", "int x;\n")],
+        ),
+        ("RM", "all:\n\t$(RM) y\n", "", &[]),
+        ("MAKE", "all:\n\t$(MAKE) -s sub\nsub:\n\t@true\n", "", &[]),
+        ("CFLAGS", "all: x\n", "ld", &[("x.c", LINK)]),
+        ("CPPFLAGS", "all: x\n", "ld", &[("x.c", LINK)]),
+        ("CXXFLAGS", "all: x\n", "ld", &[("x.cc", LINK)]),
+        ("LDFLAGS", "all: x\n", "ld", &[("x.c", LINK)]),
+        ("LDLIBS", "all: x\n", "ld", &[("x.c", LINK)]),
+        ("TARGET_ARCH", "all: x\n", "ld", &[("x.c", LINK)]),
+    ];
+    for (variable, makefile, linker, extra) in cases {
+        let label = format!("make-rule-{}", variable.to_lowercase());
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        let value = if linker.is_empty() {
+            let helper = planted.join("helper");
+            plant(&helper, &marker);
+            helper.display().to_string()
+        } else {
+            plant(&planted.join(linker), &marker);
+            format!("-B{}/", planted.display())
+        };
+        let mut files = vec![("Makefile", makefile)];
+        files.extend_from_slice(extra);
+        withheld_from_a_setup_stage(
+            &label,
+            "sh",
+            &["-c", "make -s -C {session} || true"],
+            &files,
+            &[(variable, &value)],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 ran the program in
+/// `CARGO_REGISTRY_CREDENTIAL_PROVIDER` and `CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS` for
+/// `cargo logout` of crates.io, and the program in `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`
+/// for `cargo logout --registry <name>`. The per-registry name is a family matched by its ends. A
+/// registry that cargo reads no index for needs only `CARGO_REGISTRIES_<name>_INDEX`, which names no
+/// program. The helper is left where no stage can write. The regression it rejects: a setup `cargo`
+/// started with a credential provider the person's shell holds.
+#[test]
+fn a_setup_cargo_is_not_handed_a_credential_provider() {
+    if !usability::available() {
+        return;
+    }
+    let registry = (
+        "CARGO_REGISTRIES_BRAVEBOT_PROBE_INDEX",
+        "sparse+http://127.0.0.1:9/",
+    );
+    for (name, variable, registry_args) in [
+        (
+            "cargo-registry-provider",
+            "CARGO_REGISTRY_CREDENTIAL_PROVIDER",
+            &[][..],
+        ),
+        (
+            "cargo-global-providers",
+            "CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS",
+            &[][..],
+        ),
+        (
+            "cargo-registries-provider",
+            "CARGO_REGISTRIES_BRAVEBOT_PROBE_CREDENTIAL_PROVIDER",
+            &["--registry", "bravebot-probe"][..],
+        ),
+    ] {
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let helper = planted.join("helper");
+        plant(&helper, &marker);
+        let mut args = vec!["logout"];
+        args.extend_from_slice(registry_args);
+        withheld_from_a_setup_stage(
+            name,
+            "cargo",
+            &args,
+            &[],
+            &[(variable, helper.to_str().expect("utf-8")), registry],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-30 (brave/bravebot#3811): go 1.27.3 on macOS arm64 built `runtime/cgo` with the
+/// assembler `-B<directory>` finds when `CGO_CFLAGS` or `CGO_CPPFLAGS` holds
+/// `-fno-integrated-as -B<directory>`, and so ran an `as` planted there. `CGO_CXXFLAGS` and
+/// `CGO_FFLAGS` ran nothing. Both are options, so the helper is left where no stage can write. The
+/// build uses `-a`, since `go` caches a compiled package and a second build compiles nothing, and
+/// the stage ends its `go` with `|| true`. The regression it rejects: a setup `go` started with cgo
+/// compiler flags the person's shell holds.
+#[test]
+fn a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler() {
+    if !usability::available() || !go_is_installed("go-cgo_cflags") {
+        return;
+    }
+    for variable in ["CGO_CFLAGS", "CGO_CPPFLAGS"] {
+        let label = format!("go-{}", variable.to_lowercase());
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        plant(&planted.join("as"), &marker);
+        let value = format!("-fno-integrated-as -B{}", planted.display());
+        withheld_from_a_setup_stage(
+            &label,
+            "sh",
+            &["-c", "go -C {session} build -a ./... || true"],
+            &[
+                ("go.mod", "module example.invalid/app\n\ngo 1.18\n"),
+                (
+                    "main.go",
+                    "package main\n\n/*\nint f(void) { return 1; }\n*/\nimport \"C\"\n\nfunc main() { _ = C.f() }\n",
+                ),
+            ],
+            &[(variable, &value), ("CGO_ENABLED", "1")],
+            &marker,
+            None,
+        );
+    }
+}
+
+/// SANDBOX-21: `GOENV` names the file `go` reads its settings from, and a `GOFLAGS` line in it
+/// can carry `-toolexec=<program>`, which `go vet` runs in front of the tools it starts. The
+/// program is a wrapper that records that it ran and then runs the tool it was given, so a
+/// start that is let through leaves a marker and a good run still passes. The regression it
+/// rejects: a setup stage started with the settings file the person's shell names, which runs a
+/// program a stage could have written with the person's access.
+#[test]
+fn a_setup_go_vet_is_not_handed_a_go_settings_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("go-env");
+    let marker = planted.join("ran");
+    let wrapper = planted.join("toolexec");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\n: > '{}'\nexec \"$@\"\n", marker.display()),
+    )
+    .expect("planted wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    let settings = planted.join("env");
+    std::fs::write(
+        &settings,
+        format!("GOFLAGS=-toolexec={}\n", wrapper.display()),
+    )
+    .expect("settings file");
     let workflow = Workflow::new("test", "a setup go vet")
         .file("go.mod", "module probe\n\ngo 1.20\n")
         .file("main.go", "package main\n\nfunc main() {}\n")
@@ -881,9 +2407,9 @@ fn a_setup_go_vet_is_not_handed_a_go_root() {
         .stage(Stage::new("true", &[]));
 
     run_with_planted(
-        "go-root",
+        "go-env",
         &[
-            ("GOROOT", root.to_str().expect("utf-8")),
+            ("GOENV", settings.to_str().expect("utf-8")),
             ("GOTOOLCHAIN", "local"),
         ],
         workflow,

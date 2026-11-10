@@ -24,6 +24,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -380,7 +382,9 @@ impl Window {
         let session = self.session.clone();
         self.call(
             "turn.send",
-            json!({"session": session, "prompt": prompt, "model": "xai/grok-4.5"}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": prompt, "model": "xai/grok-4.5"}),
+            ),
         );
         self.inbox.until("the front end", |message| {
             message["event"] == "turn.done" || message["event"] == "turn.error"

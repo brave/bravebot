@@ -208,7 +208,7 @@ try {
     refusals.sentFailing = await api.summonBot({ session, slug: 'lantern', prompt: FAIL })
     const failedWith = await failed
     const plain = waitFor(session, ['turn.done', 'turn.error'])
-    await api.request('turn.send', { session, prompt: 'A plain follow-up' })
+    await api.request('turn.send', { session, prompt: 'A plain follow-up', messageId: 'follow-up-1' })
     const plainWith = await plain
     await api.request('session.close', { session })
     return { refusals, failedWith, plainWith }

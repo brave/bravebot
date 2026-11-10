@@ -4,7 +4,7 @@
   "steps": [
     {"start": "d", "call": "describe"},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
-    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
-    {"await": "d", "result": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}, "actionTargets": false}}
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "resync": "session.view.resync", "retainedRows": 256}}}}]},
+    {"await": "d", "result": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "resync": "session.view.resync", "retainedRows": 256}, "actionTargets": false}}
   ]
 }

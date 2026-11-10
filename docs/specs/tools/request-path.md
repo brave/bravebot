@@ -57,7 +57,7 @@ name whoever made the link chose, and the sentence is the driver's own words, as
 <a id="PATHREQ-3"></a>
 ### PATHREQ-3: a path an `allowWrite` row refuses is refused, and not asked about
 
-`~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot`, a
+`~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), a
 credential location and any path holding a wildcard are refused whatever the person would answer;
 a request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to
 write there is refused like the rest of `~/.bravebot`. The result says so without asking, says what is true of the path that made it refuse (it holds
@@ -71,6 +71,8 @@ program should not have put.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::only_a_read_of_the_session_records_is_granted_in_the_state_directory`
+`verified-by: bravebot_sandbox::rules::a_request_for_the_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_sandbox::rules::a_directory_added_inside_or_above_the_state_directory_that_is_moved_is_refused`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 
@@ -151,8 +153,9 @@ where the path leads through links:
 
 - for a read, the paths [PATHREQ-3](#PATHREQ-3) refuses: a filesystem root, a drive root, the home
   directory and the directories above it, `~/.ssh`, `~/.bravebot` (a read of its `sessions`
-  directory excepted), credential locations and the directories that hold one, and a path with a
-  control character or a wildcard;
+  directory excepted) or the directory `BRAVEBOT_HOME` puts elsewhere (with the same exception),
+  credential locations and the directories that hold one, and a path with a control character or a
+  wildcard;
 - for a write, the paths [SANDBOX-28](../sandboxing.md#SANDBOX-28) gives a bypass stage no write row
   for: the same, and persistence locations and the directories that hold one. A new entry is judged
   by the directory it lands in, so an entry already inside the home directory or a directory above

@@ -1030,3 +1030,125 @@ pub(super) mod scripted_account {
         })
     }
 }
+
+#[cfg(test)]
+mod reads_effort_tests {
+    use super::provider_models;
+    use bravebot_aichat::anthropic::AnthropicClient;
+    use bravebot_aichat::protocol::{ChatRequest, Effort, Message};
+    use bravebot_config::Config;
+    use bravebot_core::capability::{Capability, CapabilitySet};
+    use bravebot_core::event::RecordingSink;
+    use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+    use bravebot_net::Egress;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    /// A whole Anthropic Messages reply, in the shape the reference shows one.
+    const MESSAGES_REPLY: &str = r#"{"id":"msg_1","type":"message","role":"assistant",
+        "model":"claude-test-20260101",
+        "content":[{"type":"text","text":"hi"}],
+        "stop_reason":"end_turn","stop_sequence":null,
+        "usage":{"input_tokens":3,"output_tokens":1}}"#;
+
+    /// Answer the first connection with a bare 400, the shape a refusal of the request's contents
+    /// takes, and the second with [`MESSAGES_REPLY`], the way a probe that found the field is read
+    /// the normal reply afterwards.
+    fn refuses_once_then_serves() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+        let endpoint = format!("http://{}", listener.local_addr().expect("an address"));
+        thread::spawn(move || {
+            for first in [true, false] {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                if first {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 400 Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                } else {
+                    let _ = stream.write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{MESSAGES_REPLY}",
+                            MESSAGES_REPLY.len()
+                        )
+                        .as_bytes(),
+                    );
+                }
+                let _ = stream.flush();
+            }
+        });
+        endpoint
+    }
+
+    fn anthropic_at(endpoint: &str) -> bravebot_config::provider::Provider {
+        let text = format!(
+            r#"{{"provider": {{"anthropic": {{"env": ["ANTHROPIC_API_KEY"],
+                "options": {{"baseURL": "{endpoint}/v1"}},
+                "models": {{"claude-test": {{}}}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider")
+    }
+
+    fn config_for(endpoint: &str) -> Config {
+        Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-signing-key".to_string()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-key-id".to_string()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+            _ => None,
+        })
+        .expect("config")
+    }
+
+    fn routing() -> Routing {
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "say hello");
+        routing
+    }
+
+    /// [#3017](https://github.com/brave/bravebot/issues/3017): `provider_models` marks whether a
+    /// model reads an effort level by asking [`bravebot_aichat::reads_effort`] under the same key
+    /// a refusal is remembered under. A model that has already refused the level, the way a real
+    /// session learns of one, through a real refused-then-retried request, has to show as reading
+    /// none the next time the picker lists it, or a change that asked under another key would
+    /// pass every other test here and still mislead every row it drew.
+    #[test]
+    fn a_model_that_refused_a_level_is_listed_as_reading_none() {
+        let endpoint = refuses_once_then_serves();
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("hi")])
+            .with_effort(Some(Effort::Xhigh));
+
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .complete(&mut policy, &request)
+            .expect("the retry without the level answers");
+
+        let rows = provider_models(&provider);
+        let row = rows
+            .iter()
+            .find(|model| model.key == "anthropic/claude-test")
+            .expect("the configured model is listed");
+        assert!(
+            !row.reads_effort,
+            "the picker still showed a level the service had just refused"
+        );
+    }
+}

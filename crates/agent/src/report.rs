@@ -492,10 +492,14 @@ pub struct Written {
     pub numbers: Vec<crate::diff::Numbered>,
 }
 
+/// When a failed request will be sent again, as the driver announces it.
+pub use bravebot_aichat::call::Retry;
+
 /// What the turn is waiting on.
 ///
-/// The driver's own words, chosen from the round number and nothing else. A wait that says what
-/// it is a wait for is the difference between a slow turn and an apparently stuck one.
+/// The driver's own words, chosen from the round number and nothing else, and for a request being
+/// sent again the numbers of its pause. A wait that says what it is a wait for is the difference
+/// between a slow turn and an apparently stuck one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     /// The first call to the model. It has the task and nothing else, so what it is doing is
@@ -511,8 +515,10 @@ pub enum Phase {
     /// The request failed in transit and is being sent again.
     ///
     /// Worth its own word because the pause looks like the others and is not one: nothing is
-    /// being worked out, and what the model had written has been thrown away.
-    Reconnecting,
+    /// being worked out, and what the model had written has been thrown away. Carries the pause
+    /// while it is being waited out, so a screen can say when the next attempt goes, and nothing
+    /// once that attempt is out.
+    Reconnecting(Option<Retry>),
 }
 
 impl Phase {
@@ -531,7 +537,7 @@ impl Phase {
             Self::Planning => "Planning",
             Self::Thinking => "Thinking",
             Self::Compacting => "Compacting",
-            Self::Reconnecting => "Reconnecting",
+            Self::Reconnecting(_) => "Reconnecting",
         }
     }
 }

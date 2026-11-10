@@ -11,6 +11,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -343,7 +345,7 @@ fn a_turn_that_asks_to_fetch(name: &str) -> Asked {
     front.call("trust.reply", json!({"session": session, "trusted": true}));
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "read the docs page"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "read the docs page"})),
     );
 
     let question = front.question_or_the_end();
@@ -595,12 +597,12 @@ fn the_session_view_orders_prompts_approvals_and_labelled_results() {
     front.call("trust.reply", json!({"session": session, "trusted": true}));
     front.call(
         "turn.send",
-        json!({"session": session, "prompt": "read the docs page"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "read the docs page"})),
     );
     let question = front.until(|m| m["event"] == "fetch.request");
     let busy = front.answered(
         "turn.send",
-        json!({"session": session, "prompt": "must not appear"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "must not appear"})),
     );
     assert_eq!(busy["error"]["code"], "turn_in_flight");
     front.call(
@@ -690,7 +692,7 @@ fn session_views_keep_two_sessions_and_terminal_outcomes_separate() {
         front.call("trust.reply", json!({"session": session, "trusted": false}));
         front.call(
             "turn.send",
-            json!({"session": session, "prompt": "read page"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "read page"})),
         );
         sessions.push(session);
     }
@@ -731,7 +733,7 @@ fn session_views_keep_two_sessions_and_terminal_outcomes_separate() {
     // Closing the first view does not remove the second session's stream.
     front.call(
         "turn.send",
-        json!({"session": sessions[1], "prompt": "again"}),
+        message_ids::with_fresh(json!({"session": sessions[1], "prompt": "again"})),
     );
     let next = front.until(|m| m["event"] == "session.view.update" && m["session"] == sessions[1]);
     assert_eq!(next["data"]["status"], "running");
@@ -764,7 +766,9 @@ fn a_later_turn_does_not_reuse_an_earlier_questions_number() {
 
     asked.front.send(
         "turn.send",
-        json!({"session": asked.session, "prompt": "read the docs page again"}),
+        message_ids::with_fresh(
+            json!({"session": asked.session, "prompt": "read the docs page again"}),
+        ),
     );
     let second = asked.front.question_or_the_end();
     assert_eq!(second["event"], "fetch.request", "{second}");

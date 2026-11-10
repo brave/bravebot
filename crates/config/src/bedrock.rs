@@ -185,6 +185,11 @@ pub struct Bedrock {
     /// Nothing stated for an account reached through the tier variables, which have no block to
     /// state it in.
     patience: Patience,
+    /// Whether a `provider` block named this account, as against the tier variables.
+    ///
+    /// The block is where `maxRetries` is stated, so a failure line names that setting only for an
+    /// account that has one ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    named_by_block: bool,
 }
 
 /// The context window a Bedrock model is assumed to have, in prompt tokens.
@@ -310,6 +315,7 @@ impl Bedrock {
             output_budget: None,
             cache_ttl: None,
             patience: Patience::default(),
+            named_by_block: false,
         })
     }
 
@@ -360,7 +366,14 @@ impl Bedrock {
             output_budget: None,
             cache_ttl: None,
             patience: Patience::default(),
+            named_by_block: true,
         })
+    }
+
+    /// Whether a `provider` block named this account rather than the tier variables, which have no
+    /// block to state `maxRetries` in.
+    pub fn named_by_block(&self) -> bool {
+        self.named_by_block
     }
 
     /// The same account with an exported reply ceiling applied to every model it reaches.
@@ -512,6 +525,23 @@ mod tests {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.clone())
         })
+    }
+
+    /// `options.maxRetries` has a place to be stated only where a `provider` block named the
+    /// account. The tier variables have none, so a rate-limited failure to them is not told to raise
+    /// a count it cannot set. The fault this rejects: the flag true for both, or false for both.
+    #[test]
+    fn only_an_account_a_block_named_has_a_place_for_max_retries() {
+        let tiers = configured(&[
+            (env_var::USE_BEDROCK, "1"),
+            (env_var::AWS_REGION, "us-west-2"),
+        ])
+        .expect("configured");
+        assert!(!tiers.named_by_block());
+
+        let block =
+            Bedrock::from_provider("us-west-2".to_string(), None, Vec::new()).expect("a region");
+        assert!(block.named_by_block());
     }
 
     /// The common case: the switch, a region, and the three tiers.

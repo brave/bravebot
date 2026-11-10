@@ -846,6 +846,108 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
     );
 }
 
+/// SANDBOX-18. A directory reopened by a resume is recorded by device and inode as it is
+/// reopened, so a stage that relinks it afterwards is not given a row for where the link leads.
+/// The fault it rejects: a resume that restores the name alone, so the reopened directory has no
+/// record and the run profile resolves its name again on every stage.
+#[cfg(unix)]
+#[test]
+fn a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopened() {
+    let scratch = Scratch::new("added-directories-held");
+    let notes = scratch.project.parent().expect("a root").join("held-notes");
+    let elsewhere = scratch
+        .project
+        .parent()
+        .expect("a root")
+        .join("held-elsewhere");
+    std::fs::create_dir_all(&notes).expect("create the directory to add");
+    std::fs::create_dir_all(&elsewhere).expect("create the directory to link to");
+
+    let mut workspace = Workspace::new(&scratch.project).expect("workspace");
+    let added = workspace
+        .add_directory(notes.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "hold my notes",
+        Standing {
+            history: None,
+            conversation: &a_conversation().snapshot(),
+            turns: 1,
+            tokens: 10,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &TrustStore::new("/work"),
+            programs: &TrustedPrograms::new(),
+            directories: &workspace.added_directories(),
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+
+    let mut resumed = Workspace::new(&scratch.project).expect("workspace");
+    assert!(record.reopen_added_directories(&mut resumed).is_empty());
+    let held = |workspace: &Workspace| {
+        workspace
+            .session_directories()
+            .into_iter()
+            .find(|directory| directory.path() == added)
+            .expect("the reopened directory is a session directory")
+    };
+    assert!(held(&resumed).stands_as_made_at(&added), "as reopened");
+
+    std::fs::rename(&added, notes.with_extension("aside")).expect("move it aside");
+    std::os::unix::fs::symlink(&elsewhere, &added).expect("link the name elsewhere");
+    assert!(
+        !held(&resumed).stands_as_made_at(&added),
+        "a link at the name is the directory that was reopened"
+    );
+
+    // What a stage is given is decided from those records. The link is removed and a directory
+    // made in its place, which is a directory but not the one reopened, and neither it nor where
+    // the link led is a row. The working directory is the control that rows are given at all.
+    std::fs::remove_file(&added).expect("remove the link");
+    std::fs::create_dir(&added).expect("make a directory at the name again");
+    let step = bravebot_core::command::Step {
+        program: "cat".to_string(),
+        resolved: "/bin/cat".into(),
+        started_as: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Vec::new(),
+        expansions: Vec::new(),
+        routes: Vec::new(),
+    };
+    let policy = bravebot_agent::confine::Confinement::here(
+        std::iter::once(resumed.root().to_path_buf())
+            .chain(resumed.added_directories())
+            .collect(),
+        None,
+        None,
+    )
+    .expect("a platform with a base")
+    .with_session_directories(&resumed.session_directories())
+    .policy(&step, resumed.root(), &[]);
+    let led_to = elsewhere.canonicalize().expect("canonical");
+    let writes = |path: &Path| policy.writable.iter().any(|row| row.path == path);
+    assert!(writes(resumed.root()), "no row for the working directory");
+    assert!(!writes(&added), "a row for a directory made again");
+    assert!(!writes(&led_to), "a row for where the link led");
+    assert!(!policy.readable.contains(&added), "a read row for it");
+    assert!(
+        !policy.readable.contains(&led_to),
+        "a read row for the link"
+    );
+}
+
 /// MODE-4, TRUST-6. A record written by a sitting that had bypass on gives back neither the map
 /// nor the directories it opened, and says so on the record; the same save without bypass gives
 /// both back. The fault it rejects: `save` writing the live map and directories as a person's

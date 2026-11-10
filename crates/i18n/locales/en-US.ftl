@@ -829,8 +829,8 @@ sandbox-rule-climbs = it climbs out of the directory it is read from, or holds .
 sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
 sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
 sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
-sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are, except to read ~/.bravebot/sessions
-sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or ~/.bravebot
+sandbox-rule-state-directory = no list adds reach to the state directory, where the gateway keys are (~/.bravebot, or the directory BRAVEBOT_HOME names instead), except to read its sessions directory
+sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or the state directory
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable
@@ -2990,6 +2990,11 @@ indicator-checking = { $lines ->
 # Said while the turn waits for a delegate to finish and has nothing to ask the model until its
 # report arrives. The argument is the delegate's number, such as d1.
 indicator-waiting-on-delegate = Waiting on { $delegate }
+# Said while a request that failed in transit waits to be sent again. The first figure is the time
+# until the next attempt and the second, where the request is retried for a stated length of time,
+# the time until it is given up on. Both are the driver's own counts and timers.
+indicator-reconnecting-in = Reconnecting, next try in { $wait }
+indicator-reconnecting-until = Reconnecting, next try in { $wait }, giving up in { $left }
 # Said while a hook holds the turn open. The moment is the word the hooks file spells it with and
 # the program is the first word of the command the person wrote there: nothing the hook printed.
 indicator-hook = Running hook: { $program } ({ $moment })
@@ -4017,6 +4022,10 @@ failure-with-attempts = { $what }, after { $attempts } attempts
 failure-with-next = { $what }. { $next }
 failure-unauthorized-next = Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint
 failure-premium-key-next = Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout brave` to send requests to the free endpoint instead. `bravebot auth status` shows the key in use
+# Said last after a rate limit. The first is for a request to a provider entry, which can state
+# `maxRetries` in its options, and the second for every backend that has no entry to state it in.
+failure-rate-limited-entry-next = Raise `maxRetries` in the options of this provider entry to wait longer, or set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model
+failure-rate-limited-next = Set `fallbackModel` in ~/.bravebot/settings.json to move the turn to another model, or try again later
 # A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
 # reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
 # refusal that came with one.

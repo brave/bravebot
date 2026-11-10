@@ -268,6 +268,31 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
 /// to run, and `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name the files it is read from.
 pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_"];
 
+/// Prefixes of the dynamic loader's variables, which load a library into a program before it runs:
+/// `DYLD_INSERT_LIBRARIES`, `LD_PRELOAD` and the rest of the `DYLD_` and `LD_` names.
+///
+/// A start that wants every one of them gone passes these to [`withhold_prefixed`]. They are not
+/// in [`CODE_SELECTOR_PREFIXES`], which every checked start applies, because that would remove
+/// `LD_DEBUG` from gcloud and the browser opener, which SANDBOX-30 says keep it.
+pub const LOADER_PREFIXES: &[&str] = &["DYLD_", "LD_"];
+
+/// Take every name in `held` that begins with one of `prefixes` off `command`, whatever it holds.
+///
+/// The names are read as bytes, so a name that is not text but begins with a prefix is removed, and
+/// Windows reads them without regard to case. A caller passes the names this process holds, as
+/// `std::env::vars_os` gives them.
+pub fn withhold_prefixed(
+    command: &mut Command,
+    prefixes: &[&str],
+    held: impl IntoIterator<Item = OsString>,
+) {
+    for name in held {
+        if prefixes.iter().any(|prefix| begins_variable(&name, prefix)) {
+            command.env_remove(name);
+        }
+    }
+}
+
 /// Whether the variables of a started program that make it run code are checked.
 ///
 /// There is no default: a start says which, so a new one cannot leave out the check
@@ -323,14 +348,11 @@ fn withhold_checked(
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) {
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
-    for (name, _) in &held {
-        if CODE_SELECTOR_PREFIXES
-            .iter()
-            .any(|prefix| begins_variable(name, prefix))
-        {
-            command.env_remove(name);
-        }
-    }
+    withhold_prefixed(
+        command,
+        CODE_SELECTOR_PREFIXES,
+        held.iter().map(|(name, _)| name.clone()),
+    );
     let listed: Vec<(&str, Names)> = own.iter().chain(CODE_SELECTORS).copied().collect();
     withhold_code_selectors_with(
         command,
@@ -2587,6 +2609,51 @@ mod tests {
         assert!(removed.contains(&OsString::from("BRAVEBOT_PROBE_SECRET")));
         assert!(removed.contains(&OsString::from("LD_PRELOAD")));
         assert!(!removed.contains(&OsString::from("PYTHONHOME")));
+    }
+
+    /// The regression it rejects: a prefix removal that matches the loader's names as whole
+    /// words, or only the first prefix, or that is a checked start's and so takes `LD_DEBUG` from a
+    /// start that is meant to keep it (SANDBOX-30). A name that is not text but begins with the
+    /// prefix is removed too, and a name that only shares its first letters is kept.
+    #[cfg(unix)]
+    #[test]
+    fn the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start() {
+        use super::{LOADER_PREFIXES, withhold_prefixed};
+        use std::os::unix::ffi::OsStringExt;
+
+        let bytes = OsString::from_vec(b"LD_\xff".to_vec());
+        let held = [
+            OsString::from("DYLD_INSERT_LIBRARIES"),
+            OsString::from("DYLD_PRINT_LIBRARIES"),
+            OsString::from("LD_PRELOAD"),
+            OsString::from("LD_DEBUG"),
+            bytes.clone(),
+            OsString::from("LDAP_URI"),
+            OsString::from("LDFLAGS"),
+            OsString::from("DYLDX"),
+            OsString::from("HOME"),
+        ];
+        let mut command = std::process::Command::new("/usr/bin/env");
+        withhold_prefixed(&mut command, LOADER_PREFIXES, held.clone());
+        let mut removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_os_string())
+            .collect();
+        removed.sort();
+        let mut expected = vec![
+            OsString::from("DYLD_INSERT_LIBRARIES"),
+            OsString::from("DYLD_PRINT_LIBRARIES"),
+            OsString::from("LD_PRELOAD"),
+            OsString::from("LD_DEBUG"),
+            bytes,
+        ];
+        expected.sort();
+
+        assert_eq!(removed, expected);
+        let (session, _safe, planted, _genuine) = planted_and_genuine("t13");
+        assert!(!checked("LD_DEBUG", &planted, &session));
+        assert!(!checked("DYLD_PRINT_LIBRARIES", &planted, &session));
     }
 
     /// A checked start judges a value against the directories recorded with [`keep_out`], which

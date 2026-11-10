@@ -30,7 +30,10 @@ here reads stops nothing, so a skill written for another agent works here, and
 [SKILL-15](#SKILL-15) is the two keys read for how the skill runs, and [SKILL-20](#SKILL-20) is the
 key that keeps a skill from the planner. `argument-hint` is read too: an interface draws it after the
 skill's name to say what the skill takes ([commands.md](commands.md)), and it is never given to the
-planner. A file with no frontmatter is not a skill.
+planner. A file with no frontmatter is not a skill. A directory is a skill only when its own entry is
+spelled exactly `SKILL.md`, on every volume ([INSTR-1](instructions.md#INSTR-1)): on a volume that
+folds case, `skill.md` opens as `SKILL.md`, and a directory holding it is not listed, not loaded and
+not counted in a root nobody vouched for ([SKILL-6](#SKILL-6)).
 
 ```markdown
 ---
@@ -49,6 +52,13 @@ Write the subject in the imperative. Explain why in the body, never what.
 `verified-by: bravebot_agent::skills::an_argument_hint_reaches_the_interface_and_not_the_planner`
 `verified-by: bravebot_agent::skills::the_body_is_everything_after_the_closing_marker`
 `verified-by: bravebot_agent::skills::a_marker_inside_the_body_is_left_alone`
+`verified-by: bravebot_agent::skills::a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_does_not_hold_the_skill_file`
+`verified-by: bravebot_agent::skills::a_listing_without_the_skill_file_does_not_hold_it`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_exactly_holds_the_skill_file_only_when_it_is_a_file`
+`verified-by: bravebot_agent::skills::a_project_directory_holding_skill_md_in_another_case_is_not_offered`
+`verified-by: bravebot_agent::skills::discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelling`
+`verified-by: bravebot_agent::skills::a_home_directory_holding_skill_md_in_another_case_is_not_offered`
 
 <a id="SKILL-2"></a>
 ### SKILL-2: only the name and description reach the planner; the body waits for `load_skill`
@@ -157,6 +167,7 @@ name would be on the user's screen as though the agent had written it.
 `verified-by: bravebot_agent::skills::a_skill_that_was_skipped_is_counted_rather_than_passed_over_in_silence`
 `verified-by: bravebot_agent::skills::an_untrusted_skill_is_not_named_in_what_the_user_is_told`
 `verified-by: bravebot_agent::skills::several_untrusted_skills_are_counted_and_none_of_them_is_named`
+`verified-by: bravebot_agent::skills::an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted`
 
 <a id="SKILL-7"></a>
 ### SKILL-7: withdrawn, the most specific source wins

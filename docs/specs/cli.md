@@ -263,7 +263,9 @@ is named as never transmitted, and a value from a settings file is never printed
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning. Text it names from a settings file, such as a rule, a key
 or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
-because the project and local files belong to whoever made the checkout.
+because the project and local files belong to whoever made the checkout. So are the paths it prints
+for those files, the managed file, the state directory, the key files and the client certificate and
+key, wherever the path came from: the report does not decide by origin which path to draw.
 
 The state directory is reported with the variable that named it. A `BRAVEBOT_HOME` that is set to
 something that is not an absolute path names no directory and is passed over; the report says so, naming
@@ -306,6 +308,8 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
 `verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it`
 `verified-by: bravebot_cli::doctor::a_refused_region_and_its_file_are_reported_with_control_characters_drawn_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_a_checkouts_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_state_directory_and_key_files_the_environment_names_as_pictures`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -1515,7 +1519,7 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it`
 `verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable`
-`verified-by: bravebot_cli::running::auth_status_in_an_unconfigured_build_is_a_configuration_failure`
+`verified-by: bravebot_cli::running::auth_status_where_the_configuration_cannot_be_read_is_a_configuration_failure`
 `verified-by: bravebot_cli::running::auth_status_refuses_what_asks_about_no_sign_in`
 `verified-by: bravebot_cli::running::auth_status_bedrock_asks_the_aws_cli_without_signing_in`
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`

@@ -340,6 +340,8 @@ fn sockets_line(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> Option<
 /// home, sandbox mode and permission mode a turn builds its confinement from. This session is the
 /// lead session, so bypass alone decides whether the confinement is told to. It leaves out the
 /// trust of the directory, which a turn reads when a line runs and [`report`] reads from the map.
+/// It takes no state directory: the answer depends on the mode, the home directory and the
+/// platform, and the state directory only decides which paths a row leaves out.
 pub fn programs_write_unasked(
     mode: bravebot_sandbox::SandboxMode,
     permission: bravebot_agent::PermissionMode,
@@ -2482,6 +2484,7 @@ mod tests {
                     .map(String::from)
                     .to_vec(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             writes: Vec::new(),

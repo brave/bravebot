@@ -11,7 +11,7 @@
 //! an effect nobody could be asked about is refused rather than applied unseen.
 
 use crate::exit::{Ending, fail};
-use crate::progress::printable;
+use crate::progress::{printable, printable_path};
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
@@ -173,32 +173,16 @@ fn add<R: BufRead, W: Write>(
     managed: &Managed,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
-    // Before the alias as well as among the flags after it, since Claude Code's own examples put
-    // its options first.
     let mut scope = None;
-    let mut start = 0;
-    while matches!(rest.get(start).map(String::as_str), Some("-s" | "--scope")) {
-        take_scope(rest.get(start + 1), &mut scope)?;
-        start += 2;
-    }
-    let Some((alias, flags)) = rest[start..].split_first() else {
-        return Err((Ending::Argument, t!(mcp_needs_an_alias, command = "add")));
-    };
-    // Refused as Claude Code refuses it, and without repeating the word, which may hold a value.
-    if alias.starts_with("-e") || alias.starts_with("--env") {
-        return Err(argument(t!(mcp_env_after_the_alias)));
-    }
-    if !mcp::is_alias(alias) {
-        let said = match may_be_a_value(alias) {
-            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64),
-            false => t!(mcp_not_an_alias, alias = shown(alias)),
-        };
-        return Err((Ending::Argument, said));
-    }
+    let (start, alias, flags) = alias_and_flags(rest, &mut scope)?;
     let not_added = |found: Problem| {
         (
             Ending::Argument,
-            t!(mcp_not_added, alias = alias, problem = problem(&found)),
+            t!(
+                mcp_not_added,
+                alias = shown(alias),
+                problem = problem(&found)
+            ),
         )
     };
     let declaration = declared(flags, start + 1, &mut scope).map_err(|refusal| match refusal {
@@ -234,8 +218,8 @@ fn add<R: BufRead, W: Write>(
         person,
         t!(
             mcp_declared,
-            alias = alias,
-            path = path.display().to_string()
+            alias = shown(alias),
+            path = printable_path(&path)
         ),
     );
 
@@ -262,7 +246,11 @@ fn add<R: BufRead, W: Write>(
             let command = enable_command(alias, scope);
             say(
                 person,
-                t!(mcp_declared_not_enabled, alias = alias, command = command),
+                t!(
+                    mcp_declared_not_enabled,
+                    alias = shown(alias),
+                    command = command
+                ),
             );
             return Ok(());
         }
@@ -270,7 +258,7 @@ fn add<R: BufRead, W: Write>(
             let command = enable_command(alias, scope);
             say(
                 person,
-                t!(mcp_nobody_asked, alias = alias, command = command),
+                t!(mcp_nobody_asked, alias = shown(alias), command = command),
             );
             return Ok(());
         }
@@ -278,6 +266,37 @@ fn add<R: BufRead, W: Write>(
     enabled(&settings, directory, alias, requested, "add", person)?;
     kept_from_starting(managed, alias, &declaration, person);
     Ok(())
+}
+
+/// The words `add` takes before its flags: the `-s` options that precede the alias, which are read
+/// into `scope`, then the alias, checked as a name, and the flags after it. Also how many words
+/// precede the alias, so a stray word is named by its place in what was typed.
+fn alias_and_flags<'a>(
+    rest: &'a [String],
+    scope: &mut Option<Scope>,
+) -> Result<(usize, &'a String, &'a [String]), Stopped> {
+    // Before the alias as well as among the flags after it, since Claude Code's own examples put
+    // its options first.
+    let mut start = 0;
+    while matches!(rest.get(start).map(String::as_str), Some("-s" | "--scope")) {
+        take_scope(rest.get(start + 1), scope)?;
+        start += 2;
+    }
+    let Some((alias, flags)) = rest[start..].split_first() else {
+        return Err((Ending::Argument, t!(mcp_needs_an_alias, command = "add")));
+    };
+    // Refused as Claude Code refuses it, and without repeating the word, which may hold a value.
+    if alias.starts_with("-e") || alias.starts_with("--env") {
+        return Err(argument(t!(mcp_env_after_the_alias)));
+    }
+    if !mcp::is_alias(alias) {
+        let said = match may_be_a_value(alias) {
+            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64),
+            false => t!(mcp_not_an_alias, alias = shown(alias)),
+        };
+        return Err((Ending::Argument, said));
+    }
+    Ok((start, alias, flags))
 }
 
 /// `declaration` with the image it runs in pinned to the digest its registry gives it now, where it
@@ -311,7 +330,9 @@ fn pinning<R, W: Write>(
         Err(bravebot_agent::images::Unpinned::Refused(status)) => {
             return Err(refused(t!(mcp_image_refused, status = status).to_string()));
         }
-        Err(bravebot_agent::images::Unpinned::Unreachable(reason)) => return Err(refused(reason)),
+        Err(bravebot_agent::images::Unpinned::Unreachable(reason)) => {
+            return Err(refused(printable(&reason)));
+        }
     };
     say(person, t!(mcp_image_pinned, image = &pinned));
     declaration
@@ -804,7 +825,12 @@ fn may_be_a_value(word: &str) -> bool {
 }
 
 fn checkout(cwd: Cwd<'_>) -> Result<&Path, Stopped> {
-    cwd.map_err(|error| (Ending::Failed, t!(mcp_no_current_directory, error = error)))
+    cwd.map_err(|error| {
+        (
+            Ending::Failed,
+            t!(mcp_no_current_directory, error = printable(error)),
+        )
+    })
 }
 
 /// The directory `--dir` named, as the absolute path of the place it is.
@@ -846,7 +872,7 @@ fn get<R: BufRead, W: Write>(
     let digest = declaration.digest();
     say(
         person,
-        t!(mcp_list_declared_in, path = path.display().to_string()),
+        t!(mcp_list_declared_in, path = printable_path(&path)),
     );
     for line in drawn(alias, &declaration, &digest.to_string()) {
         say(person, line);
@@ -856,7 +882,10 @@ fn get<R: BufRead, W: Write>(
         true => say(person, format!("{indent}{}", t!(mcp_approved))),
         false => say(
             person,
-            format!("{indent}{}", t!(mcp_unapproved_run_approve, alias = alias)),
+            format!(
+                "{indent}{}",
+                t!(mcp_unapproved_run_approve, alias = shown(alias))
+            ),
         ),
     }
     if let Some(refused) = refused(managed, &declaration) {
@@ -931,7 +960,7 @@ fn list<R: BufRead, W: Write>(
         return Ok(());
     };
     let here = here()?;
-    let path = mcp::declarations_file(directory).display().to_string();
+    let path = printable_path(&mcp::declarations_file(directory));
     let (rows, unusable) = report(directory, &declarations, managed, &here);
     match declarations.entries().is_empty() {
         true => say(person, t!(mcp_none_declared, path = &path)),
@@ -980,7 +1009,7 @@ pub(crate) fn examined(
         Ok(declarations) => declarations,
         Err((_, why)) => return (vec![why], true),
     };
-    let path = mcp::declarations_file(directory).display().to_string();
+    let path = printable_path(&mcp::declarations_file(directory));
     let project = printable(&here.project.display().to_string());
     let (rows, unusable) = report(directory, &declarations, managed, &here);
     let heading = match declarations.entries().is_empty() {
@@ -1176,10 +1205,13 @@ fn approve<R: BufRead, W: Write>(
             say(person, recorded(alias, &declaration));
         }
         Asked::No => {
-            return Err((Ending::Refused, t!(mcp_left_unapproved, alias = alias)));
+            return Err((
+                Ending::Refused,
+                t!(mcp_left_unapproved, alias = shown(alias)),
+            ));
         }
         Asked::Nobody => {
-            return Err((Ending::Refused, t!(mcp_nobody_to_ask, alias = alias)));
+            return Err((Ending::Refused, t!(mcp_nobody_to_ask, alias = shown(alias))));
         }
     }
     Ok(())
@@ -1222,13 +1254,17 @@ fn enable<R: BufRead, W: Write>(
             return Err((Ending::Refused, still_requested(&settings, alias)));
         }
         Asked::No => {
-            return Err((Ending::Refused, t!(mcp_not_enabled, alias = alias)));
+            return Err((Ending::Refused, t!(mcp_not_enabled, alias = shown(alias))));
         }
         Asked::Nobody => {
             let command = enable_command(alias, scope);
             return Err((
                 Ending::Refused,
-                t!(mcp_nobody_to_enable, alias = alias, command = command),
+                t!(
+                    mcp_nobody_to_enable,
+                    alias = shown(alias),
+                    command = command
+                ),
             ));
         }
     }
@@ -1394,11 +1430,14 @@ fn enabled<R, W: Write>(
 ) -> Result<(), Stopped> {
     let path = file_named(settings.path());
     if already {
-        say(person, t!(mcp_already_enabled, alias = alias, path = path));
+        say(
+            person,
+            t!(mcp_already_enabled, alias = shown(alias), path = path),
+        );
         return Ok(());
     }
     write_settings(settings, directory, command)?;
-    say(person, t!(mcp_enabled, alias = alias, path = path));
+    say(person, t!(mcp_enabled, alias = shown(alias), path = path));
     Ok(())
 }
 
@@ -1407,7 +1446,7 @@ fn enabled<R, W: Write>(
 fn still_requested(settings: &Destination, alias: &str) -> String {
     t!(
         mcp_requested_not_approved,
-        alias = alias,
+        alias = shown(alias),
         path = file_named(settings.path())
     )
 }
@@ -1426,7 +1465,11 @@ fn kept_from_starting<R, W: Write>(
     {
         say(
             person,
-            t!(mcp_enabled_not_started, alias = alias, reason = reason),
+            t!(
+                mcp_enabled_not_started,
+                alias = shown(alias),
+                reason = reason
+            ),
         );
     }
 }
@@ -1454,7 +1497,7 @@ fn write_settings(settings: &Destination, directory: &Path, command: &str) -> Re
                 Ending::Failed,
                 t!(
                     mcp_not_written,
-                    path = parent.display().to_string(),
+                    path = printable_path(parent),
                     error = error.to_string()
                 ),
             )
@@ -1558,7 +1601,10 @@ fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
     let here = std::env::current_dir().map_err(|error| {
         (
             Ending::Failed,
-            t!(mcp_no_current_directory, error = error.to_string()),
+            t!(
+                mcp_no_current_directory,
+                error = printable(&error.to_string())
+            ),
         )
     })?;
     let typed = match path {
@@ -1660,7 +1706,7 @@ fn pad(text: &str, width: usize) -> String {
 fn already(alias: &str, declaration: &Declaration) -> String {
     t!(
         mcp_already_approved,
-        alias = alias,
+        alias = shown(alias),
         digest = declaration.digest().short()
     )
 }
@@ -1668,7 +1714,7 @@ fn already(alias: &str, declaration: &Declaration) -> String {
 fn recorded(alias: &str, declaration: &Declaration) -> String {
     t!(
         mcp_recorded,
-        alias = alias,
+        alias = shown(alias),
         digest = declaration.digest().short()
     )
 }
@@ -1725,7 +1771,7 @@ fn readable(home: &Home) -> Result<(Option<&Path>, Declarations), Stopped> {
 
 fn read(directory: &Path) -> Result<Declarations, Stopped> {
     Declarations::read(directory).map_err(|why| {
-        let path = mcp::declarations_file(directory).display().to_string();
+        let path = printable_path(&mcp::declarations_file(directory));
         (
             Ending::Configuration,
             t!(mcp_unreadable, path = path, reason = unreadable(&why)),
@@ -1745,7 +1791,7 @@ fn save(
             Ending::Failed,
             t!(
                 mcp_not_written,
-                path = directory.display().to_string(),
+                path = printable_path(directory),
                 error = error.to_string()
             ),
         )
@@ -1763,7 +1809,7 @@ pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
             Ending::Failed,
             t!(
                 mcp_not_written,
-                path = path.display().to_string(),
+                path = printable_path(path),
                 error = error.to_string()
             ),
         )
@@ -2324,6 +2370,134 @@ mod tests {
         };
         let (lines, _) = examined(&home, &Managed::default(), Ok(here));
         assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
+    }
+
+    /// LAYER-3: the state directory, the file a write could not replace and the error for a working
+    /// directory that cannot be read are text the environment or a checkout chose, and reach the
+    /// screen and a refusal as pictures. A path printed as it stands lets a name recolour the
+    /// terminal or start a line of its own.
+    #[cfg(unix)]
+    #[test]
+    fn a_control_character_in_a_name_an_mcp_command_prints_is_drawn_as_its_picture() {
+        let name = "state\u{1b}[31m\u{7}";
+        let pictured = "state\u{241b}[31m\u{2407}";
+        let clean = |text: &str| text.chars().all(|c| !c.is_control() || c == '\n');
+
+        let directory = scratch(&format!("cli-mcp-drawn-{name}"));
+        let (outcome, screen) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(clean(&screen) && screen.contains(pictured), "{screen:?}");
+        for args in [&["get", "weather"][..], &["list"]] {
+            let (outcome, screen) = typing(&directory, args, "");
+            assert!(outcome.is_ok(), "{args:?}: {outcome:?}");
+            assert!(clean(&screen), "{args:?}: {screen:?}");
+            assert!(screen.contains(pictured), "{args:?}: {screen:?}");
+        }
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let here = Here {
+            project: checkout(&directory),
+            requested: Vec::new(),
+        };
+        let (lines, _) = examined(&home, &Managed::default(), Ok(here));
+        assert!(lines.iter().all(|line| clean(line)), "{lines:?}");
+        assert!(lines[0].contains(pictured), "{lines:?}");
+
+        // The declarations cannot be read: the refusal names the file.
+        let unreadable = scratch(&format!("cli-mcp-drawn-unreadable-{name}"));
+        std::fs::create_dir(mcp::declarations_file(&unreadable)).expect("a directory for a file");
+        let (outcome, _) = typing(&unreadable, &["list"], "");
+        let (_, said) = outcome.expect_err("a directory was read as the declarations");
+        assert!(clean(&said) && said.contains(pictured), "{said:?}");
+
+        // A write that cannot replace the approvals file: the refusal names it.
+        let unwritable = scratch(&format!("cli-mcp-drawn-unwritable-{name}"));
+        std::fs::create_dir(mcp::approvals_file(&unwritable)).expect("a directory for a file");
+        let (outcome, _) = typing(&unwritable, ADD, "n\n");
+        let (_, said) = outcome.expect_err("a directory was replaced by a file");
+        assert!(clean(&said) && said.contains(pictured), "{said:?}");
+
+        // A working directory that cannot be read: the error is the environment's own text.
+        let mut person = Person {
+            answers: "".as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let outcome = run(
+            &words(&["enable", "weather", "-s", "project"]),
+            Err("gone\u{1b}[31m"),
+            &Home {
+                directory: Some(directory.clone()),
+                writable: true,
+            },
+            &Managed::default(),
+            &|| unreachable!("enable reports on no session"),
+            &mut person,
+        );
+        let (_, said) = outcome.expect_err("there was no working directory");
+        assert!(
+            clean(&said) && said.contains("gone\u{241b}[31m"),
+            "{said:?}"
+        );
+    }
+
+    /// LAYER-3: `approve` and `enable` take an alias without checking it against `is_alias`, and the
+    /// refusal that repeats it writes it quoted and escaped, so an escape pasted into the alias
+    /// reaches the terminal as text. Rejects: `not_declared` interpolating the alias as it stands.
+    /// The sites that name a declared alias (`mcp_enabled`, `mcp_recorded`, `mcp_left_unapproved`)
+    /// go through the same `shown` and are reasoned only: `add` refuses an alias that fails
+    /// `is_alias`, so no test here can declare one that carries an escape.
+    #[test]
+    fn an_alias_pasted_into_approve_or_enable_is_not_printed_with_its_control_characters() {
+        let directory = scratch("cli-mcp-alias-approve-enable");
+        let (outcome, _) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        for args in [
+            &["approve", "wea\u{1b}[31mther"][..],
+            &["enable", "wea\u{1b}[31mther", "-s", "local"],
+            &["enable", "wea\u{7}ther"],
+        ] {
+            let (outcome, screen) = typing(&directory, args, "y\n");
+            let (ending, said) = outcome.expect_err("an alias nobody declared was accepted");
+            assert_eq!(ending, Ending::Argument, "{args:?}");
+            for text in [&said, &screen] {
+                assert!(
+                    text.chars().all(|c| !c.is_control() || c == '\n'),
+                    "{args:?}: {text:?}"
+                );
+            }
+            assert!(said.contains("wea"), "{args:?}: {said:?}");
+        }
+    }
+
+    /// LAYER-3: a name typed after `--bearer-env`, `--header-env` or `--tools` can be pasted with an
+    /// escape in it, and the refusal that repeats it escapes it rather than printing it.
+    /// Rejects: `problem` interpolating the name as it stands, which lets the name recolour the
+    /// terminal or start a line of its own.
+    #[test]
+    fn a_name_typed_into_a_refused_declaration_is_not_printed_with_its_control_characters() {
+        let directory = scratch("cli-mcp-problem-names");
+        let name = "A\u{1b}[31m";
+        for flags in [
+            &["--bearer-env", name, "--bearer-env", name][..],
+            &[
+                "--header-env",
+                &format!("{name}=V"),
+                "--header-env",
+                &format!("{name}=W"),
+            ],
+            &["--tools", &format!("{name},get")],
+        ] {
+            let mut args = vec!["add", "weather", "--http", "https://weather.example/mcp"];
+            args.extend_from_slice(flags);
+            let (outcome, screen) = typing(&directory, &args, "n\n");
+            let (_, said) = outcome.expect_err("a name with an escape in it was accepted");
+            assert!(screen.is_empty(), "{screen:?}");
+            assert!(said.chars().all(|c| !c.is_control()), "{flags:?}: {said:?}");
+            assert!(said.contains("\\u{1b}[31m"), "{flags:?}: {said:?}");
+        }
     }
 
     /// `doctor` reports the rows `list` does, under one heading naming the file and the directory,
