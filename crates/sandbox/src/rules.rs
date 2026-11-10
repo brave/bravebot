@@ -691,6 +691,22 @@ pub fn outside_every_credential_location(rows: Vec<PathBuf>, home: &Path) -> Vec
         .collect()
 }
 
+/// Whether the place `path` leads to is clear of every credential location and every persistence
+/// location: it is not one, does not lie inside one, and is not a directory that holds one
+/// (SANDBOX-15, SANDBOX-18).
+///
+/// `path` is resolved through its links, so a name that has become a link to `~/.ssh`, to a shell
+/// startup file or to the home directory is not clear. Each location is compared in the spelling
+/// it has under `home` and where its links lead. This asks the file system for every location, so
+/// a caller asks it of a name that has a link in it and not of every row of a fixed table.
+pub fn clear_of_every_refused_location(path: &Path, home: &Path) -> bool {
+    let at = resolved(path);
+    !credential_spellings(home)
+        .into_iter()
+        .chain(persistence_spellings(home))
+        .any(|location| under(&at, &location) || under(&location, &at))
+}
+
 /// The entries another entry decides: an allow at a path a refusal names, and an allow at or
 /// beneath a refusal the managed layer wrote.
 fn overridden(rules: &Rules) -> Vec<usize> {

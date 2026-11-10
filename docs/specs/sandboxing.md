@@ -890,6 +890,10 @@ through the directory holding it, so no list reaches the file a tool keeps its t
 directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. Each write row says what it
 names, so a backend that cannot name an absent path has the cache created as the directory or file
 the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
+A cache row is judged again where its name leads each time a stage starts: a name with a link
+below the home directory is given at the place it leads to, and is given no row, with the stage
+still started, where that place is, holds or lies inside a credential or persistence location, or
+where it is a file for a directory row or a directory for a file row ([SANDBOX-18](#SANDBOX-18)).
 What decides a row is the table and the platform: nothing on the machine is read, so `CARGO_HOME`,
 `GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
@@ -924,6 +928,12 @@ file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise mee
 `verified-by: bravebot_sandbox::toolchain::no_list_names_a_directory_that_holds_other_programs_files`
 `verified-by: bravebot_sandbox::toolchain::a_missing_cache_is_created_as_what_the_toolchain_expects_there`
 `verified-by: bravebot_sandbox::toolchain::a_list_leaves_the_policy_it_is_added_to_as_it_was`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_has_become_a_link_to_somewhere_refused_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_linked_to_somewhere_ordinary_is_granted_there_and_held_to_that_name`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_nowhere_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::an_install_or_configuration_that_has_become_a_link_to_a_refused_place_is_given_no_row`
 `verified-by: bravebot_sandbox::macos::a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install`
 
 <a id="SANDBOX-16"></a>
@@ -1452,7 +1462,9 @@ stage the reach Linux gives every stage.
 On Linux and macOS a stage of a session that names a home directory has as its policy the run base
 ([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed where the stage's program is git (below),
 plus: the cache rows of every toolchain, written, since the machine is already read and a
-cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential scope its argv names
+cache is where any build may write ([SANDBOX-15](#SANDBOX-15)), each judged where its name leads
+as each stage starts and opened on Linux without following a link in its last component, so a
+cache relinked to `~/.ssh` or a startup file gets no row; the credential scope its argv names
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
 No row names the directories its program is read from or the two files the step names, since the
@@ -1613,6 +1625,10 @@ stay out of the write rows, so the reach is to caches only. A person who wants e
 to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)). Under `read-only` no cache is
 written.
 
+A cache row is judged where its name leads, so a person who moved `~/.cargo/registry` aside and linked
+it to a directory inside a credential location, or to a file, gets no write row for it: the stage
+starts and a build that writes that cache fails at the write.
+
 **What the scratch directory check costs.** The check and the start of a stage are two steps. A
 program that is already running when another stage starts, such as an earlier stage of a pipeline or
 one left running, can change the name between them, and on Linux the row is then opened by the name
@@ -1708,6 +1724,17 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`
 `verified-by: bravebot_sandbox::rules::a_credential_location_is_compared_where_it_and_the_home_lead`
 `verified-by: bravebot_sandbox::rules::a_credential_location_under_a_home_that_is_not_text_is_not_matched_by_its_lookalike`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_has_become_a_link_to_somewhere_refused_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_nowhere_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_that_is_a_link_to_the_other_kind_of_thing_is_given_no_row`
+`verified-by: bravebot_sandbox::toolchain::a_cache_linked_to_somewhere_ordinary_is_granted_there_and_held_to_that_name`
+`verified-by: bravebot_agent::confine::a_cache_relinked_to_a_credential_or_a_startup_file_is_given_no_row`
+`verified-by: bravebot_agent::confine::a_cache_relinked_between_two_stages_is_judged_again_on_every_route_to_its_row`
+`verified-by: bravebot_sandbox::policy::a_row_marked_as_judged_stays_marked_through_the_resolution`
+`verified-by: bravebot_sandbox::policy::a_judged_row_above_a_refusal_that_became_a_link_is_an_error_and_one_not_judged_is_listed`
+`verified-by: bravebot_sandbox::linux::a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed`
+`verified-by: bravebot_sandbox::linux::a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -3234,9 +3261,15 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   until the person asks again. The check is made when the policy is built, so a name changed after
   that and before the program opens it is not caught by this clause; the backend opens a row by the
   path it was given. On Linux that is a handle that follows links, so a row opened after its name
-  became a link is attached to the link's target. On macOS the profile matches the path a process
+  became a link is attached to the link's target, except a toolchain row (a cache, an install or a configuration file), which the policy
+  marks as judged and the backend opens without following a link in its last component
+  ([SANDBOX-15](#SANDBOX-15)); a link above the last component is still followed. On macOS the profile matches the path a process
   ends up opening, so a row whose name became a link gives the target nothing. Both are recorded
-  by tests in `crates/sandbox`, the Linux one built and run only on Linux. This is the same judgement a directory given by
+  by tests in `crates/sandbox`, the Linux one built and run only on Linux. The Windows backend
+  does not refuse a link at a judged row. It writes its entry through the name, which the platform
+  follows, so a name that became a link after the policy was built and before the entry is written
+  is given the entry at its new target. The judgement made as each stage's policy is built is the
+  only check there, and a test of this on Windows does not exist. This is the same judgement a directory given by
   `/reach` receives ([SANDBOX-23](#SANDBOX-23)). The session holds the grant only, so a `git
   switch` that changes what is at the path leaves the grant in place and the row follows the
   directory approved.
@@ -3249,6 +3282,11 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   `verified-by: bravebot_agent::confine::a_path_let_reach_made_before_it_existed_is_judged_when_a_stage_starts`
   `verified-by: bravebot_sandbox::macos::a_granted_row_replaced_by_a_link_gives_its_target_nothing`
   `verified-by: bravebot_sandbox::linux::a_granted_row_replaced_by_a_link_is_attached_to_what_the_name_leads_to_when_opened`
+  `verified-by: bravebot_sandbox::linux::a_judged_row_that_became_a_link_is_refused_and_one_not_judged_is_followed`
+  `verified-by: bravebot_sandbox::policy::a_row_marked_as_judged_stays_marked_through_the_resolution`
+  `verified-by: bravebot_agent::confine::a_cache_relinked_to_a_credential_or_a_startup_file_is_given_no_row`
+  `verified-by: bravebot_agent::confine::a_cache_relinked_between_two_stages_is_judged_again_on_every_route_to_its_row`
+  `verified-by: bravebot_sandbox::linux::a_cache_moved_aside_and_linked_to_the_keys_by_one_stage_reaches_nothing_in_the_next`
 - **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
   as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
   a sub-task is reach the person never set up.

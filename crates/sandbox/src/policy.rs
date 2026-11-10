@@ -71,6 +71,21 @@ pub struct SandboxPolicy {
     /// there. Linux and Windows hold loopback by other rules and this field changes nothing for
     /// them. No address other than this machine's own is reached.
     pub allow_loopback: bool,
+    /// Rows, read or write, that the caller judged where they lead and that a backend which opens
+    /// a row by name must open without following a link in the last component of the name.
+    ///
+    /// A row opened by name attaches to wherever the name leads at that moment, so a row judged
+    /// and then relinked would be granted at the target. A backend that can open a name as the
+    /// thing it is, and not as what it leads to, refuses the policy where the name is now a link
+    /// (SANDBOX-28). A row is on this list only because the caller judged it; a row the caller did
+    /// not list is opened as it always was, since a base row such as `/bin` is a link on purpose.
+    /// The Linux backend acts on the list. The macOS backend ignores it: its profile matches the
+    /// path a process ends up opening, so a row whose name became a link gives the target nothing.
+    /// The Windows backend ignores it too, and nothing there takes its place: it writes its entry
+    /// through the name, which the platform follows, so a name that became a link after the caller
+    /// judged it and before the entry is written is given the entry at its new target. The
+    /// caller's judgement when it builds the policy is the only check on Windows.
+    pub not_through_a_link: Vec<PathBuf>,
 }
 
 impl SandboxPolicy {
@@ -88,7 +103,18 @@ impl SandboxPolicy {
             starting_in: None,
             git_directories_writable: false,
             allow_loopback: false,
+            not_through_a_link: Vec::new(),
         }
+    }
+
+    /// Have a backend that opens rows by name open the row at `path` without following a link in
+    /// its last component. See [`SandboxPolicy::not_through_a_link`].
+    pub fn not_through_a_link(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        if !self.not_through_a_link.contains(&path) {
+            self.not_through_a_link.push(path);
+        }
+        self
     }
 
     pub fn allow_read(mut self, path: impl Into<PathBuf>) -> Self {
@@ -277,6 +303,7 @@ impl SandboxPolicy {
                 starting_in: self.starting_in.clone(),
                 git_directories_writable: self.git_directories_writable,
                 allow_loopback: self.allow_loopback,
+                not_through_a_link: self.not_through_a_link.clone(),
             },
             omitted,
         }
@@ -382,7 +409,11 @@ impl SandboxPolicy {
     /// path the caller named (SANDBOX-6).
     pub fn readable_by_enumeration(&self) -> std::io::Result<Enumeration> {
         let refused = with_their_resolved_spelling(&self.unreadable);
-        enumerate(self.readable.iter().map(|row| (row, false)), &refused)
+        enumerate(
+            self.readable.iter().map(|row| (row, false)),
+            &refused,
+            &self.not_through_a_link,
+        )
     }
 
     /// The write rows a backend that cannot hold back a subdirectory grants instead of
@@ -407,7 +438,7 @@ impl SandboxPolicy {
             .iter()
             .filter(|row| !withdrawn.contains(&row.path))
             .map(|row| (&row.path, row.listed));
-        enumerate(rows, &refused)
+        enumerate(rows, &refused, &self.not_through_a_link)
     }
 
     /// Whether this policy would confine anything at all.
@@ -443,9 +474,15 @@ pub struct Enumeration {
 }
 
 /// `rows`, each marked with whether the caller passed it as listed, spread around `refused`.
+///
+/// A row in `judged` ([`SandboxPolicy::not_through_a_link`]) that has a refusal beneath it is
+/// listed, and a listing follows a link at the row, so the entries of wherever a relinked name now
+/// leads would be granted. Such a row whose name is a link is the error, naming it (SANDBOX-28), or
+/// adds nothing where the caller passed it as listed.
 fn enumerate<'a>(
     rows: impl Iterator<Item = (&'a PathBuf, bool)>,
     refused: &[PathBuf],
+    judged: &[PathBuf],
 ) -> std::io::Result<Enumeration> {
     let mut enumeration = Enumeration::default();
     for (row, listed) in rows {
@@ -456,6 +493,17 @@ fn enumerate<'a>(
                 enumeration.named.push(row.clone());
             }
             continue;
+        }
+        if judged.contains(row)
+            && fs::symlink_metadata(row).is_ok_and(|found| found.file_type().is_symlink())
+        {
+            if listed {
+                continue;
+            }
+            return Err(std::io::Error::other(format!(
+                "{} is a link now, and the row was judged for where its name led",
+                row.display()
+            )));
         }
         let spread = list_around(row, refused, &mut enumeration.listed);
         if !listed {
@@ -881,6 +929,29 @@ mod tests {
     /// than about what each one says is there.
     fn written_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
         policy.writable.iter().map(|row| row.path.clone()).collect()
+    }
+
+    /// SANDBOX-18: the rows a caller judged where they lead stay marked through the resolution
+    /// a backend that cannot name an absent path applies, and marking one twice is one mark. The
+    /// regression it rejects is a resolution that rebuilds the policy without the list, which
+    /// leaves the Linux backend following a link in a row that was judged, and a builder that
+    /// appends a mark each time it is called.
+    #[test]
+    fn a_row_marked_as_judged_stays_marked_through_the_resolution() {
+        let policy = SandboxPolicy::strict()
+            .allow_write_directory("/a")
+            .not_through_a_link("/a")
+            .not_through_a_link("/a");
+        assert_eq!(policy.not_through_a_link, vec![PathBuf::from("/a")]);
+        assert!(SandboxPolicy::strict().not_through_a_link.is_empty());
+        for grants_absent in [true, false] {
+            let kept = policy.nameable_under(&capabilities(grants_absent)).policy;
+            assert_eq!(
+                kept.not_through_a_link,
+                vec![PathBuf::from("/a")],
+                "grants_absent={grants_absent}"
+            );
+        }
     }
 
     fn capabilities(grants_paths_that_do_not_exist: bool) -> Capabilities {
@@ -1654,6 +1725,66 @@ mod tests {
             .allow_write_listed(&named)
             .deny_write(named.join("inside"));
         assert!(listed.writable_by_enumeration().is_ok());
+    }
+
+    /// A judged row with a refusal beneath it is granted as its entries, and a listing follows a
+    /// link at the row. A name relinked after the judgement is the error, naming the row, where the
+    /// same row not judged is listed as it always was and a judged row that is a listed entry adds
+    /// nothing. The rejected implementation lists every row it is given, which grants the entries
+    /// of wherever the link leads.
+    #[test]
+    #[cfg(unix)]
+    fn a_judged_row_above_a_refusal_that_became_a_link_is_an_error_and_one_not_judged_is_listed() {
+        let top = a_directory_of_this_tests_own("sandbox-policy-judged-above-a-refusal");
+        fs::create_dir_all(top.join("target/entry")).expect("the target is creatable");
+        fs::create_dir_all(top.join("kept/entry")).expect("the control is creatable");
+        std::os::unix::fs::symlink(top.join("target"), top.join("judged"))
+            .expect("the row is relinkable");
+        let below = |row: &str| top.join(row).join("refused");
+
+        let judged = SandboxPolicy::strict()
+            .allow_read(top.join("judged"))
+            .deny_read(below("judged"))
+            .not_through_a_link(top.join("judged"));
+        let error = judged
+            .readable_by_enumeration()
+            .expect_err("a judged row that is a link must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains(&top.join("judged").display().to_string()),
+            "the error has to name the row: {error}"
+        );
+        let judged_write = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(top.join("judged"))
+            .deny_write(below("judged"))
+            .not_through_a_link(top.join("judged"));
+        assert!(judged_write.writable_by_enumeration().is_err());
+
+        let listed = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write_listed(top.join("judged"))
+            .deny_write(below("judged"))
+            .not_through_a_link(top.join("judged"));
+        let rows = granted(listed.writable_by_enumeration());
+        assert!(!rows.contains(&top.join("judged")), "{rows:?}");
+        assert!(!rows.contains(&top.join("judged/entry")), "{rows:?}");
+
+        let not_judged = SandboxPolicy::strict()
+            .allow_read(top.join("judged"))
+            .deny_read(below("judged"));
+        let rows = granted(not_judged.readable_by_enumeration());
+        assert!(rows.contains(&top.join("judged/entry")), "{rows:?}");
+
+        let control = SandboxPolicy::strict()
+            .allow_read(top.join("kept"))
+            .deny_read(below("kept"))
+            .not_through_a_link(top.join("kept"));
+        let rows = granted(control.readable_by_enumeration());
+        assert!(rows.contains(&top.join("kept/entry")), "{rows:?}");
+
+        let _ = fs::remove_dir_all(&top);
     }
 
     #[test]

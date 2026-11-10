@@ -13,7 +13,8 @@
 use crate::base::{Prelude, under};
 use crate::policy::SandboxPolicy;
 use crate::programs::program_name;
-use std::path::Path;
+use crate::rules::{clear_of_every_refused_location, resolved};
+use std::path::{Path, PathBuf};
 
 /// A toolchain that brings a list of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,10 +109,28 @@ impl Toolchain {
 
     /// `policy` with this toolchain's installs and configuration readable and nothing written, for
     /// a stage that may not write (the mode `read-only`).
+    ///
+    /// Each row is judged where its name leads and opened without following a link, as a cache row
+    /// is ([`Toolchain::grant`]): an install or a configuration file is a name under the home
+    /// directory too, and a stage able to write the directory above it could link it to `~/.ssh`,
+    /// which a read row opened by name would then grant. An install is a directory and a
+    /// configuration file is a file.
     pub fn grant_reads(self, policy: SandboxPolicy, home: &Path) -> SandboxPolicy {
         let mut policy = policy;
-        for row in self.installs().iter().chain(self.configurations()) {
-            policy = policy.allow_read(under(home, row));
+        let rows = self
+            .installs()
+            .iter()
+            .map(|row| (under(home, row), true))
+            .chain(
+                self.configurations()
+                    .iter()
+                    .map(|row| (under(home, row), false)),
+            );
+        for (name, directory) in rows {
+            let Some(path) = led_to(&name, home, directory) else {
+                continue;
+            };
+            policy = policy.allow_read(&path).not_through_a_link(path);
         }
         policy
     }
@@ -135,23 +154,44 @@ impl Toolchain {
             })
     }
 
+    /// `policy` with this toolchain's caches added, each judged where its name leads now.
+    ///
+    /// A cache row is a name under the home directory that a stage able to write its parent can
+    /// move aside and put a link at (SANDBOX-15, SANDBOX-18). A name with a link in it is given
+    /// no row where it leads to a credential or persistence location, to a directory that holds
+    /// one, or to the other kind of thing than the row names, and the stage still starts. A
+    /// name that leads somewhere ordinary gets the row at the place it leads to. A judged row is
+    /// held to its name not being a link when a backend opens it
+    /// ([`SandboxPolicy::not_through_a_link`]), so a name relinked after this judgement is
+    /// refused and not attached to the new target.
     fn grant_caches(
         self,
         mut policy: SandboxPolicy,
         prelude: Prelude,
         home: &Path,
     ) -> SandboxPolicy {
-        for row in self.cache_directories(prelude) {
-            let path = under(home, row);
-            if !policy.writable.iter().any(|granted| granted.path == path) {
-                policy = policy.allow_read(&path).allow_write_directory(path);
+        let rows: Vec<(PathBuf, bool)> = self
+            .cache_directories(prelude)
+            .iter()
+            .map(|row| (under(home, row), true))
+            .chain(
+                self.cache_files()
+                    .iter()
+                    .map(|row| (under(home, row), false)),
+            )
+            .collect();
+        for (name, directory) in rows {
+            let Some(path) = led_to(&name, home, directory) else {
+                continue;
+            };
+            if policy.writable.iter().any(|granted| granted.path == path) {
+                continue;
             }
-        }
-        for row in self.cache_files() {
-            let path = under(home, row);
-            if !policy.writable.iter().any(|granted| granted.path == path) {
-                policy = policy.allow_read(&path).allow_write_file(path);
-            }
+            policy = policy.allow_read(&path).not_through_a_link(&path);
+            policy = match directory {
+                true => policy.allow_write_directory(path),
+                false => policy.allow_write_file(path),
+            };
         }
         policy
     }
@@ -225,6 +265,59 @@ const EVERY_TOOLCHAIN: [Toolchain; 6] = [
     Toolchain::Maven,
     Toolchain::Gradle,
 ];
+
+/// The path a cache row at `name` is given, or `None` where the row is not given: the place the
+/// name leads to is a credential or persistence location or holds one, or is not the kind of
+/// thing the row names (a file for a directory row, a directory for a file row).
+///
+/// A name with a link in it below `home` is given at the place it leads to, judged by
+/// [`clear_of_every_refused_location`] on the very path that is given, so the grant is not a
+/// second reading of a name a stage may have changed in between. Any other name is given as it
+/// is, as the table's rows are caches and none is a refused location, so a row keeps the spelling
+/// `home` was given in and a `home` that is itself a link is the person's own. Nothing at the name
+/// leaves the row as it is, since a row opens nothing and the toolchain makes the cache on its
+/// first run.
+///
+/// A link that leads nowhere, at the name or above it, has no place to be judged at: resolving it
+/// gives back its own name, which looks clear, and a backend that opens a judged row without
+/// following a link refuses the whole policy over it. It is given no row. So is a name that
+/// cannot be examined at all, since it may be a link. Reads file system metadata and the path
+/// alone.
+fn led_to(name: &Path, home: &Path, directory: bool) -> Option<PathBuf> {
+    use std::io::ErrorKind;
+
+    let below_home = name.strip_prefix(home).unwrap_or(name);
+    let mut at = home.to_path_buf();
+    let mut through_a_link = false;
+    for component in below_home.components() {
+        at.push(component);
+        match std::fs::symlink_metadata(&at) {
+            Ok(found) if found.file_type().is_symlink() => {
+                if std::fs::metadata(&at).is_err() {
+                    return None;
+                }
+                through_a_link = true;
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
+            Err(_) => return None,
+        }
+    }
+    let path = if through_a_link {
+        let path = resolved(name);
+        if !clear_of_every_refused_location(&path, home) {
+            return None;
+        }
+        path
+    } else {
+        name.to_path_buf()
+    };
+    match std::fs::metadata(&path) {
+        Ok(found) if found.is_dir() != directory => None,
+        _ => Some(path),
+    }
+}
 
 /// Whether `name` is `program`, or `program` followed by a version: `python3` and `python3.12`
 /// are `python`, and `python3-config` is not.
@@ -681,6 +774,259 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A cache row is a name under the home directory, and a stage able to write the parent moves
+    /// the cache aside and puts a link at the name. A list built after that is judged where the
+    /// name leads: a row given at `~/.ssh`, at a shell startup file or at a directory that holds
+    /// either would hand a later stage the credentials the base refuses (SANDBOX-15, SANDBOX-18).
+    /// The rejected implementation grants `under(home, row)` as a name, which is why each case
+    /// below checks that no row leads to the place and that the list does not stop at one row.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_that_has_become_a_link_to_somewhere_refused_is_given_no_row() {
+        use std::os::unix::fs::symlink;
+
+        let home = scratch_dir("a-toolchain-cache-relinked");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).expect("the credential directory is creatable");
+        std::fs::create_dir_all(home.join(".cargo")).expect("the cargo directory is creatable");
+        std::fs::create_dir_all(home.join(".config/autostart")).expect("autostart is creatable");
+        std::fs::write(home.join(".bashrc"), "").expect("the startup file is writable");
+        std::fs::write(home.join(".ssh/id_test"), "key").expect("the key is writable");
+        let home = crate::rules::resolved(&home);
+
+        // (what the cache row is replaced by a link to, the row's name under the home)
+        for (leads_to, replaced) in [
+            // A credential location, a directory above one, and a persistence location.
+            (home.join(".ssh"), ".cargo/registry"),
+            (home.clone(), ".cargo/registry"),
+            (home.join(".ssh/id_test"), ".cargo/registry"),
+            (home.join(".config"), ".cargo/registry"),
+            (home.join(".config/autostart"), ".cargo/registry"),
+            // A shell startup file in the place of the file row, and the home directory.
+            (home.join(".bashrc"), ".cargo/.package-cache"),
+            (home.clone(), ".cargo/.package-cache"),
+        ] {
+            let name = home.join(replaced);
+            let _ = std::fs::remove_dir_all(&name);
+            let _ = std::fs::remove_file(&name);
+            symlink(&leads_to, &name).expect("the cache is replaceable by a link");
+
+            let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+
+            for row in written_paths(&policy) {
+                let at = crate::rules::resolved(&row);
+                assert!(
+                    at != leads_to && (leads_to == home || !at.starts_with(&leads_to)),
+                    "{replaced} leads to {}, and the list writes {}",
+                    leads_to.display(),
+                    row.display()
+                );
+                assert_ne!(
+                    row, name,
+                    "{replaced} is granted as a name that is now a link"
+                );
+            }
+            assert!(
+                policy
+                    .writable
+                    .iter()
+                    .any(|row| row.path.starts_with(home.join(".cargo/git"))),
+                "the rows beside the one that leads elsewhere are still granted"
+            );
+
+            let _ = std::fs::remove_file(&name);
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A row names a kind of thing, and one that is the other kind is a name that was replaced.
+    /// The cargo lock is a file and `registry` a directory, so a file at the directory row or a
+    /// directory at the file row is no row, and the ordinary case of each stays granted.
+    #[test]
+    fn a_cache_that_is_the_other_kind_of_thing_is_given_no_row() {
+        let home = scratch_dir("a-toolchain-cache-other-kind");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".cargo/.package-cache"))
+            .expect("a directory for a file");
+        std::fs::write(home.join(".cargo/registry"), "").expect("a file for a directory");
+        std::fs::create_dir_all(home.join(".cargo/git")).expect("the git cache is creatable");
+        let home = crate::rules::resolved(&home);
+
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+
+        let written = written_paths(&policy);
+        assert!(
+            !written.contains(&home.join(".cargo/registry")),
+            "{written:?}"
+        );
+        assert!(
+            !written.contains(&home.join(".cargo/.package-cache")),
+            "{written:?}"
+        );
+        assert!(written.contains(&home.join(".cargo/git")), "{written:?}");
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A link whose target is not there has no place to be judged at: resolving it gives back its
+    /// own name, which is clear of every refused location. A judged row is opened without following
+    /// a link, so granting it would refuse the whole policy on Linux and attach the row to the link
+    /// on the other platforms, where the cache row is meant to be left out and the stage started.
+    /// The rejected implementation judges the resolved name only, which for a dangling link is the
+    /// name itself, and grants it.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_that_is_a_link_to_nowhere_is_given_no_row() {
+        use std::os::unix::fs::symlink;
+
+        let home = scratch_dir("a-toolchain-cache-dangling");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".cargo/git")).expect("the git cache is creatable");
+        let home = crate::rules::resolved(&home);
+        // The shell startup file is not there, as on a machine that never made one.
+        symlink(home.join(".bashrc"), home.join(".cargo/.package-cache"))
+            .expect("the lock is linkable");
+        symlink(home.join("nowhere"), home.join(".cargo/registry"))
+            .expect("the registry is linkable");
+
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+
+        let granted = granted_paths(&policy);
+        for name in [
+            ".cargo/.package-cache",
+            ".cargo/registry",
+            ".bashrc",
+            "nowhere",
+        ] {
+            assert!(
+                !granted.contains(&home.join(name)),
+                "{name} is a link to nowhere and is granted: {granted:?}"
+            );
+        }
+        assert!(
+            written_paths(&policy).contains(&home.join(".cargo/git")),
+            "the row beside the dangling ones is still granted"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A cache whose name is a link to the other kind of thing is no row either: a link to a file
+    /// where a directory is wanted, and a link to a directory where the lock file is. The target
+    /// is an ordinary place, so only the kind refuses it. The rejected implementation checks the
+    /// kind of a name that is not a link and takes the kind of a link's name as it is.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_that_is_a_link_to_the_other_kind_of_thing_is_given_no_row() {
+        use std::os::unix::fs::symlink;
+
+        let home = scratch_dir("a-toolchain-cache-link-other-kind");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".cargo/git")).expect("the git cache is creatable");
+        std::fs::create_dir_all(home.join("disk/a-directory")).expect("a directory is creatable");
+        std::fs::write(home.join("disk/a-file"), "").expect("a file is writable");
+        let home = crate::rules::resolved(&home);
+        symlink(home.join("disk/a-file"), home.join(".cargo/registry"))
+            .expect("the registry is linkable");
+        symlink(
+            home.join("disk/a-directory"),
+            home.join(".cargo/.package-cache"),
+        )
+        .expect("the lock is linkable");
+
+        let policy = Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &home);
+
+        let granted = granted_paths(&policy);
+        for name in [
+            "disk/a-file",
+            "disk/a-directory",
+            ".cargo/registry",
+            ".cargo/.package-cache",
+        ] {
+            assert!(
+                !granted.contains(&home.join(name)),
+                "{name} is the wrong kind of thing and is granted: {granted:?}"
+            );
+        }
+        assert!(
+            written_paths(&policy).contains(&home.join(".cargo/git")),
+            "the row beside the refused ones is still granted"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// An install and a configuration file are read rows under the home directory, so a stage able
+    /// to write the directory above them can link one to the keys, and a row opened by name is
+    /// attached to wherever the name leads. They are judged and held to their name as a cache is,
+    /// and an ordinary one is still read. The rejected implementation reads `under(home, row)` as
+    /// a name and marks nothing.
+    #[test]
+    #[cfg(unix)]
+    fn an_install_or_configuration_that_has_become_a_link_to_a_refused_place_is_given_no_row() {
+        use std::os::unix::fs::symlink;
+
+        let home = scratch_dir("a-toolchain-install-relinked");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).expect("the credential directory is creatable");
+        std::fs::create_dir_all(home.join(".cargo/bin")).expect("the install is creatable");
+        std::fs::write(home.join(".bashrc"), "").expect("the startup file is writable");
+        let home = crate::rules::resolved(&home);
+        symlink(home.join(".ssh"), home.join(".rustup")).expect("the install is linkable");
+        symlink(home.join(".bashrc"), home.join(".cargo/config.toml"))
+            .expect("the configuration is linkable");
+
+        let policy = Toolchain::Cargo.grant_reads(SandboxPolicy::strict(), &home);
+
+        let granted = granted_paths(&policy);
+        assert!(granted.contains(&home.join(".cargo/bin")), "{granted:?}");
+        for name in [".rustup", ".cargo/config.toml", ".ssh", ".bashrc"] {
+            assert!(
+                !granted.contains(&home.join(name)),
+                "{name} leads to a refused place and is read: {granted:?}"
+            );
+        }
+        assert!(!policy.readable.is_empty());
+        assert_eq!(policy.not_through_a_link, policy.readable);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A cache that is where it was, and one a person linked to a disk of their own, is still
+    /// granted, and granted to be opened as the thing it is. The rejected implementation drops
+    /// every row that is a link, which breaks a machine that keeps `~/.cargo` elsewhere, or
+    /// lists no row for a linked cache to be held to its name.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_linked_to_somewhere_ordinary_is_granted_there_and_held_to_that_name() {
+        let top = scratch_dir("a-toolchain-cache-on-another-disk");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("home/.cargo")).expect("the cargo directory is creatable");
+        std::fs::create_dir_all(top.join("disk/registry")).expect("the disk is creatable");
+        let top = crate::rules::resolved(&top);
+        std::os::unix::fs::symlink(top.join("disk/registry"), top.join("home/.cargo/registry"))
+            .expect("the cache is linkable");
+
+        let policy =
+            Toolchain::Cargo.grant(SandboxPolicy::strict(), Prelude::Linux, &top.join("home"));
+
+        let written = written_paths(&policy);
+        assert!(written.contains(&top.join("disk/registry")), "{written:?}");
+        assert!(
+            !written.contains(&top.join("home/.cargo/registry")),
+            "{written:?}"
+        );
+        for row in &written {
+            assert!(
+                policy.not_through_a_link.contains(row),
+                "{} is judged and is not held to its name",
+                row.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     /// A list is added to the base a profile starts from, so what the base granted has to reach

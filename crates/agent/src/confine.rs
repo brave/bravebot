@@ -10805,6 +10805,186 @@ mod tests {
         .with_unasked_writes(true)
     }
 
+    /// SANDBOX-15, SANDBOX-18: a toolchain cache that was moved aside and replaced by a link to
+    /// the directory holding the person's keys, or the file that starts their shell, is given no
+    /// row, and no row of the stage leads to either. The stage still starts. The same home with
+    /// the caches left as they were is the control that the rows are there to begin with, and
+    /// one cache linked to an ordinary directory is the control that only a refused place
+    /// drops a row. The regression it rejects is a row made from the cache's name, which the
+    /// Linux backend then opens through the link and attaches read and write to what it leads to.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_relinked_to_a_credential_or_a_startup_file_is_given_no_row() {
+        let (home, beside) = unasked_places("relinked-caches");
+        let root = beside.join("project");
+        std::fs::create_dir_all(home.join(".cargo")).expect("the cargo directory");
+        std::fs::write(home.join(".bashrc"), "").expect("a startup file");
+        let registry = home.join(".cargo/registry");
+        let package_cache = home.join(".cargo/.package-cache");
+        let rows_of = |policy: &SandboxPolicy| {
+            let mut rows: Vec<PathBuf> = policy.readable.clone();
+            rows.extend(policy.writable.iter().map(|row| row.path.clone()));
+            rows
+        };
+        // Every row the policy has that the intact home's does not, judged where it leads: the
+        // base reads some places in `~/.ssh` by design, so a relinked cache is held to adding none.
+        let added_leading_into = |policy: &SandboxPolicy, control: &SandboxPolicy| {
+            let known = rows_of(control);
+            rows_of(policy)
+                .into_iter()
+                .filter(|row| !known.contains(row))
+                .filter(|row| {
+                    let led = row.canonicalize().unwrap_or_else(|_| row.clone());
+                    bravebot_sandbox::rules::inside_a_credential_location(&led, &home)
+                        || bravebot_sandbox::rules::inside_a_persistence_location(&led, &home)
+                })
+                .collect::<Vec<PathBuf>>()
+        };
+        let step = step("/bin/cat", &["f"]);
+
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            // A project session under bypass, the same session without it, and a session opened
+            // on the home directory itself, whose row for the home is the other way a stage can
+            // move a cache aside.
+            for (on_home, unasked) in [(false, false), (false, true), (true, false)] {
+                let confinement = || match on_home {
+                    false => bypass_confinement(prelude, &home, &root).with_unasked_writes(unasked),
+                    true => Confinement::new(
+                        prelude,
+                        PathBuf::from("/tmp"),
+                        Some(&home),
+                        vec![home.clone()],
+                        Some(Path::new("/var/scratch")),
+                    ),
+                };
+                let shape = format!("{prelude:?} on_home={on_home} unasked={unasked}");
+                std::fs::create_dir_all(&registry).expect("a registry");
+                std::fs::write(&package_cache, "").expect("a package cache");
+                let control = confinement().policy(&step, &root, &[]);
+                assert!(
+                    control.writable.iter().any(|row| row.path == registry)
+                        && control.writable.iter().any(|row| row.path == package_cache),
+                    "{shape}: the control is not given the caches"
+                );
+
+                std::fs::remove_dir_all(&registry).expect("the registry is moved aside");
+                std::os::unix::fs::symlink(home.join(".ssh"), &registry).expect("a link");
+                std::fs::remove_file(&package_cache).expect("the package cache is moved aside");
+                std::os::unix::fs::symlink(home.join(".bashrc"), &package_cache).expect("a link");
+                let policy = confinement().policy(&step, &root, &[]);
+                let added = added_leading_into(&policy, &control);
+                assert!(
+                    added.is_empty(),
+                    "{shape}: a row leads into a credential or persistence location: {added:?}"
+                );
+                assert!(
+                    !policy
+                        .writable
+                        .iter()
+                        .any(|row| row.path == registry || row.path == package_cache),
+                    "{shape}: a relinked cache is a row of its own name"
+                );
+
+                std::fs::remove_file(&registry).expect("the link is removed");
+                std::fs::create_dir_all(beside.join("elsewhere")).expect("an ordinary directory");
+                std::os::unix::fs::symlink(beside.join("elsewhere"), &registry).expect("a link");
+                let ordinary = confinement().policy(&step, &root, &[]);
+                assert!(
+                    ordinary
+                        .writable
+                        .iter()
+                        .any(|row| row.path == beside.join("elsewhere"))
+                        && ordinary
+                            .not_through_a_link
+                            .contains(&beside.join("elsewhere")),
+                    "{shape}: a cache linked somewhere ordinary lost its row"
+                );
+                std::fs::remove_file(&registry).expect("the link is removed");
+                std::fs::remove_file(&package_cache).expect("the link is removed");
+            }
+        }
+    }
+
+    /// SANDBOX-15, SANDBOX-18: a cache is judged where it leads each time a stage starts, on every
+    /// route that gives its row, with one confinement kept across the change as the stages of one
+    /// line `a && b` are. The routes are the rows every stage holds, the rows a requested
+    /// toolchain brings in `strict`, where the machine is not read, and the files the reason for a
+    /// stage counts as ones the plan could have written. The same confinement before the change
+    /// is the control that each route gives the row, and after the link is taken away each gives
+    /// it again. The regressions it rejects are a judgement made once when the confinement is
+    /// built, and a route that grants a cache row from its name without it.
+    #[test]
+    #[cfg(unix)]
+    fn a_cache_relinked_between_two_stages_is_judged_again_on_every_route_to_its_row() {
+        let (home, beside) = unasked_places("relinked-between-stages");
+        let root = beside.join("project");
+        let registry = home.join(".cargo/registry");
+        let planted = home.join(".ssh/planted");
+        let step = step("/bin/cat", &["f"]);
+        let writes_the_registry =
+            |policy: &SandboxPolicy| policy.writable.iter().any(|row| row.path == registry);
+        let writes_the_keys = |policy: &SandboxPolicy| {
+            policy.writable.iter().any(|row| {
+                planted.starts_with(&row.path)
+                    || planted.starts_with(canonical(&row.path))
+                    || canonical(&row.path).starts_with(home.join(".ssh"))
+            })
+        };
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let held = || bypass_confinement(prelude, &home, &root).with_unasked_writes(false);
+            let routes: Vec<(&str, Confinement)> = vec![
+                ("every stage", held()),
+                (
+                    "a requested toolchain in strict",
+                    held()
+                        .with_mode(SandboxMode::Strict)
+                        .with_requested(&[Requested::Toolchain(Toolchain::Cargo)]),
+                ),
+            ];
+            for (route, confinement) in &routes {
+                let policy = || confinement.policy(&step, &root, &[]);
+                std::fs::create_dir_all(&registry).expect("a registry");
+                assert!(
+                    writes_the_registry(&policy()),
+                    "{prelude:?} {route}: the control is not given the cache"
+                );
+
+                std::fs::remove_dir_all(&registry).expect("the registry is moved aside");
+                std::os::unix::fs::symlink(home.join(".ssh"), &registry).expect("a link");
+                let relinked = policy();
+                assert!(
+                    !writes_the_registry(&relinked) && !writes_the_keys(&relinked),
+                    "{prelude:?} {route}: the confinement built before the change still gives the row"
+                );
+
+                std::fs::remove_file(&registry).expect("the link is removed");
+                std::fs::create_dir_all(&registry).expect("a registry again");
+                assert!(
+                    writes_the_registry(&policy()),
+                    "{prelude:?} {route}: the cache is not given again once it is a directory"
+                );
+                std::fs::remove_dir_all(&registry).expect("the registry is removed");
+            }
+
+            // The reason for a stage counts a file under a cache as one the plan could have
+            // written. A cache linked to the keys is not one, and the keys stay unwritable.
+            let confinement = held();
+            std::fs::create_dir_all(&registry).expect("a registry");
+            assert!(
+                confinement.writable_by_the_plan(&registry.join("program")),
+                "{prelude:?}: the control does not count a file in the cache"
+            );
+            std::fs::remove_dir_all(&registry).expect("the registry is moved aside");
+            std::os::unix::fs::symlink(home.join(".ssh"), &registry).expect("a link");
+            assert!(
+                !confinement.writable_by_the_plan(&registry.join("program"))
+                    && !confinement.writable_by_the_plan(&planted),
+                "{prelude:?}: a file under a cache linked to the keys counts as one the plan wrote"
+            );
+            std::fs::remove_file(&registry).expect("the link is removed");
+        }
+    }
+
     /// SANDBOX-22, SANDBOX-28: under bypass a `workspace-write` stage on a platform that reads the machine
     /// holds the rows a request for writing would be granted, and none of them is the home
     /// directory, a directory above it, or a place that holds a credential. The regression it
