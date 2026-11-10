@@ -2154,11 +2154,33 @@ file in `PYTHONSTARTUP`, which only an interactive interpreter reads (`python3 -
 closed did, on 3.15.0), and `sh -c` and a shell script
 did not run the file in `ENV`, which only an interactive `sh` reads. No workflow starts an
 interactive `python3` or `sh`, so none of the three is removed. `GOROOT` is removed, since
-`go vet` ran a `vet` planted under it. Planting a file under `GOPATH`, `GOBIN`, `GOWORK`,
-`GOPROXY`, `PYTHONBREAKPOINT`,
+`go vet` ran a `vet` planted under it. `GOENV` is removed, since `go vet` ran the program named by a
+`GOFLAGS=-toolexec=` line in the file `GOENV` names (go 1.27.3). Planting a file under `GOPATH`,
+`GOBIN`, `GOWORK`, `GOPROXY`, `PYTHONBREAKPOINT`,
 `npm_config_node_options`, and `GNUMAKEFLAGS` and `MFLAGS` on GNU Make 3.81 ran nothing
 ([SANDBOX-30](#SANDBOX-30) has the versions); the two make names and `GOTOOLCHAIN` stay listed or
 set by the suite because other versions read them.
+
+The other names in git(1) (Apple Git 2.54.0), GNU Make 3.81's manual and xcrun(1) that can name
+code were each tested with a script that appends a marker file, planted under the name and run
+against the git, `make` and `xcrun` commands of the workflows (init, add, commit, branch, merge,
+stash, worktree, diff, status, push, clone, fetch, pull, `make`). It ran only under `DEVELOPER_DIR`,
+`GIT_EXTERNAL_DIFF` (`git diff`), `MAKEFILES` and `MAKEFLAGS` with `SHELL=` or `-I`, which are
+handled above. It did not run under
+`GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PAGER`, `PAGER`, `GIT_EDITOR`,
+`EDITOR`, `VISUAL`, `GIT_SEQUENCE_EDITOR`, `GIT_ATTR_SOURCE`, `GIT_CEILING_DIRECTORIES`, `GIT_SSH`,
+`GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_TRACE`, `GIT_TRACE2`, `GIT_TRACE2_EVENT`,
+`GIT_TRACE_CURL`, `GIT_DIFF_OPTS`, `GIT_SSL_NO_VERIFY`, `GIT_ALLOW_PROTOCOL`, `GIT_SSH_VARIANT`,
+`GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`,
+`GIT_REDIRECT_STDERR`, `GIT_NO_REPLACE_OBJECTS`, `TOOLCHAINS`, `SDKROOT`, `XCODE_DEVELOPER_DIR_PATH`,
+or, for `make`, `MFLAGS`, `GNUMAKEFLAGS`, `MAKEOVERRIDES`, `MAKELEVEL`, `SHELL` and
+`MAKEFILE_LIST`. Those commands start no rebase, so they do not settle `GIT_SEQUENCE_EDITOR`, which
+stays in the suite's list, as do `GIT_SSH`, `GIT_SSH_COMMAND` and `GIT_PROXY_COMMAND`, which only a
+remote transport reads and a local remote does not use. `GIT_ASKPASS` and `SSH_ASKPASS` are removed
+as host variables. The pager and editor names are
+read only when git has a terminal to page on or an editor to start, and no stage has a terminal or
+starts a commit without its message. A name in neither list reaches the programs as set, so a
+workflow that starts a terminal or an editor, or reaches a remote, needs the names it reads added.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
 `~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
@@ -2190,10 +2212,18 @@ since it depends on the host's login. Token variables are removed from the envir
 runs, so the row measures the stored login. The `gh` that reads the stored login is also a checked
 start with no names of its own, and every variable that begins `DYLD_` or `LD_` is removed from it
 whatever it holds, since a library the dynamic loader loads into it runs with the account's home.
-The two prefixes are a list in `crates/agent/src/usability.rs` and not in
-`CODE_SELECTOR_PREFIXES`, because the shared prefixes are applied to every checked start and a
-start that kept `LD_DEBUG` ([SANDBOX-30](#SANDBOX-30)) would lose it; `make check-code-selectors`
-covers only the shared lists, so a reviewer reads this one.
+The two prefixes are `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs`, removed with
+`withhold_prefixed`. They are not in `CODE_SELECTOR_PREFIXES`, which every checked start applies
+and which would remove `LD_DEBUG` from the starts that keep it ([SANDBOX-30](#SANDBOX-30)).
+`make check-code-selectors` reads `LOADER_PREFIXES` and `HOST_VARIABLES`
+([checks.md](../development/checks.md)). It does not apply the prefixes to other starts, so a
+reviewer reads any other start that holds the loader's names.
+
+The two loader tests start a copy of the host's shell that keeps the loader's names, since the
+`gh` on a host can be built without the protection that ignores them. A host that cannot make that
+copy prints `skipped`, and a run with `CI` set fails instead, so a green run on a CI machine means
+the check ran. The `LD_` test uses a shell that records the names it is given. It has not been run
+against a Linux loader, which [SANDBOX-30](#SANDBOX-30) records as #3810.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -2232,6 +2262,7 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_parameters`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_signing_program`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_an_exec_path`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_common_directory`
 `verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makefiles`
@@ -2261,8 +2292,10 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_a_module_path`
 `verified-by: bravebot_agent::usability::a_setup_python_keeps_a_module_path_no_stage_can_write`
 `verified-by: bravebot_agent::usability::the_names_found_by_running_cargo_npm_go_and_python_are_removed`
+`verified-by: bravebot_agent::usability::a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
+`verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_settings_file`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
@@ -3881,10 +3914,10 @@ file. A new spawn that looks a name up through
   `GOROOT`, `GOENV` and `CARGO_HOME` whatever they hold, and records the names it examined and
   left (`TOOLCHAINS`, `SDKROOT`,
   `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`, `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and
-  `LD_` prefixes are a list in `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES`
-  applies to every checked start and would remove `LD_DEBUG` from gcloud and the browser opener;
-  `make check-code-selectors` does not read that prefix list. `make check-code-selectors` runs
-  `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
+  `LD_` prefixes are `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs`, kept out of
+  `CODE_SELECTOR_PREFIXES`, which applies to every checked start and would remove `LD_DEBUG` from
+  gcloud and the browser opener. `make check-code-selectors` runs
+  `contrib/check-code-selectors.py` ([checks.md](../development/checks.md)). It fails a call of `start` or `start_against`
   whose fourth argument is not written at the call as `CodeSelectors::Kept` or
   `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
   reason, a start in production code that passes `CodeSelectors::Checked(&[])` with no comment at
@@ -3967,8 +4000,8 @@ file. A new spawn that looks a name up through
   use for. A variable not listed is left as set. A variable that
   more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
   in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
-  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs` and in
-  `crates/tui/src/powershell.rs`:
+  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs`, in
+  `crates/tui/src/opener.rs`, in `crates/tui/src/powershell.rs` and in `crates/agent/src/usability.rs`:
 
   | `gcloud` variable | Names | Why it selects code |
   |---|---|---|
@@ -4328,6 +4361,7 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_sandbox::programs::a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup`
 `verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
+`verified-by: bravebot_sandbox::programs::the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
 `verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`

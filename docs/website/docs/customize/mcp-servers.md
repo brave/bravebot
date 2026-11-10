@@ -531,8 +531,8 @@ call failed. The model is never sent the server's account of the failure.
 Every other failure is reported in bravebot's own words, which name the tool, the protocol method
 and the code the server answered with, and nothing the server wrote. A server that fails for a
 reason only its own sentence gives, or a reply bravebot cannot parse, therefore shows a code and a
-method and nothing more. A server's own error output is shown in `--plain` and a one-shot run and
-not in the full-screen interface, so to read it run the server by hand.
+method and nothing more. A server's own error output is discarded in every interface, so to read
+it run the server by hand.
 
 ### Asking again
 
@@ -905,8 +905,9 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **A toolchain that loads from elsewhere in your home directory does not start.** A version
   manager's shim that hands over to a program somewhere else in your home is not given that
   somewhere.
-- **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
-  run pass it through to stderr.
+- **No interface shows a server's own error output.** `--plain` draws its questions on the stream
+  the output would share, and a terminal acts on escape sequences in it, so a server's bytes could
+  rewrite a question. A one-shot run discards it for the same reason.
 - **A directory holding checkouts is not refused.** Only the directories above `--dir` are searched
   for a repository, so a server given one above your projects may write their files. Give a server
   a directory of its own.

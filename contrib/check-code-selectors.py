@@ -31,6 +31,9 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    `<!-- empty-list-starts -->`. Such a start removes the generic names and no name of its own, so
    the table says what the program reads and why none of it selects code, or which issue tracks
    it. The row is what a reviewer reads; this script checks that it exists, not that it is right.
+8. `LOADER_PREFIXES` in crates/sandbox/src/programs.rs, which the stored-login `gh` start of the
+   usability suite removes, held to what docs/development/checks.md describes.
+9. `HOST_VARIABLES` in crates/agent/src/usability.rs, held to the same description.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -46,6 +49,10 @@ CRATES = ROOT / "crates"
 
 # The file that holds the generic list and the shared names.
 PROGRAMS = "crates/sandbox/src/programs.rs"
+
+# The usability suite, which holds `HOST_VARIABLES` and starts the stored-login `gh` with
+# `LOADER_PREFIXES`.
+USABILITY = "crates/agent/src/usability.rs"
 
 # The files that hold a program's own CODE_SELECTORS list, each with the tests for it in the same
 # file.
@@ -138,6 +145,114 @@ def tests_of(text):
     """The text of the test module, or None where there is none."""
     found = TESTS.search(text)
     return text[found.end():] if found else None
+
+
+def code_of(text):
+    """The text before the test module, or all of it where there is none."""
+    found = TESTS.search(text)
+    return text[: found.start()] if found else text
+
+
+def prefixes(text, name):
+    """The strings in `pub const NAME: &[&str] = &[...];`, or None where it is not found."""
+    found = re.search(
+        r"pub const " + re.escape(name) + r"\s*:\s*&\[&str\]\s*=\s*&\[(.*?)\]\s*;", text, re.DOTALL
+    )
+    return re.findall(r'"([A-Za-z0-9_]+)"', found.group(1)) if found else None
+
+
+HOSTS = re.compile(r"const\s+HOST_VARIABLES\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
+# A `for name in [..]` loop, closed by the first brace that starts a line at the indentation of the
+# `for` line, whatever that indentation is. Groups: the indentation, the names, the body.
+NAME_LOOP = re.compile(
+    r"^([ \t]*)for\s+name\s+in\s*\[(.*?)\]\s*\{(.*?)\n\1\}", re.DOTALL | re.MULTILINE
+)
+
+
+def loops_in(tests, start, check):
+    """The names in the `for name in ["..."]` loops of `tests` whose body starts with `start` and
+    asserts `check` is removed, `start` being `login_with` or `stage_with`."""
+    found = []
+    for _, names, body in NAME_LOOP.findall(tests):
+        if re.search(re.escape(start) + r"\(", body) and re.search(
+            r"assert!\(\s*" + re.escape(check) + r"\(", body
+        ):
+            found += re.findall(r'"([A-Za-z0-9_]+)"', names)
+    return found
+
+
+def loader_complaints(files):
+    """Every way `LOADER_PREFIXES` and the starts and tests that use it disagree.
+
+    The prefixes are applied to the one start that passes them, the stored-login `gh`, and not to
+    every checked start, since that would remove `LD_DEBUG` from gcloud and the opener (SANDBOX-30).
+    So this asks for that start and its tests, and for the list to stay out of the prefixes every
+    checked start applies.
+    """
+    text = files.get(PROGRAMS)
+    if text is None:
+        return []
+    loader = prefixes(text, "LOADER_PREFIXES")
+    if not loader:
+        return [
+            f"LOADER_PREFIXES is not in {PROGRAMS} or holds no prefix this script could read. If "
+            "it moved, teach check-code-selectors.py."
+        ]
+    complaints = []
+    for generic in prefixes(text, "CODE_SELECTOR_PREFIXES") or []:
+        for prefix in loader:
+            if generic.startswith(prefix) or prefix.startswith(generic):
+                complaints.append(
+                    f"{prefix} in LOADER_PREFIXES overlaps {generic} in CODE_SELECTOR_PREFIXES, "
+                    "which every checked start applies and so would remove LD_DEBUG from the "
+                    "starts SANDBOX-30 keeps it for."
+                )
+    if "LOADER_PREFIXES" not in (tests_of(text) or ""):
+        complaints.append(f"No test in {PROGRAMS} uses LOADER_PREFIXES.")
+    suite = files.get(USABILITY)
+    if suite is None:
+        return complaints
+    if not re.search(
+        r"withhold_prefixed\(\s*&mut\s+\w+\s*,\s*(?:[\w:]*::)?LOADER_PREFIXES\b", code_of(suite)
+    ):
+        complaints.append(
+            f"{USABILITY} does not pass LOADER_PREFIXES to withhold_prefixed, so the stored-login "
+            "gh is started with the loader's names (SANDBOX-21)."
+        )
+    removed = loops_in(tests_of(suite) or "", "login_with", "removed")
+    for prefix in loader:
+        if not any(name.startswith(prefix) for name in removed):
+            complaints.append(
+                f"{prefix} is in LOADER_PREFIXES and no test in {USABILITY} starts the "
+                f"stored-login gh with a {prefix} name (login_with) and asserts it is removed."
+            )
+    return complaints
+
+
+def host_complaints(text, source=USABILITY):
+    """Every way `HOST_VARIABLES` and the tests and start that use it disagree."""
+    found = HOSTS.search(text)
+    names = re.findall(r'"([A-Za-z0-9_]+)"', found.group(1)) if found else None
+    if not names:
+        return [
+            f"HOST_VARIABLES is not in {source} or holds no name this script could read. If it "
+            "moved, teach check-code-selectors.py."
+        ]
+    complaints = []
+    if not re.search(r"for\s+\w+\s+in\s+HOST_VARIABLES\s*\{[^}]*env_remove\(", code_of(text)):
+        complaints.append(
+            f"{source} has no loop that env_removes each name in HOST_VARIABLES from a stage."
+        )
+    tests = tests_of(text) or ""
+    looped = loops_in(tests, "stage_with", "removed")
+    for name in names:
+        asserted = re.search(r"assert!\(\s*withheld\(\s*\"" + re.escape(name) + r'"', tests)
+        if not asserted and name not in looped:
+            complaints.append(
+                f"{name} is in HOST_VARIABLES in {source} and no test starts a stage with it and "
+                "asserts it is removed."
+            )
+    return complaints
 
 
 def asserts(tests, name, kept):
@@ -302,6 +417,10 @@ def verdict(files, required=None, spec=""):
                 )
         else:
             complaints += call_complaints(label, text, spec)
+    if USABILITY in required:
+        complaints += loader_complaints(files)
+        if USABILITY in files:
+            complaints += host_complaints(files[USABILITY])
     return complaints
 
 
@@ -429,6 +548,69 @@ Some text.
 | A program | `crates/agent/src/x.rs` | nothing that selects code |
 
 More text.
+"""
+
+# The sandbox crate's two prefix lists and a test that uses the loader's.
+LOADER_PROGRAMS = """\
+pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_"];
+
+pub const LOADER_PREFIXES: &[&str] = &["DYLD_", "LD_"];
+#[cfg(test)]
+mod tests {
+    fn t() {
+        withhold_prefixed(&mut command, LOADER_PREFIXES, held);
+    }
+}
+"""
+
+# The usability suite: a host list a stage removes, the stored-login start, and the tests.
+LOADER_SUITE = """\
+const HOST_VARIABLES: &[&str] = &[
+    "GIT_ASKPASS",
+    "GIT_DIR",
+    "GOROOT",
+];
+fn stage_command() {
+    for name in HOST_VARIABLES {
+        command.env_remove(name);
+    }
+}
+fn login_command() {
+    bravebot_sandbox::programs::withhold_prefixed(
+        &mut command,
+        bravebot_sandbox::programs::LOADER_PREFIXES,
+        names,
+    );
+}
+#[cfg(test)]
+mod tests {
+    fn t() {
+        assert!(withheld("GIT_ASKPASS", &genuine, &session));
+        assert!(withheld("GIT_DIR", &genuine, &session));
+        for name in [
+            "GOROOT",
+        ] {
+            assert!(
+                removed(&stage_with(OsStr::new(name), parent, &session), OsStr::new(name)),
+                "{name}"
+            );
+        }
+        for name in HOST_VARIABLES {
+            assert!(removed(&stage_with(OsStr::new(name), g, &session), OsStr::new(name)));
+        }
+        for name in [
+            "DYLD_INSERT_LIBRARIES",
+            "LD_PRELOAD",
+        ] {
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(removed(&command, OsStr::new(name)), "{name}");
+        }
+        for name in ["LDAP_URI"] {
+            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
+            assert!(!removed(&command, OsStr::new(name)), "{name}");
+        }
+    }
+}
 """
 
 
@@ -745,6 +927,86 @@ def selftest():
         any("crates/tui/src/opener.rs is not among" in c for c in default_sources)
         and any("crates/agent/src/usability.rs is not among" in c for c in default_sources),
         default_sources,
+    )
+
+    # LOADER_PREFIXES and HOST_VARIABLES: the loader's names go to the one start that passes the
+    # list, and not to every checked start (SANDBOX-30 keeps LD_DEBUG for gcloud and the opener).
+    files = {PROGRAMS: LOADER_PROGRAMS, USABILITY: LOADER_SUITE}
+    got = loader_complaints(files)
+    case("loader: the prefixes, their start and their tests pass", got == [], got)
+    shared_prefixes = LOADER_PROGRAMS.replace('&["GIT_CONFIG_"]', '&["GIT_CONFIG_", "LD_"]')
+    got = loader_complaints({**files, PROGRAMS: shared_prefixes})
+    case(
+        "loader: a loader prefix added to the prefixes every checked start applies fails once",
+        len(got) == 1 and "overlaps" in got[0],
+        got,
+    )
+    got = loader_complaints({**files, USABILITY: LOADER_SUITE.replace("LOADER_PREFIXES,", "&[],")})
+    case(
+        "loader: a stored-login start that does not pass the prefixes fails",
+        any("does not pass LOADER_PREFIXES" in c for c in got),
+        got,
+    )
+    got = loader_complaints({**files, USABILITY: LOADER_SUITE.replace('"LD_PRELOAD",', "")})
+    case(
+        "loader: a prefix with no test that removes a name under it fails once",
+        len(got) == 1 and "is in LOADER_PREFIXES" in got[0],
+        got,
+    )
+    got = loader_complaints(
+        {**files, USABILITY: LOADER_SUITE.replace("removed(&command", "kept(&command")}
+    )
+    case("loader: a loader test that asserts nothing is removed fails for both prefixes", len(got) == 2, got)
+    got = loader_complaints({**files, PROGRAMS: LOADER_PROGRAMS.replace('&["DYLD_", "LD_"]', "&[]")})
+    case("loader: an empty list is reported", len(got) == 1 and "holds no prefix" in got[0], got)
+    got = loader_complaints({**files, PROGRAMS: "fn main() {}"})
+    case("loader: a missing list is reported", len(got) == 1, got)
+    got = loader_complaints(
+        {**files, PROGRAMS: LOADER_PROGRAMS.replace("LOADER_PREFIXES, held", "&[], held")}
+    )
+    case("loader: a sandbox test that never uses the list fails", len(got) == 1, got)
+    got = host_complaints(LOADER_SUITE)
+    case("host: every name removed by a test passes", got == [], got)
+    got = host_complaints(
+        LOADER_SUITE.replace('    "GIT_DIR",\n', '    "GIT_DIR",\n    "A_NEW_ONE",\n', 1)
+    )
+    case(
+        "host: a name added to the list with no test fails once",
+        len(got) == 1 and "A_NEW_ONE" in got[0],
+        got,
+    )
+    got = host_complaints(
+        LOADER_SUITE.replace(
+            "    for name in HOST_VARIABLES {\n        command.env_remove(name);\n    }\n", ""
+        )
+    )
+    case("host: a stage that does not remove the list fails once", len(got) == 1, got)
+    got = host_complaints(LOADER_SUITE.replace('assert!(withheld("GIT_DIR"', 'let _ = ("GIT_DIR"'))
+    case(
+        "host: a name mentioned outside an assertion does not count",
+        len(got) == 1 and "GIT_DIR" in got[0],
+        got,
+    )
+    # A test module nested one level deeper closes its loops at another column.
+    deeper = "".join("    " + line if line.strip() else line for line in LOADER_SUITE.splitlines(True))
+    got = host_complaints(deeper)
+    case("host: loops indented four more columns are read as before", got == [], got)
+    got = loader_complaints({**files, USABILITY: deeper})
+    case("loader: loops indented four more columns are read as before", got == [], got)
+    got = host_complaints("fn main() {}")
+    case("host: a file with no list is reported", len(got) == 1, got)
+    got = verdict(files, required=[PROGRAMS])
+    case(
+        "verdict: the loader and host checks run only where the suite is required",
+        not any("LOADER_PREFIXES" in c or "HOST_VARIABLES" in c for c in got),
+        got,
+    )
+    got = verdict(files, required=[PROGRAMS, USABILITY])
+    case(
+        "verdict: the suite being required runs the loader and host checks",
+        not any("LOADER_PREFIXES" in c or "HOST_VARIABLES" in c for c in got)
+        and any("CODE_SELECTORS is not in" in c for c in got),
+        got,
     )
 
     broke = [(claim, got) for claim, held, got in checks if not held]

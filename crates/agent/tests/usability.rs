@@ -582,6 +582,16 @@ fn loader_fixture(name: &str, script: &str) -> Option<(PathBuf, PathBuf, PathBuf
     Some((run, gh, home))
 }
 
+/// A test that cannot run on this machine says so. On a CI machine it fails instead, since a skip
+/// there reports green for a check that never ran.
+fn skipped(why: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "a CI machine must run this check, and cannot: {why}"
+    );
+    eprintln!("skipped: {why}");
+}
+
 /// SANDBOX-21: `gh auth token` is given none of the dynamic loader's variables, in the run outside
 /// the sandbox, whose failure gives no row, and in the run under it, whose failure is the row's.
 /// The values are files that exist outside every directory a stage writes, which the check every
@@ -595,7 +605,7 @@ fn the_gh_the_login_row_starts_is_not_handed_a_dyld_variable() {
     let script =
         r#"test -z "$DYLD_INSERT_LIBRARIES" && test -z "$DYLD_FALLBACK_LIBRARY_PATH" || exit 1"#;
     let Some((root, gh, home)) = loader_fixture("login-dyld", script) else {
-        eprintln!("skipped: no shell that keeps DYLD_ names can be made here");
+        skipped("no shell that keeps DYLD_ names can be made here");
         return;
     };
     let _environment = Environment::held(
@@ -623,7 +633,7 @@ fn the_gh_the_login_row_starts_is_not_handed_an_ld_variable() {
     }
     let script = r#"test -z "$LD_PRELOAD" && test -z "$LD_LIBRARY_PATH" && test -z "$LD_DEBUG" && test -z "$LD_BIND_NOW" || exit 1"#;
     let Some((root, gh, home)) = loader_fixture("login-ld", script) else {
-        eprintln!("skipped: no shell that keeps loader names can be made here");
+        skipped("no shell that keeps loader names can be made here");
         return;
     };
     let _environment = Environment::held(
@@ -1509,6 +1519,35 @@ fn a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program
     );
 }
 
+/// SANDBOX-21: `git` signs a commit by running the program `gpg.program` names when
+/// `commit.gpgsign` is true, and both can arrive as configuration through the environment. The
+/// setup `git commit` is the one that would run it. The regression it rejects: leaving the
+/// `GIT_CONFIG_` names on a setup stage's `git`, which runs a program a stage could have written
+/// with the person's access.
+#[test]
+fn a_setup_commit_is_not_handed_configuration_that_names_a_signing_program() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("config-gpg");
+    let marker = planted.join("ran");
+    let program = planted.join("gpg");
+    plant(&program, &marker);
+
+    run_with_planted(
+        "config-gpg",
+        &[
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "commit.gpgsign"),
+            ("GIT_CONFIG_VALUE_0", "true"),
+            ("GIT_CONFIG_KEY_1", "gpg.program"),
+            ("GIT_CONFIG_VALUE_1", program.to_str().expect("utf-8")),
+        ],
+        a_setup_commit(),
+        &marker,
+    );
+}
+
 /// SANDBOX-21: `GIT_CONFIG_PARAMETERS` is read as configuration the way the numbered pairs are. The
 /// regression it rejects: removing `GIT_CONFIG_COUNT` and the pairs and leaving this one.
 #[test]
@@ -1562,6 +1601,11 @@ fn a_setup_commit_is_not_handed_a_common_directory() {
     let marker = planted.join("ran");
     let common = planted.join("common");
     plant(&common.join("hooks/pre-commit"), &marker);
+    // Enough of a repository that `git` accepts the directory, so the hook is what a handed
+    // variable would run and not a failure to read the directory.
+    std::fs::create_dir_all(common.join("objects")).expect("objects");
+    std::fs::create_dir_all(common.join("refs")).expect("refs");
+    std::fs::write(common.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
 
     run_with_planted(
         "common-dir",
@@ -1592,6 +1636,75 @@ fn a_setup_make_is_not_handed_makefiles() {
         &[("MAKEFILES", extra.to_str().expect("utf-8"))],
         &marker,
         None,
+    );
+}
+
+/// A repository whose tracked file has a change, and a setup `git diff`, which starts the program
+/// `GIT_EXTERNAL_DIFF` names.
+fn a_setup_diff() -> Workflow {
+    Workflow::new("test", "a setup diff")
+        .file("work/a.txt", "one\n")
+        .setup(Stage::new("git", &["init", "-q", "work"]))
+        .setup(Stage::new("git", &["-C", "work", "add", "a.txt"]))
+        .setup(Stage::new(
+            "git",
+            &["-C", "work", "commit", "-q", "-m", "first"],
+        ))
+        .setup(Stage::new("sh", &["-c", "echo two >> work/a.txt"]))
+        .setup(Stage::new("git", &["-C", "work", "diff"]))
+        .stage(Stage::new("true", &[]))
+}
+
+/// SANDBOX-30: a variable that names a program is kept when the program is outside every
+/// directory a stage may write and removed when it is inside one, so a stage or contributor that
+/// can plant the file does not get it run with the person's access. Both halves run the real `git
+/// diff` with `GIT_EXTERNAL_DIFF`. The regression it rejects: a check that judges nothing, which
+/// runs the file in the writable directory, and a removal of the name whatever it holds, which
+/// would not run the file outside them either.
+#[test]
+fn a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is() {
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let outside = planted_dir("external-diff-outside");
+    let outside_marker = outside.join("ran");
+    let outside_program = outside.join("diff");
+    plant(&outside_program, &outside_marker);
+    let writable = planted_dir("external-diff-writable");
+    let writable_marker = outside.join("ran-from-writable");
+    let writable_program = writable.join("diff");
+    plant(&writable_program, &writable_marker);
+    bravebot_sandbox::programs::keep_out(&writable);
+
+    let report = {
+        let _environment = Environment::held(
+            &[(
+                "GIT_EXTERNAL_DIFF",
+                outside_program.to_str().expect("utf-8"),
+            )],
+            &[],
+        );
+        run("external-diff-outside", &[a_setup_diff()])
+    };
+    if !report.skipped().is_empty() {
+        skipped("git is not installed");
+        return;
+    }
+    assert!(report.is_green(), "{:?}", report.rows);
+    assert!(
+        outside_marker.exists(),
+        "a program outside every directory a stage may write was removed, so the variable is not judged by where it points: {:?}",
+        report.rows
+    );
+
+    run_with_planted(
+        "external-diff-writable",
+        &[(
+            "GIT_EXTERNAL_DIFF",
+            writable_program.to_str().expect("utf-8"),
+        )],
+        a_setup_diff(),
+        &writable_marker,
     );
 }
 
@@ -2257,6 +2370,51 @@ fn a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler() {
             None,
         );
     }
+}
+
+/// SANDBOX-21: `GOENV` names the file `go` reads its settings from, and a `GOFLAGS` line in it
+/// can carry `-toolexec=<program>`, which `go vet` runs in front of the tools it starts. The
+/// program is a wrapper that records that it ran and then runs the tool it was given, so a
+/// start that is let through leaves a marker and a good run still passes. The regression it
+/// rejects: a setup stage started with the settings file the person's shell names, which runs a
+/// program a stage could have written with the person's access.
+#[test]
+fn a_setup_go_vet_is_not_handed_a_go_settings_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !usability::available() {
+        return skipped("confinement is unavailable here");
+    }
+    let planted = planted_dir("go-env");
+    let marker = planted.join("ran");
+    let wrapper = planted.join("toolexec");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\n: > '{}'\nexec \"$@\"\n", marker.display()),
+    )
+    .expect("planted wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    let settings = planted.join("env");
+    std::fs::write(
+        &settings,
+        format!("GOFLAGS=-toolexec={}\n", wrapper.display()),
+    )
+    .expect("settings file");
+    let workflow = Workflow::new("test", "a setup go vet")
+        .file("go.mod", "module probe\n\ngo 1.20\n")
+        .file("main.go", "package main\n\nfunc main() {}\n")
+        .setup(Stage::new("go", &["-C", "{session}", "vet", "./..."]))
+        .stage(Stage::new("true", &[]));
+
+    run_with_planted(
+        "go-env",
+        &[
+            ("GOENV", settings.to_str().expect("utf-8")),
+            ("GOTOOLCHAIN", "local"),
+        ],
+        workflow,
+        &marker,
+    );
 }
 
 /// SANDBOX-21: the `/usr/bin` shims run `$DEVELOPER_DIR/usr/bin/xcrun` before the tool. The
