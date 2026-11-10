@@ -61,7 +61,7 @@ At the first stage-2b or stage-3d device work, validate a transcript, composer, 
 
 ### 7. Retain narrow send-ID recovery
 
-- **Decision:** record a message ID before dispatch, retain bounded outcomes for the live session, provide status lookup, and persist the phone’s pending send before transmission. Reject new sends at capacity rather than forget retry IDs.
+- **Decision:** require a message ID on every send, record it before dispatch, retain bounded outcomes for the live session, provide status lookup, and persist the phone’s pending send before transmission. Reject new sends at capacity rather than forget retry IDs.
 - **Reason:** an accepted prompt can leave the bounded snapshot. Display history alone cannot settle a lost acknowledgement, especially after phone process loss.
 - **Cost:** a small pending-message store and lookup API remain necessary. Host restart can still leave an unknown outcome. Other mutations are not automatically retried.
 - **Revisit when:** measurements justify changing retention or removing a recovery promise. Do not remove identity storage while continuing to claim recovery across phone process loss.
