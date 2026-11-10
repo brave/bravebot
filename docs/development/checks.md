@@ -381,7 +381,8 @@ with no comment at the call or whose file has no row in the table of empty-list 
 `docs/specs/sandboxing.md`, and holds each variable in a `CODE_SELECTORS` list, in
 `crates/sandbox/src/programs.rs` (the generic table), `crates/agent/src/gcloud.rs`,
 `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`, the browser opener's in
-`crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
+`crates/tui/src/opener.rs`, the Windows `powershell` starts' (and `osascript`'s, in a second
+list named `OSASCRIPT_CODE_SELECTORS`) in `crates/tui/src/powershell.rs` and
 the sandbox usability suite's in `crates/agent/src/usability.rs`, to
 a test that keeps a safe value and a test that removes one a stage may write. It fails when the
 opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read
@@ -392,7 +393,13 @@ read it (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only
 cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
 `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in
-`crates/agent/src/usability.rs`, which are not `CODE_SELECTORS` lists. It fails when
+`crates/agent/src/usability.rs`, which are not `CODE_SELECTORS` lists. A list that serves one
+program of a file that holds another is named `<PROGRAM>_CODE_SELECTORS` and read with the first. The generic
+table also holds `CODE_SELECTOR_PREFIXES` (names that begin with a prefix) and
+`CODE_SELECTOR_PATTERNS` (names with a fixed start and end, such as `ASDF_<tool>_VERSION`). This
+script reads `CODE_SELECTOR_PREFIXES` only to compare it with `LOADER_PREFIXES`, and does not read
+`CODE_SELECTOR_PATTERNS`; `an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name`
+pins them. It fails when
 `LOADER_PREFIXES` is missing or empty, shares a prefix with `CODE_SELECTOR_PREFIXES` (which every
 checked start applies, so `LD_DEBUG` would go from gcloud and the opener), or is not passed to
 `withhold_prefixed` by the usability suite's stored-login `gh` start, and when a prefix in it has

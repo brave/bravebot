@@ -35,23 +35,40 @@ use std::process::Stdio;
 /// directory a stage may write
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
 ///
+/// The other names are those of `gio open` and `kde-open`. GLib loads a module from each directory
+/// of `GIO_EXTRA_MODULES` and from `GIO_MODULE_DIR`. Qt loads plug-ins from `QT_PLUGIN_PATH` and
+/// `QT_QPA_PLATFORM_PLUGIN_PATH`, and finds them by the names in `QT_QPA_PLATFORMTHEME`,
+/// `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM` and `QT_STYLE_OVERRIDE`, which are options and so
+/// removed whatever they hold. `KDESYCOCA` is the service cache `kde-open` reads `Exec` lines from.
+///
 /// `HOME` is listed as one directory because `gio open`, which `xdg-open` runs under a GNOME
 /// session, reads `$HOME/.config/mimeapps.list` and `$HOME/.local/share/applications` when
-/// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not set. [`home_reads_outside_stage_writable`] also
-/// judges those two paths, since a stage can write them without writing `HOME` itself.
+/// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not set, and Qt and GLib keep configuration under it.
+/// [`home_reads_outside_stage_writable`] also judges those two paths, since a stage can write them
+/// without writing `HOME` itself. A value a stage may write is removed and the program falls back
+/// to the account's own home.
 ///
 /// `GIO_LAUNCH_DESKTOP` is the path of the wrapper program that `gio open` executes with the whole
 /// command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line 3100), so it is one
 /// file ([`Names::File`]) and is kept only when it is an existing file outside every directory a
 /// stage may write.
-const CODE_SELECTORS: [(&str, Names); 7] = [
+const CODE_SELECTORS: [(&str, Names); 16] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
-    ("GIO_LAUNCH_DESKTOP", Names::File),
     ("XDG_DATA_HOME", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    ("GIO_EXTRA_MODULES", Names::Directories),
+    ("GIO_MODULE_DIR", Names::Directory),
+    ("GIO_LAUNCH_DESKTOP", Names::File),
+    ("QT_PLUGIN_PATH", Names::Directories),
+    ("QT_QPA_PLATFORM_PLUGIN_PATH", Names::Directory),
+    ("QT_QPA_PLATFORMTHEME", Names::Options),
+    ("QT_QPA_GENERIC_PLUGINS", Names::Options),
+    ("QT_QPA_PLATFORM", Names::Options),
+    ("QT_STYLE_OVERRIDE", Names::Options),
+    ("KDESYCOCA", Names::File),
 ];
 
 /// Whether `address` may be handed to the opener, which is the one test every caller shares.
@@ -1047,7 +1064,16 @@ mod tests {
     /// an installed program or directory, or any other variable, loses it.
     #[test]
     fn the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names() {
-        for name in ["EDITOR", "XDG_RUNTIME_DIR", "DISPLAY", "LANG", "PATH"] {
+        for name in [
+            "EDITOR",
+            "XDG_RUNTIME_DIR",
+            "DISPLAY",
+            "LANG",
+            "PATH",
+            "GSETTINGS_SCHEMA_DIR",
+            "GIO_USE_VFS",
+            "QT_QPA_PLATFORM_PLUGIN_PATHS",
+        ] {
             assert!(!withheld(name, "/stage/anything"), "{name} was removed");
         }
         assert!(!withheld("BROWSER", "/safe/bin/firefox"));
@@ -1116,6 +1142,98 @@ mod tests {
         assert!(removed(&linked_config));
         assert!(removed(&linked_applications));
         assert!(removed(&linked_share));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+    }
+
+    /// SANDBOX-30, `gio open` and `kde-open`. The regression it rejects: the opener's list left at
+    /// the XDG names, so a module directory, a launcher, a plug-in directory, a plug-in name or a
+    /// service cache a stage wrote is loaded or read by the program the opener starts. A name whose
+    /// value is a path has a value a stage may write, which is removed, and a safe one, which is
+    /// kept; an option is removed whatever it holds.
+    #[test]
+    fn the_opener_removes_a_glib_or_qt_name_that_selects_code_a_stage_may_write() {
+        assert!(withheld("HOME", "/stage/home"));
+        assert!(withheld("HOME", "home"));
+        assert!(!withheld("HOME", "/safe/home"));
+
+        assert!(withheld("GIO_EXTRA_MODULES", "/stage/modules"));
+        assert!(withheld(
+            "GIO_EXTRA_MODULES",
+            "/safe/modules:/stage/modules"
+        ));
+        assert!(!withheld("GIO_EXTRA_MODULES", "/safe/modules:/safe/more"));
+
+        assert!(withheld("GIO_MODULE_DIR", "/stage/modules"));
+        assert!(!withheld("GIO_MODULE_DIR", "/safe/modules"));
+
+        assert!(withheld("GIO_LAUNCH_DESKTOP", "/stage/launcher"));
+        assert!(!withheld(
+            "GIO_LAUNCH_DESKTOP",
+            "/safe/libexec/gio-launch-desktop"
+        ));
+
+        assert!(withheld("QT_PLUGIN_PATH", "/stage/plugins"));
+        assert!(withheld("QT_PLUGIN_PATH", "/safe/plugins:/stage/plugins"));
+        assert!(!withheld("QT_PLUGIN_PATH", "/safe/plugins:/safe/more"));
+
+        assert!(withheld("QT_QPA_PLATFORM_PLUGIN_PATH", "/stage/platforms"));
+        assert!(!withheld("QT_QPA_PLATFORM_PLUGIN_PATH", "/safe/platforms"));
+
+        assert!(withheld("QT_QPA_PLATFORMTHEME", "evil"));
+        assert!(withheld("QT_QPA_PLATFORMTHEME", "/safe/anything"));
+        assert!(withheld("QT_QPA_PLATFORMTHEME", ""));
+        assert!(withheld("QT_QPA_GENERIC_PLUGINS", "evil"));
+        assert!(withheld("QT_QPA_GENERIC_PLUGINS", "/safe/anything"));
+        assert!(withheld("QT_QPA_GENERIC_PLUGINS", ""));
+        assert!(withheld("QT_QPA_PLATFORM", "evil"));
+        assert!(withheld("QT_QPA_PLATFORM", "/safe/anything"));
+        assert!(withheld("QT_QPA_PLATFORM", ""));
+        assert!(withheld("QT_STYLE_OVERRIDE", "evil"));
+        assert!(withheld("QT_STYLE_OVERRIDE", "/safe/anything"));
+        assert!(withheld("QT_STYLE_OVERRIDE", ""));
+    }
+
+    /// SANDBOX-30, `kde-open`: `KDESYCOCA` names a file, so it is removed when that file is one a
+    /// stage may write and kept when it is an existing file outside them. The regression it rejects:
+    /// `KDESYCOCA` judged as a directory or as an option, or not listed. Judged on the disk, since a
+    /// file has to exist to be kept.
+    #[cfg(unix)]
+    #[test]
+    fn the_opener_judges_a_kde_service_cache_by_the_file_it_names() {
+        let session = crate::testutil::scratch_dir("opener-sycoca-session");
+        let safe = crate::testutil::scratch_dir("opener-sycoca-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&safe).unwrap();
+        let planted = session.join("ksycoca6");
+        let genuine = safe.join("ksycoca6");
+        std::fs::write(&planted, "").unwrap();
+        std::fs::write(&genuine, "").unwrap();
+        let session = session.canonicalize().unwrap();
+        let safe = safe.canonicalize().unwrap();
+
+        // Whether the start takes `name` off when it holds `value`, with every file under the
+        // session one a stage may write.
+        let checked = |name: &str, value: &Path| {
+            let command = opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from(name), value.as_os_str().to_os_string())],
+                &|path: &Path| !path.starts_with(&session),
+            );
+            command
+                .get_envs()
+                .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+
+        assert!(checked("KDESYCOCA", &session.join("ksycoca6")));
+        assert!(checked("KDESYCOCA", &session.join("not-yet")));
+        assert!(checked("KDESYCOCA", Path::new("ksycoca6")));
+        assert!(!checked("KDESYCOCA", &safe.join("ksycoca6")));
+        assert!(checked("KDESYCOCA", &safe));
+
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&safe);
     }

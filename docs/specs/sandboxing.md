@@ -3889,7 +3889,8 @@ file. A new spawn that looks a name up through
 - **A checked start has the variables that make a program run code taken off.** The fourth
   argument of `start` is `CodeSelectors::Kept` or `CodeSelectors::Checked(names)`. Checked removes
   from the environment each variable in `CODE_SELECTORS` in `crates/sandbox/src/programs.rs`, every
-  variable whose name begins `GIT_CONFIG_`, and each variable in `names`, unless its value is one
+  variable whose name begins `GIT_CONFIG_` or `BASH_FUNC_`, every variable named `ASDF_<tool>_VERSION`
+  (`ASDF_` and `_VERSION` around at least one byte), and each variable in `names`, unless its value is one
   the program may be left to run. `names` is `&[]` for a program with no variables of its own in the
   list. Windows matches a name without regard to case. A variable the `inherits` rule withheld stays
   withheld, and one it passes on is judged. A start is checked or kept as the last bullet of this
@@ -3897,27 +3898,37 @@ file. A new spawn that looks a name up through
 
   | Variable | Names |
   |---|---|
-  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS` | a list of directories (`Names::Directories`), split as `PATH` is |
-  | `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH` | one directory (`Names::Directory`) |
-  | `BASH_ENV` | one file (`Names::File`) |
-  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, and every `GIT_CONFIG_` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
+  | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+
+  `SHELLOPTS`, `PS4`, `BASH_FUNC_` and the asdf and pyenv names are in the generic table and not in
+  one program's list because an asdf or pyenv shim is a `#!/usr/bin/env bash` script that is found
+  under the name of the program it stands for (`aws`, `python3`), so any checked start can run one,
+  and a bash script runs the code `PS4` and `BASH_FUNC_` carry whatever program it stands for. What
+  each name was shown to run is in the last bullet but one of "What a checked start does not cover".
+  The pattern `ASDF_<tool>_VERSION` is matched by its shape because the tool is part of the name,
+  and `ASDF_DATA_DIR` is judged by its value, so a prefix of `ASDF_` is not used.
 
   A value is kept when `may_be_run` accepts it for what the variable names, as the last bullet of
   this list states. A list of commands, which `BROWSER` is (`Names::Commands`), is accepted when it
   is not empty and every entry, split as `PATH` is, is one program (accepted as a program is) alone
   or followed by ` %s`, with no whitespace, control character or shell character in it, so a value
   with arguments, a second command or a shell line is removed whole. A variable in no list is left
-  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program, except that the browser
-  opener judges `HOME` as described below. Every checked start is given
-  the generic table, which `programs::withhold_code_selectors_with` applies together with the
+  as it is, so `GIT_CONFIG` and `LD_DEBUG` reach the program, and so does `HOME` for every program
+  but the AWS CLI and the browser opener, whose lists hold it (the browser opener judges it as
+  described below). Every checked start is given the generic table, which
+  `programs::withhold_code_selectors_with` applies together with the
   program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
   ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
   `doctor --push-identity`'s in `crates/cli/src/push_identity.rs`, the browser opener's in
   `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
   the sandbox usability suite's in `crates/agent/src/usability.rs`.
   The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
-  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP` and
-  `HOME`. `GIO_LAUNCH_DESKTOP` is one file (`Names::File`): `gio open` executes the wrapper it names
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP`, `HOME`
+  and the GIO, Qt and KDE names in its table below. `GIO_LAUNCH_DESKTOP` is one file
+  (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
   3100, read only when the process is not setuid), so a value is removed unless it is an existing
   file outside every directory a stage may write. `HOME` is a
@@ -3928,14 +3939,15 @@ file. A new spawn that looks a name up through
   `$HOME/.local/share/applications` leads to one (a path that does not exist is judged by the
   nearest directory above it that does, below `HOME`). A session opened on `~/.config` or
   `~/.local/share/applications` has no row for `HOME` itself, which is why those two are judged. The
-  generic table does not list `HOME`, so gcloud, the AWS CLI and `ssh` keep it. The AWS CLI, the gcloud
-  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list `BROWSER` and the
-  four `XDG_` directories,
+  generic table does not list `HOME`. The AWS CLI lists it as a directory (below), and gcloud, `ssh`
+  and `git` keep it. The AWS CLI, the gcloud launcher and the `ssh-keygen`, `ssh` and `git` of
+  `doctor --push-identity` list `BROWSER` and the four `XDG_` directories,
   since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
   Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
   helper that git's configuration names can do the same. `xdg-open` itself reads `BROWSER` only in
-  its generic path, so under GNOME with `gio` installed it is not read. The desktop application deletes `BROWSER`,
-  `GIO_LAUNCH_DESKTOP` and the four `XDG_` directories from its own environment before it asks
+  its generic path, so under GNOME with `gio` installed it is not read. The desktop application
+  deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories and the GIO, Qt and KDE names
+  of the opener's table below from its own environment before it asks
   Electron to open an address or a file, since
   it starts the opener through Electron and not through this start. It does not delete `HOME`: the
   application reads `HOME` itself, `process.env` is shared with the agent it starts, and a `HOME`
@@ -4056,7 +4068,8 @@ file. A new spawn that looks a name up through
   more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
   in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
   `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs`, in
-  `crates/tui/src/opener.rs`, in `crates/tui/src/powershell.rs` and in `crates/agent/src/usability.rs`:
+  `crates/tui/src/opener.rs`, in `crates/tui/src/powershell.rs` (with `OSASCRIPT_CODE_SELECTORS` for `osascript`) and in
+  `crates/agent/src/usability.rs`:
 
   | `gcloud` variable | Names | Why it selects code |
   |---|---|---|
@@ -4082,21 +4095,97 @@ file. A new spawn that looks a name up through
   | `OPENSSL_CONF` | a file | configuration of the OpenSSL the CLI bundles, which can load an engine or a provider module |
   | `OPENSSL_CONF_INCLUDE` | a directory | where that configuration's `.include` lines are read from |
   | `OPENSSL_ENGINES`, `OPENSSL_MODULES` | a directory | where the bundled OpenSSL loads engines and provider modules from |
+  | `HOME` | a directory | where `~/.aws/config` (a `credential_process`) and `~/.aws/cli/alias` (an alias that starts with `!` runs a shell command) are read from when `AWS_CONFIG_FILE` is not set |
+  | `PAGER`, `MANPAGER` | a list of commands | the program an `aws ... help` page is piped to (`awscli/help.py`), run through a shell; `MANPAGER` is preferred |
+  | `PYTHONWARNINGS` | options | the interpreter imports the module a `-W` filter names, and `PYTHONPATH` can place one |
+  | `BOTOCORE_EXPERIMENTAL__PLUGINS` | options | read by version 1 of the CLI (`awscli/botocore/plugin.py`) for the modules a client loads as plug-ins. No run loaded a module through it, and it is listed because it is read |
 
-  `PYTHONPATH`, `PYTHONSTARTUP` and the other `PYTHON*` variables are not listed: the installed CLI is a
-  frozen executable, and a probe of version 2.37.12 with `PYTHONPATH` and `PYTHONSTARTUP` naming a
-  `sitecustomize.py` did not run it. `AWS_PAGER` and `PAGER` name a program the CLI runs to page
-  output, but every `aws` this program starts has both output streams piped, and a probe with
-  `AWS_PAGER` naming a script, run piped and under a pseudo-terminal, did not run it. The
-  rest of the variables the CLI documents (`AWS_PROFILE`, `AWS_CA_BUNDLE`,
+  The installed CLI of version 2 from AWS is a frozen executable, and a probe of 2.37.12
+  (`/usr/local/bin/aws`) with `PYTHONPATH` naming a `sitecustomize.py`, and with `PYTHONSTARTUP`,
+  did not run it. An `aws` that is a script is a Python program started without `-E` or `-I`, and
+  runs the interpreter's variables. That is the `aws` of a pip install and of the Homebrew
+  `awscli` formula. Its 2.39.7 `Formula/a/awscli.rb` in `Homebrew/homebrew-core` calls
+  `virtualenv_create(libexec, python3, system_site_packages: false)`, `pip_install` for the
+  resources and `pip_install_and_link` for the CLI. The installed `/opt/homebrew/bin/aws` is a link
+  to `Cellar/awscli/2.39.7/bin/aws`, and the entry script `libexec/bin/aws` starts with
+  `#!/opt/homebrew/Cellar/awscli/2.39.7/libexec/bin/python`. What was run and what was read:
+
+  - **Run, Homebrew**: the `awscli` 2.39.7 bottle that `brew install awscli` installs
+    (`aws --version` printed `aws-cli/2.39.7 Python/3.15.2 Darwin/25.6.0 source/arm64`), on macOS
+    26.6, arm64, with `env -i`, a scratch `HOME` and `PATH=/usr/bin:/bin`, and a helper that
+    appends to a marker file planted under each name. A control with nothing planted wrote no
+    marker. The helper ran under `AWS_CONFIG_FILE` (a `credential_process`, and a `[plugins]`
+    section with `cli_legacy_plugin_path`), `AWS_SHARED_CREDENTIALS_FILE` (a `credential_process`),
+    `HOME` (the same `~/.aws/config` entries, and a `!` alias in `~/.aws/cli/alias`), `PAGER` and
+    `MANPAGER` (for `aws s3 help` with output piped), `PYTHONPATH` (a `sitecustomize`, also with
+    `PYTHONSAFEPATH=1`) and `PYTHONWARNINGS` (`ignore::<module>.<Class>` imported the module that
+    `PYTHONPATH` placed). It ran nothing under `PYTHONWARNINGS` alone, `PYTHONHOME`,
+    `PYTHONEXECUTABLE`, `PYTHONUSERBASE`, `PYTHONBREAKPOINT`, `PYTHONSTARTUP` with piped streams,
+    `BOTOCORE_EXPERIMENTAL__PLUGINS`, `AWS_PAGER` with piped streams, or `EDITOR`, `VISUAL` and
+    `BROWSER` for `aws configure list`. Under a pseudo-terminal, with a local HTTP endpoint,
+    `AWS_PAGER` and `PAGER` ran for the output of `aws sts get-caller-identity`, and
+    `--no-cli-pager` stopped them. `PYTHONSTARTUP` ran only with `PYTHONINSPECT=1` and a
+    pseudo-terminal. Every `aws` this program starts has its streams piped, so neither is listed.
+  - **Run, pip**: `awscli` 1.46.3 from pip in a virtualenv of Python 3.15.0 (Homebrew), with the
+    same method. The results match the Homebrew run, with these differences: version 1 ignores
+    `cli_legacy_plugin_path`, and loads a `[plugins]` entry `name = module` only when `PYTHONPATH`
+    names the directory of the module; it ran no pager for `AWS_PAGER` or `PAGER` for the output of
+    `aws sts get-caller-identity` under a pseudo-terminal. `PYTHONDEVMODE`, `PYTHONTRACEMALLOC` and
+    `PYTHONSAFEPATH` each let it exit 0 and ran nothing.
+  - **Run, frozen 2.37.12**: the config-file results above (a `credential_process`, a `!` alias, a
+    `[plugins]` entry, and `PAGER` and `MANPAGER` for `aws s3 help`) hold for it too, and nothing
+    ran under `PYTHONPATH` or `PYTHONSTARTUP` with piped streams. `AWS_PAGER` and `PAGER` ran for
+    the output of a command under a pseudo-terminal and not when the streams were piped.
+  - **`BOTOCORE_EXPERIMENTAL__PLUGINS`** is read at `awscli/botocore/plugin.py` of 1.46.3. With
+    `p=<module>` and `PYTHONPATH` naming the module, neither 1.46.3 nor Homebrew 2.39.7 loaded it.
+    The CLI creates its own clients with `PluginContext(plugins="DISABLED")`
+    (`create_nested_client` in `awscli/botocore/utils.py`). Source of 2.39.7 (commit
+    1db1c87dcc3a560dfbad7ea07bb37d0ab6ed010b of `aws/aws-cli`) holds no read of the name in
+    `awscli/*.py` and no `awscli/botocore/plugin.py`. It stays in the list because 1.46.3 reads it.
+  - **Read from source**: in 2.39.7 `awscli/clidriver.py` reads `AWS_PAGER` (line 390) and `PAGER`
+    (line 398), and `awscli/help.py` reads `MANPAGER` (line 135). In 1.46.3 `awscli/help.py` reads
+    `MANPAGER` and then `PAGER` (lines 85 to 88) and starts the pager with `shell=True`, and
+    `awscli/customizations/globalargs.py` reads `AWS_PAGER` only to warn about it.
+
+  The rest of the variables the CLI documents (`AWS_PROFILE`, `AWS_CA_BUNDLE`,
   `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_DATA_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`) name data the CLI
-  parses and does not run. This list was read from the CLI's own topic pages and the strings of the
-  executable and its bundled `libcrypto`, and cannot show that no other variable selects code
-  ([PATH-008](../best-practices/paths.md#PATH-008)). `gcloud` is a Python program started without
-  `-E` or `-I`, which is why its list holds the `PYTHON*` variables and the AWS CLI's does not.
+  parses and does not run. This list was read from the CLI's own topic pages, the strings of the
+  executable and its bundled `libcrypto`, and the runs above, and cannot show that no other variable
+  selects code ([PATH-008](../best-practices/paths.md#PATH-008)). `gcloud` is a Python program
+  started without `-E` or `-I`, which is why its list holds the `PYTHON*` variables. The AWS list
+  does not, since the generic table holds those the script run reached (`PYTHONPATH`) and a probe of
+  the frozen executable reached none.
   The test that runs the installed CLI with a `credential_process` helper is skipped on a machine
   with no `aws` in a directory the lookup accepts, so its `verified-by` line holds only where the
   CLI is installed.
+
+  The browser opener's list is:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `BROWSER` | a list of commands | the commands `xdg-open` and Python's `webbrowser` run |
+  | `XDG_DATA_HOME`, `XDG_CONFIG_HOME` | a directory | where `xdg-open` and `gio open` read `mimeapps.list` and the `.desktop` entry of the handler |
+  | `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS` | a list of directories | the same, searched in order |
+  | `HOME` | a directory | the base of the four above when they are not set, so a changed `HOME` selects the handler. `$HOME/.config` and `$HOME/.local/share/applications` are judged with it |
+  | `GIO_EXTRA_MODULES` | a list of directories | modules `gio` loads |
+  | `GIO_MODULE_DIR` | a directory | the directory `gio` loads modules from |
+  | `GIO_LAUNCH_DESKTOP` | a file | the wrapper `gio open` executes with the command line of the handler it starts |
+  | `QT_PLUGIN_PATH` | a list of directories | where Qt, and so `kde-open`, loads plug-ins from |
+  | `QT_QPA_PLATFORM_PLUGIN_PATH` | a directory | where Qt loads the platform plug-in from |
+  | `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM`, `QT_STYLE_OVERRIDE` | options | name the plug-in Qt loads from the directories above |
+  | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
+
+  What was run and what was read for these names is in "What a checked start does not cover".
+
+  `osascript` is given `OSASCRIPT_CODE_SELECTORS` in `crates/tui/src/powershell.rs`, the generic
+  table, and no other list:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `CFFIXED_USER_HOME` | a directory | the home directory `osascript` takes its user-domain `Library/Script Libraries` and `Library/ScriptingAdditions` from, where a compiled script library it is asked to use runs its handlers |
+
+  `HOME` is not listed for `osascript`: it does not follow `HOME` (the runs are under "What a checked
+  start does not cover").
 
   The `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` starts are all built by `started`
   in `crates/cli/src/push_identity.rs`, so one list covers the three:
@@ -4116,8 +4205,8 @@ file. A new spawn that looks a name up through
 
   The `powershell` that the clipboard tool and `/caffeinate` start on Windows is started by
   `powershell::start` in `crates/tui/src/powershell.rs`, which both call. It gives a program whose
-  name is `powershell` (with or without `.exe`, in any case) this list and every other program the
-  generic table alone:
+  name is `powershell` (with or without `.exe`, in any case) this list, a program whose name is
+  `osascript` the `osascript` list below, and every other program the generic table alone:
 
   | Variable | Names | Why it selects code |
   |---|---|---|
@@ -4153,7 +4242,7 @@ file. A new spawn that looks a name up through
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
   | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` is not read on macOS and is tracked by #3810 | the strings of the macOS binaries. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
-  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. The Linux tools are tracked by #3810 | the strings of the macOS binaries, for those two only |
+  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` and `osascript`, which have lists of their own | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. The Linux tools are tracked by #3810 | the strings of the macOS binaries, for those two only |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
 
   The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
@@ -4196,7 +4285,8 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 
 **What a checked start does not cover.** A checked start removes the generic names and the names its
 caller lists, and a name nobody listed reaches the program. Each bullet says what was read from a
-program's documentation or launcher and what was run. These were not shown by running the program:
+program's documentation or launcher, what was read from source and what was run. These were not
+shown by running the program, or not entirely:
 
 - The Windows `powershell` starts of the clipboard tool (`crates/tui/src/clipboard.rs`) and of the
   inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table and the list in
@@ -4208,9 +4298,69 @@ program's documentation or launcher and what was run. These were not shown by ru
   loader. It is tracked by #3810.
 - `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
   and no names of their own, and have not been run on Linux. It is tracked by #3810.
-- A Homebrew or pip `aws` script and an asdf or pyenv shim start an
-  interpreter or another program by variables of their own, which are not listed. It is tracked by
-  #3809. The variables `gio open` and `kde-open` read are recorded in the next bullet.
+- A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
+  examined for the variables they read to choose code, by running each where it could be run, and
+  the names are in the generic table or in the list of the start that runs the program (the AWS
+  CLI's, the browser opener's, `osascript`'s). The runs were on macOS 26.6 (arm64) with an
+  environment holding only the variable under test, `PATH=/usr/bin:/bin` and a scratch `HOME`, and
+  each name below is marked **run** (a planted helper ran) or **source** (read in the file named,
+  not run). A name that ran nothing is recorded as such. No run found every variable a program
+  reads, so each list can be incomplete ([PATH-008](../best-practices/paths.md#PATH-008)).
+  - **Bash scripts** (every asdf and pyenv shim is `#!/usr/bin/env bash`). Run under bash 3.2.57
+    (`/usr/bin`) and 5.3.20 (Homebrew) with the same results: `SHELLOPTS=xtrace` with a `PS4` that
+    holds a command substitution ran the command; an exported function `BASH_FUNC_<name>%%` ran
+    when the script called a command of that name (`BASH_FUNC_pyenv-version-name%%` and
+    `BASH_FUNC_cp%%` ran; `BASH_FUNC_readlink%%` did not);
+    `BASH_ENV` ran a file. `BASHOPTS` ran nothing. These are in the generic table, since they apply
+    to any bash script. The test `a_bash_script_runs_the_code_in_shellopts_ps4_and_an_exported_function`
+    runs a planted bash script that way.
+  - **pyenv** (commit 9e40c078 of `pyenv/pyenv`, with the shims `pyenv rehash` writes). Run:
+    `PYENV_HOOK_PATH` (a `.bash` file under `<dir>/exec/` was sourced), `PYENV_ROOT` (`pyenv exec`
+    sourced a hook from `<root>/pyenv.d/exec`; an installed shim sets its own `PYENV_ROOT`, so the
+    name matters when `pyenv` itself is started), `PYENV_VERSION=../../../evil` (resolved to
+    `$PYENV_ROOT/versions/../../../evil/bin/python3`, which ran; an absolute path did not).
+    `HOME` selects `$HOME/.pyenv` when `PYENV_ROOT` is unset, and a hook under it ran with
+    `pyenv exec`. Nothing ran under `PYENV_DIR`, `_PYENV_SHIM_PATH`, `PYENV_NATIVE_EXT` or `PYTHONPATH` (the planted Python never
+    started). `PYENV_DEBUG` was run only together with a `PS4` that holds a command substitution,
+    which ran it, as the `PS4` row above does. A plug-in under
+    `PYENV_ROOT/plugins/*/bin` was not run by `pyenv version-name` and is not claimed.
+  - **asdf** (release binary v0.20.2, commit cb72590, darwin-arm64, whose shims are
+    `exec asdf exec "<tool>" "$@"`). Run: `ASDF_DATA_DIR` (a plug-in `exec-env` and an installed
+    tool ran from the directory), `ASDF_CONFIG_FILE` (a `pre_<tool>_<command>` line of the file
+    ran), `ASDF_<TOOL>_VERSION=path:<dir>` (ran `<dir>/bin/<tool>`; `ASDF_FOO_VERSION=2.0.0` ran
+    nothing; the name holds the tool, so it is matched by shape in `CODE_SELECTOR_PATTERNS`) and
+    `HOME` (with a `.tool-versions`, `~/.asdf/installs/<tool>/<version>/bin/<tool>` ran). Nothing
+    ran under `ASDF_DIR`, `ASDF_CONCURRENCY` or `ASDF_TOOL_VERSIONS_FILENAME`. `HOME` is in
+    the AWS CLI's list and the opener's and in no other, because gcloud, `ssh` and `git` need it, so
+    an asdf or pyenv shim that stands for another program is run with the `HOME` it was given.
+    That gap is not closed here.
+  - **`aws` script**: the names, and the versions, are in the AWS table above. Run: Homebrew
+    `awscli` 2.39.7 and pip `awscli` 1.46.3 (scripts), and the frozen 2.37.12 executable. Version
+    2.39.7 was also read from source.
+  - **`gio open`**. Run on macOS with Homebrew `gio` 2.90.1: a planted library whose constructor
+    writes a marker ran under `GIO_EXTRA_MODULES` and under `GIO_MODULE_DIR`, for `gio open
+    x-probe://a` and for `gio open /etc/hosts`, and did not run without them. Source, GLib 2.86.0
+    (commit e33be08bda99): `GIO_EXTRA_MODULES` and `GIO_MODULE_DIR` in `gio/giomodule.c` (both
+    ignored in a setuid program), `GIO_LAUNCH_DESKTOP` in `gio/gdesktopappinfo.c`, the four `XDG_`
+    names and `HOME` in `glib/gutils.c`. Handler selection through `.desktop` entries is not
+    observable on macOS, where `gio/gio-tool-open.c` skips it, and was run on Linux with 2.86.0
+    for the four `XDG_` names (the browser opener bullet below). Read in the files named, with no
+    load of code found: `GSETTINGS_SCHEMA_DIR`,
+    `GSETTINGS_BACKEND`, `GIO_USE_VFS` (which choose among modules already loaded) and
+    `DBUS_SESSION_BUS_ADDRESS` (selects a bus).
+  - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. Its names are
+    from source only, read at these commits, none of which is a release tag: kde-cli-tools
+    aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
+    `KIOCLIENT_AS_KDEOPEN`), KIO a80751d2, KService 2bd4461c and KCoreAddons e96958b2, and Qt 6.10.0
+    (tag v6.10.0, commit 5a8637e4516b). `QT_PLUGIN_PATH` (`qcoreapplication.cpp`) and
+    `QT_QPA_PLATFORM_PLUGIN_PATH` (`qguiapplication.cpp`) name directories plug-ins load from,
+    `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS` and `QT_QPA_PLATFORM` (`qguiapplication.cpp`)
+    and `QT_STYLE_OVERRIDE` (`qapplication.cpp`) name the plug-in loaded from them, and
+    `KDESYCOCA` (`ksycoca.cpp`) names the cache the `Exec` line of a handler is read from. Which
+    release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
+    `KDEDIRS`, `KDE_FULL_SESSION`, `KDE_SESSION_VERSION`, `KDE_FORK_SLAVES` and the `QML*_IMPORT_PATH`
+    names have no read in the files searched, which does not show they are never read. A run of
+    `kde-open` on Linux is tracked by #3822.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
   mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
@@ -4256,7 +4406,7 @@ program's documentation or launcher and what was run. These were not shown by ru
   `external-open.ts` and the control, and fails when `openPath` skips the deletion. It prints
   `skipped` where there is no Linux, `xvfb-run` or Electron binary. It needed `--no-sandbox` and
   `--disable-dev-shm-usage` on the host that ran it. The by-hand run was made before
-  `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets six.
+  `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets fifteen.
   `make check-code-selectors` fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or
   `NAMES` in that test differs from `CODE_SELECTORS` in `crates/tui/src/opener.rs` other than by
   `HOME`, which the desktop application leaves set because it and the agent it starts read it.
@@ -4335,8 +4485,24 @@ program's documentation or launcher and what was run. These were not shown by ru
   the launchers read is therefore complete only for `xdg-open` and `xdg-mime` 1.2.1 and, for the
   files named above, `gio open` and `kde-open`.
   They are tracked by #3822.
-- `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
-  tracked by #3809.
+- `osascript` was run on macOS 26.6 (arm64) with `/usr/bin/osascript` and `env -i
+  PATH=/usr/bin:/bin`. A compiled script library `Marker3809.scpt` (built with `osacompile`) in
+  `<home>/Library/Script Libraries`, whose handler appends to a marker file, was used with
+  `osascript -e 'use lib : script "Marker3809"' -e "return lib's ping()"`. With `HOME=<home>` it
+  failed with `Can't get script "Marker3809" (-1728)` and wrote no marker. With
+  `CFFIXED_USER_HOME=<home>`, whatever `HOME` was, it printed `1` and wrote the marker. `path to
+  scripting additions from user domain`, `path to library folder from user domain`, `path to home
+  folder` and `path to application support from user domain` all resolved to the account's home
+  under a changed `HOME` and to `<home>` under `CFFIXED_USER_HOME`. So `osascript` follows
+  `CFFIXED_USER_HOME` and not `HOME`, and `CFFIXED_USER_HOME` is its list. A plain-text
+  `.applescript` in `Script Libraries` was not loaded. An `.osax` bundle in `ScriptingAdditions`
+  was not built, so only the resolved path, and not the load of an `.osax`, is shown to follow
+  `CFFIXED_USER_HOME`. `strings -a /usr/bin/osascript` holds no upper-case variable name, and
+  `fs_usage` and `dtruss` were not run (they need privileges), so another name may exist.
+  `defaults read` did not follow `CFFIXED_USER_HOME`, so the name is not shown to apply to other
+  programs and is not in the generic table.
+  `a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start` runs this
+  with the checked start and prints `skipped` where `osascript` or `osacompile` is absent.
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
   are given the generic table and the suite's own list ([SANDBOX-21](#SANDBOX-21)). Each name was
   found by running the program with a helper planted under it on macOS 26 (arm64) with GNU Make
@@ -4508,6 +4674,17 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_sandbox::programs::a_callers_own_names_are_judged_on_top_of_the_generic_ones`
 `verified-by: bravebot_sandbox::programs::a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup`
 `verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
+`verified-by: bravebot_sandbox::programs::the_table_holds_each_name_that_makes_a_bash_script_or_a_shim_run_code`
+`verified-by: bravebot_sandbox::programs::an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name`
+`verified-by: bravebot_sandbox::programs::an_exported_function_or_tool_version_whose_name_is_not_text_is_removed`
+`verified-by: bravebot_sandbox::programs::a_bash_script_runs_the_code_in_shellopts_ps4_and_an_exported_function`
+`verified-by: bravebot_bedrock::credentials::a_pager_the_cli_runs_for_its_help_is_kept_only_when_it_is_an_installed_program`
+`verified-by: bravebot_bedrock::credentials::a_home_a_stage_may_write_is_not_the_one_the_cli_reads_its_configuration_from`
+`verified-by: bravebot_bedrock::credentials::a_python_warning_filter_or_botocore_plugin_is_removed_whatever_it_holds`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_glib_or_qt_name_that_selects_code_a_stage_may_write`
+`verified-by: bravebot_tui::opener::the_opener_judges_a_kde_service_cache_by_the_file_it_names`
+`verified-by: bravebot_tui::powershell::osascript_has_a_user_home_it_would_load_script_libraries_from_removed_when_a_stage_may_write_it`
+`verified-by: bravebot_tui::powershell::a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
 `verified-by: bravebot_sandbox::programs::the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
@@ -4546,7 +4723,7 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the five names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the five names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`

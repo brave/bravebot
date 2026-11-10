@@ -252,6 +252,20 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     selectors::PYTHONPYCACHEPREFIX,
     selectors::PYTHONHOME,
     ("BASH_ENV", Names::File),
+    // A program that is a bash script, which every shim and many wrappers are: `xtrace` with a
+    // `PS4` that holds a command substitution runs that command, whatever the script does.
+    ("SHELLOPTS", Names::Options),
+    ("PS4", Names::Options),
+    // Version-manager shims, found by the name of the program they stand for. pyenv's hook
+    // directories and root, and asdf's data directory and configuration file, name files the shim
+    // sources or runs. `PYENV_VERSION` is a version name that pyenv joins to its root, so
+    // `../../../x` selects a program outside it. `ASDF_<TOOL>_VERSION` is in
+    // `CODE_SELECTOR_PATTERNS`.
+    ("ASDF_DATA_DIR", Names::Directory),
+    ("ASDF_CONFIG_FILE", Names::File),
+    ("PYENV_ROOT", Names::Directory),
+    ("PYENV_HOOK_PATH", Names::Directories),
+    ("PYENV_VERSION", Names::Options),
     ("DEVELOPER_DIR", Names::Directory),
     ("GIT_EXEC_PATH", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
@@ -266,7 +280,18 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
 /// Prefixes of variable names that are all [`Names::Options`]. `GIT_CONFIG_COUNT`,
 /// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` write configuration, which can name a program
 /// to run, and `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name the files it is read from.
-pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_"];
+///
+/// `BASH_FUNC_<name>%%` is how bash passes an exported function to a program that is a bash
+/// script, which then runs it when the script calls `<name>`.
+pub const CODE_SELECTOR_PREFIXES: &[&str] = &["GIT_CONFIG_", "BASH_FUNC_"];
+
+/// Variable names built from a prefix and a suffix around a part the person or a tool chooses, each
+/// a [`Names::Options`] name, as `(prefix, suffix)`.
+///
+/// asdf reads `ASDF_<TOOL>_VERSION`, and a value `path:<directory>` makes the shim run
+/// `<directory>/bin/<tool>`. The name cannot be listed whole, and the prefix `ASDF_` alone would
+/// also remove `ASDF_DATA_DIR`, which is judged by its value.
+pub const CODE_SELECTOR_PATTERNS: &[(&str, &str)] = &[("ASDF_", "_VERSION")];
 
 /// Prefixes of the dynamic loader's variables, which load a library into a program before it runs:
 /// `DYLD_INSERT_LIBRARIES`, `LD_PRELOAD` and the rest of the `DYLD_` and `LD_` names.
@@ -335,9 +360,26 @@ fn begins_variable(held: &OsStr, prefix: &str) -> bool {
         })
 }
 
+/// Whether `held` begins with `prefix` and ends with `suffix` with at least one byte between them,
+/// with the case rule of [`is_variable`]. Read as bytes.
+fn is_patterned(held: &OsStr, prefix: &str, suffix: &str) -> bool {
+    let bytes = held.as_encoded_bytes();
+    let same = |start: &[u8], wanted: &str| {
+        if cfg!(windows) {
+            start.eq_ignore_ascii_case(wanted.as_bytes())
+        } else {
+            start == wanted.as_bytes()
+        }
+    };
+    bytes.len() > prefix.len() + suffix.len()
+        && same(&bytes[..prefix.len()], prefix)
+        && same(&bytes[bytes.len() - suffix.len()..], suffix)
+}
+
 /// What a [`CodeSelectors::Checked`] start takes off `command`: the names in `own` and in
 /// [`CODE_SELECTORS`] by [`withhold_code_selectors_with`], and every held name that begins with one
-/// of [`CODE_SELECTOR_PREFIXES`], which are [`Names::Options`] and so never pass.
+/// of [`CODE_SELECTOR_PREFIXES`] and every held name that matches one of
+/// [`CODE_SELECTOR_PATTERNS`], which are [`Names::Options`] and so never pass.
 ///
 /// A name in both `own` and [`CODE_SELECTORS`] is judged by both, so it is taken off when either
 /// says so. The prefix rule reads the names themselves, so it covers a name that is not text.
@@ -353,6 +395,14 @@ fn withhold_checked(
         CODE_SELECTOR_PREFIXES,
         held.iter().map(|(name, _)| name.clone()),
     );
+    for (name, _) in &held {
+        if CODE_SELECTOR_PATTERNS
+            .iter()
+            .any(|(prefix, suffix)| is_patterned(name, prefix, suffix))
+        {
+            command.env_remove(name);
+        }
+    }
     let listed: Vec<(&str, Names)> = own.iter().chain(CODE_SELECTORS).copied().collect();
     withhold_code_selectors_with(
         command,
@@ -2339,6 +2389,165 @@ mod tests {
             "CLOUDSDK_PYTHON_ARGS",
         ] {
             assert!(checked(name, &planted, &session), "{name} was kept");
+        }
+    }
+
+    /// The regression it rejects: a bash script, which every asdf and pyenv shim is, left to run a
+    /// command a stage planted through its trace prompt, an exported function or a version name.
+    /// Each of these was shown to run code in a bash script by a real run (SANDBOX-30).
+    #[cfg(unix)]
+    #[test]
+    fn the_table_holds_each_name_that_makes_a_bash_script_or_a_shim_run_code() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t1s");
+
+        for name in ["SHELLOPTS", "PS4", "PYENV_VERSION"] {
+            for value in ["../../../evil", "xtrace", ""] {
+                assert!(checked(name, Path::new(value), &session), "{name}={value}");
+            }
+            assert!(checked(name, &genuine, &session), "{name} kept a path");
+        }
+        for name in ["ASDF_DATA_DIR", "PYENV_ROOT"] {
+            assert!(checked(name, &planted, &session), "{name} was kept");
+            assert!(checked(name, &session, &session), "{name} was kept");
+            assert!(!checked(name, &safe, &session), "{name} was removed");
+        }
+        assert!(checked("ASDF_CONFIG_FILE", &planted, &session));
+        assert!(!checked("ASDF_CONFIG_FILE", &genuine, &session));
+        let list = |entries: &[&Path]| path_of(entries);
+        assert!(checked(
+            "PYENV_HOOK_PATH",
+            Path::new(&list(&[&safe, &session])),
+            &session
+        ));
+        assert!(!checked(
+            "PYENV_HOOK_PATH",
+            Path::new(&list(&[&safe, &genuine])),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: the prefix `BASH_FUNC_` or the pattern `ASDF_<TOOL>_VERSION`
+    /// dropped, matched on the start of the name alone, matched only for names the table spells
+    /// out, or widened so a neighbouring name is removed. `ASDF_DATA_DIR` is judged by its value, so
+    /// a prefix of `ASDF_` would remove it for a genuine setup.
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name() {
+        let (session, _safe, _planted, genuine) = planted_and_genuine("t1p");
+
+        for name in [
+            "BASH_FUNC_pyenv-version-name%%",
+            "BASH_FUNC_readlink%%",
+            "BASH_FUNC_x",
+            "ASDF_FOO_VERSION",
+            "ASDF_NODEJS_VERSION",
+            "ASDF_A_B_VERSION",
+        ] {
+            assert!(checked(name, &genuine, &session), "{name} was kept");
+            assert!(checked(name, Path::new("path:/x"), &session), "{name}");
+            assert!(checked(name, Path::new(""), &session), "{name}");
+        }
+        for name in [
+            "ASDF_DATA_DIR",
+            "ASDF_VERSION",
+            "ASDF__VERSION",
+            "ASDF_FOO_VERSIONS",
+            "XASDF_FOO_VERSION",
+            "ASDF_FOO_VERSIO",
+            "BASH_FUNC",
+            "MY_BASH_FUNC_x",
+        ] {
+            assert!(!checked(name, &genuine, &session), "{name} was removed");
+        }
+    }
+
+    /// SANDBOX-30, run: a bash script, which every asdf and pyenv shim is, runs a command a
+    /// stage put in its trace prompt or in an exported function, and the checked start takes
+    /// both names off. The control (the names set on a plain command) must run the code, so the
+    /// check cannot pass because the script never reaches it. Prints `skipped` and passes where
+    /// `/bin/bash` is absent, and fails under `CI`.
+    #[cfg(unix)]
+    #[test]
+    fn a_bash_script_runs_the_code_in_shellopts_ps4_and_an_exported_function() {
+        let bash = Path::new("/bin/bash");
+        if !bash.exists() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "/bin/bash is absent under CI"
+            );
+            eprintln!("skipped: /bin/bash is absent");
+            return;
+        }
+        let (session, _safe, _planted, _genuine) = planted_and_genuine("t1r");
+        let marker = session.join("marker");
+        let script = session.join("shim.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\nbasename /x\n").unwrap();
+        let ps4 = format!("$(echo ps4 >> '{}')+ ", marker.display());
+        let function = format!("() {{ echo function >> '{}'; }}", marker.display());
+        let names = [
+            ("SHELLOPTS", "xtrace".to_string()),
+            ("PS4", ps4),
+            ("BASH_FUNC_basename%%", function),
+        ];
+
+        let control = Command::new(bash)
+            .arg(&script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .envs(names.iter().map(|(name, value)| (*name, value)))
+            .output()
+            .unwrap();
+        assert!(control.status.success(), "{control:?}");
+        let ran = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(
+            ran.contains("ps4") && ran.contains("function"),
+            "the control did not run both: {ran:?}"
+        );
+        std::fs::remove_file(&marker).unwrap();
+
+        for (name, value) in &names {
+            assert!(
+                removes(
+                    CodeSelectors::Checked(&[]),
+                    name,
+                    OsStr::new(value),
+                    &session
+                ),
+                "{name} was kept"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&session);
+    }
+
+    /// The regression it rejects: the prefix and pattern read as text, so a name that is not text
+    /// but has the shape stays with the program.
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_function_or_tool_version_whose_name_is_not_text_is_removed() {
+        use std::os::unix::ffi::OsStrExt;
+        let (session, _safe, _planted, genuine) = planted_and_genuine("t1b");
+
+        for name in [&b"BASH_FUNC_\xff%%"[..], &b"ASDF_\xff_VERSION"[..]] {
+            let command = start_against(
+                &Resolved::written_in_source("/usr/bin/env"),
+                Inherits::All,
+                SearchPath::Inherited,
+                CodeSelectors::Checked(&[]),
+                [(
+                    OsStr::from_bytes(name).to_os_string(),
+                    genuine.clone().into_os_string(),
+                )],
+                &|file: &Path| {
+                    outside_stage_writable_with(file, std::slice::from_ref(&session), &[])
+                },
+            );
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(set, now)| set.as_bytes() == name && now.is_none()),
+                "{} was kept",
+                String::from_utf8_lossy(name)
+            );
         }
     }
 

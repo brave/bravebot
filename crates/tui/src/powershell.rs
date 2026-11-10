@@ -49,10 +49,23 @@ const CODE_SELECTORS: [(&str, Names); 11] = [
     ("CORECLR_PROFILER_PATH_64", Names::File),
 ];
 
+/// What `osascript` reads to choose code to run, judged on top of the generic names. The script
+/// libraries (`~/Library/Script Libraries`) and scripting additions (`~/Library/ScriptingAdditions`)
+/// of the user domain are found under `CFFIXED_USER_HOME` when it is set, and a compiled library
+/// there runs when a script uses it. `HOME` does not move them (run on macOS 26.6; SANDBOX-30), so
+/// it is not listed. Only `osascript` is given this list, since `CFFIXED_USER_HOME` is not shown to
+/// be read by other programs.
+const OSASCRIPT_CODE_SELECTORS: [(&str, Names); 1] = [("CFFIXED_USER_HOME", Names::Directory)];
+
 /// Whether `program`, as a lookup resolved it, is PowerShell: a file named `powershell`, with or
 /// without a Windows executable extension and in any case.
 fn is_powershell(program: &Path) -> bool {
     bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "powershell")
+}
+
+/// Whether `program`, as a lookup resolved it, is `osascript`.
+fn is_osascript(program: &Path) -> bool {
+    bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "osascript")
 }
 
 /// The command that starts the tool the lookup found at `program`: the person's whole environment,
@@ -61,7 +74,8 @@ fn is_powershell(program: &Path) -> bool {
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
 ///
 /// The generic names are removed when their value names a file a stage may write. PowerShell has
-/// [`CODE_SELECTORS`] removed as well, and no other tool does.
+/// [`CODE_SELECTORS`] removed as well, `osascript` has [`OSASCRIPT_CODE_SELECTORS`], and no other
+/// tool has a list.
 pub(crate) fn start(program: PathBuf) -> Command {
     start_against(
         &Resolved::found_earlier(program),
@@ -86,13 +100,22 @@ fn start_against(
             held,
             outside_stage_writable,
         )
+    } else if is_osascript(program.as_path()) {
+        bravebot_sandbox::programs::start_against(
+            program,
+            Inherits::All,
+            SearchPath::Reduced,
+            CodeSelectors::Checked(&OSASCRIPT_CODE_SELECTORS),
+            held,
+            outside_stage_writable,
+        )
     } else {
         bravebot_sandbox::programs::start_against(
             program,
             Inherits::All,
             SearchPath::Reduced,
-            // A clipboard or inhibitor tool other than PowerShell: the generic table alone
-            // (SANDBOX-30, empty-list starts).
+            // A clipboard or inhibitor tool other than PowerShell and `osascript`: the generic
+            // table alone (SANDBOX-30, empty-list starts).
             CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,
@@ -308,6 +331,130 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// SANDBOX-30, run on macOS 26.6: `osascript` loads a compiled script library from
+    /// `Library/Script Libraries` under `CFFIXED_USER_HOME`. The regression it rejects: the name
+    /// not listed for `osascript`, so a library a stage wrote runs; classed as options, so a safe
+    /// directory is removed; or listed as `HOME`, which `osascript` does not follow.
+    #[test]
+    fn osascript_has_a_user_home_it_would_load_script_libraries_from_removed_when_a_stage_may_write_it()
+     {
+        let fixture = Fixture::new("osascript-home");
+        let planted = fixture.planted_directory();
+        let genuine = fixture.genuine_directory();
+        let removed = |program: &str, name: &str, value: &Path| {
+            started(program, name, value, &fixture)
+                .get_envs()
+                .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+        let withheld = |name: &str, value: &Path| removed("/usr/bin/osascript", name, value);
+
+        assert!(withheld("CFFIXED_USER_HOME", &planted));
+        assert!(withheld("CFFIXED_USER_HOME", Path::new("modules")));
+        assert!(withheld("CFFIXED_USER_HOME", &fixture.safe.join("missing")));
+        assert!(!withheld("CFFIXED_USER_HOME", &genuine));
+        // `HOME` is not what `osascript` follows, so it is left as set.
+        assert!(!withheld("HOME", &planted));
+        // Another tool, PowerShell included, is not given the name.
+        for program in ["/windows/powershell.exe", "/usr/bin/xclip"] {
+            assert!(
+                !removed(program, "CFFIXED_USER_HOME", &planted),
+                "{program}"
+            );
+        }
+        // `osascript` is not given PowerShell's names.
+        assert!(!withheld("PSModulePath", &planted));
+        assert!(is_osascript(Path::new("/usr/bin/osascript")));
+        assert!(!is_osascript(Path::new("/usr/bin/osascript-helper")));
+    }
+
+    /// SANDBOX-30, run on macOS: a compiled script library a stage wrote under
+    /// `CFFIXED_USER_HOME` runs when `osascript` uses it, and the checked start does not let that
+    /// happen. The control (the name set, the start not applied) must run the library, so the check
+    /// cannot pass because the library never loads. Prints `skipped` and passes where `osascript`
+    /// or `osacompile` is absent, and fails under `CI` on macOS.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start() {
+        let (osascript, osacompile) = (
+            Path::new("/usr/bin/osascript"),
+            Path::new("/usr/bin/osacompile"),
+        );
+        if !osascript.exists() || !osacompile.exists() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "osascript or osacompile is absent under CI"
+            );
+            eprintln!("skipped: osascript or osacompile is absent");
+            return;
+        }
+        let base = scratch_dir("osascript-real-run");
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let libraries = home.join("Library").join("Script Libraries");
+        std::fs::create_dir_all(&libraries).unwrap();
+        let marker = base.join("marker");
+        let source = base.join("Marker3809.applescript");
+        std::fs::write(
+            &source,
+            format!(
+                "on ping()\n  do shell script \"echo ran >> '{}'\"\n  return 1\nend ping\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let compiled = Command::new(osacompile)
+            .arg("-o")
+            .arg(libraries.join("Marker3809.scpt"))
+            .arg(&source)
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        let home = home.canonicalize().unwrap();
+        let session = base.canonicalize().unwrap();
+        let args = [
+            "-e",
+            "use lib : script \"Marker3809\"",
+            "-e",
+            "return lib's ping()",
+        ];
+
+        // Control: the name set as the person would set it, with no start applied.
+        let control = Command::new(osascript)
+            .args(args)
+            .env_clear()
+            .env("CFFIXED_USER_HOME", &home)
+            .output()
+            .unwrap();
+        assert!(control.status.success(), "{control:?}");
+        assert!(marker.exists(), "the control did not run the library");
+        std::fs::remove_file(&marker).unwrap();
+
+        // The checked start, with the session the one directory a stage may write.
+        let writable = vec![session];
+        let mut start = start_against(
+            &Resolved::found_earlier(osascript),
+            [(
+                OsString::from("CFFIXED_USER_HOME"),
+                home.clone().into_os_string(),
+            )],
+            &|file: &Path| {
+                bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
+            },
+        );
+        let removed = start
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new("CFFIXED_USER_HOME") && now.is_none());
+        assert!(removed, "the start kept CFFIXED_USER_HOME");
+        let checked = start.args(args).output().unwrap();
+        assert!(!checked.status.success(), "{checked:?}");
+        assert!(
+            !marker.exists(),
+            "the library ran through the checked start"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// SANDBOX-30. The list is given to the program the lookup resolved to, which on Windows keeps
