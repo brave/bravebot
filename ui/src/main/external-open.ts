@@ -6,7 +6,9 @@
  * handler that opens an address or a file from the `XDG_` directories. A program the person
  * approved with `run` may have written the file any of these name, and the opener then runs it
  * outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
- * `crates/tui/src/opener.rs`.
+ * `crates/tui/src/opener.rs`, which also judges `HOME` and removes it from the opener's own start.
+ * `HOME` is not deleted here: this process and the agent it starts read it, so under a GNOME
+ * session on Linux the opener still reads a `HOME` the sandbox let a program write.
  *
  * The names are deleted from `process.env`, which Node writes through to the process's real
  * environment, immediately before each call, so the first call and every later one is covered

@@ -3902,21 +3902,35 @@ file. A new spawn that looks a name up through
   is not empty and every entry, split as `PATH` is, is one program (accepted as a program is) alone
   or followed by ` %s`, with no whitespace, control character or shell character in it, so a value
   with arguments, a second command or a shell line is removed whole. A variable in no list is left
-  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program. Every checked start is given
+  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program, except that the browser
+  opener judges `HOME` as described below. Every checked start is given
   the generic table, which `programs::withhold_code_selectors_with` applies together with the
   program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
   ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
   `doctor --push-identity`'s in `crates/cli/src/push_identity.rs`, the browser opener's in
   `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
   the sandbox usability suite's in `crates/agent/src/usability.rs`.
-  The browser opener adds `BROWSER` and the four `XDG_` directories that `xdg-open` reads to choose
-  the handler it runs (`XDG_DATA_DIRS` is also in the generic table). The AWS CLI, the gcloud
-  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list the same names,
+  The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table) and `HOME`, which is a
+  directory: `gio open`, which `xdg-open` runs under a GNOME session, reads
+  `$HOME/.config/mimeapps.list` and `$HOME/.local/share/applications` when `XDG_CONFIG_HOME` and
+  `XDG_DATA_HOME` are not set. The opener removes `HOME` when it does not name an existing directory
+  outside every directory a stage may write, and also when `$HOME/.config` or
+  `$HOME/.local/share/applications` leads to one (a path that does not exist is judged by the
+  nearest directory above it that does, below `HOME`). A session opened on `~/.config` or
+  `~/.local/share/applications` has no row for `HOME` itself, which is why those two are judged. The
+  generic table does not list `HOME`, so gcloud, the AWS CLI and `ssh` keep it. The AWS CLI, the gcloud
+  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list `BROWSER` and the
+  four `XDG_` directories,
   since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
   Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
   helper that git's configuration names can do the same. The desktop application deletes the same
   five names from its own environment before it asks Electron to open an address or a file, since
-  it starts the opener through Electron and not through this start. The names another program
+  it starts the opener through Electron and not through this start. It does not delete `HOME`: the
+  application reads `HOME` itself, `process.env` is shared with the agent it starts, and a `HOME`
+  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`. On Linux
+  under a GNOME session the application's opener therefore still reads a `HOME` a stage may write.
+  No issue tracks that. The names another program
   reads are added to its start when that program is audited. The usability suite's list
   (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
   `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
@@ -4183,9 +4197,9 @@ program's documentation or launcher and what was run. These were not shown by ru
   loader. It is tracked by #3810.
 - `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
   and no names of their own, and have not been run on Linux. It is tracked by #3810.
-- A Homebrew or pip `aws` script, an asdf or pyenv shim and `gio open` and `kde-open` start an
-  interpreter or another program by variables of their own, which are not listed. It is tracked by
-  #3809.
+- A Homebrew or pip `aws` script, an asdf or pyenv shim and `kde-open` start an
+  interpreter or another program by variables of their own, which are not listed. `gio open` is
+  covered for `HOME` by the browser opener's list. It is tracked by #3809.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
   mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
@@ -4214,9 +4228,13 @@ program's documentation or launcher and what was run. These were not shown by ru
   launchers whose names are fixed, `KDE_SESSION_VERSION` to complete the name `kde-open5`,
   `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`, and `XDG_RUNTIME_DIR`
   for a `flatpak-info` file that switches to `gdbus`. None of those names a file to run.
-  `HOME` is not removed and does choose the handler: with `XDG_CURRENT_DESKTOP=GNOME` and no other
-  name set, an `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a
-  `.desktop` entry started the planted handler through `gio open`. It is tracked by #3849.
+  `HOME` is in the opener's list. With `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
+  `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
+  started the planted handler through `gio open`.
+  `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs that, and
+  `a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk` runs the judgment on the
+  disk. What `gio` does with `HOME` removed was not run: the test removes nothing it can see
+  `gio` fall back from, and does not run on a host where the account has handlers of its own.
   These were not run: the Windows `rundll32` start, which was read and is tracked by #3860;
   `kde-open` and a KDE session, because `kde-open` is not installed on the host that ran the rest
   and installing it there with apt would add 152 packages, so what it reads is unobserved; and a
@@ -4406,6 +4424,8 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
 `verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
+`verified-by: bravebot_tui::opener::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
+`verified-by: bravebot_tui::opener::a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`

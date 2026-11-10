@@ -76,7 +76,10 @@ through `src/main/external-open.ts`, which deletes `BROWSER`, `XDG_DATA_HOME`, `
 starts reads them to choose the program it runs
 ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). The names are removed whatever they hold,
 which is stricter than the terminal client's check of the value, and a bridge started after an open is
-started without them. `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
+started without them. It does not delete `HOME`, which the application and the agent it starts
+read, so on Linux under a GNOME session the opener Electron starts can still read a `HOME` the
+sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)).
+`scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
 launcher it starts is a script that records which of the five names it was started with.
 See [file access and retention](file-access-security.md) for the helper's guarantees

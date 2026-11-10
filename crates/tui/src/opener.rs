@@ -32,8 +32,14 @@ use std::process::Stdio;
 /// complete. A value is kept only when every entry is an existing absolute path outside every
 /// directory a stage may write
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
-const CODE_SELECTORS: [(&str, Names); 5] = [
+///
+/// `HOME` is listed as one directory because `gio open`, which `xdg-open` runs under a GNOME
+/// session, reads `$HOME/.config/mimeapps.list` and `$HOME/.local/share/applications` when
+/// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not set. [`home_reads_outside_stage_writable`] also
+/// judges those two paths, since a stage can write them without writing `HOME` itself.
+const CODE_SELECTORS: [(&str, Names); 6] = [
     selectors::BROWSER,
+    ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
@@ -135,6 +141,11 @@ fn opening_against(
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> std::process::Command {
+    let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let home = held
+        .iter()
+        .find(|(name, _)| name == OsStr::new("HOME"))
+        .map(|(_, value)| std::path::PathBuf::from(value));
     let mut command = bravebot_sandbox::programs::start_against(
         program,
         Inherits::Without(&bravebot_config::scrub::own_credentials()),
@@ -143,12 +154,46 @@ fn opening_against(
         held,
         outside_stage_writable,
     );
+    if let Some(home) = home
+        && !home_reads_outside_stage_writable(&home, outside_stage_writable)
+    {
+        command.env_remove("HOME");
+    }
     command
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
+}
+
+/// The paths under `HOME` that `gio open` reads the handler from when the matching `XDG_`
+/// directory is not set.
+const READ_UNDER_HOME: [&str; 2] = [".config", ".local/share/applications"];
+
+/// Whether what `xdg-open` reads under `home` is outside the directories a stage may write.
+///
+/// A session opened on `~/.config` or `~/.local/share` has no row for `HOME` itself, so `HOME` alone
+/// passes while the files read under it can be written. Each path in [`READ_UNDER_HOME`] is judged
+/// as it is when it exists (a link counts and is followed by the judgment). One that does not exist
+/// is judged by the nearest existing directory above it below `home`, since whoever may write that
+/// directory can make the path. `home` itself is judged by [`CODE_SELECTORS`].
+fn home_reads_outside_stage_writable(
+    home: &Path,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    READ_UNDER_HOME.iter().all(|under| {
+        let mut path = home.join(under);
+        while path != home {
+            if path.symlink_metadata().is_ok() {
+                return outside_stage_writable(&path);
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+        true
+    })
 }
 
 #[cfg(test)]
@@ -379,7 +424,8 @@ mod tests {
     /// Each directory holds a `mimeapps.list` naming its own handler as the default for `https`.
     /// `XDG_DATA_DIRS` names an installed directory that holds both handlers' entries, so a
     /// `mimeapps.list` read from `variable` is the only thing that chooses. `HOME` is a scratch
-    /// directory, so the person's own defaults cannot start a browser.
+    /// directory, so the person's own defaults cannot start a browser, except when `variable` is
+    /// `HOME`, which is then the directory under test.
     ///
     /// `XDG_DATA_DIRS` is the variable that cannot be run that way: with the planted value
     /// removed, `gio open` reads the system's directories and starts the browser they name for
@@ -436,6 +482,10 @@ mod tests {
             if variable == "XDG_DATA_HOME" || variable == "XDG_DATA_DIRS" {
                 entry(&directory.join("applications"), marker);
                 default(&directory.join("applications/mimeapps.list"), marker);
+            } else if variable == "HOME" {
+                entry(&directory.join(".local/share/applications"), marker);
+                std::fs::create_dir_all(directory.join(".config")).unwrap();
+                default(&directory.join(".config/mimeapps.list"), marker);
             } else {
                 entry(&data, marker);
                 std::fs::create_dir_all(directory).unwrap();
@@ -532,6 +582,51 @@ mod tests {
         }
     }
 
+    /// SANDBOX-30, through the installed `xdg-open` and `gio open` where this host has both, with
+    /// every `XDG_` directory unset so that `HOME` alone chooses the handler. The regression it
+    /// rejects: the opener left `HOME` as the person set it, so a `mimeapps.list` and a `.desktop`
+    /// entry a stage wrote under a `HOME` it may write choose the program `gio open` runs. The same
+    /// layout under an installed `HOME` is read and its handler runs, which shows `HOME` does choose
+    /// the handler here. It prints `skipped` and passes where either program is missing, where the
+    /// handler in the installed `HOME` does not run, and where the person running it has handlers of
+    /// their own under their `HOME`, since `gio open` falls back to that directory when `HOME` is
+    /// removed and would start their browser.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome() {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let (Some(opener), Some(_gio)) = (
+            bravebot_sandbox::programs::find(OsStr::new("xdg-open")),
+            bravebot_sandbox::programs::find(OsStr::new("gio")),
+        ) else {
+            println!("skipped: no xdg-open and gio on this host");
+            return;
+        };
+        if std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .is_some_and(|own| {
+                own.join(".config/mimeapps.list").exists()
+                    || own.join(".local/share/applications").exists()
+            })
+        {
+            println!("skipped: this account has handlers of its own under its home");
+            return;
+        }
+        let ran = gnome_handler_run_by(
+            "opener::tests::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome",
+            "HOME",
+            &opener,
+        );
+        match ran {
+            (_, false) => {
+                println!("skipped: the xdg-open here does not run a handler chosen by HOME")
+            }
+            ran => assert_eq!(ran, (false, true)),
+        }
+    }
+
     /// SANDBOX-30. The regression it rejects: the opener started with `Checked(&[])`, or with the
     /// list left out of the start, so `BROWSER` names a program `xdg-open` runs before it reads a
     /// desktop environment, and the `XDG_` directories name the handler it runs, from a file a stage
@@ -555,6 +650,13 @@ mod tests {
 
         assert!(withheld("XDG_CONFIG_DIRS", "/safe/etc:/stage/etc"));
         assert!(!withheld("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+
+        assert!(withheld("HOME", "/stage/home"));
+        assert!(withheld("HOME", "home"));
+        assert!(withheld("HOME", ""));
+        assert!(!withheld("HOME", "/safe/home"));
+        assert!(!withheld("HOME", "/safe/home/"));
+        assert!(withheld("HOME", "/safe-not/home"));
     }
 
     /// SANDBOX-30. The regression it rejects: `BROWSER` judged as a single program name, so a list
@@ -580,19 +682,77 @@ mod tests {
     /// an installed program or directory, or any other variable, loses it.
     #[test]
     fn the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names() {
-        for name in [
-            "EDITOR",
-            "HOME",
-            "XDG_RUNTIME_DIR",
-            "DISPLAY",
-            "LANG",
-            "PATH",
-        ] {
+        for name in ["EDITOR", "XDG_RUNTIME_DIR", "DISPLAY", "LANG", "PATH"] {
             assert!(!withheld(name, "/stage/anything"), "{name} was removed");
         }
         assert!(!withheld("BROWSER", "/safe/bin/firefox"));
         assert!(!withheld("XDG_DATA_DIRS", "/safe/share"));
         assert!(!withheld("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+        assert!(!withheld("HOME", "/safe/home"));
+    }
+
+    /// SANDBOX-30, on the disk: `HOME` is removed when it, or the configuration or handler
+    /// directory `xdg-open` reads under it, leads to a directory a stage may write, and kept
+    /// otherwise. The regression it rejects: `HOME` judged alone, so a session opened on
+    /// `~/.config` or on `~/.local/share/applications` (which has no row for `HOME`) leaves `HOME`
+    /// as set while the files read under it are the stage's; and a comparison of the names as
+    /// written, which a link into the session slips past.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk() {
+        let session = crate::testutil::scratch_dir("opener-home-session");
+        let safe = crate::testutil::scratch_dir("opener-home-safe");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
+        let planted = session.join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        let make = |name: &str| {
+            let home = safe.join(name);
+            std::fs::create_dir_all(&home).unwrap();
+            home
+        };
+        let genuine = make("genuine");
+        std::fs::create_dir_all(genuine.join(".config")).unwrap();
+        std::fs::create_dir_all(genuine.join(".local/share/applications")).unwrap();
+        let bare = make("bare");
+        let linked_config = make("linked-config");
+        std::os::unix::fs::symlink(&planted, linked_config.join(".config")).unwrap();
+        let linked_applications = make("linked-applications");
+        std::fs::create_dir_all(linked_applications.join(".local/share")).unwrap();
+        std::os::unix::fs::symlink(
+            &planted,
+            linked_applications.join(".local/share/applications"),
+        )
+        .unwrap();
+        let linked_share = make("linked-share");
+        std::fs::create_dir_all(linked_share.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&planted, linked_share.join(".local/share")).unwrap();
+        let linked_home = safe.join("to-planted");
+        std::os::unix::fs::symlink(&planted, &linked_home).unwrap();
+        let writable = vec![session.clone()];
+        let outside = |path: &Path| {
+            bravebot_sandbox::programs::outside_stage_writable_with(path, &writable, &[])
+        };
+        let removed = |value: &Path| {
+            opening_against(
+                &Resolved::found_earlier("/usr/bin/open"),
+                &[],
+                [(OsString::from("HOME"), value.as_os_str().to_os_string())],
+                &outside,
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new("HOME") && now.is_none())
+        };
+
+        assert!(!removed(&genuine));
+        assert!(!removed(&bare));
+        assert!(removed(&planted));
+        assert!(removed(&linked_home));
+        assert!(removed(&linked_config));
+        assert!(removed(&linked_applications));
+        assert!(removed(&linked_share));
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&safe);
     }
 
     /// SANDBOX-30, on the disk: a directory a stage planted under the session is removed from
