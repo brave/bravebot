@@ -474,6 +474,11 @@ An argument naming something the driver minted is held the same way, since the p
 who picks which of those names a call is about. [routing.md](routing.md) is where that case is
 settled.
 
+One exception is named, and it is narrow: within a manifest plan a person approved, the calls of an
+`apply` step whose tools the person marked plan-covered are selected by a processor that read
+untrusted content, among calls of the plan's tools, arguments and lists, each acceptable on its own,
+within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
+
 `verified-by: bravebot_core::policy::requesting_untrusted_content_is_refused`
 `verified-by: bravebot_core::policy::an_argument_cannot_be_read_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
@@ -659,11 +664,6 @@ Context integrity only ever falls, and it falls when content is put in front of 
 quarantined read
 puts a reference in the context, not the bytes, and a slot id with a line count carries no
 instruction. A paste does not lower it either, and resuming cannot raise it.
-
-One exception is named, and it is narrow: within a manifest plan a person approved, the calls of an
-`apply` step whose tools the person marked plan-covered are selected by a processor that read
-untrusted content, among calls of the plan's tools, arguments and lists, each acceptable on its own,
-within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
 
 **Why.** Lowering integrity at the observation would label the planner's own words untrusted on the
 strength of a file it never saw, and `present` would then quarantine the planner from itself.
