@@ -2021,13 +2021,41 @@ moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARG
 an agent socket removed. The suite starts its programs as a checked start
 ([SANDBOX-30](#SANDBOX-30)), so the generic table applies to a stage, and the suite adds the
 variables the programs it starts read to choose code: `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`,
-`GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT` are removed whatever they hold; `GIT_SSH`,
-`GIT_EXTERNAL_DIFF`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and
-`CARGO_BUILD_RUSTC_WRAPPER` are kept only when they name a program outside every directory a stage
-may write; `GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`,
-`GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` and `GOFLAGS` are removed, as are
-`GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER` and
-`CARGO_TARGET_<triple>_RUNNER`.
+`GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR`, `GOROOT` and `GOENV` are removed whatever they hold,
+and so is `CARGO_HOME` (a host variable that moves a read row, above); `GOENV` names a file that sets
+`GOFLAGS`, `GOTOOLCHAIN` and more, and `CARGO_HOME` holds the `config.toml` that names a wrapper, a
+linker or a credential provider. `GIT_SSH`,
+`GIT_EXTERNAL_DIFF`, `RUSTC`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`,
+`CARGO_BUILD_RUSTC`, `CARGO_BUILD_RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`,
+`CARGO_BUILD_RUSTDOC`, `RUSTUP_TOOLCHAIN`, `PKG_CONFIG` and `PYTHONEXECUTABLE` are kept only when they name a
+program outside every directory a stage may write, `BROWSER` (the commands `cargo doc --open` runs)
+only when each command is one such program, and `RUSTUP_HOME` and `NODE_PATH` only when they
+name a directory (`NODE_PATH` a list of them) outside every one; `GIT_SSH_COMMAND`,
+`GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`,
+`CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS`, `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTDOCFLAGS`,
+`CARGO_BUILD_RUSTDOCFLAGS`, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
+`CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS`, `GOFLAGS`, `GOCACHEPROG`, `CC`, `CXX`, `CGO_LDFLAGS`,
+`CGO_CFLAGS`, `CGO_CPPFLAGS`, the make variables `MAKE`, `RM`, `AR`, `AS`, `FC`, `PC`, `M2C`, `LEX`,
+`YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET` and `CO`, and the make flag variables `CFLAGS`,
+`CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` are removed, as
+are `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER`,
+`CARGO_TARGET_<triple>_RUNNER`, `CARGO_TARGET_<triple>_RUSTFLAGS`,
+`CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` and every name that begins `npm_config_` in any case (this includes `npm_config_prefix`). A
+`RUSTUP_HOME` that is removed is set back to the account's `.rustup`, since the `cargo` proxy finds
+its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX` and
+`NODE_OPTIONS` are in the generic table ([SANDBOX-30](#SANDBOX-30)), which a stage is given too.
+
+A session records the directories a stage may write when its first confined stage starts, which is
+after the setup stages, so a setup stage's start has none of them. The tests that plant a file under
+a variable that names a directory or a program therefore record the directory the helper is in as
+one a stage wrote, as the session would. Every such test also runs the program with the variable as
+the person set it and asserts the helper ran, so a helper the program never reaches through that variable does
+not make the test pass. `RUSTC_WRAPPER` and `PYTHONPATH` each have a second test that a value
+outside every directory a stage may write is kept. `GOENV`, `GOCACHEPROG`, `PKG_CONFIG`, `CXX`,
+`CGO_LDFLAGS`, `GOTOOLCHAIN`, `NODE_OPTIONS`, `NODE_PATH`, `BROWSER`, `npm_config_` names, `PYTHONHOME`,
+`PYTHONPYCACHEPREFIX`, `PYTHONEXECUTABLE`, `PYTHONSTARTUP`, `MAKEFLAGS` with `-I`, the make rule
+variables and linker flags, `CGO_CFLAGS`, `CGO_CPPFLAGS` and the cargo credential providers each have a
+test of the same kind against the real program.
 
 The variables below were examined for the programs the suite starts and are not removed, because
 planting a file under each and running the program as a stage runs it ran nothing. `xcrun` and the
@@ -2036,11 +2064,16 @@ planting a file under each and running the program as a stage runs it ran nothin
 directory without one, and `TOOLCHAINS` and `XCODE_DEVELOPER_DIR_PATH` change nothing it finds), while
 the same planted file ran under `DEVELOPER_DIR`. `vim -es -u NONE`, which the editor workflow
 starts, did not run the command in `VIMINIT`, and `vim` without `-es` did, so a workflow that starts
-an interactive `vim` needs `VIMINIT` added. `python3 -c` and `python3 -m unittest` did not run the
-file in `PYTHONSTARTUP`, which only an interactive interpreter reads, and `sh -c` and a shell script
+an interactive `vim` needs `VIMINIT` added. `python3 -c`, `python3 -m unittest` and `python3 -m venv` did not run the
+file in `PYTHONSTARTUP`, which only an interactive interpreter reads (`python3 -i` with stdin
+closed did, on 3.15.0), and `sh -c` and a shell script
 did not run the file in `ENV`, which only an interactive `sh` reads. No workflow starts an
 interactive `python3` or `sh`, so none of the three is removed. `GOROOT` is removed, since
-`go vet` ran a `vet` planted under it.
+`go vet` ran a `vet` planted under it. Planting a file under `GOPATH`, `GOBIN`, `GOWORK`,
+`GOPROXY`, `PYTHONBREAKPOINT`,
+`npm_config_node_options`, and `GNUMAKEFLAGS` and `MFLAGS` on GNU Make 3.81 ran nothing
+([SANDBOX-30](#SANDBOX-30) has the versions); the two make names and `GOTOOLCHAIN` stay listed or
+set by the suite because other versions read them.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
 `~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
@@ -2117,6 +2150,32 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_an_exec_path`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_common_directory`
 `verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makefiles`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makeflags_that_name_a_shell`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_wrapper_or_target_flags`
+`verified-by: bravebot_agent::usability::a_setup_cargo_keeps_a_wrapper_no_stage_can_write`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_compiler_or_a_workspace_wrapper`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_flags_or_a_target_program_that_name_a_linker_or_runner`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_rustdoc_or_documentation_flags`
+`verified-by: bravebot_agent::usability::a_setup_cargo_doc_open_is_not_handed_a_browser`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_cargo_home_that_holds_configuration`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_toolchain_or_a_toolchain_directory`
+`verified-by: bravebot_agent::usability::a_setup_npm_is_not_handed_configuration`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_flags_or_a_compiler`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_an_environment_file_or_a_cache_program`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_a_pkg_config_linker_flags_or_a_cxx_compiler`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_a_toolchain_named_in_its_environment`
+`verified-by: bravebot_agent::usability::a_setup_node_is_not_handed_options_or_a_module_path`
+`verified-by: bravebot_agent::usability::a_setup_npm_is_not_handed_a_configuration_file_or_an_initialiser`
+`verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_an_installation_or_a_compiled_module_tree`
+`verified-by: bravebot_agent::usability::a_setup_python_venv_is_not_handed_an_executable`
+`verified-by: bravebot_agent::usability::a_setup_python_the_workflows_start_does_not_read_a_startup_file`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_an_include_directory`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_the_program_or_linker_flags_of_a_built_in_rule`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_credential_provider`
+`verified-by: bravebot_agent::usability::a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler`
+`verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_a_module_path`
+`verified-by: bravebot_agent::usability::a_setup_python_keeps_a_module_path_no_stage_can_write`
+`verified-by: bravebot_agent::usability::the_names_found_by_running_cargo_npm_go_and_python_are_removed`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
@@ -3699,11 +3758,32 @@ file. A new spawn that looks a name up through
   helper that git's configuration names can do the same. The desktop application deletes the same
   five names from its own environment before it asks Electron to open an address or a file, since
   it starts the opener through Electron and not through this start. The names another program
-  reads are added to its start when that program is audited. The usability suite's list adds the
-  names `git`, `make`, `cargo`, `go` and `xcrun` read to choose code, and its stored-login `gh`
-  removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite also removes
-  `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR` and `GOROOT`
-  whatever they hold, and records the names it examined and left (`TOOLCHAINS`, `SDKROOT`,
+  reads are added to its start when that program is audited. The usability suite's list
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
+  `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
+  (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`) and `go` (with the C compiler, `pkg-config` and
+  linker flags a cgo build reads) read to choose code, and it matches by form
+  `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS` and every
+  `npm_config_` name in any case. `python3` is also given the generic table.
+  `CC`, `CXX` and `PKG_CONFIG` are in this list and not in the generic table, because the generic
+  table is applied to every checked start and only these starts compile or link. A run with a
+  planted helper on the host recorded in the last bullet of "What a checked start does not cover"
+  found: go cgo ran `CC`, `CXX` and `PKG_CONFIG`; make's
+  built-in rules ran `CC` (compile and link) and `CXX` and never run `pkg-config`; the `cc` crate
+  1.2.62 in a cargo build script ran `CC`, `CXX` and `AR`, and the `pkg-config` crate 0.3.33 ran
+  `PKG_CONFIG`. `CC` and `CXX` hold a program and arguments, so they are options and removed whatever
+  they hold; `PKG_CONFIG` is a program and is kept when it names one outside every directory a stage
+  may write. The `cc` crate also ran the helper through `CC_<triple>`, `CXX_<triple>`, `AR_<triple>`,
+  `HOST_CC`, `CFLAGS_<triple>`, `CXXFLAGS_<triple>` and `HOST_CFLAGS`, and the suite does not remove those:
+  the names are a family that this list does not match yet. No workflow of the suite builds a crate
+  with a build script that uses the `cc` crate, so the gap is not reached by a workflow that exists.
+  It is tracked by #3859. Configuration files that can name code, such as `.npmrc` and
+  `.cargo/config.toml` in a directory a stage may write, are not examined by the suite or by the
+  lists; that is tracked by #3858.
+  The stored-login `gh` removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite
+  also removes `GIT_TEMPLATE_DIR`, `GIT_EXEC_PATH`, `GIT_COMMON_DIR`, `MAKEFILES`, `DEVELOPER_DIR`,
+  `GOROOT`, `GOENV` and `CARGO_HOME` whatever they hold, and records the names it examined and
+  left (`TOOLCHAINS`, `SDKROOT`,
   `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`, `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and
   `LD_` prefixes are a list in `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES`
   applies to every checked start and would remove `LD_DEBUG` from gcloud and the browser opener;
@@ -3821,6 +3901,9 @@ file. A new spawn that looks a name up through
   executable and its bundled `libcrypto`, and cannot show that no other variable selects code
   ([PATH-008](../best-practices/paths.md#PATH-008)). `gcloud` is a Python program started without
   `-E` or `-I`, which is why its list holds the `PYTHON*` variables and the AWS CLI's does not.
+  The test that runs the installed CLI with a `credential_process` helper is skipped on a machine
+  with no `aws` in a directory the lookup accepts, so its `verified-by` line holds only where the
+  CLI is installed.
 
   The `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` starts are all built by `started`
   in `crates/cli/src/push_identity.rs`, so one list covers the three:
@@ -3828,9 +3911,6 @@ file. A new spawn that looks a name up through
   | Variable | Names | Why it selects code |
   |---|---|---|
   | `SSH_ASKPASS` | options | the program `ssh` runs to ask for a passphrase. This command asks for none from the environment |
-  The test that runs the installed CLI with a `credential_process` helper is skipped on a machine
-  with no `aws` in a directory the lookup accepts, so its `verified-by` line holds only where the
-  CLI is installed.
   | `SSH_ASKPASS_REQUIRE` | options | `force` makes `ssh` run `SSH_ASKPASS` even with a terminal |
   | `SSH_SK_PROVIDER` | options | the library `ssh` and `ssh-keygen` load for a hardware key |
   | `SSH_SK_HELPER` | options | the program `ssh` runs for a hardware key |
@@ -3922,8 +4002,8 @@ launch that records the directory and not by a later resolution in the same proc
 reconnect. A program named by an absolute path is not judged by any lookup and starts as before.
 
 **What a checked start does not cover.** A checked start removes the generic names and the names its
-caller lists, and a name nobody listed reaches the program. The lists were read from the programs'
-documentation and launchers, and these were not shown by running the program:
+caller lists, and a name nobody listed reaches the program. Each bullet says what was read from a
+program's documentation or launcher and what was run. These were not shown by running the program:
 
 - The Windows `powershell` starts of the clipboard tool (`crates/tui/src/clipboard.rs`) and of the
   inhibitor (`crates/tui/src/caffeinate.rs`) are given the generic table and the list in
@@ -3964,7 +4044,7 @@ documentation and launchers, and these were not shown by running the program:
   `HOME` is not removed and does choose the handler: with `XDG_CURRENT_DESKTOP=GNOME` and no other
   name set, an `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a
   `.desktop` entry started the planted handler through `gio open`. It is tracked by #3849.
-  These were not run: the Windows `rundll32` start, which was read; `kde-open` and a KDE session,
+  These were not run: the Windows `rundll32` start, which was read and is tracked by #3860; `kde-open` and a KDE session,
   because `kde-open` is not installed on the host that ran the rest, so what it reads is
   unobserved; a logged-in GNOME session; and `XDG_DATA_DIRS` through `gio open`, since removing a
   planted value there lets `gio open` use the system's handlers and start a real browser. They
@@ -3972,8 +4052,56 @@ documentation and launchers, and these were not shown by running the program:
 - `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
   tracked by #3809.
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
-  are given the generic table. The names `make`, `git` and `xcrun` read are added by #3797. Running
-  each of the others with a name planted is tracked by #3811.
+  are given the generic table and the suite's own list ([SANDBOX-21](#SANDBOX-21)). Each name was
+  found by running the program with a helper planted under it on macOS 26 (arm64) with GNU Make
+  3.81, cargo 1.99.0, npm 11.19.1, go 1.27.3 and python3 3.15.0. The helper ran under
+  `MAKEFLAGS` (`SHELL=` and `-I`), `MAKEFILES`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTC`,
+  `RUSTDOC`, the `CARGO_BUILD_` forms of those, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`,
+  `RUSTDOCFLAGS`, `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS`,
+  `CARGO_HOME`, `RUSTUP_TOOLCHAIN` and `RUSTUP_HOME`, every `npm_config_` name in any case
+  (`script_shell`, `userconfig`, `globalconfig`, `prefix`, `init_module`), `NODE_OPTIONS`,
+  `NODE_PATH`, `GOFLAGS`, `GOENV`, `GOCACHEPROG`, `GOTOOLCHAIN=path`, `CC`, `CXX`,
+  `PKG_CONFIG`, `CGO_LDFLAGS` (`-fuse-ld=`), `CGO_CFLAGS` and `CGO_CPPFLAGS` (`-fno-integrated-as -B<dir>`
+  with an `as` in the directory; the go build cache hides this unless `-a` is given), the make rule
+  variables `AS`, `FC`, `PC`, `M2C`, `LEX`, `YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET`, `CO`, `AR`, `RM`
+  and `MAKE`, make's `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` with
+  `-B<dir>` and a linker in the directory, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
+  `CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS` and `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` (for
+  `cargo logout`), `CARGO_ENCODED_RUSTDOCFLAGS` and `CARGO_BUILD_RUSTDOCFLAGS` (`cargo test --doc` with
+  `--test-runtool=`), `BROWSER` (`cargo doc --open`, in the suite's list as well as the browser opener's),
+  `PYTHONPATH` and `PYTHONUSERBASE` (a `sitecustomize`
+  under the first and a `usercustomize` under the second), `PYTHONHOME` (a `sitecustomize` in the
+  standard library it names), `PYTHONPYCACHEPREFIX` (an unchecked-hash `.pyc`), `PYTHONEXECUTABLE`
+  (`-m venv`) and `PYTHONSTARTUP` (`python3 -i` only), and `GOTOOLCHAIN=go1.99.0+path` ran a
+  `go1.99.0` found on `PATH`. It did not run under
+  `GNUMAKEFLAGS` or `MFLAGS` with `-f`, `-I` or `SHELL=` on 3.81, and `MAKEFLAGS` with `-f` in any
+  spelling (`-f <file>`, `-f<file>`, `--file=`, `--makefile=`, `f <file>`, `-s -f <file>`), `-C`,
+  `--directory=` or `-o`, none of which read the file or change directory when they come from
+  `MAKEFLAGS` on 3.81 (the same file passed on the command line does run, so the control holds),
+  `make` implicit-rule variables `ASFLAGS`, `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
+  built-in rule; a recipe that uses `$(CPP)` runs it), `CGO_CXXFLAGS`,
+  `CGO_FFLAGS`, the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
+  `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
+  through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
+  `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
+  `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `CARGO`, `RUSTFMT`, `COMPILER_PATH`,
+  `CARGO_REGISTRIES_CRATES_IO_CREDENTIAL_PROVIDER` for `cargo login`, `GOPATH` or `GOMODCACHE` holding a
+  toolchain (`go` tried to download it), `GOBIN`, `GOWORK`, `GOAUTH`, `GOPROXY`, `PYTHONSTARTUP` (for `-c`, `-m unittest` and `-m venv`),
+  `__PYVENV_LAUNCHER__`, `PYTHONBREAKPOINT`, `npm_config_node_options`,
+  `npm_config_cache`, `npm_config_git` or `npm_config_prefix` (set to a directory holding the helper as
+  `bin/npm` and `bin/node`, for `npm run`, `root -g`, `bin -g`, `prefix -g`, `config get prefix`, `ls`,
+  `pack --dry-run`, `install --offline` and `-v`; it is removed anyway as an `npm_config_` name).
+  `GNUMAKEFLAGS` and `MFLAGS` are in the suite's list because other versions of `make` read them.
+  `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
+  `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it. Windows was not run:
+  the suite runs nothing there. No Linux host was available, so the names a Linux build of these
+  programs reads, and their versions, are not recorded; a Linux run is tracked by #3811.
+  The tests assert the control, so on a version that does not read a name the test fails and does not
+  skip; only a program that is not installed skips it. The results for the `cc` and `pkg-config`
+  crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
+  `GOAUTH`, `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `COMPILER_PATH`, `RANLIB`,
+  `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
+  repeats them.
 - `tput` is started by bare name by crossterm 0.29.0 (`src/terminal/sys/unix.rs`, line 273) when a
   terminal-size query fails. The dependency makes that start and it does not go through
   `programs::start`, so it has no `CodeSelectors` argument. It is tracked by #3802.
