@@ -235,10 +235,10 @@ accepted, since it names that one directory.
 
 The unix-only tests of the hard link and second path rows carry `#[cfg(unix)]`. The non-unix arm
 is checked by `cargo clippy --target x86_64-pc-windows-gnu -p bravebot-agent -p bravebot-core
---all-targets -- -D warnings`, which compiles it on any host; it was run with the C compiler and
-archiver of the `ring` build script stubbed (`CC_x86_64_pc_windows_gnu=true`,
-`AR_x86_64_pc_windows_gnu=true`), which only lets that script pass, and it reported nothing.
-Running the tests on Windows was not done.
+--all-targets -- -D warnings`, which compiles it on any host, with `CC_x86_64_pc_windows_gnu=true`
+and `AR_x86_64_pc_windows_gnu=true` where no Windows C compiler is installed, since only the
+`ring` build script uses them. No test of the hard link or second path rows runs on Windows,
+which is a Known cost.
 
 **Whitespace is out of scope for the identity lookup.** The identity lookup finds names that are
 one file by device and inode. A volume that folds `note.md ` and `note.md` into one file, such as

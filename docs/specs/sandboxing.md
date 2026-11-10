@@ -3936,7 +3936,7 @@ file. A new spawn that looks a name up through
   application reads `HOME` itself, `process.env` is shared with the agent it starts, and a `HOME`
   put back after the call cannot be shown to follow the moment Electron starts `xdg-open`. On Linux
   under a GNOME session the application's opener therefore still reads a `HOME` a stage may write.
-  No issue tracks that. The names another program
+  [#3904](https://github.com/brave/bravebot/issues/3904) tracks that. The names another program
   reads are added to its start when that program is audited. The usability suite's list
   (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
   `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
@@ -4293,8 +4293,8 @@ program's documentation or launcher and what was run. These were not shown by ru
   files whose `Exec` line it runs, `PATH` to find that program, and `XDG_CURRENT_DESKTOP` only as a
   file-name prefix, accepted only when it is letters, digits, `-` and `_`. It also reads
   `GIO_LAUNCH_DESKTOP`, the path of the wrapper it executes with the handler's whole command line
-  (`gdesktopappinfo.c` line 3100; ignored when the process is setuid). That name was not in the
-  opener's list and now is, and
+  (`gdesktopappinfo.c` line 3100; ignored when the process is setuid). `GIO_LAUNCH_DESKTOP` is in
+  the opener's list, and
   `gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
   holds it on the disk. The other names it reads do not choose a program or directory:
   `GIO_USE_PORTALS` (first character only), `GIO_LAUNCHED_DESKTOP_FILE` (a journal identifier),

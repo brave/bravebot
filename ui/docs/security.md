@@ -79,7 +79,8 @@ path, and not under GNOME with `gio` installed, where it runs `gio open`)
 which is stricter than the terminal client's check of the value, and a bridge started after an open is
 started without them. It does not delete `HOME`, which the application and the agent it starts
 read, so on Linux under a GNOME session the opener Electron starts can still read a `HOME` the
-sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)).
+sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30);
+tracked by [#3904](https://github.com/brave/bravebot/issues/3904)).
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
 launcher it starts is a script that records which of the six names it was started with.
