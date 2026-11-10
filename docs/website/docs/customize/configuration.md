@@ -997,9 +997,9 @@ both with no multiplexer setting of its own, asked or not: an SGR report matches
 sequences screen reads for itself, so it passes through a window the way a byte sequence screen does
 not recognize at all does.
 
-Not run: a drag and the scrollbar past the bottom edge, the footer naming what the pointer is over,
-copying through GNU screen specifically (only tmux's copy was checked against the clipboard), a
-column past 223 behind either multiplexer, and more than one pane or window open at once in either.
+Not run: a drag held past the bottom edge, and the scrollbar, the footer naming what the pointer is
+over, copying through GNU screen specifically (only tmux's copy was checked against the clipboard),
+a column past 223 behind either multiplexer, and more than one pane or window open at once in either.
 Where the wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier
 above to select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the
 session asking for the mouse at all.
