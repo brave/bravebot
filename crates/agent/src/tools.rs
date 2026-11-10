@@ -28592,6 +28592,111 @@ mod tests {
             }
         }
 
+        /// CMDLINE-17: a value a substitution printed reaches the program that uses it and nothing
+        /// bravebot records or tells about the call. `run` is called in bypass mode, in the
+        /// foreground and as a background job, with a substitution that works, one that fails after
+        /// printing the value to both streams, and one whose value the environment cannot hold. What
+        /// is formatted for the value is the result the planner is told, the origin and note shown
+        /// to the person, the events of the session trail, everything the reporter was told (the
+        /// history a front end draws from) and the debug form of the jobs the turn holds. The
+        /// program that works leaves a file only when it was handed the value, so the absence of the
+        /// value from those texts is not an absence of the run. The regressions it rejects are a
+        /// failure or start-error sentence that quotes the output, a trail or reporter event that
+        /// carries the value, and a `Debug` of the job that holds it.
+        #[cfg(unix)]
+        #[test]
+        fn an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call() {
+            use crate::PermissionMode::Bypass;
+            use std::os::unix::fs::PermissionsExt;
+
+            let secret = "tools-secret-4b7e19c3";
+            let scratch = Scratch::new("run-expansion-leak");
+            for (name, body) in [
+                (
+                    "check.sh",
+                    format!(
+                        "#!/bin/sh\n[ \"$BRAVEBOT_TEST_GOT\" = \"{secret}\" ] && touch matched\n\
+                         echo done\n"
+                    ),
+                ),
+                ("emit.sh", format!("#!/bin/sh\nprintf '%s\\n' {secret}\n")),
+                (
+                    "fail.sh",
+                    format!(
+                        "#!/bin/sh\nprintf '%s\\n' {secret}\nprintf '%s\\n' {secret} >&2\nexit 3\n"
+                    ),
+                ),
+                (
+                    "nul.sh",
+                    format!("#!/bin/sh\nprintf '%s\\000\\n' {secret}\n"),
+                ),
+            ] {
+                let program = scratch.path.join(name);
+                std::fs::write(&program, body).expect("a program");
+                std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                    .expect("executable");
+            }
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for (source, handed) in [("emit.sh", true), ("fail.sh", false), ("nul.sh", false)] {
+                for background in [false, true] {
+                    let _ = std::fs::remove_file(scratch.path.join("matched"));
+                    let mut sink = RecordingSink::new();
+                    let mut reporter = crate::report::RecordingReporter::default();
+                    let mut policy = policy(&mut sink);
+                    let (produced, jobs) = with_tools(&workspace, |tools| {
+                        tools.permission_mode = crate::LiveMode::new(Bypass);
+                        let produced = run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut reporter,
+                            &json!({
+                                "command": format!("BRAVEBOT_TEST_GOT=$(./{source}) ./check.sh"),
+                                "background": background,
+                            }),
+                        );
+                        if handed {
+                            for _ in 0..200 {
+                                if scratch.path.join("matched").exists() {
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                            }
+                        }
+                        (produced, format!("{:?}", tools.jobs))
+                    });
+                    let said = told(&mut policy, &produced.text);
+                    let case = format!("{source}, background={background}");
+
+                    assert_eq!(
+                        scratch.path.join("matched").exists(),
+                        handed,
+                        "{case}: the program's having been handed the value is not what the \
+                         substitution allows: {said}"
+                    );
+                    let trail = format!("{:?}", sink.events());
+                    assert!(
+                        !sink.events().is_empty(),
+                        "{case}: nothing was recorded, so its absence proves nothing"
+                    );
+                    for (where_, text) in [
+                        ("the result", said),
+                        ("the origin", produced.origin.clone()),
+                        ("the note", produced.note.clone()),
+                        ("the trail", trail),
+                        ("the reporter", format!("{reporter:?}")),
+                        ("the jobs", jobs),
+                    ] {
+                        assert!(
+                            !text.contains(secret),
+                            "{case}: the value reached {where_}: {text}"
+                        );
+                    }
+                }
+            }
+        }
+
         /// CMDLINE-17: the `run` tool's background branch gives the call's own cancellation and
         /// deadline to the substitution it works out before the job starts. A cancel that arrives
         /// while `NAME=$(slow) cmd` is being worked out ends it, and a deadline shorter than the

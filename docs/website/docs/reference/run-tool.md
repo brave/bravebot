@@ -155,7 +155,13 @@ variable or substitution as an argument or as the program, backticks (an assignm
   resolved binary, permission checks and recorded reads and writes, and runs just before the step
   that uses it, in the same directory, under the same deadline and sandbox, with no standard input.
   It is one level deep: `$`, a substitution or a backtick inside it is refused. Trailing newlines of
-  its output are dropped, and the output is not shown to the model.
+  its output are dropped, and the output is not shown to the model. Nothing else is done to the
+  output, and bravebot does not look at it: its length and its encoding do not refuse the line, so
+  a long output or a byte that is not text reaches the program as it was printed. On Windows the
+  value is text, so a byte sequence that is not valid UTF-8 arrives as U+FFFD. A value the system
+  will not put in an environment, such as one holding a NUL byte or one larger than the system
+  takes, fails the start of the step that would use it, with the system's words about that program
+  and nothing of the value.
 - **A withheld variable is refused.** The credentials bravebot removes from every step
   ([below](#what-a-program-is-handed)) and the names in `run.scrubEnv` cannot be read this way, and
   the removal is still applied after the assignment. A variable that is not set is refused too,

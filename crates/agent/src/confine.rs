@@ -2178,6 +2178,10 @@ impl Confinement {
         let sandbox = bravebot_sandbox::for_current_platform()
             .map_err(|error| not_confined(error.to_string()))?;
         let capabilities = sandbox.capabilities();
+        // The strings the policy reads: the names it keys on are ASCII scope variables and
+        // `SSH_AUTH_SOCK`. A value a substitution printed that is not text is left out, which reads
+        // as the variable being unset and so lends nothing; the bytes are decided on by no one, and
+        // the step still receives them as they are through `command`.
         let readable: Vec<(String, String)> = environment
             .iter()
             .filter_map(|(name, value)| {
@@ -8450,6 +8454,67 @@ mod tests {
 
         assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
         assert!(!writes(&policy, agent.name()));
+    }
+
+    /// CMDLINE-17, LAYER-2: an assignment worked out when the step is spawned carries no scope, so
+    /// the socket does not follow it, and nothing the policy reads depends on a value a
+    /// substitution printed. The regression it rejects: a scope chosen from the argv alone for a
+    /// step whose environment is not known yet, which lends `known_hosts` and the agent socket to
+    /// a step whose `SSH_AUTH_SOCK` or `GIT_SSH_COMMAND` a program's output may name. The control
+    /// is the same push with no assignment.
+    #[test]
+    #[cfg(unix)]
+    fn an_assignment_worked_out_at_spawn_in_front_of_a_push_removes_its_scope() {
+        let confined = confinement(&["/work/project"]);
+        let agent = AgentSocket::at("worked-out");
+        let environment = agent.environment();
+        let push = step("/usr/bin/git", &["push"]);
+        let mut worked_out = push.clone();
+        worked_out.expansions = vec![bravebot_core::command::Expansion {
+            name: "GIT_SSH_COMMAND".to_string(),
+            parts: vec![bravebot_core::command::ValuePart::Variable(
+                "HOME".to_string(),
+            )],
+        }];
+
+        let control = confined.policy(&push, Path::new("/work"), &environment);
+        let policy = confined.policy(&worked_out, Path::new("/work"), &environment);
+
+        assert!(reads(&control, &format!("{HOME}/.ssh/known_hosts")));
+        assert!(writes(&control, agent.name()));
+        assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
+        assert!(!writes(&policy, agent.name()));
+    }
+
+    /// CMDLINE-17, LAYER-2: a value that is not text reaches the process as the bytes it is. The
+    /// strings the policy reads leave it out, and it is the environment handed to the process that
+    /// carries it. The regression it rejects: the process environment built from the strings the
+    /// policy reads, which drops the variable or hands the next program U+FFFD in place of the
+    /// bytes a program printed. `None` where this machine cannot prepare a stage under its
+    /// platform's sandbox.
+    #[test]
+    #[cfg(unix)]
+    fn a_value_that_is_not_text_reaches_the_process_as_its_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            return;
+        }
+        let (session, confined) = a_session("raw-environment");
+        let bytes = vec![b'a', 0xff, 0xfe, b'b'];
+        let mut command = Command::new("/bin/cat");
+        command.env("BB_RAW", std::ffi::OsString::from_vec(bytes.clone()));
+
+        let prepared = confined
+            .prepared(&command, &step("/bin/cat", &[]), &session)
+            .expect("a stage this platform can confine");
+
+        let held = prepared
+            .variables
+            .iter()
+            .find(|(name, _)| name == "BB_RAW")
+            .map(|(_, value)| value.clone().into_vec());
+        assert_eq!(held, Some(bytes));
     }
 
     /// SANDBOX-18: a session that names no home directory has no location to compare the socket

@@ -4340,6 +4340,45 @@ mod tests {
         assert!(matches!(plan.steps, Steps::Join { .. }));
     }
 
+    /// CMDLINE-17: the command inside `NAME="$(cmd)"` is a step of the plan, so a consumer that
+    /// counts or numbers `steps()` (the prompt's "N steps" and its rows) counts it. The operands
+    /// the planner is told are listed per command of the line and are paired with the commands of
+    /// the plan's shape, which the substituted command is not one of, so the pairing holds and the
+    /// assignment is told from its source. Rejects a pairing that walks `steps()` and so shifts
+    /// the outer command's operands onto the inner step (the told line then falls back to the
+    /// planner's own text or drops a later command's operands).
+    #[test]
+    fn a_plan_holding_a_substituted_command_is_still_paired_with_the_operands_of_the_line() {
+        let tree = Tree::new("told-substitution");
+        tree.executable("bin/cmd").executable("bin/inner");
+        tree.file("a.txt");
+        let bin = tree.root.join("bin/cmd").display().to_string();
+        for (line, expected) in [
+            (
+                "FOO=\"$(./bin/inner a)\" ./bin/cmd 'x y'",
+                format!("FOO=\"$(./bin/inner a)\" {bin} 'x y'"),
+            ),
+            (
+                "./bin/cmd y | FOO=$(./bin/inner a) ./bin/cmd *.txt && ./bin/cmd z",
+                format!("{bin} y | FOO=\"$(./bin/inner a)\" {bin} *.txt && {bin} z"),
+            ),
+        ] {
+            let plan = bypass_compiled(line, &tree.root);
+            assert_eq!(
+                plan.steps.steps().len(),
+                expected.matches(&bin).count() + 1,
+                "{line}"
+            );
+            assert_eq!(display_as_written(&plan), expected, "{line}");
+            let written = plan_as_written(&plan, None).unwrap_or_else(|| panic!("{line}"));
+            assert_eq!(
+                written.steps.steps().len(),
+                plan.steps.steps().len(),
+                "{line}"
+            );
+        }
+    }
+
     /// By the time an argument is in a plan the only thing that ever split the line has already
     /// run, so there is nothing left that could split it again.
     #[test]

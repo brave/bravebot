@@ -61,6 +61,7 @@ use crate::confine::Confinement;
 use crate::interjections::Arrival;
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, ValuePart, is_the_null_device};
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -183,18 +184,36 @@ pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
 /// See [`WAIT_FLOOR`].
 pub const WAIT_CEILING: Duration = Duration::from_secs(600);
 
-/// The most a substitution may print before it is refused, in bytes.
-const SUBSTITUTION_LIMIT: usize = 64 * 1024;
-
 /// A worked-out value of an assignment, which may be a secret.
 ///
 /// Held from the moment it is worked out until it is handed to a process, and printed nowhere:
 /// its `Debug` says only that it is redacted, so no struct holding one can leak it by derive.
-struct Secret(String);
+///
+/// An `OsString`, so the bytes a substitution printed reach the environment as they are and the
+/// driver decodes none of them.
+struct Secret(OsString);
 
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("<redacted>")
+    }
+}
+
+/// The bytes a substitution printed, as the value of a variable.
+///
+/// Looks at none of them. On Unix an environment value is a byte string, so they pass unchanged.
+/// Elsewhere it is text, and the bytes are read as UTF-8 with each sequence that is not replaced
+/// by U+FFFD: a transformation of the value, where a refusal would be a decision taken from what
+/// an unvouched program printed (CMDLINE-17, LAYER-2).
+fn environment_value(bytes: Vec<u8>) -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
 
@@ -668,13 +687,13 @@ impl<'a> Running<'a> {
         for step in steps {
             let mut values = Vec::with_capacity(step.expansions.len());
             for expansion in &step.expansions {
-                let mut value = String::new();
+                let mut value = OsString::new();
                 for part in &expansion.parts {
                     match part {
-                        ValuePart::Text(text) => value.push_str(text),
-                        ValuePart::Variable(name) => value.push_str(&variable_value(name)?),
+                        ValuePart::Text(text) => value.push(text),
+                        ValuePart::Variable(name) => value.push(variable_value(name)?),
                         ValuePart::Substitution { source, steps } => {
-                            value.push_str(&self.substitute(source, steps)?.0);
+                            value.push(self.substitute(source, steps)?.0);
                         }
                     }
                 }
@@ -689,7 +708,9 @@ impl<'a> Running<'a> {
     /// trailing newlines trimmed.
     ///
     /// Every way this fails says the source and how the line ended, and nothing it printed on
-    /// either stream: the output is the value, or part of it.
+    /// either stream: the output is the value, or part of it. The line ends here only by the exit
+    /// status, the clock, the cancellation or an error of the run itself, never by what was
+    /// printed: the value is untrusted output, and its length and its encoding decide nothing.
     fn substitute(&mut self, source: &str, steps: &Steps) -> Result<Secret, ExecError> {
         let failed = |detail: &str| ExecError::Substitution {
             source: source.to_string(),
@@ -722,27 +743,21 @@ impl<'a> Running<'a> {
         }
         // The bytes the pipe delivered, not the text `Drain::text` makes of them: that is lossy, so
         // a program printing `\xff` would otherwise hand the next program U+FFFD and the line would
-        // run on a value nobody printed. A value that is not valid UTF-8 is refused, as a variable
-        // that is not is ([`variable_value`]), with the source and nothing of the output.
-        let raw = inner.raw_stdout.take().unwrap_or_default();
-        if raw.len() > SUBSTITUTION_LIMIT {
-            return Err(failed(&format!(
-                "it printed more than {SUBSTITUTION_LIMIT} bytes"
-            )));
-        }
-        // `FromUtf8Error` holds the bytes, so it is dropped here rather than formatted.
-        let mut value =
-            String::from_utf8(raw).map_err(|_| failed("its output is not valid UTF-8"))?;
-        while value.ends_with('\n') {
-            value.pop();
-            if value.ends_with('\r') {
-                value.pop();
+        // run on a value nobody printed.
+        let mut raw = inner.raw_stdout.take().unwrap_or_default();
+        // Only the line ends are cut, as a shell does. The cut changes the value and decides
+        // nothing: every output, whatever it holds, goes on to the step that uses it.
+        while raw.last() == Some(&b'\n') {
+            raw.pop();
+            if raw.last() == Some(&b'\r') {
+                raw.pop();
             }
         }
-        // A NUL in the value is not looked for: `Command::env` cannot hold one, so the step that
-        // would receive it fails to start, and that error names the program and the operating
-        // system's words, never the value.
-        Ok(Secret(value))
+        // Neither a NUL nor a size the operating system refuses is looked for: `Command::env`
+        // cannot hold the first and the system's limit on an environment decides the second, so
+        // the step that would receive the value fails to start, and that error names the program
+        // and the operating system's words, never the value.
+        Ok(Secret(environment_value(raw)))
     }
 
     /// Run one shape of a plan, and say whether it ended well.

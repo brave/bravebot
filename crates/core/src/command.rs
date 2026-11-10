@@ -1228,6 +1228,173 @@ mod tests {
         );
     }
 
+    /// A step that takes `name` from `parts` in front of its program.
+    fn expanding(program: &str, name: &str, parts: Vec<ValuePart>) -> Step {
+        Step {
+            expansions: vec![Expansion {
+                name: name.to_string(),
+                parts,
+            }],
+            ..step(program, &[])
+        }
+    }
+
+    fn substituting(source: &str, inner: Step) -> ValuePart {
+        ValuePart::Substitution {
+            source: source.to_string(),
+            steps: Box::new(Steps::Pipeline(vec![inner])),
+        }
+    }
+
+    /// CMDLINE-17: an assignment is drawn from its source, a lone variable the way it was written
+    /// and a mixed value in double quotes with each part escaped so that two values do not draw
+    /// alike. Rejects drawing a value in place of its source, dropping a part, or leaving a
+    /// `"` or `$` in a text part unescaped so that `"a$(x)"` as text and as a substitution match.
+    #[test]
+    fn an_expansion_is_drawn_from_its_source() {
+        let lone = Expansion {
+            name: "TOKEN".to_string(),
+            parts: vec![ValuePart::Variable("SECRET".to_string())],
+        };
+        assert_eq!(lone.display(), "TOKEN=$SECRET");
+
+        let mixed = Expansion {
+            name: "MIX".to_string(),
+            parts: vec![
+                ValuePart::Text("a\"b$c\\".to_string()),
+                ValuePart::Variable("X".to_string()),
+                substituting("cmd 'y'", step("cmd", &["y"])),
+                ValuePart::Text("\u{7}".to_string()),
+            ],
+        };
+        assert_eq!(
+            mixed.display(),
+            "MIX=\"a\\\"b\\$c\\\\${X}$(cmd 'y')\\u{7}\""
+        );
+
+        let as_text = Expansion {
+            name: "MIX".to_string(),
+            parts: vec![ValuePart::Text("$(cmd 'y')".to_string())],
+        };
+        assert_ne!(
+            as_text.display(),
+            Expansion {
+                name: "MIX".to_string(),
+                parts: vec![substituting("cmd 'y'", step("cmd", &["y"]))],
+            }
+            .display(),
+            "text and a substitution drew alike"
+        );
+    }
+
+    /// CMDLINE-17: the line a person reads and the line the planner is told both carry the
+    /// assignment, in front of the program, so an approval or a result never hides one.
+    #[test]
+    fn a_step_with_an_expansion_draws_it_in_front_of_its_program() {
+        let expanding = expanding("prog", "TOKEN", vec![ValuePart::Variable("SECRET".into())]);
+        let steps = Steps::Pipeline(vec![expanding]);
+        assert_eq!(steps.display(), "TOKEN=$SECRET /usr/bin/prog");
+        let told = steps
+            .display_with_operands(&[vec!["arg".into()]], &[vec![]])
+            .expect("one list per step");
+        assert_eq!(told, "TOKEN=$SECRET /usr/bin/prog arg");
+        assert_eq!(plan(steps.clone()).display(), "TOKEN=$SECRET /usr/bin/prog");
+        let as_written = steps.steps()[0].as_written();
+        assert_eq!(as_written, "TOKEN=$SECRET prog");
+    }
+
+    /// CMDLINE-17: the command inside a substitution is a step of the plan, and it comes before the
+    /// step that uses its output, which is the order it runs in. Every gate that walks the plan
+    /// sees it, including one inside a later stage and one inside a group. Rejects a `steps` that
+    /// leaves the inner step out (a rule or a vouched list never judging it) or lists it after.
+    #[test]
+    fn the_steps_of_a_plan_list_a_substituted_command_before_the_step_using_it() {
+        let using = expanding(
+            "outer",
+            "A",
+            vec![substituting("inner a", step("inner", &["a"]))],
+        );
+        let alone = plan(Steps::Pipeline(vec![using.clone()]));
+        let programs: Vec<&str> = alone
+            .steps
+            .steps()
+            .iter()
+            .map(|step| step.program.as_str())
+            .collect();
+        assert_eq!(programs, ["inner", "outer"]);
+
+        let later = plan(Steps::Join {
+            left: Box::new(Steps::Pipeline(vec![step("first", &[])])),
+            joiner: Joiner::And,
+            right: Box::new(Steps::Group(Box::new(Steps::Pipeline(vec![
+                step("mid", &[]),
+                using,
+            ])))),
+        });
+        let programs: Vec<&str> = later
+            .steps
+            .steps()
+            .iter()
+            .map(|step| step.program.as_str())
+            .collect();
+        assert_eq!(programs, ["first", "mid", "inner", "outer"]);
+    }
+
+    /// CMDLINE-17: an endorsement is bound to the expansion, so two plans that differ only in what
+    /// an assignment takes its value from must not encode alike. Rejects a key that drops
+    /// `expansions`, one that keeps the name and loses the parts, one that tells a variable from
+    /// text of the same spelling, and one that keeps the substitution's source and loses the
+    /// command it compiled to.
+    #[test]
+    fn two_plans_differing_only_in_an_expansion_never_encode_alike() {
+        let encoded = |step: Step| plan(Steps::Pipeline(vec![step])).canonical();
+        let variable = |name: &str, from: &str| {
+            encoded(expanding("p", name, vec![ValuePart::Variable(from.into())]))
+        };
+        let bare = encoded(step("p", &[]));
+        assert_ne!(
+            bare,
+            variable("A", "X"),
+            "an expansion was left out of the key"
+        );
+        assert_ne!(
+            variable("A", "X"),
+            variable("B", "X"),
+            "the name was ignored"
+        );
+        assert_ne!(
+            variable("A", "X"),
+            variable("A", "Y"),
+            "the variable was ignored"
+        );
+        assert_ne!(
+            variable("A", "X"),
+            encoded(expanding("p", "A", vec![ValuePart::Text("X".into())])),
+            "a variable and the same word as text encoded alike"
+        );
+        assert_ne!(
+            encoded(expanding(
+                "p",
+                "A",
+                vec![ValuePart::Text("a".into()), ValuePart::Text("b".into())]
+            )),
+            encoded(expanding("p", "A", vec![ValuePart::Text("ab".into())])),
+            "the number of parts was ignored"
+        );
+        let substituting_with =
+            |inner: Step| encoded(expanding("p", "A", vec![substituting("cmd", inner)]));
+        assert_ne!(
+            substituting_with(step("cmd", &["one"])),
+            substituting_with(step("cmd", &["two"])),
+            "a substitution compiled to other steps encoded alike"
+        );
+        assert_eq!(
+            variable("A", "X"),
+            variable("A", "X"),
+            "the encoding is not stable"
+        );
+    }
+
     /// The directory decides what a relative path in the plan means, so it is part of the plan.
     #[test]
     fn the_directory_a_plan_runs_in_is_part_of_what_it_encodes() {

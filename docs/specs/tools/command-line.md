@@ -1009,13 +1009,20 @@ variable set to `v-\xff` is refused as not valid text; one set to `v-\u{FFFD}` i
 reaches the program unchanged.
 
 **A failure says what ran and how it ended, not what it printed.** A substitution that fails to
-start, is stopped, exits non-zero or prints bytes that are not valid Unicode fails the line before
-the stage that uses it, naming the source text and the exit status. A substitution that prints more
-than 65536 bytes (64 KiB) fails the line the same way, naming the source and that limit. Neither its
-standard output nor its standard error is in the message. What it printed is judged as the bytes the
-pipe delivered, so a `\xff` is refused and a U+FFFD, which is valid text, is passed on unchanged. Text
-holding a NUL byte is not looked for: the environment cannot hold one, so the stage that would receive it fails to
-start, and that error names the program and the operating system's words, never the value.
+start, is stopped or exits non-zero fails the line before the stage that uses it, naming the source
+text and the exit status. Neither its standard output nor its standard error is in the message.
+
+**The output is the value, and the driver decides nothing from it.** `cmd` may be a program nobody
+vouched for, so what it printed is untrusted ([RUN-4](run.md#RUN-4)). Its length and its encoding
+are not looked at: 65537 bytes and a `\xff` reach the program as they were printed, and a U+FFFD
+arrives as its own three bytes. The bytes are the ones the pipe delivered, not the lossy text made
+of them for display. The one change made to them is that trailing `\n` and `\r\n` are cut, as a shell
+does, and that cut depends on the line ends and on nothing else. A value the operating system will
+not put in an environment, a NUL byte or more than it holds, fails the start of the stage that would
+receive it, and that error names the program and the operating system's words, never the value. On
+Windows an environment value is text, so the bytes are read as UTF-8 and each sequence that is not
+valid is replaced by U+FFFD. That is a change to the value that depends on no outcome the driver
+takes, where a refusal would be a decision taken from what an unvouched program printed.
 
 **Nothing remembered covers such a line.** A line carrying an expansion is treated as a line with an
 environment assignment is: a remembered answer, a grant or an allow rule is not matched against it,
@@ -1041,10 +1048,13 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
 `verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
 `verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
-`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_is_refused_and_one_printing_the_replacement_character_is_not`
+`verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_reaches_the_program_byte_for_byte`
+`verified-by: bravebot_agent::exec::the_trailing_line_ends_of_a_substitution_are_cut_from_its_bytes_and_nothing_else`
 `verified-by: bravebot_agent::exec::a_background_start_is_cancelled_while_its_substitution_runs`
 `verified-by: bravebot_agent::exec::a_background_start_holds_its_substitution_to_the_calls_deadline`
-`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_byte_limit_is_refused_naming_its_source_and_the_limit`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_65536_bytes_reaches_the_program_whole`
+`verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_system_takes_fails_the_start_naming_the_program`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
 `verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
 `verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
 `verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
@@ -1063,6 +1073,24 @@ it reaches one.)
 `verified-by: bravebot_core::policy::an_expansion_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key`
 `verified-by: bravebot_core::policy::an_expansion_leaves_a_step_unproven`
+`verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start`
+`verified-by: bravebot_agent::tools::an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call`
+`verified-by: bravebot_core::command::an_expansion_is_drawn_from_its_source`
+`verified-by: bravebot_core::command::a_step_with_an_expansion_draws_it_in_front_of_its_program`
+`verified-by: bravebot_core::command::the_steps_of_a_plan_list_a_substituted_command_before_the_step_using_it`
+`verified-by: bravebot_core::command::two_plans_differing_only_in_an_expansion_never_encode_alike`
+`verified-by: bravebot_agent::cmdline::a_plan_holding_a_substituted_command_is_still_paired_with_the_operands_of_the_line`
+`verified-by: bravebot_agent::confirm::a_summary_counts_the_command_inside_a_substitution`
+
+The command inside `NAME="$(cmd)"` is a step of the plan, so the prompt's step count and its rows
+include it, in the order it runs. The operands the planner is told are paired with the commands of
+the line's shape, which the substituted command is not one of.
+
+The guarantee covers what bravebot shows or writes. It does not cover a program that prints the
+value it was handed: bravebot cannot tell that it did, so that output is the line's output, which
+is `(U,priv)` under an expansion, and the planner reads it only where it may read such output.
+`verified-by: bravebot_agent::exec::a_program_that_prints_an_expanded_value_puts_it_in_its_own_output_only`
+`verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_expansion_is_untrusted`
 
 ## Amendments to existing specs
 
