@@ -29,6 +29,8 @@ governs:
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
   - crates/tui/src/powershell.rs
+  - ui/scripts/host-card.test.mjs
+  - ui/scripts/shown.test.mjs
 guards:
   - symbol: find_in
     sites:

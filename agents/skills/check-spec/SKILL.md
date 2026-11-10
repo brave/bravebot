@@ -290,6 +290,7 @@ A run decides each clause by the record:
 | Every clause carries a `verified-by` line | mechanical | error |
 | `verified-by` names a `#[test]` that exists, in the module it says | mechanical | error |
 | `by-construction` says what makes the clause hold | mechanical | error |
+| A file a `by-construction` bracket names by its path from a repository-root directory (`ui/`, `crates/`, `docs/` and so on) exists | mechanical | error |
 | `verified-by: none` | mechanical | warning |
 | `agents/unverified-clauses.txt` lists exactly the clauses a full run finds uncovered | mechanical | error |
 | Every line of `docs/check-spec-reviewed` is a well formed record | mechanical | error |

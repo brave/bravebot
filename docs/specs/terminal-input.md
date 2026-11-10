@@ -31,6 +31,7 @@ governs:
   - crates/agent/src/interjections.rs
   - crates/agent/src/turn/cutting.rs
   - ui/src/renderer/interjecting.ts
+  - ui/scripts/interjecting.test.mjs
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md
