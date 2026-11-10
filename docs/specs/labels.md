@@ -187,6 +187,40 @@ guards:
       - crates/agent/src/tools.rs: 2
       - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 4
+  - symbol: Policy::declassify_into_workspace
+    sites:
+      - crates/agent/src/manifest.rs: 1
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 2
+  - symbol: Policy::declassify_written_into_workspace
+    sites:
+      - crates/agent/src/tools.rs: 2
+      - crates/core/src/policy.rs: 2
+  - symbol: Policy::declassify_checkout_into_workspace
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::promote_a_tool_list
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/core/src/policy.rs: 4
+  - symbol: Policy::promote_a_server_move
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/agent/src/servers.rs: 1
+      - crates/core/src/policy.rs: 5
+  - symbol: Policy::adopt_edited_body
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 3
+  - symbol: Policy::promote_vetted
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 20
+  - symbol: Policy::promote_vetted_picture
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 7
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
@@ -541,16 +575,16 @@ and the content has no say in it.
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
 | the auto mode's classifier's reply | the context's, as any reply taken out of a transport's envelope gets. The driver reads one word of it, and only where that label is trusted, whether or not it is private; a reply labelled untrusted is read as a refusal to allow ([AUTO-6](auto-mode.md#AUTO-6)) | `verified-by: bravebot_agent::turn::an_untrusted_context_is_not_put_to_the_classifier` `verified-by: bravebot_agent::turn::a_private_context_is_put_to_the_classifier_and_its_word_answers` `verified-by: bravebot_agent::classifier::a_context_that_has_met_something_untrusted_is_not_consulted` `verified-by: bravebot_agent::classifier::a_trusted_context_is_consulted_whether_or_not_it_holds_private_content` `verified-by: bravebot_agent::classifier::only_the_allow_word_alone_allows` |
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
-| the body a person saved from their editor over a proposed write | trusted and public, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
+| the body a person saved from their editor over a proposed write | trusted and public, from `Policy::adopt_edited_body`, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | a number a processor chose from a list | untrusted and private, by taint over what the processor was given, assigned by the policy layer as the reader returns its byte and no better than the answer's. The number is all that is kept of the answer, and which number is read is decided by the crate that reads it, which is the ninth entry of [Known costs](#known-costs). It reaches a call at that label, on the person's answer to the call ([ROUTE-10](routing.md#ROUTE-10), [MCP-14](mcp.md#MCP-14)) | `verified-by: bravebot_core::policy::a_number_read_from_an_answer_keeps_the_label_of_the_answer` `verified-by: bravebot_core::policy::a_stored_choice_is_a_reference_whatever_its_label_and_the_trail_holds_no_digit` `verified-by: bravebot_core::policy::carry_a_choice_consumes_the_endorsement_spends_the_choice_and_refuses_before_spending` |
-| one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
-| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
-| where a remote server's reply pointed, once a person says the server moved there | trusted and public, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
+| one slot's bytes a person read on their screen and vouched for | trusted and private, from `Policy::promote_vetted`, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
+| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, from `Policy::promote_a_tool_list`, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
+| where a remote server's reply pointed, once a person says the server moved there | trusted and public, from `Policy::promote_a_server_move`, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
 | a part of a server's tool result: its text, and each picture it carries | untrusted and private, the capability's own label, the same for a picture as for the text and the same whatever the parts hold. Which parts are taken, and under which of four media types, is decided by the transport crate from the `type`, the `mimeType` and the size of the data the server wrote, and is the eighth entry of [Known costs](#known-costs) | `verified-by: bravebot_mcp::stdio::a_tool_result_picture_is_labelled_untrusted_and_private` `verified-by: bravebot_mcp::http::a_tool_result_picture_is_labelled_untrusted_and_private` |
 | the text of a prompt a person ran from a server | untrusted and private, the capability's own label, whoever chose the prompt and typed its arguments, because choosing to run a prompt does not vouch for what it says ([MCP-11](mcp.md#MCP-11)) | `verified-by: bravebot_mcp::stdio::a_prompt_text_is_labelled_untrusted_and_private` `verified-by: bravebot_mcp::http::a_prompt_text_is_labelled_untrusted_and_private` `verified-by: bravebot_agent::mcp::a_prompt_a_person_ran_reaches_the_server_with_their_arguments_and_the_planner_gets_a_reference` |
 | what a session fetched with a tool of what a person held out in the browser, a selection, a link or a tab | untrusted and private, as any part of a server's tool result is. Holding it out gives the bytes no label: they are the page's whichever hand selected them, a selection includes the text the page hides, and the extension that keeps them is not the driver ([BROWSER-39](browser.md#BROWSER-39)) | `verified-by: bravebot_agent::browser_group_servers::what_a_person_held_out_in_the_browser_is_a_reference_and_the_planner_never_holds_it` `verified-by: bravebot_agent::browser_group_servers::an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every_call_after_is_put_to_the_person` |
-| a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
+| a picture or a PDF `vet_content` let through | trusted and private, from `Policy::promote_vetted_picture`, on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |

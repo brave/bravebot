@@ -79,8 +79,8 @@ releasing it hands the user's data somewhere this policy no longer governs. Writ
 workspace is the one move that lowers confidentiality without releasing anything, because the
 destination is inside the boundary the bytes came from. The same holds for what the planner writes
 with `write_file` or `edit_file` once it has been shown private content
-([LABEL-8](labels.md#LABEL-8)): the text is released public at its own integrity, so the write is
-decided as it was before.
+([LABEL-8](labels.md#LABEL-8)): `declassify_written_into_workspace` releases the text public at its
+own integrity, so the write is decided as it was before.
 
 `verified-by: bravebot_core::policy::a_write_back_into_the_workspace_lowers_only_confidentiality`
 `verified-by: bravebot_core::policy::what_the_planner_writes_into_the_workspace_is_released_public_at_its_own_integrity`
