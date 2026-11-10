@@ -162,7 +162,6 @@ impl View {
             .sum();
         while self.retained.len() > RETAINED_ROWS
             || (self.retained_bytes > RETAINED_BYTES
-                && self.retained.len() > 1
                 && self.retained.first_key_value().is_some_and(|(id, _)| {
                     !sent.contains(id) || self.retained_bytes - sent_bytes > RETAINED_BYTES
                 }))
@@ -670,8 +669,8 @@ mod tests {
         assert_eq!(last.omitted, snapshot.omitted);
     }
 
-    /// The newest row is kept whatever its size, so a client that resyncs straight after a long
-    /// reply is sent it. The next row drops it.
+    /// A row is kept whatever its size by the update that sends it, so a client that resyncs
+    /// straight after a long reply is sent it. The next row drops it.
     #[test]
     fn a_row_larger_than_the_byte_budget_is_kept_only_while_it_is_the_newest() {
         let mut view = View::new(true);
@@ -686,6 +685,31 @@ mod tests {
         let snapshot = view.snapshot();
         assert_eq!(snapshot.rows.len(), 1);
         assert_eq!((snapshot.rows[0].id, snapshot.omitted), (large + 1, large));
+    }
+
+    /// A row longer than the budget is dropped by an update that does not send it, even when it is
+    /// the only row kept: one that sends no rows, or only a later state of a row already dropped.
+    #[test]
+    fn a_row_larger_than_the_byte_budget_is_dropped_by_an_update_that_does_not_send_it() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let call = json!({"call": 1, "verb": "read", "target": "x"});
+        view.event(&Event::new("tool.started", "s1", call.clone()));
+        let large = narrate(&mut view, RETAINED_BYTES + 1).rows[0].id;
+        let finished = view
+            .event(&Event::new("tool.finished", "s1", call))
+            .unwrap();
+        assert_eq!(finished.rows[0].id, large - 1);
+        assert_eq!(finished.omitted, large);
+        assert!(view.snapshot().rows.is_empty());
+
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let large = narrate(&mut view, RETAINED_BYTES + 1).rows[0].id;
+        let detached = view.detach();
+        assert!(detached.rows.is_empty());
+        assert_eq!(detached.omitted, large);
+        assert!(view.snapshot().rows.is_empty());
     }
 
     /// A row replaced by a later state counts once, at its latest size, so finishing calls does

@@ -260,6 +260,7 @@ The view keeps its current state and its most recent rows, at most `retainedRows
 `verified-by: bravebot_ui_bridge::view::a_snapshot_keeps_the_most_recent_rows_and_the_question_waiting`
 `verified-by: bravebot_ui_bridge::view::a_view_keeps_its_most_recent_rows_within_a_byte_budget_and_says_how_many_it_left_out`
 `verified-by: bravebot_ui_bridge::view::a_row_larger_than_the_byte_budget_is_kept_only_while_it_is_the_newest`
+`verified-by: bravebot_ui_bridge::view::a_row_larger_than_the_byte_budget_is_dropped_by_an_update_that_does_not_send_it`
 `verified-by: bravebot_ui_bridge::view::a_row_replaced_by_a_later_state_counts_once_toward_the_byte_budget`
 `verified-by: bravebot_ui_bridge::view::a_long_later_state_of_an_older_row_is_kept_by_the_update_that_sends_it`
 `verified-by: bravebot_ui_bridge::view::rows_kept_stay_within_the_byte_budget_and_the_latest_update`
