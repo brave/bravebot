@@ -1548,6 +1548,24 @@ is given in the same place. Where no identity is recorded, as on Windows, the na
 a directory and not a link, so a directory made in place of the original is given the row. The
 refusal lasts for the session, and a new session makes a new scratch directory.
 
+Each directory the session was opened on, the working directory and every directory added with
+`/add-dir`, `--add-dir` or `additionalDirectories` or reopened by a resume, is held the same way.
+The workspace records its device and inode as it is opened, added or reopened
+([TRUST-14](trust-map.md#TRUST-14)), the stage's confinement is built from those records, and a
+directory is a row only while its name leads to that directory. Every stage may write the temporary
+directory, so a stage can move a session directory that lies directly under it and put a link in
+its place, and a row written from the name would then grant wherever the link leads. The name is
+resolved once, the resolved path is compared with the record, and that same path is the row. A name
+that leads to another directory, or to nothing, is given no row, and the stages that follow still
+start. A name that leads to a link or a file refuses the stage, and the refusal names the
+directory. The check is made as each stage starts, so a later stage of one line is held too, and a
+name already changed when a line's confinement is built is given no row. A directory that lies in
+or is a credential location is judged as before, by where its name leads. Where no identity is
+recorded, as on Windows, the name is held to being a directory and not a link, so a directory made
+in place of the original is given the row. The file tools hold the name the workspace stored and
+do not follow a link made later. The interval between the check and the sandbox opening the row
+remains: a name relinked in it is not caught, as for the scratch directory.
+
 A stage's program is git where the file it resolved to, with its links followed, is named `git`, or
 `git.exe` in any case on Windows, and lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
@@ -1674,6 +1692,17 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_line_that_relinks_the_scratch_directory_is_refused_at_the_stage_after`
 `verified-by: bravebot_agent::confine::a_scratch_directory_made_again_by_a_program_does_not_stop_the_stages_after`
 `verified-by: bravebot_agent::tools::a_turns_confinement_holds_the_scratch_directory_to_the_one_the_session_made`
+`verified-by: bravebot_agent::confine::a_session_directory_whose_name_leads_elsewhere_gets_no_row`
+`verified-by: bravebot_agent::confine::a_session_directory_as_recorded_is_a_row_and_starts_a_stage`
+`verified-by: bravebot_agent::confine::a_working_directory_that_leads_elsewhere_is_not_replaced_by_an_added_one_as_the_place`
+`verified-by: bravebot_agent::workspace::the_session_directories_are_the_directories_recorded_as_they_were_opened`
+`verified-by: bravebot_agent::workspace::a_delegates_checkout_records_its_own_root_and_carries_its_parents_records`
+`verified-by: bravebot_agent::confine::a_stage_that_relinks_an_added_directory_hands_the_next_stage_nothing`
+`verified-by: bravebot_agent::confine::a_line_that_relinks_an_added_directory_is_refused_at_the_stage_after`
+`verified-by: bravebot_agent::confine::a_line_that_relinks_the_primary_root_is_refused_at_the_stage_after`
+`verified-by: bravebot_agent::confine::an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after`
+`verified-by: bravebot_agent::tools::a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded`
+`verified-by: bravebot_tui::sessions::a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopened`
 `verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
 `verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
 `verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`

@@ -256,7 +256,11 @@ pub struct Workspace {
     /// Behind a lock and a handle because a turn holds a clone of the workspace, and a directory
     /// bypass mode opens in the middle of a turn has to be reachable by the file tools in that turn
     /// and listed by the session that outlives it. A delegate's checkout takes a copy instead.
-    added: Arc<Mutex<Vec<PathBuf>>>,
+    added: Arc<Mutex<Vec<ScratchDirectory>>>,
+    /// The working directory as it was when the session opened it or moved to it, which is what a
+    /// stage is given a row for only while its name still leads there (SANDBOX-18). None where it
+    /// could not be read as a directory then.
+    root_made: Option<ScratchDirectory>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
@@ -496,6 +500,7 @@ impl Workspace {
             while_reading: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             while_backing_up: Arc::new(Mutex::new(None)),
+            root_made: ScratchDirectory::observed(canonical.clone()),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -3982,7 +3987,8 @@ impl Workspace {
         locked(&self.kept.session_checkouts).push(entry.clone());
 
         let mut delegate = self.clone();
-        delegate.added = Arc::new(Mutex::new(self.added_directories()));
+        delegate.added = Arc::new(Mutex::new(locked(&self.added).clone()));
+        delegate.root_made = ScratchDirectory::observed(target.clone());
         delegate.root = target;
         delegate.backups = Arc::new(Mutex::new(Vec::new()));
         delegate.rewind = Arc::default();

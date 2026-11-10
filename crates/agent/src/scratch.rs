@@ -288,11 +288,12 @@ impl ScratchDirectory {
     }
 
     /// The directory at `path` as it stands now, for a caller that did not make it through
-    /// [`SessionScratch`], such as a test handed a directory. None where `path` is not a directory.
+    /// [`SessionScratch`]: a session directory recorded as it is opened or added (SANDBOX-18), or
+    /// a test handed a directory. None where `path` is not a directory.
     ///
-    /// A session that made the directory asks [`SessionScratch::directory`] instead: a name that
-    /// has been changed gives the identity of what it was changed to.
-    #[doc(hidden)]
+    /// The name is not followed, so a link at `path` is not a directory here. A session that made
+    /// the directory asks [`SessionScratch::directory`] instead: a name that has been changed gives
+    /// the identity of what it was changed to.
     pub fn observed(path: PathBuf) -> Option<Self> {
         let found = std::fs::symlink_metadata(&path).ok()?;
         if !found.is_dir() {

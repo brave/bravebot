@@ -70,6 +70,11 @@ pub struct Confinement {
     temporary: PathBuf,
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
+    /// The session directories as the session recorded them when it opened or added them
+    /// ([`Confinement::with_session_directories`]), empty where the roots came from paths alone.
+    /// A directory is a row in `roots` only while its name leads to the directory recorded, and
+    /// each stage is refused as it starts once the name leads to a link or a file (SANDBOX-18).
+    roots_made: Vec<ScratchDirectory>,
     scratch: Option<PathBuf>,
     /// The directory `scratch` was made as. `scratch` is a row only while its name leads to this
     /// directory, and each stage is refused as it starts once the name leads to a link or a file
@@ -143,11 +148,51 @@ impl Confinement {
         self.request_path == RequestPath::Listed
     }
 
+    /// This confinement with the session's directories as the session recorded them when it opened
+    /// the session on them or added them (SANDBOX-18).
+    ///
+    /// `directories` replace the paths [`Confinement::here`] was given. A directory is a row only
+    /// while its name still leads to the directory recorded: the name is resolved first and the
+    /// resolved path compared with the record, so the row is the path that was checked and not a
+    /// second reading of a name a stage may have changed in between. A name that now leads to
+    /// another directory, or to nothing, gives no row, and one that leads to a link or a file
+    /// stops every stage as it starts ([`Confinement::session_linked`]), as the scratch
+    /// directory's does. A directory not listed here is given no row.
+    ///
+    /// The first directory is the working directory. Where it gives no row, the run has no
+    /// directory for the `[includeIf]` blocks of the person's git configuration to match, and the
+    /// next directory is not taken for it.
+    #[must_use]
+    pub fn with_session_directories(mut self, directories: &[ScratchDirectory]) -> Self {
+        let rows: Vec<Option<PathBuf>> = directories
+            .iter()
+            .map(|made| {
+                let named = canonical(made.path());
+                made.stands_as_made_at(&named).then_some(named)
+            })
+            .collect();
+        let standing: Vec<PathBuf> = rows.iter().flatten().cloned().collect();
+        self.place = signing::Place {
+            directory: rows.first().cloned().flatten(),
+            sessions: standing
+                .iter()
+                .chain(self.scratch.iter())
+                .cloned()
+                .collect(),
+            agent: None,
+        };
+        self.roots = standing;
+        self.roots_made = directories.to_vec();
+        self
+    }
+
     /// The confinement for a session on this machine, or `None` where the platform has no base to
     /// build one on. Every platform the agent runs on has one.
     ///
-    /// `roots` are the directories the person opened the session on, each read and written. `home`
-    /// is the account's profile directory, which is what `~` means and what no row reaches.
+    /// `roots` are the directories the person opened the session on, each read and written, as
+    /// paths alone. A session that recorded them holds them to the directories recorded with
+    /// [`Confinement::with_session_directories`] (SANDBOX-18). `home` is the account's profile
+    /// directory, which is what `~` means and what no row reaches.
     ///
     /// `scratch` is the session's own directory as the session made it. It is a row only while its
     /// name still leads to that directory (SANDBOX-18), since `canonical` would turn the row for a
@@ -216,6 +261,7 @@ impl Confinement {
                 agent: None,
             },
             roots,
+            roots_made: Vec::new(),
             scratch,
             scratch_made: None,
             user_cache: None,
@@ -1902,6 +1948,10 @@ impl Confinement {
     /// grant, which holds for a directory above it but not for one at it: on macOS a row at a
     /// refused path lifts the refusal. Names are compared without regard to case on Windows and
     /// macOS, whose file systems fold it, and exactly on Linux.
+    ///
+    /// The roots are the names a session directory still leads from: a root that leads to another
+    /// directory is dropped by [`Confinement::with_session_directories`], so this judges where
+    /// each one leads now.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
         reaching_credentials(self.prelude, self.home.as_deref(), self.roots.iter())
     }
@@ -1912,6 +1962,53 @@ impl Confinement {
             .as_ref()
             .filter(|made| made.leads_elsewhere())
             .map(ScratchDirectory::path)
+    }
+
+    /// The first session directory, if its name now leads to a link or a file (SANDBOX-18). One
+    /// that leads to another directory or nowhere is given no row when the confinement is built
+    /// and is not this: nothing is reached through it, and the stages after it still start.
+    fn session_linked(&self) -> Option<&Path> {
+        self.roots_made
+            .iter()
+            .find(|made| made.leads_elsewhere())
+            .map(ScratchDirectory::path)
+    }
+
+    /// Why a stage cannot be started because of the session or scratch directory, if it cannot.
+    fn directory_refusal(&self) -> Option<String> {
+        if let Some((root, location)) = self.root_reaching_credentials() {
+            return Some(match self.prelude {
+                Prelude::Windows => format!(
+                    "the session directory `{}` is or holds `{}`, which a Windows stage cannot be \
+                     kept out of; open the session on a project directory instead",
+                    root.display(),
+                    location.display()
+                ),
+                _ => format!(
+                    "the session directory `{}` is or lies inside `{}`, which a stage given that \
+                     directory to write is not kept out of; open the session on a project \
+                     directory instead",
+                    root.display(),
+                    location.display()
+                ),
+            });
+        }
+        if let Some(linked) = self.session_linked() {
+            return Some(format!(
+                "the session directory `{}` has been replaced by a link or a file, so a stage \
+                 given it to write could reach wherever its name now leads; open the session on \
+                 it again to be given it",
+                linked.display()
+            ));
+        }
+        self.scratch_linked().map(|linked| {
+            format!(
+                "the session's scratch directory `{}` has been replaced by a link or a file, so a \
+                 stage given it to write could reach wherever its name now leads; start a new \
+                 session to be given another",
+                linked.display()
+            )
+        })
     }
 
     /// What `command` is started as under this confinement, or the reason it cannot be.
@@ -1928,30 +2025,8 @@ impl Confinement {
             program: step.program.clone(),
             detail,
         };
-        if let Some((root, location)) = self.root_reaching_credentials() {
-            return Err(not_confined(match self.prelude {
-                Prelude::Windows => format!(
-                    "the session directory `{}` is or holds `{}`, which a Windows stage cannot be \
-                     kept out of; open the session on a project directory instead",
-                    root.display(),
-                    location.display()
-                ),
-                _ => format!(
-                    "the session directory `{}` is or lies inside `{}`, which a stage given that \
-                     directory to write is not kept out of; open the session on a project \
-                     directory instead",
-                    root.display(),
-                    location.display()
-                ),
-            }));
-        }
-        if let Some(linked) = self.scratch_linked() {
-            return Err(not_confined(format!(
-                "the session's scratch directory `{}` has been replaced by a link or a file, so a \
-                 stage given it to write could reach wherever its name now leads; start a new \
-                 session to be given another",
-                linked.display()
-            )));
+        if let Some(detail) = self.directory_refusal() {
+            return Err(not_confined(detail));
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
@@ -4492,6 +4567,214 @@ mod tests {
         assert!(refused_for_the_scratch_directory(&confinement).is_some());
         let _ = std::fs::remove_file(session.path());
         let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// What `confinement` refuses a stage for when it is about a session directory, and nothing
+    /// otherwise.
+    fn refused_for_a_session_directory(confinement: &Confinement) -> Option<String> {
+        match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. }) if detail.contains("session directory") => {
+                Some(detail)
+            }
+            _ => None,
+        }
+    }
+
+    /// SANDBOX-18: a session directory whose name leads to a link, to another directory or to
+    /// nothing when the confinement is built gets no row, on every prelude, and a link or a file
+    /// stops the stage while another directory or nothing does not. The regression it rejects: the
+    /// row built from the name as `canonical` resolves it, which hands the stage wherever the link
+    /// leads, and a refusal for every changed name, which ends every later `run`. A link to a
+    /// credential directory is one of the changes: it gets no row and the credential directory is
+    /// not read or written through it.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_directory_whose_name_leads_elsewhere_gets_no_row() {
+        let outside = somewhere_to_link_to("confine-session-directory-changed");
+        let target = outside
+            .join("elsewhere")
+            .canonicalize()
+            .expect("a canonical target");
+        let credentials = outside
+            .join(".ssh")
+            .canonicalize()
+            .expect("a canonical credential directory");
+        let changes: Vec<(&str, bool, crate::testutil::PutThere<'_>)> = vec![
+            (
+                "a link to another directory",
+                true,
+                Box::new(|name| std::os::unix::fs::symlink(&target, name).expect("link")),
+            ),
+            (
+                "a link to a credential directory",
+                true,
+                Box::new(|name| std::os::unix::fs::symlink(&credentials, name).expect("link")),
+            ),
+            (
+                "a file",
+                true,
+                Box::new(|name| std::fs::write(name, "x").expect("a file")),
+            ),
+            (
+                "an empty directory made in its place",
+                false,
+                Box::new(|name| std::fs::create_dir(name).expect("a directory")),
+            ),
+            ("nothing", false, Box::new(|_| {})),
+        ];
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for (index, (change, stops, put_there)) in changes.iter().enumerate() {
+                let directory = crate::testutil::scratch_dir(&format!(
+                    "confine-session-{}-{index}",
+                    format!("{prelude:?}").to_lowercase()
+                ));
+                let _ = std::fs::remove_dir_all(&directory);
+                std::fs::create_dir_all(&directory).expect("a session directory");
+                let made =
+                    crate::ScratchDirectory::observed(directory.clone()).expect("a directory");
+                let named = directory.canonicalize().expect("canonical");
+                let named = named.display().to_string();
+                let confinement = || {
+                    Confinement::new(
+                        prelude,
+                        PathBuf::from("/tmp"),
+                        Some(Path::new(HOME)),
+                        vec![directory.clone()],
+                        None,
+                    )
+                    .with_session_directories(std::slice::from_ref(&made))
+                };
+                let policy = |confinement: &Confinement| {
+                    confinement.policy(
+                        &step("/bin/cat", &["f"]),
+                        Path::new("/people/person/project"),
+                        &[],
+                    )
+                };
+                let before = confinement();
+                assert!(
+                    reads(&policy(&before), &named),
+                    "{prelude:?} {change}: before read"
+                );
+                assert!(
+                    writes(&policy(&before), &named),
+                    "{prelude:?} {change}: before write"
+                );
+                assert_eq!(
+                    refused_for_a_session_directory(&before),
+                    None,
+                    "{prelude:?} {change}"
+                );
+
+                let aside = crate::testutil::moved_aside_and_replaced(&directory, put_there);
+                let after = confinement();
+
+                let policy = policy(&after);
+                assert!(!reads(&policy, &named), "{prelude:?} {change}: read");
+                assert!(!writes(&policy, &named), "{prelude:?} {change}: written");
+                for led in [&target, &credentials] {
+                    let led = led.display().to_string();
+                    assert!(
+                        !reads(&policy, &led),
+                        "{prelude:?} {change}: read where it leads"
+                    );
+                    assert!(
+                        !writes(&policy, &led),
+                        "{prelude:?} {change}: written where it leads"
+                    );
+                }
+                assert_eq!(
+                    refused_for_a_session_directory(&after).is_some(),
+                    *stops,
+                    "{prelude:?} {change}"
+                );
+                let _ = std::fs::remove_dir_all(&directory);
+                let _ = std::fs::remove_file(&directory);
+                let _ = std::fs::remove_dir_all(&aside);
+            }
+        }
+    }
+
+    /// SANDBOX-18: a working directory whose name leads elsewhere gives no row, and the run has no
+    /// directory of its own for the person's `[includeIf "gitdir:..."]` blocks, while an added
+    /// directory that still stands keeps its row. The regression it rejects: the first directory
+    /// that stands taken for the working directory, which matches those blocks against a directory
+    /// the stage does not start in. The same confinement before the change is the control.
+    #[cfg(unix)]
+    #[test]
+    fn a_working_directory_that_leads_elsewhere_is_not_replaced_by_an_added_one_as_the_place() {
+        let working = crate::testutil::scratch_dir("confine-session-place-working");
+        let added = crate::testutil::scratch_dir("confine-session-place-added");
+        for directory in [&working, &added] {
+            let _ = std::fs::remove_dir_all(directory);
+            std::fs::create_dir_all(directory).expect("a session directory");
+        }
+        let recorded: Vec<ScratchDirectory> = [&working, &added]
+            .into_iter()
+            .map(|directory| ScratchDirectory::observed(directory.clone()).expect("a directory"))
+            .collect();
+        let confinement = || {
+            Confinement::here(
+                vec![working.clone(), added.clone()],
+                None,
+                Some(Path::new(HOME)),
+            )
+            .expect("a platform with a base")
+            .with_session_directories(&recorded)
+        };
+        let working_row = working.canonicalize().expect("canonical");
+        let added_row = added.canonicalize().expect("canonical");
+
+        let before = confinement();
+        assert_eq!(
+            before.place.directory.as_deref(),
+            Some(working_row.as_path())
+        );
+
+        let aside = crate::testutil::moved_aside_and_replaced(&working, |name| {
+            std::fs::create_dir(name).expect("a directory made in its place")
+        });
+        let after = confinement();
+
+        assert_eq!(
+            after.place.directory, None,
+            "an added directory as the place"
+        );
+        assert_eq!(after.place.sessions, vec![added_row.clone()]);
+        assert_eq!(after.roots, vec![added_row]);
+        let _ = std::fs::remove_dir_all(&working);
+        let _ = std::fs::remove_dir_all(&added);
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// SANDBOX-18: a session directory that is the one recorded is a row and starts a stage, and a
+    /// confinement built from paths alone keeps its rows. The control for the test above: a check
+    /// that refuses every stage or grants no row passes it for the wrong reason.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_directory_as_recorded_is_a_row_and_starts_a_stage() {
+        let directory = crate::testutil::scratch_dir("confine-session-recorded");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a session directory");
+        let made = crate::ScratchDirectory::observed(directory.clone()).expect("a directory");
+        let named = directory.canonicalize().expect("canonical");
+        let named = named.display().to_string();
+        let held = Confinement::here(vec![directory.clone()], None, Some(Path::new(HOME)))
+            .expect("a platform with a base")
+            .with_session_directories(std::slice::from_ref(&made));
+        let by_path = Confinement::here(vec![directory.clone()], None, Some(Path::new(HOME)))
+            .expect("a platform with a base");
+
+        for confinement in [&held, &by_path] {
+            let policy = confinement.policy(
+                &step("/bin/cat", &["f"]),
+                Path::new("/people/person/project"),
+                &[],
+            );
+            assert!(reads(&policy, &named) && writes(&policy, &named));
+            assert_eq!(refused_for_a_session_directory(confinement), None);
+        }
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// The directory the session made is a row and starts a stage. The control for the three

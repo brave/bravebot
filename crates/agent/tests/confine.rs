@@ -474,6 +474,234 @@ fn a_stage_that_relinks_the_scratch_directory_hands_the_next_stage_nothing() {
     }
 }
 
+/// SANDBOX-18: a session directory is the one the session was opened on or added, and not whatever
+/// its name leads to later. A stage replaces an added directory with a link to a directory the
+/// person never added, and the next `run` of the session is not given that directory to write. The
+/// regression it rejects: every build resolving the stored name again, so the second stage's row is
+/// wherever the link leads and `planted` is written beside.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_relinks_an_added_directory_hands_the_next_stage_nothing() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("added-relinked");
+    let added = places.session.join("added");
+    std::fs::create_dir(&added).expect("an added directory");
+    let scratch = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(scratch.path());
+    let recorded: Vec<_> = [places.session.clone(), added.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confine = || {
+        Confinement::here(
+            vec![places.session.clone(), added.clone()],
+            scratch.directory().as_ref(),
+            Some(&places.home),
+        )
+        .expect("a platform with a base")
+        .with_session_directories(&recorded)
+    };
+    let aside = places.session.join("added.aside");
+
+    let relink = places.run_given(
+        &format!(
+            "sh -c 'mv {} {} && ln -s {} {}'",
+            added.display(),
+            aside.display(),
+            places.beside.display(),
+            added.display()
+        ),
+        Some(&confine()),
+        Some(&own),
+    );
+    let planted = places.beside.join("planted");
+    let next = places.try_run_given(
+        &format!("touch '{}/planted'", added.display()),
+        Some(&confine()),
+        Some(&own),
+    );
+
+    assert!(relink.ended_well, "the link was not made: {relink:?}");
+    assert!(
+        !planted.exists(),
+        "the second stage wrote {} through the link: {next:?}",
+        planted.display()
+    );
+    assert!(
+        next.as_ref().map_or(true, |ran| !ran.ended_well),
+        "the second stage was not refused and did not fail: {next:?}"
+    );
+}
+
+/// SANDBOX-18: a refused line names the session directory and says what happened to it.
+#[cfg(unix)]
+fn refused_for_a_session_directory(
+    result: Result<exec::Ran, exec::ExecError>,
+    directory: &Path,
+    line: &str,
+) {
+    match result {
+        Err(exec::ExecError::NotConfined { detail, .. }) => assert!(
+            detail.contains("session directory")
+                && detail.contains(&directory.display().to_string()),
+            "`{line}` was refused for another reason: {detail}"
+        ),
+        other => panic!("`{line}` was not refused: {other:?}"),
+    }
+}
+
+/// SANDBOX-18: the same, on one line. The confinement of a line is built before its first stage,
+/// so a session directory relinked by the first stage is held at the stage after. The regression
+/// it rejects: the check made when the confinement is built and not again as each stage starts.
+#[cfg(unix)]
+#[test]
+fn a_line_that_relinks_an_added_directory_is_refused_at_the_stage_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("added-relinked-in-a-line");
+    let added = places.session.join("added");
+    std::fs::create_dir(&added).expect("an added directory");
+    let recorded: Vec<_> = [places.session.clone(), added.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confinement = Confinement::here(
+        vec![places.session.clone(), added.clone()],
+        None,
+        Some(&places.home),
+    )
+    .expect("a platform with a base")
+    .with_session_directories(&recorded);
+    let line = format!(
+        "sh -c 'mv {} {} && ln -s {} {}' && touch '{}/planted'",
+        added.display(),
+        places.session.join("added.aside").display(),
+        places.beside.display(),
+        added.display(),
+        added.display()
+    );
+
+    let refused = places.try_run_given(&line, Some(&confinement), None);
+
+    refused_for_a_session_directory(refused, &added, &line);
+    assert!(!places.beside.join("planted").exists());
+}
+
+/// SANDBOX-18: the primary root is held as an added directory is, because the session's directories
+/// are one list. The regression it rejects: the check made on the added directories alone.
+#[cfg(unix)]
+#[test]
+fn a_line_that_relinks_the_primary_root_is_refused_at_the_stage_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("root-relinked-in-a-line");
+    let root = places.session.join("project");
+    std::fs::create_dir(&root).expect("a project directory");
+    let recorded: Vec<_> = [root.clone(), places.session.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confinement = Confinement::here(
+        vec![root.clone(), places.session.clone()],
+        None,
+        Some(&places.home),
+    )
+    .expect("a platform with a base")
+    .with_session_directories(&recorded);
+    let line = format!(
+        "sh -c 'mv {} {} && ln -s {} {}' && touch '{}/planted'",
+        root.display(),
+        places.session.join("project.aside").display(),
+        places.beside.display(),
+        root.display(),
+        root.display()
+    );
+
+    let refused = places.try_run_given(&line, Some(&confinement), None);
+
+    refused_for_a_session_directory(refused, &root, &line);
+    assert!(!places.beside.join("planted").exists());
+}
+
+/// SANDBOX-18: an added directory that a program removed and made again is not the one the session
+/// recorded, and the stages after it still start. The regression it rejects: a refusal for every
+/// name that leads to anything but the directory recorded, which ends every later `run`.
+#[cfg(unix)]
+#[test]
+fn an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("added-made-again");
+    let added = places.session.join("added");
+    std::fs::create_dir(&added).expect("an added directory");
+    let recorded: Vec<_> = [places.session.clone(), added.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confine = || {
+        Confinement::here(
+            vec![places.session.clone(), added.clone()],
+            None,
+            Some(&places.home),
+        )
+        .expect("a platform with a base")
+        .with_session_directories(&recorded)
+    };
+    let aside = places.session.join("added.aside");
+
+    let again = places.run_given(
+        &format!(
+            "sh -c 'mv {} {} && mkdir {}'",
+            added.display(),
+            aside.display(),
+            added.display()
+        ),
+        Some(&confine()),
+        None,
+    );
+    let next = places.try_run_given("cat inside.txt", Some(&confine()), None);
+
+    assert!(
+        again.ended_well,
+        "the directory was not made again: {again:?}"
+    );
+    let next = next.expect("a stage after the directory was made again starts");
+    assert_eq!(next.stdout, "inside\n", "{next:?}");
+
+    // The directory made again is not the one recorded, so it is given no row, while the session
+    // directory that stands is. The regression it rejects: a row for the name, which a program
+    // that made the directory again would be handed to write.
+    let step = bravebot_core::command::Step {
+        program: "cat".to_string(),
+        resolved: "/bin/cat".into(),
+        started_as: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Vec::new(),
+        expansions: Vec::new(),
+        routes: Vec::new(),
+    };
+    let policy = confine().policy(&step, &places.session, &[]);
+    let remade = resolved(&added);
+    let session = resolved(&places.session);
+    assert!(
+        policy.writable.iter().any(|row| row.path == session),
+        "no row for the session directory that stands"
+    );
+    assert!(
+        !policy.writable.iter().any(|row| row.path == remade),
+        "a write row for a directory made again"
+    );
+    assert!(
+        !policy.readable.contains(&remade),
+        "a read row for a directory made again"
+    );
+}
+
 /// SANDBOX-18: the same, on one line. The confinement of a line is built before its first stage,
 /// so the check has to be made again as each stage starts: on Linux the row is opened by its name
 /// when the stage after the link is started. The regression it rejects: the check made when the

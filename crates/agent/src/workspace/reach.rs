@@ -7,6 +7,7 @@ use super::{
     BACKSLASH_SEPARATES, Workspace, WorkspaceError, destination, expand_home, locked,
     refuse_unkeyable,
 };
+use crate::scratch::ScratchDirectory;
 use bravebot_i18n::t;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -316,13 +317,25 @@ impl Workspace {
     /// [`Workspace::add_directory`] through a shared reference, for the one route that opens a
     /// directory in the middle of a turn, where the turn holds a clone of the workspace and the
     /// session's own copy has to see the directory after it (PATHREQ-7).
+    ///
+    /// The directory is recorded by device and inode as it is added, and a stage is given a row
+    /// for it only while its name still leads there (SANDBOX-18). The file tools hold the name
+    /// that is returned.
     pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let canonical = self.resolve_directory(directory)?;
 
         bravebot_sandbox::programs::keep_out(&canonical);
         let mut added = locked(&self.added);
-        if !added.contains(&canonical) {
-            added.push(canonical.clone());
+        if !added.iter().any(|open| open.path() == canonical) {
+            // Recorded as the directory it is now, so a name that later leads elsewhere is not
+            // taken for it (SANDBOX-18). A name that cannot be read as a directory is not opened.
+            let made = ScratchDirectory::observed(canonical.clone()).ok_or_else(|| {
+                WorkspaceError::Invalid {
+                    path: directory.to_string(),
+                    reason: "must be a directory",
+                }
+            })?;
+            added.push(made);
         }
         Ok(canonical)
     }
@@ -412,7 +425,24 @@ impl Workspace {
 
     /// The directories added by name, in the order they were added.
     pub fn added_directories(&self) -> Vec<PathBuf> {
-        locked(&self.added).clone()
+        locked(&self.added)
+            .iter()
+            .map(|open| open.path().to_path_buf())
+            .collect()
+    }
+
+    /// The working directory and every directory added by name, each as the directory it was when
+    /// the session opened or added it, which is what a stage is given a row for only while its
+    /// name still leads there (SANDBOX-18). The working directory comes first.
+    ///
+    /// A working directory that could not be read as a directory when it was recorded is left out,
+    /// and so is given no row.
+    pub fn session_directories(&self) -> Vec<ScratchDirectory> {
+        self.root_made
+            .iter()
+            .cloned()
+            .chain(locked(&self.added).iter().cloned())
+            .collect()
     }
 
     /// Let programs reach `path` for the rest of the session. A second grant of a path already
@@ -539,17 +569,18 @@ impl Workspace {
         bravebot_sandbox::programs::keep_out(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
+        self.root_made = ScratchDirectory::observed(canonical.clone());
         // Names relative to the root left behind mean nothing under the new one (INSTR-14, INSTR-16,
         // CHECKOUT-23).
         self.kept.touched = Arc::default();
         locked(&self.kept.working_writes).last.clear();
         {
             let mut added = locked(&self.added);
-            let (overlapping, kept) = std::mem::take(&mut *added)
+            let (overlapping, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut *added)
                 .into_iter()
-                .partition(|open| overlaps(open, &canonical));
+                .partition(|open| overlaps(open.path(), &canonical));
             *added = kept;
-            closed.extend(overlapping);
+            closed.extend(overlapping.iter().map(|open| open.path().to_path_buf()));
         }
         // Whatever the new root is now reachable as itself, so it did not close.
         closed.retain(|open| *open != canonical);
@@ -591,15 +622,15 @@ impl Workspace {
         let mut added = locked(&self.added);
         let open = added
             .iter()
-            .position(|open| open == candidate)
+            .position(|open| open.path() == candidate)
             .or_else(|| {
                 let resolved = destination(candidate)?;
-                added.iter().position(|open| *open == resolved)
+                added.iter().position(|open| open.path() == resolved)
             })
             .ok_or_else(|| WorkspaceError::Invalid {
                 path: directory.to_string(),
                 reason: "is not a directory opened beside the working directory",
             })?;
-        Ok(added.remove(open))
+        Ok(added.remove(open).path().to_path_buf())
     }
 }

@@ -1205,6 +1205,12 @@ change, and a grant of the directory holds only while the name still leads to th
 made ([SANDBOX-18](sandboxing.md#SANDBOX-18)). A session that cannot read that identity has no
 scratch directory to grant.
 
+The workspace keeps the same record for the directory it was opened on and for each directory added
+with `/add-dir`, `--add-dir` or `additionalDirectories` or reopened by a resume: the device and
+inode of the directory at the time it was opened, added or reopened, with the name. A copy of the
+workspace made for a delegate or a checkout carries the records. A stage's grant of such a directory
+holds only while its name still leads to that directory ([SANDBOX-18](sandboxing.md#SANDBOX-18)).
+
 `verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
 `verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
@@ -1215,6 +1221,8 @@ scratch directory to grant.
 `verified-by: bravebot_agent::scratch::an_account_directory_that_cannot_be_written_is_put_back_to_private`
 `verified-by: bravebot_agent::scratch::a_name_that_leads_anywhere_but_to_the_directory_made_is_not_that_directory`
 `verified-by: bravebot_agent::scratch::a_directory_is_observed_only_where_the_name_leads_to_one`
+`verified-by: bravebot_agent::workspace::the_session_directories_are_the_directories_recorded_as_they_were_opened`
+`verified-by: bravebot_agent::workspace::a_delegates_checkout_records_its_own_root_and_carries_its_parents_records`
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
 `verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`

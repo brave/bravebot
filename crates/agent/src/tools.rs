@@ -664,8 +664,11 @@ impl<'a> Tools<'a> {
         if !self.confines_programs() {
             return None;
         }
+        // Held to the directories the session recorded, so a name a stage has relinked since is
+        // given no row (SANDBOX-18). The paths are the same names, for the callers that read them.
+        let recorded = self.workspace.session_directories();
         let roots = std::iter::once(self.workspace.root().to_path_buf())
-            .chain(self.workspace.added_directories().iter().cloned())
+            .chain(self.workspace.added_directories())
             .collect();
         let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
         #[cfg(all(test, unix))]
@@ -674,6 +677,7 @@ impl<'a> Tools<'a> {
         let hosts = scripted.as_ref().or(hosts);
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch_made(), self.profile)?
+                .with_session_directories(&recorded)
                 .with_network(bravebot_config::run_network())
                 .with_hosts(hosts)
                 .with_mode(self.sandbox)
@@ -27197,6 +27201,73 @@ mod tests {
             assert!(refused_for_the_scratch_directory(&workspace));
             let _ = std::fs::remove_file(session.path());
             let _ = std::fs::remove_dir_all(&aside);
+        }
+
+        /// SANDBOX-18: the confinement of a turn holds the working directory and every added
+        /// directory to the directory the workspace recorded when it was opened or added. The
+        /// regressions it rejects: a confinement built from the names alone, which grants wherever
+        /// a name leads when the line starts, and one that records the directory when the line
+        /// starts, which takes the identity of whatever directory stands at the name then and so
+        /// grants a directory made again in place of the one added.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded() {
+            let project = Scratch::new("session-directories-project");
+            let added = Scratch::new("session-directories-added");
+            let elsewhere = Scratch::new("session-directories-elsewhere");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let mut workspace = Workspace::new(&project.path).expect("workspace");
+            let named = workspace
+                .add_directory(added.path.to_str().expect("utf-8 path"))
+                .expect("the directory is added");
+            let target = elsewhere.path.canonicalize().expect("canonical");
+            let policy = |workspace: &Workspace| {
+                with_tools(workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools
+                        .confinement(true)
+                        .expect("a platform with a base")
+                        .policy(&step, workspace.root(), &[])
+                })
+            };
+            let writes = |policy: &bravebot_sandbox::policy::SandboxPolicy,
+                          path: &std::path::Path| {
+                policy.writable.iter().any(|row| row.path == path)
+            };
+            let before = policy(&workspace);
+            assert!(writes(&before, &named), "no row for the directory added");
+            assert!(
+                writes(&before, &project.path.canonicalize().expect("canonical")),
+                "no row for the working directory"
+            );
+
+            std::fs::remove_dir(&named).expect("the added directory removed");
+            std::os::unix::fs::symlink(&target, &named).expect("link");
+            let after = policy(&workspace);
+            assert!(!writes(&after, &named), "a row for the name of a link");
+            assert!(!writes(&after, &target), "a row for where the link leads");
+            assert!(
+                !after.readable.contains(&target),
+                "a read row for where the link leads"
+            );
+
+            std::fs::remove_file(&named).expect("the link removed");
+            std::fs::create_dir(&named).expect("a directory made again in its place");
+            let again = policy(&workspace);
+            assert!(
+                !writes(&again, &named),
+                "a row for a directory made again at the name"
+            );
+            let _ = std::fs::remove_dir(&named);
+            workspace.close_added_directories();
         }
 
         /// The reach a person remembered is read from the state directory for the session that has
