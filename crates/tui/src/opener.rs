@@ -883,6 +883,10 @@ mod tests {
                 executable(&place.join("gio-launch-desktop"), "#!/bin/sh\n");
                 place.join("gio-launch-desktop").display().to_string()
             }
+            "KDESYCOCA" => {
+                std::fs::write(place.join("sycoca"), "").unwrap();
+                place.join("sycoca").display().to_string()
+            }
             _ => {
                 std::fs::create_dir_all(place.join("selected")).unwrap();
                 place.join("selected").display().to_string()
