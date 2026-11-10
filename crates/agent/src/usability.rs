@@ -179,21 +179,6 @@ fn is_npm_config_name(name: &OsStr) -> bool {
         .is_some_and(|start| start.eq_ignore_ascii_case(NPM_CONFIG_PREFIX.as_bytes()))
 }
 
-/// The variables the stored-login `gh` is not handed because they load code into it: the dynamic
-/// loader's (`DYLD_INSERT_LIBRARIES`, `LD_PRELOAD` and the rest of the `DYLD_` and `LD_` names).
-/// `gh auth token` needs none of them, so each is removed whatever it holds.
-///
-/// The list is local because [`bravebot_sandbox::programs::CODE_SELECTOR_PREFIXES`] applies to
-/// every checked start, and removing these prefixes there would change the environment of gcloud
-/// and the browser opener, which SANDBOX-30 says keep `LD_DEBUG`.
-const LOADER_PREFIXES: &[&str] = &["DYLD_", "LD_"];
-
-fn is_loader_name(name: &OsStr) -> bool {
-    LOADER_PREFIXES
-        .iter()
-        .any(|prefix| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
-}
-
 /// What a workflow is expected to do under the sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Expect {
@@ -841,8 +826,11 @@ pub fn login_row_for(
 /// The command that asks the stored-login `gh` for a token.
 ///
 /// `held` and `outside_stage_writable` are as for [`stage_command`]. The dynamic loader's names
-/// are removed whatever they hold ([`LOADER_PREFIXES`]), and the token variables are removed so
-/// that `gh` answers from its stored login.
+/// (`DYLD_INSERT_LIBRARIES`, `LD_PRELOAD` and the rest of the `DYLD_` and `LD_` names) load code
+/// into `gh` and it needs none of them, so each is removed whatever it holds, through
+/// [`bravebot_sandbox::programs::withhold_prefixed`] with
+/// [`bravebot_sandbox::programs::LOADER_PREFIXES`]. The token variables are removed so that `gh`
+/// answers from its stored login.
 fn login_command(
     gh: &Path,
     args: &[String],
@@ -855,11 +843,7 @@ fn login_command(
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
-    let loader: Vec<OsString> = held
-        .iter()
-        .map(|(name, _)| name.clone())
-        .filter(|name| is_loader_name(name))
-        .collect();
+    let names: Vec<OsString> = held.iter().map(|(name, _)| name.clone()).collect();
     let mut command = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(gh),
         inherits,
@@ -875,9 +859,11 @@ fn login_command(
     for name in LOGIN_VARIABLES {
         command.env_remove(name);
     }
-    for name in loader {
-        command.env_remove(name);
-    }
+    bravebot_sandbox::programs::withhold_prefixed(
+        &mut command,
+        bravebot_sandbox::programs::LOADER_PREFIXES,
+        names,
+    );
     inherits.withhold(&mut command);
     command
 }

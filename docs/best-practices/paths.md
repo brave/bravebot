@@ -239,7 +239,9 @@ SANDBOX-30, and that every name in a
 `CODE_SELECTORS` list (in `crates/sandbox/src/programs.rs`, `crates/agent/src/gcloud.rs`,
 `crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
 `crates/tui/src/opener.rs` and `crates/tui/src/powershell.rs`) has one test that removes
-a value and one that keeps a value (an options variable needs only the first). A reviewer confirms
+a value and one that keeps a value (an options variable needs only the first). It also reads
+`LOADER_PREFIXES` and `HOST_VARIABLES` ([checks.md](../development/checks.md)) and applies the
+loader prefixes to no other start. A reviewer confirms
 the rest of these, and that the list is complete:
 
 - A value inside a stage-writable directory is removed.

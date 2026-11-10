@@ -207,7 +207,10 @@ absolute path when running the target. Without it, that integration test is repo
 The sandbox usability suite (`crates/agent/tests/usability.rs`, spec SANDBOX-21) runs everyday
 workflows under the sandbox default, so a default change cannot break `git`, `gh`, `cargo`, `npm` or
 `make` unnoticed. It runs with `cargo test --all` on Linux and macOS, skips what is not installed, and
-`bravebot doctor --sandbox-check` runs it on any machine.
+`bravebot doctor --sandbox-check` runs it on any machine. Each program it starts is started with
+the variables that choose code to run removed or checked, so a value the person's environment
+holds does not run in a setup stage or a control run, which have the person's access
+([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21), [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)).
 
 These are local checks, not a promise that every CI environment passes. Windows Clippy
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
@@ -380,7 +383,19 @@ a test that keeps a safe value and a test that removes one a stage may write. It
 opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read
 as an empty one. An options variable needs only the second. `make check` runs it and so does CI. It
 cannot tell that a list is complete, which
-[PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer.
+[PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
+`LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in
+`crates/agent/src/usability.rs`, which are not `CODE_SELECTORS` lists. It fails when
+`LOADER_PREFIXES` is missing or empty, shares a prefix with `CODE_SELECTOR_PREFIXES` (which every
+checked start applies, so `LD_DEBUG` would go from gcloud and the opener), or is not passed to
+`withhold_prefixed` by the usability suite's stored-login `gh` start, and when a prefix in it has
+no test in the suite that starts that `gh` holding a name with the prefix and asserts the name is
+removed. It fails when `HOST_VARIABLES` is missing or not removed by the suite's stage start, and
+for a name in it that no test starts a stage with and asserts removed; a loop over the list itself
+counts for no name. It does not apply the loader prefixes to other starts, so a start that should
+remove `DYLD_` and `LD_` names and does not is still found by a reviewer. The tests
+`the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start` and the two loader tests in
+`crates/agent/tests/usability.rs` fail when a prefix is dropped.
 
 `make check-narration` fails a pull request whose commit messages, title, body or added lines
 contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)
