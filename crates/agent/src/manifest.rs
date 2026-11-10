@@ -833,12 +833,14 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     }
     let servers = Servers::of(task);
 
+    let puts_lists = confirmer.can_put_apply_lists();
     let planned = match plan(
         config,
         egress,
         task,
         &connectors,
         &servers,
+        puts_lists,
         &dropped,
         reporter,
         sink,
@@ -978,7 +980,8 @@ impl Attempt {
     }
 }
 
-/// Phase 1, in two calls, then phases 2 and 3.
+/// Phase 1, in two calls, then phases 2 and 3. `puts_lists` says whether the client can put an
+/// `apply` step's list to the person.
 #[expect(
     clippy::too_many_arguments,
     reason = "the planning calls' collaborators, plus the attempt and accounting that run_accounted owns across the run"
@@ -989,6 +992,7 @@ fn plan<S: Sink, R: Reporter>(
     task: &Task,
     connectors: &crate::connectors::Connectors,
     servers: &Servers,
+    puts_lists: bool,
     dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
@@ -1178,7 +1182,18 @@ fn plan<S: Sink, R: Reporter>(
         // it is shown is its own plan and the check's words about it, so its context still holds
         // the task and the driver's words alone. A plan with no connector step passes the check,
         // so this never asks again in a run that uses no connector and calls no server.
-        match connectors.check(&plan).and_then(|()| servers.check(&plan)) {
+        let listed = servers.puts_a_list(&plan, &covered);
+        let checked = connectors
+            .check(&plan)
+            .and_then(|()| servers.check(&plan))
+            .and_then(|()| match listed {
+                Some(number) if !puts_lists => Err(format!(
+                    "step {number}: this client cannot put an APPLY step's calls to the person as \
+                     a list, so only a step whose tools the plan covers can run here"
+                )),
+                _ => Ok(()),
+            });
+        match checked {
             Ok(()) => break (plan, label, covered),
             Err(why) if round == "fit" => {
                 reporter.narration(format!(
