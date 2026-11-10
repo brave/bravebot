@@ -29,7 +29,9 @@ to say so.
 
 **Only these names may be pinned**, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
-`AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
+`AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. A project or
+local settings file in a checkout cannot name any of these variables, so what a pin outranks is the
+person's own file, the environment and the build. Every other name
 in the file decides nothing, the signing key and key id included, save the two pairs of lists and the
 two refusals: `"mcp": { "allow": [...], "deny": [...] }` name the
 [MCP servers](mcp-servers.md#refused-by-an-administrator)
