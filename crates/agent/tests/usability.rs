@@ -998,6 +998,22 @@ fn a_setup_cargo_keeps_a_wrapper_no_stage_can_write() {
     );
 }
 
+/// Whether the host runs macOS. Some names were found by running a program that only reads them
+/// there; the tests for those skip elsewhere ([SANDBOX-30](../../../docs/specs/sandboxing.md)).
+fn on_macos() -> bool {
+    std::env::consts::OS == "macos"
+}
+
+/// Whether `go` is installed, for a test whose stage starts it through `sh`, where the skip by the
+/// name of the stage's program sees `sh`. Says so when it is not.
+fn go_is_installed(name: &str) -> bool {
+    let found = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("go")).is_some();
+    if !found {
+        eprintln!("skipped {name}: go is not installed");
+    }
+    found
+}
+
 /// The target triple of the host in the lower-case form rustup names a toolchain by, for a host
 /// the tests below know. `None` elsewhere, where the tests that need it are skipped.
 fn host_triple() -> Option<&'static str> {
@@ -1338,30 +1354,43 @@ fn a_setup_python_is_not_handed_a_module_path() {
     if !usability::available() {
         return;
     }
-    for (name, variable, module, user_base) in [
-        (
-            "python-path",
-            "PYTHONPATH",
-            "modules/sitecustomize.py",
-            false,
-        ),
-        (
-            "python-user-base",
-            "PYTHONUSERBASE",
-            "base/lib/python/site-packages/usercustomize.py",
-            true,
-        ),
+    for (name, variable, user_base) in [
+        ("python-path", "PYTHONPATH", false),
+        ("python-user-base", "PYTHONUSERBASE", true),
     ] {
         let planted = planted_dir(name);
         let marker = planted.join("ran");
-        let file = planted.join(module);
-        std::fs::create_dir_all(file.parent().expect("a directory")).expect("modules");
+        let value = planted.join(if user_base { "base" } else { "modules" });
+        // The user site directory under a base is named by the interpreter: it is
+        // `lib/python/site-packages` for a macOS framework build and `lib/python3.<minor>/site-packages`
+        // for a Linux one.
+        let directory = if user_base {
+            let Some(site) = python_output(
+                &["-c", "import site; print(site.getusersitepackages())"],
+                &[(variable, value.to_str().expect("utf-8"))],
+            ) else {
+                eprintln!("skipped {name}: python3 is not installed");
+                continue;
+            };
+            PathBuf::from(site.trim())
+        } else {
+            value.clone()
+        };
+        assert!(
+            directory.starts_with(&value),
+            "the user site directory {directory:?} is not under the base {value:?}"
+        );
+        let file = directory.join(if user_base {
+            "usercustomize.py"
+        } else {
+            "sitecustomize.py"
+        });
+        std::fs::create_dir_all(&directory).expect("modules");
         std::fs::write(
             &file,
             format!("open('{}', 'w').write('x')\n", marker.display()),
         )
         .expect("module");
-        let value = planted.join(if user_base { "base" } else { "modules" });
 
         withheld_from_a_setup_stage(
             name,
@@ -1684,7 +1713,7 @@ fn a_setup_go_is_not_handed_an_environment_file_or_a_cache_program() {
 /// `pkg-config` program, linker flags or C++ compiler the person's shell holds.
 #[test]
 fn a_setup_go_is_not_handed_a_pkg_config_linker_flags_or_a_cxx_compiler() {
-    if !usability::available() {
+    if !usability::available() || !go_is_installed("go-pkg-config") {
         return;
     }
     let plain = "package main\n\n/*\n#include <stdio.h>\n*/\nimport \"C\"\n\nfunc main() {}\n";
@@ -1695,6 +1724,13 @@ fn a_setup_go_is_not_handed_a_pkg_config_linker_flags_or_a_cxx_compiler() {
         ("go-cgo-ldflags", "CGO_LDFLAGS", plain, false),
         ("go-cxx", "CXX", plain, true),
     ] {
+        if variable == "CGO_LDFLAGS" && !on_macos() {
+            eprintln!(
+                "skipped {name}: the C compiler on {} takes no path in -fuse-ld=",
+                std::env::consts::OS
+            );
+            continue;
+        }
         let planted = planted_dir(name);
         let marker = planted.join("ran");
         let helper = planted.join("helper");
@@ -2015,6 +2051,13 @@ fn a_setup_python_venv_is_not_handed_an_executable() {
     if !usability::available() {
         return;
     }
+    if !on_macos() {
+        eprintln!(
+            "skipped python-executable: python3 on {} ignores it",
+            std::env::consts::OS
+        );
+        return;
+    }
     let planted = planted_dir("python-executable");
     let marker = planted.join("ran");
     let helper = planted.join("helper");
@@ -2194,7 +2237,14 @@ fn a_setup_cargo_is_not_handed_a_credential_provider() {
 /// compiler flags the person's shell holds.
 #[test]
 fn a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler() {
-    if !usability::available() {
+    if !usability::available() || !go_is_installed("go-cgo_cflags") {
+        return;
+    }
+    if !on_macos() {
+        eprintln!(
+            "skipped go-cgo_cflags: the C compiler on {} takes no -fno-integrated-as",
+            std::env::consts::OS
+        );
         return;
     }
     for variable in ["CGO_CFLAGS", "CGO_CPPFLAGS"] {

@@ -4105,9 +4105,17 @@ program's documentation or launcher and what was run. These were not shown by ru
   `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
   `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it. Windows was not run:
   the suite runs nothing there. No Linux host was available, so the names a Linux build of these
-  programs reads, and their versions, are not recorded; a Linux run is tracked by #3811.
+  programs reads, and their versions, are not recorded; a Linux run of `make`, `cargo`, `npm`, `go`
+  and `python3` is tracked by #3811 and #3863.
   The tests assert the control, so on a version that does not read a name the test fails and does not
-  skip; only a program that is not installed skips it. The results for the `cc` and `pkg-config`
+  skip. A test skips, and says so, where the program is not installed (a `go` that a stage starts
+  through `sh` included) and, off macOS, for the names that a Linux build of the program or its
+  C compiler does not read: `PYTHONEXECUTABLE`, `CGO_LDFLAGS` with `-fuse-ld=<path>`, and
+  `CGO_CFLAGS` and `CGO_CPPFLAGS` with `-fno-integrated-as -B<dir>`. The `PYTHONUSERBASE` test takes
+  the directory of `usercustomize.py` from `site.getusersitepackages()`, since the directory under a
+  base is `lib/python/site-packages` for a macOS framework build and
+  `lib/python3.<minor>/site-packages` for other builds. A skipped name stays in the lists and is
+  removed on every host. The results for the `cc` and `pkg-config`
   crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
   `GOAUTH`, `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `COMPILER_PATH`, `RANLIB`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
