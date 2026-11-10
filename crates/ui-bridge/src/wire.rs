@@ -495,6 +495,33 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
     }
 }
 
+/// The longest `messageId` a `turn.send` may carry.
+pub const MESSAGE_ID_LENGTH: usize = 64;
+
+/// The id a client gave a `turn.send`
+/// ([RPCVIEW-10](../../../docs/specs/session-view.md#RPCVIEW-10)).
+///
+/// Every send from a client carries one, new for each Send action, so a send repeated after a lost
+/// answer can be told from a new one. It is required rather than optional: a client that left it
+/// out would lose that protection, and nothing would notice. It is 1 to [`MESSAGE_ID_LENGTH`]
+/// ASCII letters, digits, `-` or `_`, which a UUID is, so it is short and holds nothing that needs
+/// escaping in a log.
+pub fn message_id(value: Option<&Value>) -> Result<String, Failure> {
+    match value {
+        Some(Value::String(id))
+            if (1..=MESSAGE_ID_LENGTH).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') =>
+        {
+            Ok(id.clone())
+        }
+        _ => Err(Failure::bad_request(format!(
+            "`messageId` must be 1 to {MESSAGE_ID_LENGTH} ASCII letters, digits, `-` or `_`"
+        ))),
+    }
+}
+
 /// The definition a `turn.send` says the session's conversation belongs to, if it says one
 /// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
 ///

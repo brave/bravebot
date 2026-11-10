@@ -787,7 +787,7 @@ fn bridge_handoff(ending: &str) {
     call(
         &mut bridge,
         "turn.send",
-        json!({"session":handle,"prompt":"copy","recall":false,"model":"undo-test/test"}),
+        json!({"session":handle,"prompt":"copy","recall":false,"model":"undo-test/test","messageId":"undo-1"}),
     );
     let mut observed = Vec::new();
     let until = std::time::Instant::now() + endpoint::LIMIT;

@@ -177,7 +177,7 @@ try {
     const made = await window.bravebot.request('session.new', { directory })
     const session = made.ok.session
     await window.bravebot.request('trust.reply', { session, trusted: true })
-    const sent = await window.bravebot.request('turn.send', { session, prompt: 'Read @../outside.txt' })
+    const sent = await window.bravebot.request('turn.send', { session, prompt: 'Read @../outside.txt', messageId: 'outside-1' })
     await window.bravebot.request('session.close', { session })
     return sent
   }, project)

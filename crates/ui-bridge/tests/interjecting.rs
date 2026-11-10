@@ -10,6 +10,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -297,7 +299,7 @@ impl Running {
         let session = idle.session.clone();
         let started = idle.call(
             "turn.send",
-            json!({"session": session, "prompt": "look around"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "look around"})),
         );
         assert!(started["ok"]["target"].is_u64(), "no turn began: {started}");
         idle
@@ -562,7 +564,7 @@ fn a_session_with_a_view_refuses_a_line() {
     );
     let started = turn.call(
         "turn.send",
-        json!({"session": session, "prompt": "look around"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "look around"})),
     );
     assert!(started["ok"]["target"].is_u64(), "no turn began: {started}");
     let refused = turn.interject("into a viewed turn");

@@ -199,6 +199,39 @@ test('a close the bridge answers with no_such_session unregisters the session', 
   assert.equal(session.view.sequence, 0, 'a session the bridge no longer has receives no updates')
 })
 
+/** The bridge refuses a send without an id, and a repeated id would read as the same send again. */
+test('each send carries a message id of its own in the shape the bridge takes', async () => {
+  const ids: unknown[] = []
+  let client: RpcAgentClient
+  client = new RpcAgentClient({
+    write(line) {
+      const request = JSON.parse(line) as { id: number; method: string; params: Record<string, unknown> }
+      let ok: unknown = {}
+      if (request.method === 'agent.info') ok = { capabilities: { sessionView: contract.capability } }
+      if (request.method === 'session.new') ok = { session: 's1' }
+      if (request.method === 'session.view.start') {
+        client.receive(JSON.stringify({ event: 'session.view.initial', session: 's1', data: {
+          sequence: 0, turn: 0, target: 0, status: 'idle', pending: null, rows: [],
+        } }) + '\n')
+      }
+      if (request.method === 'turn.send') {
+        ids.push(request.params.messageId)
+        ok = { turn: ids.length, target: ids.length }
+      }
+      client.receive(JSON.stringify({ id: request.id, ok }) + '\n')
+    },
+  }, { workspaces: [{ id: 'work', name: 'Work', directory: '/work' }] })
+  const session = await client.createSession({ workspace: 'work' })
+  await session.send('same words')
+  await session.send('same words')
+  assert.equal(ids.length, 2)
+  for (const id of ids) {
+    assert.equal(typeof id, 'string', 'a send carried no id')
+    assert.match(id as string, /^[A-Za-z0-9_-]{1,64}$/, `${id as string} is not an id the bridge takes`)
+  }
+  assert.notEqual(ids[0], ids[1], 'two sends of the same words carried one id')
+})
+
 test('after a close, the detach ends the view and later events for the session are dropped quietly', async () => {
   const diagnostics: string[] = []
   const send = (client: RpcAgentClient, event: string, data: unknown): void =>

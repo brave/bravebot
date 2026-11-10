@@ -8,6 +8,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -142,7 +144,7 @@ fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
         &mut child,
         3,
         "turn.send",
-        json!({"session": session, "prompt": "say done"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
     );
     until(&said, |message| {
         message["event"] == "turn.done"

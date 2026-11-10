@@ -11,6 +11,8 @@
 )]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
@@ -78,7 +80,7 @@ impl Window {
         for (key, value) in extra.as_object().unwrap() {
             params[key] = value.clone();
         }
-        self.call("turn.send", params);
+        self.call("turn.send", message_ids::with_fresh(params));
         let until = std::time::Instant::now() + endpoint::LIMIT;
         loop {
             assert!(std::time::Instant::now() < until, "the turn never ended");
@@ -378,7 +380,9 @@ fn a_picture_the_bridge_cannot_carry_refuses_the_send() {
     let grown = window
         .dispatch(
             "turn.send",
-            json!({"session": session, "prompt": "look", "attachments": [heavy]}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": "look", "attachments": [heavy]}),
+            ),
         )
         .unwrap_err();
     assert_eq!(
@@ -390,7 +394,7 @@ fn a_picture_the_bridge_cannot_carry_refuses_the_send() {
         for (key, value) in extra.as_object().unwrap() {
             params[key] = value.clone();
         }
-        let sent = window.dispatch("turn.send", params);
+        let sent = window.dispatch("turn.send", message_ids::with_fresh(params));
         assert_eq!(
             sent.map_err(|failure| failure.code),
             Err(ErrorCode::BadRequest),
@@ -537,7 +541,9 @@ fn a_dropped_png_over_the_scalable_ceiling_refuses_the_send() {
     let refused = window
         .dispatch(
             "turn.send",
-            json!({"session": session, "prompt": "look", "attachments": [huge]}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": "look", "attachments": [huge]}),
+            ),
         )
         .unwrap_err();
 

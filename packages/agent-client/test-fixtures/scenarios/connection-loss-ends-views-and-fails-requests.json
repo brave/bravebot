@@ -17,7 +17,7 @@
     {"send": [{"event": "session.view.initial", "session": "s2", "data": {"sequence": 0, "turn": 0, "target": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
     {"await": "b", "bindSession": "b"},
     {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
-    {"expectRequest": "s", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"expectRequest": "s", "method": "turn.send", "params": {"session": "s1", "prompt": "go", "messageId": "$fresh"}},
     {"closeTransport": "bravebot-rpc exited with code 1"},
     {"await": "send", "error": {"name": "ConnectionLostError", "code": "agent_gone", "outcome": "unknown"}},
     {"expectView": "a", "status": "idle", "ended": {"reason": "connection_lost"}},

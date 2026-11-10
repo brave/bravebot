@@ -1407,6 +1407,9 @@ impl Bridge {
         // back to recognising them by their wording; what it may not do is claim one of the
         // agent's, which is [`wire::composed`]'s whole job.
         let composed = crate::wire::composed(request.params.get("composed"))?;
+        // Checked here and not in `start_turn`, which also starts the turn of a watch: that has no
+        // client behind it, so no id.
+        crate::wire::message_id(request.params.get("messageId"))?;
         self.start_turn(request, composed)
     }
 

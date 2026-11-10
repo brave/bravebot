@@ -28,7 +28,7 @@ fi
 # Keep stdin open until completion and answer the fixture's read confirmation. The old
 # pipe slept for two minutes but could never answer a question coming back from the agent.
 python3 - "$RPC" "$WORKDIR" <<'PYTHON'
-import json, queue, subprocess, sys, threading, time
+import json, queue, subprocess, sys, threading, time, uuid
 from pathlib import Path
 
 rpc, directory = sys.argv[1:]
@@ -67,7 +67,7 @@ try:
             handle = message['ok']['session']
             send('trust.reply', session=handle, trusted=False)
         elif message.get('id') == 2:
-            send('turn.send', session=handle, prompt='In one sentence, what is the purpose of crates/core/src/label.rs?')
+            send('turn.send', session=handle, messageId=str(uuid.uuid4()), prompt='In one sentence, what is the purpose of crates/core/src/label.rs?')
         event = message.get('event')
         data = message.get('data', {})
         if event == 'vouch.request':

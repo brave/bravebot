@@ -17,6 +17,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 mod support;
 
 use serde_json::{Value, json};
@@ -311,7 +313,10 @@ fn the_host_keeps_its_records_apart_from_a_windows() {
     let host = Host::start(&scratch, &endpoint);
     let mut client = host.client();
     let session = client.session_in(&scratch.project());
-    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     client.event("turn.done");
 
     let kept = records_under(&scratch.root());
@@ -356,6 +361,53 @@ fn the_host_keeps_its_records_apart_from_a_windows() {
     client.leave();
 }
 
+/// A send carries the id its client gave it, so a later step can tell a repeat from a new send. One
+/// without an id, or with one that is not an id, is refused before a turn starts, and the next send
+/// that has one runs. A send the host let through without an id would reach the model.
+#[test]
+fn a_send_without_a_message_id_is_refused_before_a_turn_starts() {
+    let scratch = Scratch::new();
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    let endpoint = a_model_service(ends_the_turn, move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+
+    for refused in [
+        json!({"session": session, "prompt": "hello"}),
+        json!({"session": session, "prompt": "hello", "messageId": 7}),
+        json!({"session": session, "prompt": "hello", "messageId": ""}),
+        json!({"session": session, "prompt": "hello", "messageId": "has space"}),
+    ] {
+        let answered = client.answered("turn.send", refused.clone());
+        assert_eq!(
+            answered["error"]["code"], "bad_request",
+            "{refused} was not refused: {answered}"
+        );
+        assert!(
+            answered["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("messageId")),
+            "the refusal of {refused} does not name the field: {answered}"
+        );
+    }
+
+    client.call(
+        "turn.send",
+        json!({"session": session, "prompt": "hello", "messageId": "0f1e2d3c-aaaa-4bbb-8ccc-123456789abc"}),
+    );
+    client.event("turn.done");
+    assert_eq!(
+        asked.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a refused send reached the model"
+    );
+    client.leave();
+}
+
 /// What the planner was told about the programs `run` starts, on the first request of a turn in a
 /// host started on the settings file `named` holds, when there is one.
 fn told_to_a_hosts_planner(named: Option<&str>) -> String {
@@ -379,7 +431,7 @@ fn told_to_a_hosts_planner(named: Option<&str>) -> String {
     let session = client.session_in(&scratch.project());
     client.call(
         "turn.send",
-        json!({"session": session, "prompt": "do the work"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
     );
     let ended =
         client.until(|message| message["event"] == "turn.done" || message["event"] == "turn.error");
@@ -424,7 +476,10 @@ fn a_session_is_reported_closed_only_after_its_turn_has_ended() {
     let host = Host::start(&scratch, &endpoint);
     let mut client = host.client();
     let session = client.session_in(&scratch.project());
-    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     reached
         .recv_timeout(PATIENCE)
         .expect("the turn reached the model");
@@ -525,7 +580,7 @@ fn a_controller_that_started_its_view_is_asked_and_its_approval_lands() {
     let session = client.viewed_session_in(&scratch.project());
     client.call(
         "turn.send",
-        json!({"session": session, "prompt": "write it"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
     );
     let asked = client.event("confirm.request");
     client.call(
@@ -553,7 +608,7 @@ fn a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen(
     let session = client.unviewed_session_in(&scratch.project());
     client.call(
         "turn.send",
-        json!({"session": session, "prompt": "write it"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
     );
     client.event("turn.done");
 
@@ -592,7 +647,7 @@ fn a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on() 
     let session = first.viewed_session_in(&scratch.project());
     let sent = first.call(
         "turn.send",
-        json!({"session": session, "prompt": "write it"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
     );
     reached
         .recv_timeout(PATIENCE)
@@ -639,7 +694,7 @@ fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answe
     let session = first.viewed_session_in(&scratch.project());
     let sent = first.call(
         "turn.send",
-        json!({"session": session, "prompt": "write it"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
     );
     let asked = first.event("confirm.request");
     let old = asked["data"]["request"].as_u64().expect("a number");
@@ -662,7 +717,7 @@ fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answe
     // The next turn asks this client, with a number the old question did not have.
     second.call(
         "turn.send",
-        json!({"session": session, "prompt": "write again"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "write again"})),
     );
     let asked_now = second.event("confirm.request");
     let current = asked_now["data"]["request"].as_u64().expect("a number");
@@ -722,7 +777,10 @@ fn a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them()
 
     let mut first = host.client();
     let session = first.viewed_session_in(&scratch.project());
-    first.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    first.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     reached
         .recv_timeout(PATIENCE)
         .expect("the turn reached the model");
@@ -752,7 +810,10 @@ fn a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them()
     // The next turn's updates follow the snapshot, one sequence at a time.
     let mut rows = snapshot["rows"].as_array().unwrap().clone();
     let mut sequence = snapshot["sequence"].as_u64().unwrap();
-    second.call("turn.send", json!({"session": session, "prompt": "again"}));
+    second.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "again"})),
+    );
     reached
         .recv_timeout(PATIENCE)
         .expect("the turn reached the model");
@@ -816,10 +877,16 @@ fn a_session_left_with_its_startup_question_unanswered_asks_the_next_client() {
     let asked = second.event("trust.request");
     assert_eq!(asked["session"], session.as_str());
 
-    let early = second.answered("turn.send", json!({"session": session, "prompt": "hello"}));
+    let early = second.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     assert_eq!(early["error"]["code"], "bad_request", "{early}");
     second.call("trust.reply", json!({"session": session, "trusted": true}));
-    second.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    second.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     second.event("turn.done");
     second.leave();
 }
@@ -849,7 +916,7 @@ fn a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it(
     for (method, params) in [
         (
             "turn.send",
-            json!({"session": session, "prompt": "mine now"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "mine now"})),
         ),
         ("turn.cancel", json!({"session": session})),
         ("trust.reply", json!({"session": session, "trusted": true})),
@@ -1064,7 +1131,10 @@ fn an_unconfined_hook_the_host_runs_holds_no_socket() {
     let host = Host::start(&scratch, &endpoint);
     let mut client = host.client();
     let session = client.session_in(&scratch.project());
-    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     client.event("turn.done");
 
     let listed = std::fs::read_to_string(scratch.project().join("hook-fds.txt"))
@@ -1448,7 +1518,10 @@ fn a_hosted_session_is_reported_closed_only_after_its_end_hook_has_run() {
     let host = Host::start(&scratch, &endpoint);
     let mut client = host.client();
     let session = client.session_in(&scratch.project());
-    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     client.event("turn.done");
 
     let closing = client.call("session.close", json!({"session": session}));
@@ -1475,7 +1548,10 @@ fn a_host_that_quits_ends_the_sessions_it_holds_before_it_exits() {
     let mut host = Host::start(&scratch, &endpoint);
     let mut client = host.client();
     let session = client.session_in(&scratch.project());
-    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
     client.event("turn.done");
 
     host.command("quit");

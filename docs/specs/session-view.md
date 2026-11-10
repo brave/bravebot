@@ -262,3 +262,12 @@ The view keeps its current state and its most recent rows, at most `retainedRows
 `verified-by: bravebot_ui_bridge::host_process::a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them`
 `verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
 `verified-by: by-construction (packages/agent-client/tests/client.test.ts recovers a missed update from a snapshot, refuses actions while one is awaited, and ends the view when a resync is refused or the runtime offers none; tests/view.test.ts bounds the rows and leaves out changes to omitted rows)`
+
+<a id="RPCVIEW-10"></a>
+### RPCVIEW-10: every send carries a message id its client gave it
+
+`turn.send` takes a required `messageId`: 1 to 64 ASCII letters, digits, `-` or `_`. A request without one, or with any other value, is refused with `bad_request` before a turn starts, and the model is sent nothing. A client gives each Send action a new id. The desktop window, the desktop's own bot and summoned turns, the ACP adapter and the TypeScript client all do. The local host offers `messageId` on `turn.send`. A turn a watch starts has no client and carries no id. The bridge does not yet record or compare ids, so a repeated id starts a second turn.
+
+`verified-by: bravebot_ui_bridge::host_process::a_send_without_a_message_id_is_refused_before_a_turn_starts`
+`verified-by: bravebot_ui_bridge::wire::a_message_id_is_a_short_ascii_word_and_is_required`
+`verified-by: by-construction (packages/agent-client/tests/client.test.ts checks that two sends carry two ids of the accepted shape; ui/scripts/summons.test.mjs checks the same for a summoned turn and ui/scripts/sanitise.test.mjs that a window's id reaches the agent unchanged; the ACP suite sends every prompt through the bridge, which refuses one without an id)`
