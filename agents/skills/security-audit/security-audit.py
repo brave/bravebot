@@ -558,13 +558,22 @@ def construction_hits(symbol, sources):
     whether each site should exist, and neither of those is a site to decide about.
 
     An associated function cannot be called on a receiver, so the qualified name with its paren is
-    the only way to write a call and a literal count is exact.
+    the only way to write a call. The qualifier may carry its generics, `Labelled::<String>::new(`
+    and `<Labelled<String>>::new(`, which `check-spec` counts with the plain form, so the list of
+    construction sites reads them too.
     """
     literal = f"{symbol}("
+    qualifier, _, bare = symbol.rpartition("::")
     hits = []
     for path, lines in sources.items():
-        for number, raw in enumerate(mechanics.strip_comments(lines), start=1):
-            count = raw.count(literal)
+        code = mechanics.strip_comments(lines)
+        through = (
+            mechanics.qualifier_spellings(code, qualifier, re.escape(bare) + r"\s*\(")
+            if qualifier and any(qualifier in line for line in code)
+            else {}
+        )
+        for number, raw in enumerate(code, start=1):
+            count = raw.count(literal) + through.get(number, 0)
             if count:
                 hits.append((str(path), number, raw.strip(), count))
     return hits

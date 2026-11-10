@@ -861,10 +861,78 @@ def associated_sites(owned):
     return {(path, number) for path, number, _ in inside} or None
 
 
+# The generic arguments of a path segment, which may hold two levels of their own:
+# `<String>`, `<Vec<String>>` and `<Vec<Option<String>>>` are the depths this tree reaches.
+GENERICS = r"<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>"
+
+
+def qualifier_spellings(code, qualifier, tail):
+    """The uses of a qualified name written with its qualifier's generics, as `{line: count}`.
+
+    `Type::<T>::name` and `<Type<T>>::name` are the same call as `Type::name`, and the textual
+    count for `Type::name` does not read them. `tail` is what has to follow the qualifier and the
+    `::`: the name, and for a constructor the parenthesis that calls it.
+
+    The whole file is searched as one text, so a path that rustfmt wrapped across lines is one use,
+    and the line is the one it starts on. A `<` that follows a word, a `:` or a `>` is the generics
+    of another path (`Vec::<Labelled<T>>::new`, `Option<Labelled<T>>::new`), whose qualifier is
+    not this one, so it starts no qualified path here."""
+    text = "\n".join(code)
+    named = re.escape(qualifier)
+    spelled = re.compile(
+        rf"\b{named}\s*::\s*{GENERICS}\s*::\s*{tail}"
+        rf"|(?<![\w:>])<\s*(?:\w+\s*::\s*)*{named}\s*(?:{GENERICS})?\s*>\s*::\s*{tail}"
+    )
+    found = {}
+    for match in spelled.finditer(text):
+        number = text.count("\n", 0, match.start()) + 1
+        found[number] = found.get(number, 0) + 1
+    return found
+
+
+def qualifier_aliases(code, qualifier):
+    """Where `qualifier` is given another name, as `(line, name)`.
+
+    `use Type as L` and `type L = Type` make `L::name(` a call of the guarded symbol that no count
+    can read, because the qualifier it names is spelled nowhere. The qualifier is distinctive, so
+    unlike the bare name of a guard it is not written for other reasons."""
+    text = "\n".join(code)
+    named = re.escape(qualifier)
+    alias = re.compile(
+        rf"\b{named}\s+as\s+(\w+)"
+        rf"|\btype\s+(\w+)\s*(?:{GENERICS})?\s*=\s*(?:\w+\s*::\s*)*{named}\b(?!\s*::)"
+    )
+    return [
+        (text.count("\n", 0, match.start()) + 1, match.group(1) or match.group(2))
+        for match in alias.finditer(text)
+    ]
+
+
+def unseen_aliases(qualifier, sources):
+    """Uses of an alias of `qualifier`, as `(path, line, text, why)`."""
+    found = []
+    for path, lines in sources.items():
+        code = strip_comments(lines)
+        if not any(qualifier in line for line in code):
+            continue
+        for number, name in qualifier_aliases(code, qualifier):
+            found.append(
+                (
+                    str(path),
+                    number,
+                    code[number - 1].strip(),
+                    f"as `{name}`, a name for `{qualifier}` that no count reads; "
+                    f"write `{qualifier}` where it is used",
+                )
+            )
+    return found
+
+
 def guard_sites(symbol, sources):
     """Every use of a guarded symbol, as `(path, line, text, count)`. `Type::method` also
     matches `.method(`, since that is how most call sites read once the receiver has a type,
     and `Type::function` does not, since an associated function has no receiver to be called on.
+    `Type::<T>::name` and `<Type<T>>::name` are the same call and are counted with `Type::name`.
 
     Occurrences rather than lines. Two uses on one line are two uses, and rustfmt reflowing
     one call across two lines is still one, which is what lets an allowlist pin a count and
@@ -897,15 +965,15 @@ def guard_sites(symbol, sources):
     definition = definition_of(bare)
     call = f".{bare}("
     hits = []
+    through_name = re.escape(bare) + r"\b"
     for path, lines in sources.items():
         code = strip_comments(lines)
-        owns = (
-            qualifier is None
-            or its_own_file(path, qualifier)
-            or any(qualifier in line for line in code)
-        )
+        names_qualifier = qualifier is not None and any(qualifier in line for line in code)
+        owns = qualifier is None or its_own_file(path, qualifier) or names_qualifier
+        through = qualifier_spellings(code, qualifier, through_name) if names_qualifier else {}
         for number, raw in enumerate(code, start=1):
             count = len(named.findall(raw)) if symbol in raw else 0
+            count += through.get(number, 0)
             if associated is not None:
                 count += (path, number) in associated
             else:
@@ -920,12 +988,14 @@ def guard_sites(symbol, sources):
 def unseen_spellings(symbol, sources):
     """Uses of a guarded method that `guard_sites` cannot count, as `(path, line, text, why)`.
 
-    The count is textual: `.name(` and `Type::name`. Rust has other ways to write the same call,
-    `Type::<T>::name(`, `<Type<T>>::name(`, an alias such as `L::name(` after `use Type as L`, and
-    a `macro_rules!` body, which is one occurrence however many times the macro is invoked. None
-    of them is rare enough to rely on nobody writing it, and each leaves every pinned count where
-    it was, so a use in one of them would land with the allowlist still true. Reporting them here
-    is what lets the count stand for every spelling instead of the two it reads.
+    The count is textual: `.name(`, `Type::name`, and the two forms that carry the qualifier's
+    generics, `Type::<T>::name(` and `<Type<T>>::name(`. Rust has other ways to write the same
+    call: an alias such as `L::name(` after `use Type as L`, and a `macro_rules!` body, which is
+    one occurrence however many times the macro is invoked. Neither is rare enough to rely on
+    nobody writing it, and each leaves every pinned count where it was, so a use in one of them
+    would land with the allowlist still true. Reporting them here is what lets the count stand for
+    every spelling instead of the ones it reads. An alias of the qualifier is reported for every
+    pinned guard by `unseen_aliases`, not only where the entry says `every-spelling: yes`.
 
     Only a method that is called on a receiver is held to this, and only where the entry says
     `every-spelling: yes`. An associated function is counted where its qualified name is written,
@@ -939,7 +1009,12 @@ def unseen_spellings(symbol, sources):
     if not owned or associated_sites(owned) is not None:
         return []
     spelled = re.compile(rf"(?<![\w\"]){re.escape(bare)}(?![\w\"])")
-    qualified = re.compile(rf"\b{re.escape(qualifier)}::$")
+    # `Type::name` and the forms that carry the qualifier's generics are what the count reads.
+    named = re.escape(qualifier)
+    qualified = re.compile(
+        rf"\b{named}\s*::\s*(?:{GENERICS}\s*::\s*)?$"
+        rf"|(?<![\w:>])<\s*(?:\w+\s*::\s*)*{named}\s*(?:{GENERICS})?\s*>\s*::\s*$"
+    )
     defined = re.compile(r"\bfn\s+$")
     literal = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)'")
     found = []
@@ -995,6 +1070,7 @@ def check_guards(spec, sources):
                     fix="the key is read only as `every-spelling: yes` beside a pinned `sites:` list",
                 )
 
+    aliased = set()
     for symbol in spec.guards:
         sites = guard_sites(symbol, sources)
         if not sites:
@@ -1017,6 +1093,20 @@ def check_guards(spec, sources):
             continue
         if symbol in allowlists:
             yield from check_allowlist(spec, symbol, allowlists[symbol], sites)
+            parts = symbol.split("::")
+            if len(parts) > 1 and parts[-2] not in aliased:
+                aliased.add(parts[-2])
+                owned = owned_definitions(parts[-1], parts[-2], sources)
+                if any(in_impl for _, _, _, in_impl in owned):
+                    for path, number, text, why in unseen_aliases(parts[-2], sources):
+                        yield finding(
+                            spec.rel,
+                            ERROR,
+                            "guard-spelling-unseen",
+                            f"`{path}` names `{parts[-2]}`, the type of a pinned guard, {why}",
+                            evidence=f"{path}:{number}: {text}",
+                            fix="a pinned count that does not see a use says the use was reviewed",
+                        )
             if symbol not in spec.every_spelling:
                 continue
             for path, number, text, why in unseen_spellings(symbol, sources):
