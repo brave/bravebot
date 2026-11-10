@@ -90,6 +90,28 @@ fn main() {
                     out.write_all(line.as_bytes())?;
                     out.write_all(b"\n")?;
                 }
+                // What a plan's approval may cover is the person's to declare, so it is suggested
+                // apart from the line and never put in it.
+                for group in &asked.groups {
+                    let Some((tools, line)) = installed.covering(group) else {
+                        continue;
+                    };
+                    let named = match tools.split_last() {
+                        Some((last, [])) => last.to_string(),
+                        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                        None => continue,
+                    };
+                    writeln!(out)?;
+                    writeln!(
+                        out,
+                        "To let approving a plan run {named} of brave-{group} without asking at \
+                         the step, declare it with this instead:"
+                    )?;
+                    writeln!(out)?;
+                    out.write_all(b"  ")?;
+                    out.write_all(line.as_bytes())?;
+                    out.write_all(b"\n")?;
+                }
                 Ok(())
             })
         }
