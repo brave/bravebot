@@ -18,6 +18,7 @@ use crate::scratch::ScratchDirectory;
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
+use bravebot_core::permissions::{WrapperQuestion, is_wrapper};
 use bravebot_core::policy::Containment;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
@@ -3455,10 +3456,6 @@ fn canonical(path: &Path) -> PathBuf {
 /// Whether a program, known by the file name it resolved to, starts a file or a program its
 /// arguments name: a shell, a language's interpreter, or a wrapper that runs its operand.
 fn runs_what_it_is_given(name: &str) -> bool {
-    const WRAPPERS: &[&str] = &[
-        "env", "xargs", "exec", "nohup", "time", "timeout", "nice", "setsid", "stdbuf", "command",
-        "busybox",
-    ];
     const INTERPRETERS: &[&str] = &[
         "sh",
         "bash",
@@ -3497,7 +3494,7 @@ fn runs_what_it_is_given(name: &str) -> bool {
     let versioned = name
         .strip_prefix("python")
         .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.'));
-    versioned || WRAPPERS.contains(&name) || INTERPRETERS.contains(&name)
+    versioned || is_wrapper(name, WrapperQuestion::RunsItsOperand) || INTERPRETERS.contains(&name)
 }
 
 /// Whether `found` accepts one of the names an argument could be a file under: the argument
@@ -4170,6 +4167,33 @@ mod tests {
             held(&confined, &[&step("/usr/bin/make", &[])]),
             Containment::Held
         );
+    }
+
+    /// RUN-5: which programs start the file they are handed is answered by the table of wrappers
+    /// in `bravebot_core::permissions` and the interpreters here, and a program that runs nothing
+    /// it is handed is neither.
+    #[test]
+    fn a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given() {
+        for name in [
+            "env",
+            "xargs",
+            "exec",
+            "nohup",
+            "time",
+            "timeout",
+            "nice",
+            "setsid",
+            "stdbuf",
+            "command",
+            "busybox",
+            "sh",
+            "python3.12",
+        ] {
+            assert!(runs_what_it_is_given(name), "{name}");
+        }
+        for name in ["cat", "ls", "builtin", "noglob", "ENV", "git"] {
+            assert!(!runs_what_it_is_given(name), "{name}");
+        }
     }
 
     /// RUN-5: an interpreter or a wrapper handed a file under a directory the plan may write is

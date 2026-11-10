@@ -289,6 +289,16 @@ the sandbox permits, and a command line assembled from arguments a place where o
 confined program is told to do. `cmd.exe` drops the outer quotation marks of a line that starts with
 one and acts on what it finds outside the rest, so no quoting holds for it.
 
+**What it costs.** The Windows refusals read the program name as it is written. `Path::extension`
+gives no extension for `build.bat.`, and `is_cmd` compares the whole file name, so an absolute
+program path with a trailing dot or space (`build.bat.`, `cmd.exe.`) or a stream suffix
+(`cmd.exe::$DATA`) skips the batch-file and `cmd.exe` refusals. An MCP server declared with an
+absolute program path reaches the backend that way, since the lookup returns an absolute path
+unchanged ([SERVERS-5](mcp-servers.md#SERVERS-5)). Whether `CreateProcessW` starts the interpreter
+for such a name is unchecked on Windows. `is_cmd` also goes by the name alone, so a copy of
+`cmd.exe` called `tool.exe` that a stage can write and run is started with the quoting a program
+is given, not the refusals `cmd.exe` gets.
+
 `verified-by: bravebot_sandbox::macos::paths_cannot_inject_profile_syntax`
 `verified-by: bravebot_sandbox::macos::a_profile_containing_a_hostile_path_still_applies`
 `verified-by: bravebot_sandbox::macos::granted_paths_appear_as_subpath_rules`

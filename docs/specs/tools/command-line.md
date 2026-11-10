@@ -1125,6 +1125,15 @@ nothing until you have opened that file.
   spelling agree on can be listed at all. An option after an operand is refused for the same reason,
   so `grep -r TODO src -n` asks where `grep -rn TODO src` does not. The cost is a prompt for a call
   that would have been fine, which is the right direction and is still work.
+- **The audited table was read against the option lists of GNU, BSD, busybox and uutils, and run
+  against none of them but the BSD tools of macOS.** The matcher compares an option by its exact
+  spelling, so a GNU abbreviation (`--outp=x`, `--files0`) is refused whichever program would have
+  accepted it, and an attached value on an option that takes none, a cluster holding an option that
+  is not listed or that takes a value, and any option after an operand are refused as well. After
+  `--` a word is an operand, as it is for the programs. No listed option is known to write a file or
+  run a program in GNU, busybox or uutils. An option that one of them gives a meaning its BSD
+  namesake does not have is unchecked there, because the table is run against the BSD tools only.
+  `ls -l` and `ls -n` also read the user and group databases, which no answer names.
 - **A name is refused where it lands in the workspace, and no name is ever positively identified.**
   The audited utilities are supplied by the operating system and differ by platform, distribution and
   package manager, so no hash or signature can be pinned for one: an entry is a claim about a program

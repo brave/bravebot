@@ -1182,8 +1182,15 @@ grants covers what it names, and [RUN-20](tools/run.md#RUN-20) declines the same
 vouch for the same reason. The decision reads the argv and nothing else.
 
 [CRED-5](credential-protection.md#CRED-5) reads the same table to name the ambient authority of the
-program under a wrapper, so there is one list of wrappers.
+program under a wrapper, and [RUN-5](tools/run.md#RUN-5) reads it to decide whether a program runs
+the file it is handed. The table is one list in `bravebot_core::permissions`. This clause and the
+ambient-authority reading of [CRED-5](credential-protection.md#CRED-5) read the entries whose
+options it describes, and the check on a file a plan wrote ([RUN-5](tools/run.md#RUN-5)) asks the
+entries that run an operand, through `is_wrapper`. `xargs`, `exec`, `setsid` and `busybox` are in
+the table as programs that run an operand and whose options are not read, so a rule is matched
+against them whole. A wrapper added to the table is a decision about both questions.
 
+`verified-by: bravebot_core::permissions::the_wrapper_table_answers_each_question_for_exactly_the_programs_it_lists`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_however_it_is_cased_or_suffixed`
 `verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
@@ -1194,6 +1201,23 @@ program under a wrapper, so there is one list of wrappers.
 
 ## Known costs
 
+- **A wrapper the table leaves whole is a second rule for the person, which PERM-20's Why says the
+  table exists to avoid.** The Why gives the cost of not looking through a wrapper as a second rule
+  for each one. The text leaves `xargs`, `npx`, `devbox run`, `docker exec`, a wrapper named by a
+  path (`/usr/bin/env git push`), a wrapper with an option the table does not list
+  (`timeout --kill-after-x 1 git push`, `env -S 'git push'`) and `command -v` whole, so
+  `Bash(git push *)` in `deny` does not refuse them. This is chosen because a reading of an option
+  the table does not know could name the wrong program, and a deny rule that matched it would be a
+  guess about a command line. Whether the table should read more (a path-named `env`, `env -S`) is
+  undecided, and so is whether the Why should say "for the wrappers in the table", which is what
+  the behaviour is. Behaviour is unchanged.
+- **`env` is read with a looser grammar than the program's own.** PERM-20 reads every word of `env`
+  containing `=` as an assignment, so `env =1 git push` is read as `env` running `git push`. BSD
+  `env` on macOS refuses `=1` (`setenv =1: Invalid argument`) and runs nothing. What GNU and uutils
+  `env` do with an empty name is unchecked. The reading names a command that may not be the one
+  that runs. A `deny` or `ask` rule then matches more than the program does, which is the safe
+  direction, and an `allow` rule does not look through a wrapper at all, so no rule is weaker for
+  it.
 - **How many questions a session opens with is the file's to choose.** Every name in
   `additionalDirectories` is one box, so a file naming thirty directories is thirty of them before
   the first prompt can be typed, and the way out of a list somebody does not want to answer is
@@ -1243,6 +1267,16 @@ program under a wrapper, so there is one list of wrappers.
   somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
   That is the point of asking separately, and it is also the odd case: a person who has just said
   they did not write this code has said something about whoever wrote the rules too.
+- **A program word is read by its typed spelling, which Windows reads more loosely.** The case and
+  the `.exe` or `.com` of a program word are folded ([PERM-5](#PERM-5)), and nothing else the
+  Windows loader ignores is: a trailing dot or space (`git.exe. push`), a `::$DATA` suffix, an 8.3
+  short name (`POWERS~1`), and another PATHEXT extension (`npm.cmd`, `az.bat`) name a program that
+  `Bash(git push *)` or `Bash(npm *)` in `deny` or `ask` does not cover. Only a host that runs the
+  stage unconfined or reaches the file by another route is exposed to the `.cmd` and `.bat` forms,
+  since the AppContainer backend refuses a batch file. What `CreateProcessW` and `canonicalize` do
+  with each spelling is read from the code and unchecked on Windows. The fold is Unicode lowercase,
+  and NTFS folds names by its own table, so a character the two fold differently (`\u{17f}`,
+  `\u{131}`) can name the program in one and not in the other; that is unchecked as well.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers

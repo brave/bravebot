@@ -1421,40 +1421,152 @@ enum Wrapper {
     Environment,
 }
 
-/// The fixed table of programs whose first word that is not an option is the program they run
-/// (PERM-20). A program that is not here is not looked through, and neither is a wrapper with an
-/// option this table does not list.
-fn wrapper(program: &str) -> Option<Wrapper> {
-    const NONE: &[&str] = &[];
-    let plain = |flags, valued, long_valued, numeric, positional| Wrapper::Options {
+/// A question asked of the table of wrappers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapperQuestion {
+    /// Whether the program's leading options are read to find the program it runs, which is what a
+    /// deny or ask rule is matched through (PERM-20) and what names the authority of the program
+    /// under it (CRED-5).
+    ReadsItsOptions,
+    /// Whether the program starts a file or a program that one of its operands names, so that a
+    /// file a plan could have written and then handed to it runs (RUN-5).
+    RunsItsOperand,
+}
+
+/// One program in the table of wrappers: how its options are read, if they are, and whether it runs
+/// an operand.
+struct Entry {
+    name: &'static str,
+    /// `None` for a program whose options this table does not read, so that a rule is matched
+    /// against it whole.
+    reading: Option<Wrapper>,
+    runs_operand: bool,
+}
+
+const fn options(
+    flags: &'static [&'static str],
+    valued: &'static [&'static str],
+    long_valued: &'static [&'static str],
+    numeric: bool,
+    positional: usize,
+) -> Option<Wrapper> {
+    Some(Wrapper::Options {
         flags,
         valued,
         long_valued,
         numeric,
         positional,
-    };
-    Some(match program {
-        "timeout" => plain(
+    })
+}
+
+const NO_WORDS: &[&str] = &[];
+
+/// The fixed table of wrappers, the one place a wrapper is listed. An entry says for each question
+/// asked of the table what the answer is, so adding a program here means answering every one.
+///
+/// A program whose `reading` is set is one whose first word that is not an option is the program it
+/// runs (PERM-20). A program that is not here is not looked through, and neither is a wrapper with
+/// an option its reading does not list. Names are compared as they are given: the caller folds the
+/// case and the extension where its question calls for it.
+static WRAPPERS: &[Entry] = &[
+    Entry {
+        name: "timeout",
+        reading: options(
             &["--foreground", "--preserve-status", "-v", "--verbose"],
             &["-s", "-k"],
             &["--signal", "--kill-after"],
             false,
             1,
         ),
-        "time" => plain(&["-p", "-v", "-a"], &["-f", "-o"], NONE, false, 0),
-        "nice" => plain(NONE, &["-n"], &["--adjustment"], true, 0),
-        "stdbuf" => plain(
-            NONE,
+        runs_operand: true,
+    },
+    Entry {
+        name: "time",
+        reading: options(&["-p", "-v", "-a"], &["-f", "-o"], NO_WORDS, false, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "nice",
+        reading: options(NO_WORDS, &["-n"], &["--adjustment"], true, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "stdbuf",
+        reading: options(
+            NO_WORDS,
             &["-i", "-o", "-e"],
             &["--input", "--output", "--error"],
             false,
             0,
         ),
-        "command" => plain(&["-p"], NONE, NONE, false, 0),
-        "nohup" | "builtin" | "noglob" => plain(NONE, NONE, NONE, false, 0),
-        "env" => Wrapper::Environment,
-        _ => return None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "command",
+        reading: options(&["-p"], NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "nohup",
+        reading: options(NO_WORDS, NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "builtin",
+        reading: options(NO_WORDS, NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: false,
+    },
+    Entry {
+        name: "noglob",
+        reading: options(NO_WORDS, NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: false,
+    },
+    Entry {
+        name: "env",
+        reading: Some(Wrapper::Environment),
+        runs_operand: true,
+    },
+    Entry {
+        name: "xargs",
+        reading: None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "exec",
+        reading: None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "setsid",
+        reading: None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "busybox",
+        reading: None,
+        runs_operand: true,
+    },
+];
+
+/// Whether the table answers `question` yes for the program called `name`, as the caller spells
+/// it: `timeout` is in the table and `TIMEOUT` and `timeout.exe` are not.
+pub fn is_wrapper(name: &str, question: WrapperQuestion) -> bool {
+    WRAPPERS.iter().any(|entry| {
+        entry.name == name
+            && match question {
+                WrapperQuestion::ReadsItsOptions => entry.reading.is_some(),
+                WrapperQuestion::RunsItsOperand => entry.runs_operand,
+            }
     })
+}
+
+/// How the table reads the options of the program called `name`, if it does.
+fn wrapper(name: &str) -> Option<&'static Wrapper> {
+    WRAPPERS
+        .iter()
+        .find(|entry| entry.name == name)?
+        .reading
+        .as_ref()
 }
 
 /// What follows one leading wrapper, or `None` where the first word is not in the table, where an
@@ -1462,7 +1574,7 @@ fn wrapper(program: &str) -> Option<Wrapper> {
 fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
     let (program, mut rest) = argv.split_first()?;
     let (flags, valued, long_valued, numeric, mut positional) =
-        match wrapper(&wrapper_name(program))? {
+        match *wrapper(&wrapper_name(program))? {
             Wrapper::Options {
                 flags,
                 valued,
@@ -1541,8 +1653,9 @@ fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
 /// The argv left after each leading wrapper in turn, outermost first. `timeout 5 nice git push`
 /// gives `nice git push` and then `git push`.
 ///
-/// The one reader of the wrapper table: a deny or ask rule is matched through it (PERM-20), and
-/// [`crate::ambient::spent_by`] names the authority of the program it finds (CRED-5).
+/// The one reader of the wrapper table's options: a deny or ask rule is matched through it
+/// (PERM-20), and [`crate::ambient::spent_by`] names the authority of the program it finds
+/// (CRED-5). [`is_wrapper`] is the same table asked whether a program runs its operand (RUN-5).
 pub fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
     let mut found = Vec::new();
     let mut current = argv.to_vec();
@@ -3515,6 +3628,39 @@ mod tests {
         assert_eq!(
             permissions.for_pipeline(&stages),
             Decision::Ruled(Ruling::Ask)
+        );
+    }
+
+    /// The table of wrappers answers each question for the programs it lists and for no other, so
+    /// a program added for one question is a decision about the others (PERM-20, RUN-5).
+    #[test]
+    fn the_wrapper_table_answers_each_question_for_exactly_the_programs_it_lists() {
+        let asked = |question| {
+            let mut names: Vec<&str> = [
+                "timeout", "time", "nice", "stdbuf", "command", "nohup", "builtin", "noglob",
+                "env", "xargs", "exec", "setsid", "busybox", "sudo", "npx", "sh", "TIMEOUT",
+                "env.exe", "",
+            ]
+            .into_iter()
+            .filter(|name| is_wrapper(name, question))
+            .collect();
+            names.sort_unstable();
+            names
+        };
+        assert_eq!(
+            asked(WrapperQuestion::ReadsItsOptions),
+            [
+                "builtin", "command", "env", "nice", "noglob", "nohup", "stdbuf", "time", "timeout"
+            ],
+            "the programs whose options PERM-20 reads"
+        );
+        assert_eq!(
+            asked(WrapperQuestion::RunsItsOperand),
+            [
+                "busybox", "command", "env", "exec", "nice", "nohup", "setsid", "stdbuf", "time",
+                "timeout", "xargs"
+            ],
+            "the programs RUN-5 holds to run the file they are handed"
         );
     }
 
