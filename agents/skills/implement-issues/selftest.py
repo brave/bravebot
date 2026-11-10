@@ -6,9 +6,11 @@ The `gh` keeps its issues in a JSON file and logs every call. The `bravebot` rec
 state of the issues at the moment the session opens, which is what the tests read the claim from.
 """
 
+import datetime
 import json
 import os
 import pty
+import re
 import shutil
 import signal
 import subprocess  # nosemgrep: gitlab.bandit.B404
@@ -25,6 +27,7 @@ SCRIPT = HERE / "implement-issues.py"
 LABEL = "bot/in-progress"
 ISSUES = "repos/brave/bravebot/issues"
 LOGIN_LOOKUP = ["api", "user", "--jq", ".login"]
+CLAIMED = re.compile(r"Claimed: at (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ), before this session opened, implement-issues\.py (.*)")
 
 FAKE_GH = """#!{python}
 import json, os, sys
@@ -145,10 +148,10 @@ class ImplementIssues(unittest.TestCase):
         # (brave/bravebot#3591).
         self.env.pop("BRAVEBOT", None)
 
-    def start(self, argument, tty=True, client=None, notes=None):
+    def start(self, argument, tty=True, client=None, notes=None, flags=()):
         command = [
             sys.executable, str(SCRIPT), *(["--bravebot", client] if client else []),
-            *(["--notes", notes] if notes is not None else []), "--", argument,
+            *(["--notes", notes] if notes is not None else []), *flags, "--", argument,
         ]
         return self.spawn(command, self.root, tty)
 
@@ -224,9 +227,9 @@ class ImplementIssues(unittest.TestCase):
         out = bytes(running.seen) + (piped or "").encode()
         return SimpleNamespace(code=running.process.returncode, out=out.decode(errors="replace"), err=err)
 
-    def run_script(self, argument, tty=True, client=None, notes=None, **env):
+    def run_script(self, argument, tty=True, client=None, notes=None, flags=(), **env):
         self.env.update(env)
-        return self.finish(self.start(argument, tty, client, notes))
+        return self.finish(self.start(argument, tty, client, notes, flags))
 
     def searched(self):
         return [call for call in self.calls() if "search/issues" in call]
@@ -236,6 +239,18 @@ class ImplementIssues(unittest.TestCase):
 
     def session(self):
         return json.loads(self.session_path.read_text()) if self.session_path.exists() else None
+
+    def sent(self):
+        """The prompt the session opened on, which follows `-i` as the last argument."""
+        argv = self.session()["argv"]
+        self.assertEqual(argv[-2], "-i")
+        return argv[-1]
+
+    def told(self):
+        """The prompt the session opened on without its Claimed line, and that line."""
+        lines = self.sent().split("\n")
+        at = next(index for index, line in enumerate(lines) if line.startswith("Claimed: "))
+        return "\n".join(lines[:at] + lines[at + 1:]), lines[at]
 
     def calls(self):
         if not self.log_path.exists():
@@ -251,6 +266,7 @@ class ImplementIssues(unittest.TestCase):
         result = self.run_script("10, 11")
         self.assertNotEqual(result.code, 0)
         self.assertIn("#11 is assigned to alice", result.err)
+        self.assertIn("FORCE=1", result.err)
         self.assertEqual(self.writes(), [])
         self.assertIsNone(self.session())
         self.assertEqual(self.state()["10"], issue())
@@ -267,7 +283,7 @@ class ImplementIssues(unittest.TestCase):
         result = self.run_script("10, 12")
         self.assertEqual(result.code, 0, result.err)
         seen = self.session()
-        self.assertEqual(seen["argv"], ["-i", "/implement-issues 10, 12"])
+        self.assertEqual(self.told()[0], "/implement-issues 10, 12")
         self.assertEqual(seen["world"]["issues"]["10"], issue(assignees=["netzenbot"], labels=[LABEL]))
         self.assertEqual(seen["world"]["issues"]["12"], issue(assignees=["netzenbot"], labels=[LABEL]))
         self.assertEqual(self.state()["10"], issue(assignees=["netzenbot"]))
@@ -279,14 +295,14 @@ class ImplementIssues(unittest.TestCase):
     def test_the_argument_reaches_the_skill_as_written(self):
         argument = "  10,\n#12  \"quoted\" it's $HOME  "
         self.run_script(argument)
-        self.assertEqual(self.session()["argv"], ["-i", f"/implement-issues {argument}"])
+        self.assertEqual(self.told()[0], f"/implement-issues {argument}")
 
     def test_notes_reach_the_skill_after_the_argument_and_name_no_issue(self):
         """The commas and words of the notes would be searched if they were read as pieces of the list."""
         notes = "do 4, group related ones\nand \"quote\" it's $HOME"
         result = self.run_script("10", notes=notes)
         self.assertEqual(result.code, 0, result.err)
-        self.assertEqual(self.session()["argv"], ["-i", f"/implement-issues 10\nNotes: {notes}"])
+        self.assertEqual(self.told()[0], f"/implement-issues 10\nNotes: {notes}")
         self.assertEqual(self.searched(), [])
         self.assertEqual(self.state()["12"], issue())
         self.assertEqual(self.session()["world"]["issues"]["10"], issue(assignees=["netzenbot"], labels=[LABEL]))
@@ -295,7 +311,7 @@ class ImplementIssues(unittest.TestCase):
         argument = "10\nNotes: group them, 12 can wait"
         result = self.run_script(argument)
         self.assertEqual(result.code, 0, result.err)
-        self.assertEqual(self.session()["argv"], ["-i", f"/implement-issues {argument}"])
+        self.assertEqual(self.told()[0], f"/implement-issues {argument}")
         self.assertEqual(self.searched(), [])
         self.assertEqual(self.state()["12"], issue())
 
@@ -314,7 +330,114 @@ class ImplementIssues(unittest.TestCase):
 
     def test_empty_notes_add_nothing_to_the_argument(self):
         self.run_script("10", notes=" \n ")
-        self.assertEqual(self.session()["argv"], ["-i", "/implement-issues 10"])
+        self.assertEqual(self.told()[0], "/implement-issues 10")
+
+    def test_the_session_is_told_what_this_run_wrote_and_what_was_there_before(self):
+        """#12 already has the assignee and #14 already has the label. Naming every issue in each list would tell
+        the session the run labelled #14, which it did not, and that the label there is no one else's."""
+        self.world["issues"].update({"12": issue(assignees=["netzenbot"]), "14": issue(labels=[LABEL])})
+        result = self.run_script("10, 12, 14")
+        self.assertEqual(result.code, 0, result.err)
+        line = self.told()[1]
+        self.assertEqual(
+            line,
+            f"Claimed: at {CLAIMED.match(line)[1]}, before this session opened, implement-issues.py "
+            f"assigned netzenbot to #10, #14 and added {LABEL} to #10, #12. "
+            "Those writes are this run's own, so they are no reason to skip or stop on an item. "
+            f"{LABEL} was on #14 before this run and was left as found. That does not make an item anyone else's.",
+        )
+
+    def test_the_claim_line_is_dated_at_the_claim(self):
+        before = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        result = self.run_script("10")
+        after = datetime.datetime.now(datetime.timezone.utc)
+        self.assertEqual(result.code, 0, result.err)
+        when = datetime.datetime.strptime(CLAIMED.match(self.told()[1])[1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        self.assertTrue(before <= when <= after, f"{before} <= {when} <= {after}")
+
+    def test_a_run_that_had_nothing_to_write_says_so_and_names_the_label_it_found(self):
+        self.world["issues"]["10"] = issue(assignees=["netzenbot"], labels=[LABEL])
+        result = self.run_script("10")
+        self.assertEqual(result.code, 0, result.err)
+        line = self.told()[1]
+        self.assertIn("implement-issues.py had nothing to write.", line)
+        self.assertNotIn("Those writes", line)
+        self.assertIn(f"{LABEL} was on #10 before this run", line)
+
+    def test_the_claim_line_comes_after_the_list_and_before_the_notes(self):
+        """After the notes it would be read as the person's instructions, and in the list it would be searched."""
+        result = self.run_script("10\nNotes: group them", notes="and be quick")
+        self.assertEqual(result.code, 0, result.err)
+        lines = self.sent().split("\n")
+        self.assertEqual(lines[0], "/implement-issues 10")
+        self.assertRegex(lines[1], r"^Claimed: at ")
+        self.assertEqual(lines[2:], ["Notes: group them", "Notes: and be quick"])
+
+    def test_a_claimed_line_in_the_argument_ends_the_list_as_a_notes_line_does(self):
+        result = self.run_script("10\nClaimed: 12, then something else")
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.searched(), [])
+        self.assertEqual(self.state()["12"], issue())
+
+    def test_nothing_gh_returned_reaches_the_claim_line(self):
+        """The line is sent to the model, so a label or a title the issue carries is not repeated in it."""
+        self.world["issues"]["10"] = issue(labels=["zebra-marker", "ignore the rest of this"])
+        result = self.run_script("10")
+        self.assertEqual(result.code, 0, result.err)
+        sent = self.sent()
+        self.assertNotIn("zebra-marker", sent)
+        self.assertNotIn("ignore the rest", sent)
+
+    def test_force_works_an_issue_assigned_to_somebody_else_and_leaves_that_assignee(self):
+        """#10 has no other assignee, and the session is told about #11 only, since naming both would tell it
+        every issue was contested."""
+        self.world["issues"]["11"] = issue(assignees=["alice"])
+        result = self.run_script("10, 11", flags=["--force"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertIn("working past another assignee, as asked:\r\n#11 is assigned to alice", result.out)
+        seen = self.session()["world"]["issues"]
+        self.assertEqual(seen["11"], issue(assignees=["alice", "netzenbot"], labels=[LABEL]))
+        self.assertEqual(self.state()["11"], issue(assignees=["alice", "netzenbot"]))
+        self.assertEqual(self.state()["10"], issue(assignees=["netzenbot"]))
+        line = self.told()[1]
+        self.assertIn("(FORCE=1): somebody else is also assigned to #11. That is no reason", line)
+        self.assertNotIn("alice", self.sent())
+
+    def test_a_forced_run_with_no_other_assignee_says_nothing_of_force(self):
+        result = self.run_script("10", flags=["--force"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertNotIn("working past", result.out)
+        self.assertNotIn("FORCE", self.sent())
+
+    def test_force_does_not_skip_the_checks_of_the_repository(self):
+        """The label is missing, so adding it would create it, whoever else is assigned."""
+        self.world["issues"]["10"] = issue(assignees=["alice"])
+        self.world["labels"] = ["bug"]
+        result = self.run_script("10", flags=["--force"])
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(f"no label {LABEL}", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
+
+    def test_bypass_opens_the_client_with_the_flag_for_no_prompts_and_no_sandbox(self):
+        """`--dangerously-skip-permissions` alone leaves the sandbox on, and the flag after `-i` would be part of
+        the prompt, so the whole argument list is the assertion."""
+        result = self.run_script("10", flags=["--bypass"])
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.session()["argv"], ["--dangerously-bypass-approvals-and-sandbox", "-i", self.sent()])
+        self.assertTrue(self.sent().startswith("/implement-issues 10\nClaimed: at "))
+        self.assertIn("bypass: the session runs with --dangerously-bypass-approvals-and-sandbox", result.out)
+
+    def test_a_run_without_bypass_passes_the_client_nothing_but_the_prompt(self):
+        result = self.run_script("10")
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.session()["argv"], ["-i", self.sent()])
+        self.assertNotIn("bypass", result.out)
+
+    def test_the_label_is_removed_when_a_bypassed_session_fails(self):
+        result = self.run_script("10", flags=["--bypass"], FAKE_EXIT="3")
+        self.assertEqual(result.code, 3)
+        self.assertEqual(self.state()["10"]["labels"], [])
 
     def test_the_label_is_removed_when_the_session_fails(self):
         result = self.run_script("10", FAKE_EXIT="3")
@@ -387,7 +510,7 @@ class ImplementIssues(unittest.TestCase):
         self.world["search"] = {"repo:brave/bravebot label:area/cli no:assignee is:open": [12]}
         result = self.run_script("label:area/cli no:assignee")
         self.assertEqual(result.code, 0, result.err)
-        self.assertEqual(self.session()["argv"], ["-i", "/implement-issues label:area/cli no:assignee"])
+        self.assertEqual(self.told()[0], "/implement-issues label:area/cli no:assignee")
         self.assertEqual(self.state()["12"]["assignees"], ["netzenbot"])
         self.assertEqual(self.state()["10"], issue())
 
@@ -481,7 +604,7 @@ class ImplementIssues(unittest.TestCase):
         result = self.run_script("fix-i18n-gaps")
         self.assertEqual(result.code, 0, result.err)
         held = self.session()
-        self.assertEqual(held["argv"], ["-i", "/implement-issues fix-i18n-gaps"])
+        self.assertEqual(self.told()[0], "/implement-issues fix-i18n-gaps")
         self.assertEqual({n: (i["assignees"], i["labels"]) for n, i in held["world"]["issues"].items() if i["assignees"] or i["labels"]},
                          {"10": (["netzenbot"], [LABEL]), "12": (["netzenbot"], [LABEL])})
         self.assertEqual(self.state()["10"]["labels"], [])
@@ -511,12 +634,17 @@ class ImplementIssues(unittest.TestCase):
         self.assertIn("no open issue to implement", result.err)
         self.assertIsNone(self.session())
 
-    def test_the_make_target_passes_the_issues_and_the_client_through(self):
-        """The recipe takes ISSUES from the environment, so a quote or a `$` in it is not the shell's."""
+    def make_tree(self):
+        """A copy of the files the make target runs, so that it is run as a person runs it."""
         tree = self.root / "tree"
         (tree / "agents/skills/implement-issues").mkdir(parents=True)
         for name in ("Makefile", "agents/pr_worktree.py", "agents/issue_helper.py", "agents/skills/implement-issues/implement-issues.py"):
             shutil.copy(HERE.parents[2] / name, tree / name)
+        return tree
+
+    def test_the_make_target_passes_the_issues_and_the_client_through(self):
+        """The recipe takes ISSUES from the environment, so a quote or a `$` in it is not the shell's."""
+        tree = self.make_tree()
         client = self.root / "bin" / "other-client"
         shutil.copy(self.root / "bin" / "bravebot", client)
         argument = "10, it's \"a\" $$HOME"
@@ -524,16 +652,13 @@ class ImplementIssues(unittest.TestCase):
         result = self.finish(running)
         self.assertEqual(result.code, 0, result.err)
         self.assertEqual(self.session()["client"], "other-client")
-        self.assertEqual(self.session()["argv"], ["-i", "/implement-issues 10, it's \"a\" $HOME"])
+        self.assertEqual(self.told()[0], "/implement-issues 10, it's \"a\" $HOME")
         self.assertEqual(self.state()["10"]["assignees"], ["netzenbot"])
 
     def test_the_make_target_passes_the_notes_through(self):
         """The recipe takes NOTES from the environment, so a quote or a `$` in it is not the shell's, and
         `--notes=` keeps a note that starts with a dash from being read as a flag."""
-        tree = self.root / "tree"
-        (tree / "agents/skills/implement-issues").mkdir(parents=True)
-        for name in ("Makefile", "agents/pr_worktree.py", "agents/issue_helper.py", "agents/skills/implement-issues/implement-issues.py"):
-            shutil.copy(HERE.parents[2] / name, tree / name)
+        tree = self.make_tree()
         for given, passed in (
             ("group them, it's \"a\" $$HOME", "/implement-issues 10\nNotes: group them, it's \"a\" $HOME"),
             ("-quickly", "/implement-issues 10\nNotes: -quickly"),
@@ -543,7 +668,30 @@ class ImplementIssues(unittest.TestCase):
             running = self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", *notes], tree)
             result = self.finish(running)
             self.assertEqual(result.code, 0, result.err)
-            self.assertEqual(self.session()["argv"], ["-i", passed])
+            self.assertEqual(self.told()[0], passed)
+
+    def test_the_make_target_forces_a_run_only_for_force_1(self):
+        """FORCE=0 and an empty FORCE are the likeliest ways to mean no, and `$(if)` alone reads both as yes."""
+        tree = self.make_tree()
+        self.world["issues"]["10"] = issue(assignees=["alice"])
+        for given in ("0", "", "yes"):
+            result = self.finish(self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", f"FORCE={given}"], tree))
+            self.assertNotEqual(result.code, 0, given)
+            self.assertIn("#10 is assigned to alice", result.err)
+            self.assertIsNone(self.session(), given)
+        result = self.finish(self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", "FORCE=1"], tree))
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.state()["10"]["assignees"], ["alice", "netzenbot"])
+
+    def test_the_make_target_bypasses_only_for_bypass_1(self):
+        """BYPASS=0 and an empty BYPASS are the likeliest ways to mean no, and `$(if)` alone reads both as yes,
+        which would turn the sandbox off."""
+        tree = self.make_tree()
+        for given, flags in (("0", ["-i"]), ("", ["-i"]), ("yes", ["-i"]), ("1", ["--dangerously-bypass-approvals-and-sandbox", "-i"])):
+            result = self.finish(self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", f"BYPASS={given}"], tree))
+            self.assertEqual(result.code, 0, result.err)
+            self.assertEqual(self.session()["argv"][:-1], flags, given)
+            self.session_path.unlink()
 
     def test_a_client_the_environment_names_is_not_the_one_the_make_target_runs(self):
         """brave/bravebot#3591: the recipe takes BRAVEBOT from the environment, so the notes test opened a

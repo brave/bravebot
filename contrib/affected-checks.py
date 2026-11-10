@@ -95,8 +95,13 @@ READ_BY_EXTENSION_TESTS = (
     "crates/browser/tests/file-names.json",
 )
 
-# Part of the desktop UI, and compared by a Rust test with what it generates from the catalogs.
-UI_READ_BY_RUST = ("ui/src/renderer/i18n/messages.gen.ts",)
+# Part of the desktop UI, and compared by a Rust test with what it generates from the catalogs, or by
+# contrib/check-code-selectors.py with the browser opener's list of variables.
+UI_READ_BY_RUST = (
+    "ui/src/renderer/i18n/messages.gen.ts",
+    "ui/src/main/external-open.ts",
+    "ui/scripts/external-open-electron.test.mjs",
+)
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
@@ -467,6 +472,8 @@ CASES = (
     ("ui/scripts/fuses.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
     ("ui/src/renderer/i18n/messages.gen.ts", {"rust", "ui"}),
+    ("ui/src/main/external-open.ts", {"rust", "ui"}),
+    ("ui/scripts/external-open-electron.test.mjs", {"rust", "ui"}),
     ("packages/agent-client/src/common/client.ts", {"ui", "mobile"}),
     ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui", "mobile"}),
     ("packages/agent-client/package-lock.json", {"ui", "mobile", "npm"}),

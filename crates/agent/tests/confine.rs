@@ -1982,6 +1982,70 @@ fn a_denied_entry_under_the_session_stops_the_stage() {
     );
 }
 
+/// SANDBOX-12 and TRUST-14 through the agent, on Windows: with a session directory of its own, the
+/// stage can make a directory in the session's `temp` directory, and it cannot make one in the
+/// account's temporary directory, which its `TEMP` and `TMP` do not name. The regression it rejects
+/// is a stage that still gets the account's `%TEMP%` (granting it, and writing an entry onto
+/// everything in it). The write in the session's directory is the control that the refusal in the
+/// account's is not made for every temporary directory. Whether the stage's `TEMP` names the
+/// session's directory is not asserted, since a container was seen to be given its own.
+#[cfg(windows)]
+#[test]
+fn a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("session-temp");
+    let made = bravebot_agent::scratch::SessionScratch::create().expect("a session directory");
+    let directory = made
+        .directory()
+        .expect("a directory that can be told again");
+    let confinement = Confinement::here(
+        vec![places.session.clone()],
+        Some(&directory),
+        Some(&places.home),
+    )
+    .expect("a platform with a base");
+    let own = resolved(made.path()).join("temp");
+    let account_temp = resolved(&std::env::temp_dir());
+
+    // Observed on the Windows runner: `set TEMP` in a container names the container's own
+    // `AC\Temp`, not the directory the agent passed. The property that matters is that the name
+    // is not the account's temporary directory, so that is what is asserted, and the name seen is
+    // printed (#3883).
+    for name in ["TEMP", "TMP"] {
+        let ran = places.run(&format!("cmd /c set {name}"), Some(&confinement));
+        eprintln!("{name} in the stage: {}", ran.stdout.trim());
+        assert!(
+            ran.stdout.contains('='),
+            "{name} is not set in the stage: {}",
+            ran.stdout
+        );
+        assert!(
+            !ran.stdout
+                .to_lowercase()
+                .contains(&format!("{name}={}", account_temp.display()).to_lowercase()),
+            "{name} names the account's temporary directory: {}",
+            ran.stdout
+        );
+    }
+    let inside = own.join("made-by-a-stage");
+    let ran = places.run(&touch(inside.display()), Some(&confinement));
+    assert!(ran.ended_well, "the session's temp was not writable");
+    assert!(inside.is_dir());
+
+    // Nothing but a name is made here, and the stage is expected to be refused it.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let account = std::env::temp_dir().join(format!("bravebot-refused-{}", std::process::id()));
+    let refused = places.try_run_given(&touch(account.display()), Some(&confinement), None);
+    let reached = account.exists();
+    let _ = std::fs::remove_dir_all(&account);
+    assert!(
+        !reached && !refused.is_ok_and(|ran| ran.ended_well),
+        "a stage wrote the account's temporary directory"
+    );
+}
+
 /// The regression it rejects: the credential check skipped on Windows, so a session opened on the
 /// home directory, or on a credential location itself, is granted read and write over the
 /// directories that hold a key and `settings.json`, which a container cannot be refused a path

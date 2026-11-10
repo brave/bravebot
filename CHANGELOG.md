@@ -76,6 +76,8 @@
  - Fixed `watch_file` ending at its first look for a file beside the project under bypass. ([#3378](https://github.com/brave/bravebot/issues/3378))
  - Fixed the agent asking to quit a browser that was already running with its debugging port open, and asking you to approve `loopback` for a line that only connects to a local port. ([#3611](https://github.com/brave/bravebot/issues/3611), [#3616](https://github.com/brave/bravebot/issues/3616))
  - Fixed OpenRouter being spelled two ways in the accounts list, the model list and the settings report.
+ - Fixed `/btw` typed during a turn saying nothing when it went out or when it was answered, and the question being stopped, with its answer lost, when the turn ended on its own. A line in the transcript now says each and names the key that opens the answer, and the answer arrives after the turn. A `/btw` typed with no turn running now reads `Answering your /btw question` on the working line.
+ - Fixed a manifest step line, a `/hunks` row and the run question in `--plain` and in an editor drawing a file name that ends in a space, holds a character that draws as nothing, or has a byte that is not UTF-8, as the name without it. ([#2762](https://github.com/brave/bravebot/issues/2762))
 
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 

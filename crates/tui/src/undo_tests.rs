@@ -1672,6 +1672,21 @@ fn a_turn_wrote_foo(name: &str) -> Wrote {
 /// A session whose last turn is said to have turned `before` into `after` in `foo.rs`, with the
 /// rewind point and backup that says so and no turn run to make it.
 fn a_point_over(name: &str, before: &str, after: &str) -> Wrote {
+    a_point_over_file(
+        name,
+        "foo.rs",
+        bravebot_agent::workspace::Before::Bytes(before.as_bytes().to_vec()),
+        after,
+    )
+}
+
+/// [`a_point_over`] for the file `file`, which held `before` ahead of the turn.
+fn a_point_over_file(
+    name: &str,
+    file: &str,
+    before: bravebot_agent::workspace::Before,
+    after: &str,
+) -> Wrote {
     let root = scratch_dir(&format!("hunks-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -1690,14 +1705,14 @@ fn a_point_over(name: &str, before: &str, after: &str) -> Wrote {
         rewind_point(&session, &conversation, &trust, &programs, &stored),
         "edit foo.rs".into(),
     );
-    let path = workspace.root().join("foo.rs");
+    let path = workspace.root().join(file);
     std::fs::write(&path, after).unwrap();
     session
         .rewind
         .keep_backups(vec![bravebot_agent::workspace::Backup {
             kept: false,
             path,
-            was: bravebot_agent::workspace::Before::Bytes(before.as_bytes().to_vec()),
+            was: before,
             captured_trust: Integrity::Trusted,
         }]);
     Wrote {
@@ -1858,6 +1873,86 @@ fn the_hunks_of_the_last_turn_are_listed_with_their_lines() {
     assert!(rows[1].changes.contains(&Change::Added("INDIA TOO".into())));
     assert!(!rows[0].untrusted && !rows[1].untrusted);
     assert_eq!(wrote.foo(), EDITED, "listing wrote to the file");
+}
+
+/// PROMPT-1: a file the turn wrote is named in the list as every prompt names it. A name that ends
+/// in a space or holds a character that draws as nothing is not drawn as the name without it, in
+/// the row, in the line saying a hunk went back and in the line for a file with no hunks. A name
+/// that is only text is drawn as it always was.
+#[test]
+fn the_list_and_its_notes_draw_a_file_name_spelled() {
+    if !in_isolated_profile() {
+        return;
+    }
+    use bravebot_agent::workspace::Before;
+    let bytes = |text: &str| Before::Bytes(text.as_bytes().to_vec());
+    let spellings = [
+        ("note.md", "note.md"),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b.md", "\"a\\u{202e}b.md\""),
+        ("a\u{200b}b.md", "\"a\\u{200b}b.md\""),
+    ];
+    let mut rows = Vec::new();
+    for (file, shown) in spellings {
+        let mut wrote = a_point_over_file("spelled", file, bytes("one\ntwo\n"), "one\nTWO\n");
+
+        wrote.list();
+
+        let listed = wrote.rows();
+        assert_eq!(listed.len(), 1, "{file:?}: {}", wrote.said());
+        assert_eq!(listed[0].line(), format!("Hunk(1 {shown})"), "{file:?}");
+        rows.push(listed[0].line());
+
+        wrote.put_back(1);
+
+        assert!(
+            wrote.said().contains(&format!(
+                "put back hunk 1 of {shown} as it stood before turn 1"
+            )),
+            "{file:?}: {}",
+            wrote.said()
+        );
+        let mut created = a_point_over_file("spelled-left", file, Before::Nothing, "one\n");
+
+        created.list();
+
+        assert!(
+            created
+                .said()
+                .contains(&format!("{shown}: the turn created it")),
+            "{file:?}: {}",
+            created.said()
+        );
+    }
+    for (at, row) in rows.iter().enumerate().skip(1) {
+        assert_ne!(
+            row, &rows[0],
+            "{:?} drew as the plain name",
+            spellings[at].0
+        );
+    }
+}
+
+/// A row that names a file is drawn by the activity as it stands, so the desktop and mobile
+/// transcripts, which draw `shownTarget`, do not spell the name a second time.
+#[test]
+fn a_hunk_row_is_not_spelled_a_second_time_by_the_activity() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_point_over_file(
+        "twice",
+        "note.md ",
+        bravebot_agent::workspace::Before::Bytes(b"one\ntwo\n".to_vec()),
+        "one\nTWO\n",
+    );
+
+    wrote.list();
+
+    let rows = wrote.rows();
+    assert_eq!(rows.len(), 1, "{}", wrote.said());
+    assert_eq!(rows[0].shown_target(), rows[0].target);
+    assert_eq!(rows[0].shown_target(), "1 \"note.md\u{2423}\"");
 }
 
 /// Only the named hunk goes back, the file keeps the other as the turn wrote it, the map is as it

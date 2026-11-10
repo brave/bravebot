@@ -26,10 +26,8 @@ guards:
   - symbol: Policy::vetting_verdict
   - symbol: Policy::vetting_did_not_complete
   - symbol: Policy::vetting_stopped
-  - symbol: Policy::promote_vetted
   - symbol: Policy::before_promoting
   - symbol: Policy::compose_vetting_picture
-  - symbol: Policy::promote_vetted_picture
   - symbol: Policy::attach_vetted_picture
   - symbol: Policy::authorise_a_copy_of_a_picture
 documented-by: docs/website/docs/security/vetting.md

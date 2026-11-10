@@ -2574,6 +2574,7 @@ indicator-reconnecting-until = Reconnexion, prochain essai dans { $wait }, aband
 indicator-hook = Exécution du hook : { $program } ({ $moment })
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
+indicator-answering = Réponse à votre question /btw
 indicator-stopping = Arrêt en cours
 indicator-stopping-delegates = { $count ->
     [one] Arrêt en cours, en attente de { $count } délégué
@@ -3728,6 +3729,8 @@ btw-needs-a-question = /btw prend la question à poser, que la conversation ne l
 btw-stopped = la question a été arrêtée
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
+btw-asked-beside-a-turn = réponse à votre question /btw en cours à côté du tour ; { $chord } ouvre la réponse quand elle est prête
+btw-answered-beside-a-turn = votre question /btw a reçu une réponse ; { $chord } l'ouvre
 
 # Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
 # réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où

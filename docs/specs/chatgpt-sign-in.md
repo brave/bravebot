@@ -1538,9 +1538,10 @@ Windows, where `start` is a shell builtin. It is started as the sandboxing spec 
 that bravebot looks up by name, resolved first and with the variables that spec removes from what an agent
 passes on left out. The opener failing is not the sign-in failing, and the command carries on waiting. The
 opener is `bravebot_tui::opener`, which the terminal interface uses for a link as well, so the program,
-its arguments and what it is given are one definition. It is a checked start: `BROWSER`, `XDG_DATA_HOME`,
+its arguments and what it is given are one definition. It is a checked start: `BROWSER`, `GIO_LAUNCH_DESKTOP`, `XDG_DATA_HOME`,
 `XDG_CONFIG_HOME`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` are removed unless they name a program or file
-outside every directory a stage may write, and every other variable is passed on ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
+outside every directory a stage may write, `HOME` is removed unless it and the configuration and handler
+directories read under it lead outside every such directory, and every other variable is passed on ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **Why.** A sign-in that printed the URL only when the opener failed would show nothing on a machine where
 the opener exits successfully and opens nothing, which a machine reached over SSH may do. A shell between

@@ -169,6 +169,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-connector",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-filetype",
  "bravebot-i18n",
  "bravebot-lsp",
@@ -187,6 +188,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

@@ -325,22 +325,11 @@ fn placeholder() -> &'static str {
 /// faithful record of the bytes without being able to act. A tab is replaced like the rest, since
 /// ratatui drops it without drawing anything. Callers that lay a tab out as width do so before
 /// this, and lines are already split, so no newline reaches it.
-pub(crate) fn printable(text: &str) -> String {
-    if !text.chars().any(|c| c.is_control()) {
-        return text.to_string();
-    }
-    text.chars()
-        .map(|c| {
-            if !c.is_control() {
-                c
-            } else {
-                // The Unicode pictures for C0, so an escape reads as ␛ rather than vanishing: a
-                // character silently dropped is one a user cannot tell was ever there.
-                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
-            }
-        })
-        .collect()
-}
+///
+/// This is `bravebot_agent::confirm::printable_with_tab_pictured`, the one implementation the
+/// approval text and the command line share, named `printable` here so the module's callers read
+/// as they did.
+pub(crate) use bravebot_agent::confirm::printable_with_tab_pictured as printable;
 
 /// Lay styled text out behind a margin, one drawn row at a time.
 ///

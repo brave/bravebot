@@ -405,7 +405,7 @@ waiting `/clear` for `/rename`, say, and then they wait behind that line and the
 could change the record's name or notes, and are carried out as you press Enter behind a command line. `/style` is carried out as you press Enter behind a command line too, but waits behind a prompt, and `/forget-trust` waits behind both. A waiting `/sandbox off` holds none of
 them back. The four that open a list draw it over the turn. What they answer goes into the
 transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question asked with no turn running, a `/manifest` run or a goal check,
-every command waits. A `/btw` typed during a turn is carried out as you press Enter, and its answer is a row you open with Ctrl-L. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a
+every command waits. A `/btw` typed during a turn is carried out as you press Enter, a line in the transcript says it is out and another says when it is answered, and its answer is a row you open with Ctrl-L. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a
 command carried out as you press Enter, `queued` for one that waits, and `now/queued` where it depends
 on what follows the word and on what is already waiting. A `now` row reads `queued` while a line of the
 same command waits, and during a compaction or an aside asked with no turn running every row reads `queued`. Tab, or Enter on a
@@ -727,7 +727,10 @@ view back where it was.
 
 **An aside leaves the transcript alone.** Neither the question nor the answer is drawn there, and an
 answer arriving while the turn is still going is not drawn over it: the aside lives in this view and
-nowhere else.
+nowhere else. A question typed during a turn leaves two lines of the program's own, one when it goes
+out and one when it is answered, each naming the key that opens the row. An answer that arrives after
+the turn has ended is announced in the same way, and does not open this view over the prompt you may be
+typing.
 
 The header and the footer name which kind of thing you are looking at: a delegate by its kind and its
 number, a command by the line that ran, an aside as an aside.

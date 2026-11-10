@@ -49,8 +49,10 @@ the links ([CMD-30](commands.md#CMD-30)).
 
 What is not built, each named in the clause it bears on:
 
-- A check of the interface inside tmux and GNU screen. What a multiplexer forwards is read from its
-  documents and source, and the interface has not been run inside either ([MOUSE-53](#MOUSE-53)).
+- A check of the interface inside tmux and GNU screen at a column or row past 223, with more than
+  one pane or window open, and a copy through GNU screen's own path. A single pane filling the
+  window forwarded the wheel, a right click and, through tmux, a drag's copy to the clipboard,
+  byte-identical to running outside either ([MOUSE-53](#MOUSE-53)).
 - Branching from an earlier turn. The menu's `branch this session` copies the whole session, since
   nothing cuts a copy at a turn ([MOUSE-52](#MOUSE-52)).
 - A wheel that reads `tui.wheelRows` in an approval or other question that scrolls. It moves the body
@@ -2039,9 +2041,12 @@ report in that form, and otherwise writes the older form, in which a position pa
 is set to the last cell it can name; `server-client.c` forwards a mouse report to the pane while its
 `mouse` option is off, and `key-bindings.c` binds a press, a drag and a turn of the wheel with it on to
 `send-keys -M` when the pane's program asked for mouse reports. The GNU screen manual lists mouse
-tracking in the table of private modes it understands as modes 9 and 1000, and no other. The
-interface has not been run inside either multiplexer, so a click at a wide column inside one has not
-been tried, and what screen does with modes 1002, 1003 and 1006 is not shown.
+tracking in the table of private modes it understands as modes 9 and 1000, and no other. Run inside
+both, a single pane filling the window, with tmux 3.8 and GNU screen 4.00.03 (FAU) on macOS: the
+wheel and a right click forwarded through each, byte-identical to running outside either, and a
+drag's copy reached the system clipboard through tmux. A click at a wide column past 223 has not
+been tried inside either, nor has more than one pane or window open at once, nor copying through
+screen's own path.
 
 `verified-by: bravebot_tui::app::tests::wide::a_press_a_drag_and_a_release_on_the_scrollbar_at_a_column_past_223_move_the_view`
 `verified-by: bravebot_tui::app::tests::wide::a_drag_of_the_thumb_to_a_row_past_223_goes_where_that_row_is_on_the_track`

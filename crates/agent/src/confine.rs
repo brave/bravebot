@@ -49,6 +49,15 @@ enum RequestPath {
     Unlisted,
 }
 
+/// Whose directory stages are given to write temporary files in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemporaryOwner {
+    /// The account's temporary directory.
+    Account,
+    /// A directory of the session's own inside its scratch directory ([`stage_temporary`]).
+    Session,
+}
+
 /// What the proxies decided for one foreground run (SANDBOX-24).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostsSeen {
@@ -68,6 +77,11 @@ pub const MOST_HOSTS_ASKED: usize = 8;
 pub struct Confinement {
     prelude: Prelude,
     temporary: PathBuf,
+    /// Whether `temporary` is a directory of the session's own inside its scratch directory and not
+    /// the account's temporary directory, which is so on Windows where the session has a scratch
+    /// directory ([`stage_temporary`]). Then every stage is told it as `TEMP` and `TMP`, and no
+    /// stage is granted the account's directory.
+    temporary_owner: TemporaryOwner,
     home: Option<PathBuf>,
     /// The state directory in force where `BRAVEBOT_HOME` puts it elsewhere than `~/.bravebot`
     /// ([`Confinement::with_state_directory`]), refused to every stage as `~/.bravebot` is.
@@ -192,6 +206,11 @@ impl Confinement {
         self
     }
 
+    /// The temporary directory, where it is the session's own.
+    fn sessions_temporary(&self) -> Option<&Path> {
+        (self.temporary_owner == TemporaryOwner::Session).then_some(self.temporary.as_path())
+    }
+
     /// The confinement for a session on this machine, or `None` where the platform has no base to
     /// build one on. Every platform the agent runs on has one.
     ///
@@ -257,9 +276,16 @@ impl Confinement {
         let scratch = scratch.filter(|row| {
             reaching_credentials(prelude, home.as_deref(), None, std::iter::once(row)).is_none()
         });
+        let (temporary, temporary_owner) = stage_temporary(prelude, temporary, scratch.as_deref());
+        if temporary_owner == TemporaryOwner::Session {
+            // A directory that cannot be made leaves the row naming a path nothing can be written
+            // in, which is a stage with no temporary directory and not one with the account's.
+            std::fs::create_dir_all(&temporary).ok();
+        }
         Self {
             prelude,
             temporary,
+            temporary_owner,
             home,
             state: None,
             place: signing::Place {
@@ -1374,7 +1400,9 @@ impl Confinement {
         {
             policy = with_security_cache(policy, cache);
         }
-        if self.temporary_held_back {
+        // Where the temporary directory is the session's own there is no row of the account's to
+        // drop, and the session's stays like the scratch directory's.
+        if self.temporary_held_back && self.temporary_owner == TemporaryOwner::Account {
             policy.writable.retain(|row| row.path != self.temporary);
         }
         policy
@@ -1533,6 +1561,7 @@ impl Confinement {
         // directory is one of, so holding it back there is a refusal inside a row and not a row
         // left out (SANDBOX-22).
         if self.temporary_held_back
+            && self.temporary_owner == TemporaryOwner::Account
             && !unasked.is_empty()
             && !policy.unwritable.contains(&self.temporary)
         {
@@ -2043,7 +2072,23 @@ impl Confinement {
             .map(ScratchDirectory::path)
     }
 
-    /// Why a stage cannot be started because of the session or scratch directory, if it cannot.
+    /// The session's own temporary directory, if its name now leads to a link or a file.
+    ///
+    /// It is made inside the scratch directory, which every stage may write, so a stage can put a
+    /// link at its name and the row written from it would then grant wherever it leads. Judged as
+    /// [`Confinement::scratch_linked`] judges the scratch directory: the name is not followed, and
+    /// a name that is gone or is a directory is not this. On Windows `symlink_metadata` reports a
+    /// junction as a link as well; that case is reasoned from the standard library and has not
+    /// been run there.
+    fn temporary_linked(&self) -> Option<&Path> {
+        let temporary = self.sessions_temporary()?;
+        std::fs::symlink_metadata(temporary)
+            .is_ok_and(|found| !found.is_dir())
+            .then_some(temporary)
+    }
+
+    /// Why a stage cannot be started because of a session, scratch or temporary directory, if it
+    /// cannot (SANDBOX-18).
     fn directory_refusal(&self) -> Option<String> {
         if let Some((root, location)) = self.root_reaching_credentials() {
             return Some(match self.prelude {
@@ -2070,11 +2115,19 @@ impl Confinement {
                 linked.display()
             ));
         }
-        self.scratch_linked().map(|linked| {
-            format!(
+        if let Some(linked) = self.scratch_linked() {
+            return Some(format!(
                 "the session's scratch directory `{}` has been replaced by a link or a file, so a \
                  stage given it to write could reach wherever its name now leads; start a new \
                  session to be given another",
+                linked.display()
+            ));
+        }
+        self.temporary_linked().map(|linked| {
+            format!(
+                "the session's temporary directory `{}` has been replaced by a link or a file, \
+                 so a stage given it to write could reach wherever its name now leads; start a \
+                 new session to be given another",
                 linked.display()
             )
         })
@@ -2102,7 +2155,12 @@ impl Confinement {
         let identified = self.identified(step);
         let chosen = identified.as_ref().and_then(Identified::command);
         let environment = overlay(
-            effective_environment(command),
+            temporary_defaults(
+                std::env::vars_os().collect(),
+                self.sessions_temporary(),
+                command.get_envs(),
+                FOLD_CASE,
+            ),
             proxied
                 .iter()
                 .map(|(name, value)| (OsStr::new(name), Some(OsStr::new(value))))
@@ -2467,15 +2525,22 @@ pub fn change_notice(
 }
 
 /// `said` with the sentence that the person holds the temporary directory back, where a platform
-/// confines and the person did.
+/// confines, the person did and the setting does what the sentence says.
+///
+/// On Windows a session with a directory of its own is given a `temp` directory inside it in place
+/// of the account's temporary directory, and the setting changes nothing for that, so the sentence
+/// would be untrue and nothing is said. A Windows session with no directory of its own does have
+/// the account's directory held back and is not told so, which is less than is true.
 fn with_temporary_held_back_said(
     said: String,
     prelude: Option<Prelude>,
     held_back: bool,
 ) -> String {
-    match prelude.is_some() && held_back {
-        true => format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}"),
-        false => said,
+    match prelude {
+        Some(prelude) if held_back && prelude != Prelude::Windows => {
+            format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}")
+        }
+        _ => said,
     }
 }
 
@@ -3225,10 +3290,47 @@ const FOLD_CASE: bool = cfg!(windows);
 
 type Pair = (std::ffi::OsString, std::ffi::OsString);
 
-/// The variables `command` will start with: this process's, less the names removed and with the
-/// ones set.
-fn effective_environment(command: &Command) -> Vec<Pair> {
-    overlay(std::env::vars_os().collect(), command.get_envs(), FOLD_CASE)
+/// The names Windows programs read for where to put a temporary file.
+const TEMPORARY_NAMES: [&str; 2] = ["TEMP", "TMP"];
+
+/// The variables a command starts with: `held`, less the names `changes` removes and with the ones
+/// it sets, and `TEMP` and `TMP` naming `temporary` where there is one. They are set before
+/// `changes`, so a stage's own assignment of either wins, as `TMPDIR` is left to the line on the
+/// other platforms ([TRUST-14](../../../docs/specs/trust-map.md)). A name differing only in case is
+/// replaced, not kept beside them, where `fold_case` says variable names are compared that way.
+fn temporary_defaults<'a>(
+    held: Vec<Pair>,
+    temporary: Option<&'a Path>,
+    changes: impl Iterator<Item = (&'a std::ffi::OsStr, Option<&'a std::ffi::OsStr>)>,
+    fold_case: bool,
+) -> Vec<Pair> {
+    let held = match temporary {
+        Some(temporary) => overlay(
+            held,
+            TEMPORARY_NAMES
+                .iter()
+                .map(|name| (OsStr::new(name), Some(temporary.as_os_str()))),
+            fold_case,
+        ),
+        None => held,
+    };
+    overlay(held, changes, fold_case)
+}
+
+/// The directory stages are given to write temporary files in, and whose it is. On Windows with a
+/// scratch directory it is a directory inside that, so the account's temporary directory, which
+/// holds other programs' files and is not the session's, is a grant to no stage and no entry is
+/// written onto what is in it (SANDBOX-12). Everywhere else, and with no scratch directory, it is
+/// the account's `temporary`.
+fn stage_temporary(
+    prelude: Prelude,
+    temporary: PathBuf,
+    scratch: Option<&Path>,
+) -> (PathBuf, TemporaryOwner) {
+    match (prelude, scratch) {
+        (Prelude::Windows, Some(scratch)) => (scratch.join("temp"), TemporaryOwner::Session),
+        _ => (temporary, TemporaryOwner::Account),
+    }
 }
 
 /// `held` less every name `changes` removes or sets, plus the values it sets.
@@ -3809,6 +3911,153 @@ mod tests {
         assert!(!kept_out(), "kept out by describing the line");
         confined.policy(&cat, &described, &[]);
         assert!(kept_out(), "the line's own run kept nothing out");
+    }
+
+    /// SANDBOX-12 and the stage `$TMPDIR` clause of TRUST-14, on Windows: where the session has a
+    /// scratch directory, a stage is granted a `temp` directory inside it and not the account's
+    /// temporary directory, so no entry is written onto what other programs keep there. The
+    /// regressions it rejects are the account's directory still granted, the session's directory
+    /// not granted, and the directory chosen the same way on the other platforms, whose temporary
+    /// directory is the account's. A Windows confinement with no scratch directory is the control
+    /// that the account's directory is what is used when there is no session directory.
+    #[test]
+    fn a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts() {
+        // Nothing but a name is made here, in a directory this test removes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let scratch =
+            std::env::temp_dir().join(format!("bravebot-temp-row-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let scratch = canonical(&scratch);
+        let program = step("/usr/bin/make", &[]);
+        let written = |prelude: Prelude, scratch: Option<&Path>| -> Vec<PathBuf> {
+            Confinement::new(
+                prelude,
+                PathBuf::from("/account/temp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/work/project")],
+                scratch,
+            )
+            .policy(&program, Path::new("/work"), &[])
+            .writable
+            .iter()
+            .map(|row| row.path.clone())
+            .collect()
+        };
+
+        let own = written(Prelude::Windows, Some(&scratch));
+        assert!(own.contains(&scratch.join("temp")), "{own:?}");
+        assert!(scratch.join("temp").is_dir(), "the directory is made");
+        assert!(!own.contains(&PathBuf::from("/account/temp")), "{own:?}");
+
+        let without = written(Prelude::Windows, None);
+        assert!(
+            without.contains(&PathBuf::from("/account/temp")),
+            "{without:?}"
+        );
+
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let other = written(prelude, Some(&scratch));
+            assert!(
+                other.contains(&PathBuf::from("/account/temp")),
+                "{prelude:?}: {other:?}"
+            );
+            assert!(
+                !other.contains(&scratch.join("temp")),
+                "{prelude:?}: {other:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// SANDBOX-22 on Windows: where the session has a directory of its own, holding the temporary
+    /// directory back changes nothing for a stage, so its `temp` directory is written in every
+    /// mode and nothing refuses it, and the account's directory stays granted to no stage. The
+    /// regression it rejects is the setting dropping the session's row, as it drops the account's
+    /// on Linux and macOS, which leaves a Windows stage with no place to write a temporary file.
+    /// Run on a Windows prelude from any host, since the rows are decided by code every platform
+    /// runs. The bypass refusal of the directory is not reached on Windows, where no row is given
+    /// without a request, and the test asserts that nothing is refused there as well.
+    #[test]
+    fn holding_the_temporary_directory_back_leaves_a_windows_sessions_own_written() {
+        // Nothing but a name is made here, in a directory this test removes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let scratch =
+            std::env::temp_dir().join(format!("bravebot-temp-held-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let scratch = canonical(&scratch);
+        let session_temp = scratch.join("temp");
+        let program = step("/usr/bin/make", &[]);
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
+            for held_back in [false, true] {
+                let policy = Confinement::new(
+                    Prelude::Windows,
+                    PathBuf::from("/account/temp"),
+                    Some(Path::new(HOME)),
+                    vec![PathBuf::from("/work/project")],
+                    Some(&scratch),
+                )
+                .with_mode(mode)
+                .with_unasked_writes(true)
+                .with_temporary_held_back(held_back)
+                .policy(&program, Path::new("/work"), &[]);
+                let written: Vec<&PathBuf> = policy.writable.iter().map(|row| &row.path).collect();
+                assert!(
+                    written.contains(&&session_temp),
+                    "{mode:?} held back {held_back}: the session's temp is not written: {written:?}"
+                );
+                assert!(
+                    !written.contains(&&PathBuf::from("/account/temp")),
+                    "{mode:?} held back {held_back}: {written:?}"
+                );
+                assert!(
+                    !policy.unwritable.contains(&session_temp)
+                        && !policy.unwritable.contains(&PathBuf::from("/account/temp")),
+                    "{mode:?} held back {held_back}: a temporary directory is refused: {:?}",
+                    policy.unwritable
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// TRUST-14: on Windows a stage is told the session's temporary directory as `TEMP` and `TMP`,
+    /// whatever case the process holds them in, and a name the line itself sets is the line's. The
+    /// regressions it rejects are one of the two names not set, the held `Temp` kept beside the
+    /// new one, and the line's own value overwritten. With no directory, nothing is added.
+    #[test]
+    fn a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins() {
+        let held = || -> Vec<Pair> {
+            vec![
+                ("Temp".into(), "C:\\Users\\a\\AppData\\Local\\Temp".into()),
+                ("PATH".into(), "C:\\Windows".into()),
+            ]
+        };
+        let session = Path::new("C:\\scratch\\temp");
+        let value = |pairs: &[Pair], name: &str| -> Vec<String> {
+            pairs
+                .iter()
+                .filter(|(own, _)| own.to_string_lossy().eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.to_string_lossy().into_owned())
+                .collect()
+        };
+
+        let told = temporary_defaults(held(), Some(session), std::iter::empty(), true);
+        for name in ["TEMP", "TMP"] {
+            assert_eq!(value(&told, name), ["C:\\scratch\\temp"], "{name}");
+        }
+        assert_eq!(value(&told, "PATH"), ["C:\\Windows"]);
+
+        let own = [(OsStr::new("TMP"), Some(OsStr::new("D:\\mine")))];
+        let told = temporary_defaults(held(), Some(session), own.into_iter(), true);
+        assert_eq!(value(&told, "TMP"), ["D:\\mine"]);
+        assert_eq!(value(&told, "TEMP"), ["C:\\scratch\\temp"]);
+
+        let told = temporary_defaults(held(), None, std::iter::empty(), true);
+        assert_eq!(told, held());
     }
 
     /// A confinement on a platform that reads the machine except the credential locations.
@@ -4661,6 +4910,66 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&aside);
             }
         }
+    }
+
+    /// SANDBOX-18, SANDBOX-12: a Windows stage is refused once the session's own `temp` directory,
+    /// made inside the scratch directory a stage may write, leads to a link or a file, and not
+    /// when it is a directory or gone. The regression it rejects: a link put at `temp` by a stage
+    /// being granted as the directory it leads to. Run with a symlink on a Unix host; a junction on
+    /// Windows is the same name judged by `symlink_metadata`, and that case is reasoned only. The
+    /// same change on a platform whose temporary directory is the account's is the control that
+    /// the check does not apply there.
+    #[cfg(unix)]
+    #[test]
+    fn a_stage_is_refused_once_the_sessions_temporary_directory_leads_to_a_link_or_a_file() {
+        let refused_for_temporary = |confinement: &Confinement| match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. })
+                if detail.contains("session's temporary directory") =>
+            {
+                Some(detail)
+            }
+            _ => None,
+        };
+        let outside = somewhere_to_link_to("confine-temporary-linked");
+        for (change, put_there) in what_leads_elsewhere(&outside) {
+            let (session, confinement) = made_scratch(Prelude::Windows);
+            let temp = confinement.temporary.clone();
+            assert_eq!(confinement.temporary_owner, TemporaryOwner::Session);
+            assert!(temp.is_dir(), "the directory is made");
+            assert_eq!(
+                refused_for_temporary(&confinement),
+                None,
+                "refused before it was changed"
+            );
+
+            let aside = crate::testutil::moved_aside_and_replaced(&temp, put_there);
+            let refused = refused_for_temporary(&confinement)
+                .unwrap_or_else(|| panic!("{change} was not refused"));
+            assert!(refused.contains(&temp.display().to_string()), "{refused}");
+
+            let _ = std::fs::remove_file(&temp);
+            let _ = std::fs::remove_dir_all(&aside);
+            drop(session);
+        }
+        for (change, put_there) in what_leads_nowhere_else() {
+            let (session, confinement) = made_scratch(Prelude::Windows);
+            let temp = confinement.temporary.clone();
+            let aside = crate::testutil::moved_aside_and_replaced(&temp, put_there);
+            assert_eq!(
+                refused_for_temporary(&confinement),
+                None,
+                "{change} was refused"
+            );
+            let _ = std::fs::remove_dir_all(&aside);
+            drop(session);
+        }
+        let (session, confinement) = made_scratch(Prelude::Linux);
+        std::os::unix::fs::symlink(&outside, session.path().join("temp")).expect("a link");
+        assert_eq!(
+            refused_for_temporary(&confinement),
+            None,
+            "a platform whose temporary directory is the account's was refused for a link in the scratch directory"
+        );
     }
 
     /// SANDBOX-18: a scratch directory that was removed, or replaced by another directory, is no
@@ -9611,7 +9920,17 @@ mod tests {
                 ("/work/project/target/cargo".to_string(), vec!["build"]),
                 ("/var/scratch/ssh".to_string(), vec!["host"]),
                 ("/work/project/git".to_string(), vec!["push"]),
-                ("/tmp/curl".to_string(), vec![]),
+                // The directory stages write temporary files in: the account's, except on Windows
+                // with a session directory, where it is the session's own (SANDBOX-12).
+                (
+                    if what == "windows" {
+                        "/var/scratch/temp/curl"
+                    } else {
+                        "/tmp/curl"
+                    }
+                    .to_string(),
+                    vec![],
+                ),
                 (
                     format!("{HOME}/.cargo/registry/curl"),
                     vec!["https://a.example"],
@@ -11417,9 +11736,12 @@ mod tests {
     }
 
     /// SANDBOX-22: the description of `run` says the person held the temporary directory back,
-    /// on every platform that confines, and says nothing where they did not or nothing confines.
-    /// The regression it rejects is a description that still tells the planner the temporary
-    /// directory is written, which sends it to `mktemp` and heredocs that are then refused.
+    /// on Linux and macOS, and says nothing where they did not, where nothing confines or on
+    /// Windows. A Windows session with a directory of its own is given a `temp` directory in place
+    /// of the account's, and the setting changes nothing there, so the sentence would be untrue.
+    /// The regressions it rejects are a description that still tells the planner the temporary
+    /// directory is written, which sends it to `mktemp` and heredocs that are then refused, and
+    /// one that tells a Windows planner the directory is read-only when its own stays written.
     #[test]
     fn the_planner_is_told_the_temporary_directory_a_person_held_back() {
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
@@ -11432,11 +11754,19 @@ mod tests {
             )
             .expect("a statement");
             let held = with_temporary_held_back_said(said.clone(), Some(prelude), true);
-            assert!(
-                held.contains("holds the temporary directory back"),
-                "{held}"
-            );
-            assert!(held.starts_with(&said), "{held}");
+            match prelude {
+                Prelude::Windows => {
+                    assert_eq!(held, said, "{held}");
+                    assert!(!held.contains("read and not written"), "{held}");
+                }
+                _ => {
+                    assert!(
+                        held.contains("holds the temporary directory back"),
+                        "{held}"
+                    );
+                    assert!(held.starts_with(&said), "{held}");
+                }
+            }
             assert_eq!(
                 with_temporary_held_back_said(said.clone(), Some(prelude), false),
                 said

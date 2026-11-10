@@ -1287,7 +1287,7 @@ mod tests {
             let log = dir.join("log");
             let phase = if failing == "get" { "Error" } else { "Ready" };
             let script = format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") printf '{resolved}\\n' ;;\nesac\nexit 0\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") if [ /dev/fd/2 -ef /dev/null ]; then printf 'stderr-null %s\\n' \"$*\" >> '{log}'; fi; printf '{resolved}\\n' ;;\nesac\nexit 0\n",
                 log = log.display(),
             );
             let program = dir.join("openshell");
@@ -1425,6 +1425,40 @@ mod tests {
         let lookalike = executed(OsStr::new("tool-\u{FFFD}"));
         assert!(raw.ends_with(b"-- tool-\xff"), "{raw:?}");
         assert_ne!(raw, lookalike);
+    }
+
+    /// SERVERS-25: a server in an OpenShell sandbox has its stderr discarded when the caller asks
+    /// for that. The fake CLI records when its own stderr is the null device. The regression it
+    /// rejects: a start that gives `openshell sandbox exec` the caller's stderr whatever was asked,
+    /// which would let a server write to the terminal the caller draws its questions on. A piped
+    /// stderr is the control that shows the probe tells the two apart.
+    #[test]
+    fn a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox() {
+        use crate::process::Stream;
+        let recorded = |stderr: Stream| {
+            let cli = FakeCli::failing("none");
+            let shell = cli.shell(&[]);
+            let mut child = shell
+                .spawn(
+                    OsStr::new("python3"),
+                    &[],
+                    &SandboxPolicy::strict(),
+                    Streams {
+                        stdin: Stream::Null,
+                        stdout: Stream::Null,
+                        stderr,
+                    },
+                    Environment::Inherited,
+                )
+                .expect("started");
+            child.wait().expect("the fake CLI exits");
+            cli.lines()
+                .into_iter()
+                .filter(|line| line.starts_with("stderr-null sandbox exec"))
+                .count()
+        };
+        assert_eq!(recorded(Stream::Null), 1);
+        assert_eq!(recorded(Stream::Piped), 0);
     }
 
     #[test]

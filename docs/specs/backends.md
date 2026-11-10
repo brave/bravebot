@@ -1278,6 +1278,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
 `verified-by: bravebot_agent::backend::the_xai_account_reads_no_level_is_one_service_and_is_asked_for_the_name_after_its_identifier`
+`verified-by: bravebot_tui::app::models::a_model_that_refused_a_level_is_listed_as_reading_none`
 
 
 <a id="BACKEND-23"></a>

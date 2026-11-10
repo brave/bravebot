@@ -5075,13 +5075,15 @@ fn a_denied_file_is_not_read_through_a_second_path_to_the_tree() {
     std::fs::create_dir(scratch.path.join("src")).unwrap();
     std::fs::write(scratch.path.join("src/a.md"), "SECRET_TOKEN=hunter2").unwrap();
     std::fs::write(scratch.path.join("src/b.md"), "PUBLIC_NOTE=daylight").unwrap();
-    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let second = format!(
         "/System/Volumes/Data{}",
         workspace.root().to_str().expect("utf-8 root")
     );
-    workspace
-        .add_directory(&second)
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
         .expect("the second path opens");
     let call = format!(r#"{{"path":"{second}/src/a.md"}}"#);
     let control = format!(r#"{{"path":"{second}/src/b.md"}}"#);
@@ -5113,13 +5115,15 @@ fn a_denied_file_is_not_written_or_edited_through_a_second_path_to_the_tree() {
     let scratch = Scratch::new("permissions-write-denied-through-a-firmlink");
     std::fs::create_dir(scratch.path.join("src")).unwrap();
     std::fs::write(scratch.path.join("src/a.md"), "SECRET_TOKEN=hunter2").unwrap();
-    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let second = format!(
         "/System/Volumes/Data{}",
         workspace.root().to_str().expect("utf-8 root")
     );
-    workspace
-        .add_directory(&second)
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
         .expect("the second path opens");
     let write = format!(r#"{{"path":"{second}/src/a.md","contents":"overwritten"}}"#);
     let edit =
@@ -5162,7 +5166,11 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
         if !aliases::prepare(&scratch.path, row) {
             continue;
         }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .expect("the second path opens");
+        let spelled = aliases::spelling(workspace.root(), row);
         let folds_case = bravebot_agent::workspace::trust_store(workspace.root()).folds_case();
         let denying = |verb: &str| {
             let (permissions, rejected) = Permissions::parse(
@@ -5201,10 +5209,10 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
         };
 
         assert!(
-            reads(rules(&[], &[], &[]), row.alias),
+            reads(rules(&[], &[], &[]), &spelled),
             "{}: {:?} does not open without a rule, so a refusal shows nothing",
             row.kind,
-            row.alias
+            spelled
         );
         assert!(
             reads(denying("Read"), aliases::CONTROL)
@@ -5218,7 +5226,7 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
             row.kind
         );
         let covered =
-            !reads(denying("Read"), row.alias) && !replaces(denying("Edit"), row.alias, row.alias);
+            !reads(denying("Read"), &spelled) && !replaces(denying("Edit"), &spelled, row.alias);
         aliases::expect(row, aliases::Consumer::DenyRule, covered);
     }
 }
@@ -10312,12 +10320,281 @@ fn a_stale_edit_is_refused() {
 
     let _first = received.recv().unwrap();
     let second = received.recv().unwrap();
-    assert!(second.contains("changed after it was read; read it again before editing"));
+    assert!(second.contains("may have changed while the user was being asked about it"));
 
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
         "stale\n"
     );
+}
+
+/// TRUST-4: a `run` line that starts while the person is asked about overwriting a file voids the
+/// yes, whether or not the line touched the file. Nothing tells the file authority which files a
+/// program rewrote, so the count of lines started is the only sign, and a yes drawn before it is
+/// not the yes for the file as it now is. The file keeps its bytes and the planner is told to
+/// repeat the call. With `starts` false the same yes is spent, so a write that never happens
+/// cannot pass the test.
+///
+/// Returns what the file held afterwards and what the planner was told.
+fn write_file_while_a_program_starts(starts: bool) -> (String, String) {
+    let scratch = Scratch::new(&format!("write-program-{starts}"));
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"a.txt","contents":"replaced\n"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        }),
+    };
+    let task = Task::new("replace a.txt").with_file_authority(authority);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        told,
+    )
+}
+
+/// Rejects a write approval that ignores the count of `run` lines started, which is how the
+/// approval was compared before TRUST-4 named the count for every approval of a write.
+#[test]
+fn a_run_that_started_while_a_write_was_being_asked_voids_the_yes() {
+    let (kept, told) = write_file_while_a_program_starts(true);
+    assert_eq!(kept, "original\n", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+}
+
+/// The control for the test above: with no line started, the same yes is spent and the file is
+/// written, so a test that never wrote could not pass.
+#[test]
+fn a_write_is_made_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told) = write_file_while_a_program_starts(false);
+    assert_eq!(kept, "replaced\n", "the approved write did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// As [`write_file_while_a_program_starts`], for a picture written by reference (WRITE-9).
+fn picture_write_while_a_program_starts(starts: bool) -> (Vec<u8>, String) {
+    let scratch = Scratch::new(&format!("picture-program-{starts}"));
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("copy.png"), b"original").unwrap();
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        }),
+    };
+    let task = Task::new("keep a copy of the screenshot").with_file_authority(authority);
+
+    let (bodies, _sink) = a_turn_that_reads_a_picture_for(
+        &scratch,
+        &task,
+        bravebot_core::trust::TrustStore::new("/work"),
+        "shot.png",
+        vec![tool_request(
+            "write_file",
+            r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+        )],
+        &mut confirmer,
+    );
+    (
+        std::fs::read(scratch.path.join("copy.png")).unwrap(),
+        bodies.last().expect("the planner was told").clone(),
+    )
+}
+
+/// Rejects a picture write that compares the path's revision alone, so a line that started while
+/// the person was asked does not void the yes.
+#[test]
+fn a_run_that_started_while_a_picture_write_was_being_asked_voids_the_yes() {
+    let (kept, told) = picture_write_while_a_program_starts(true);
+    assert_eq!(kept, b"original", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+}
+
+/// The control for the test above: the same yes is spent when no line started.
+#[test]
+fn a_picture_is_written_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told) = picture_write_while_a_program_starts(false);
+    assert_eq!(kept, a_png(), "the approved picture did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// As [`write_file_while_a_program_starts`], for a download (DOWNLOAD-2). Returns the file's
+/// bytes, what the planner was told and the names left in the directory.
+fn download_while_a_program_starts(starts: bool) -> (Vec<u8>, String, Vec<String>) {
+    let scratch = Scratch::new(&format!("download-program-{starts}"));
+    std::fs::write(scratch.path.join("data.bin"), b"original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, _count) = serve_raw(raw_reply("application/octet-stream", b"new"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(trusting_the_workspace());
+    let started = authority.clone();
+    let mut confirmer = ApprovesFetchesAndWrites {
+        on_write: Some(Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        })),
+        ..Default::default()
+    };
+    let task = Task::new("refresh the data").with_file_authority(authority);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read(scratch.path.join("data.bin")).unwrap(),
+        told,
+        names_in(&scratch.path),
+    )
+}
+
+/// Rejects a download approval that compares the path's revision alone, so a line that started
+/// while the person was asked does not void the yes. No staging file is left behind.
+#[test]
+fn a_run_that_started_while_a_download_was_being_asked_voids_the_yes() {
+    let (kept, told, names) = download_while_a_program_starts(true);
+    assert_eq!(kept, b"original", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+    assert_eq!(names, ["data.bin"], "a staging file was left behind");
+}
+
+/// The control for the test above: the same yes is spent when no line started.
+#[test]
+fn a_download_is_saved_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told, _) = download_while_a_program_starts(false);
+    assert_eq!(kept, b"new", "the approved download did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// As [`write_file_while_a_program_starts`], for an edit. The file is not touched while the person
+/// is asked, so the bytes the edit was drawn on are the bytes on disk and only the count of lines
+/// started says the yes may be about something else.
+fn edit_while_a_program_starts(starts: bool) -> (String, String) {
+    let scratch = Scratch::new(&format!("edit-program-{starts}"));
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"original","new_text":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(trusting_the_workspace());
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        }),
+    };
+    let task = Task::new("edit a.txt")
+        .with_permissions(rules(&[], &["Edit(a.txt)"], &[]))
+        .with_file_authority(authority);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        told,
+    )
+}
+
+/// TRUST-4: a `run` line that started while the person was asked about an edit voids the yes even
+/// when the file still holds the bytes the diff was drawn on. Rejects an edit that compares the
+/// file's bytes and its revision but not the count of lines started, and one that takes the stamp
+/// after the answer.
+#[test]
+fn a_run_that_started_while_an_edit_was_being_asked_voids_the_yes() {
+    let (kept, told) = edit_while_a_program_starts(true);
+    assert_eq!(kept, "original\n", "a voided yes edited the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+}
+
+/// The control for the test above: with no line started, the same yes is spent and the edit lands,
+/// so a test that never edited could not pass.
+#[test]
+fn an_edit_is_made_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told) = edit_while_a_program_starts(false);
+    assert_eq!(kept, "replaced\n", "the approved edit did not land");
+    assert!(!told.contains("may have changed"), "{told}");
 }
 
 /// An edit whose file is replaced by a link out of the workspace while the person is asked about it
@@ -42628,6 +42905,170 @@ fn a_trusted_file_is_not_offered_for_vouching() {
     );
 }
 
+/// R33 (d). A yes to a vouch writes a rule about the name asked, which changes nothing for a file
+/// the map distrusts under another of its names (TRUST-2), so the question is not put. The
+/// regression it rejects: deciding the offer under the typed name alone, which asks the person a
+/// question whose answer is thrown away. The controls are a file with one name and a hard link
+/// pair that no rule is about, which are offered.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_to_a_distrusted_file_is_not_offered_for_vouching() {
+    let scratch = Scratch::new("vouch-hard-link");
+    for directory in ["linked", "plain", "pair"] {
+        std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    }
+    std::fs::write(scratch.path.join("fetched.txt"), "one\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("fetched.txt"),
+        scratch.path.join("linked/copy.txt"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("plain/single.txt"), "two\n").unwrap();
+    std::fs::write(scratch.path.join("pair/a.txt"), "three\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("pair/a.txt"),
+        scratch.path.join("pair/b.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"linked/copy.txt"}"#),
+        tool_request("read_file", r#"{"path":"plain/single.txt"}"#),
+        tool_request("read_file", r#"{"path":"pair/a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = VouchesForFiles::new(false);
+    let offered = confirmer.offered.clone();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.distrust("fetched.txt");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let asked: Vec<String> = offered
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert_eq!(
+        asked,
+        ["plain/single.txt", "pair/a.txt"],
+        "the offers made were not exactly the files a yes could vouch for"
+    );
+}
+
+/// R33 (e), CMDLINE-8, TRUST-2. An audited line that reads a file by a name the map has no rule
+/// about, whose hard link or symbolic link the map distrusts, is not read-proven trusted: the
+/// operand is asked about under every name the file has. Rejects labelling the operand by its
+/// spelling alone, which let `wc -l linked/copy.txt` run unasked and print as trusted text. The
+/// controls are a file with one name and a hard link pair no rule is about, which stay unasked.
+#[cfg(unix)]
+#[test]
+fn an_audited_line_reading_another_name_of_a_distrusted_file_is_asked_about() {
+    let scratch = Scratch::new("run-operand-other-names");
+    for directory in ["linked", "plain", "pair"] {
+        std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    }
+    std::fs::write(scratch.path.join("fetched.txt"), "one\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("fetched.txt"),
+        scratch.path.join("linked/hard.txt"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../fetched.txt", scratch.path.join("linked/soft.txt")).unwrap();
+    std::fs::write(scratch.path.join("plain/single.txt"), "two\n").unwrap();
+    std::fs::write(scratch.path.join("pair/a.txt"), "three\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("pair/a.txt"),
+        scratch.path.join("pair/b.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let lines = [
+        "wc -l linked/hard.txt",
+        "wc -l linked/soft.txt",
+        "wc -l plain/single.txt",
+        "wc -l pair/b.txt",
+    ];
+    let mut replies: Vec<String> = lines
+        .iter()
+        .map(|command| {
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": command }).to_string(),
+            )
+        })
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = confirmer.seen.clone();
+    let mut trust = trusting_the_workspace();
+    trust.distrust("fetched.txt");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("count them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = format!("{:?}", seen.lock().unwrap());
+    for distrusted in ["linked/hard.txt", "linked/soft.txt"] {
+        assert!(
+            asked.contains(distrusted),
+            "a line reading another name of a distrusted file ran unasked: {distrusted}"
+        );
+    }
+    for control in ["plain/single.txt", "pair/b.txt"] {
+        assert!(
+            !asked.contains(control),
+            "a file no rule distrusts was put to a person: {control}"
+        );
+    }
+    let bodies = every_request(&received);
+    let last = bodies.last().expect("requests were made");
+    for control in ["1 plain/single.txt", "1 pair/b.txt"] {
+        assert!(
+            last.contains(control),
+            "the control line did not print as text: {control}"
+        );
+    }
+}
+
 /// Asked once per path per turn. A planner retrying a read it was refused must not put the same
 /// question up again.
 #[test]
@@ -60608,6 +61049,9 @@ struct ApprovesFetchesAndWrites {
     hop_urls: Vec<String>,
     /// Words sent with each answer to a write.
     note: Option<&'static str>,
+    /// Run when a write is put to it, as something else on the machine can act while a person
+    /// reads the prompt.
+    on_write: Option<Box<dyn FnMut() + Send>>,
     /// Every question about letting vetted content through, which it refuses. A test of a release
     /// nobody is asked about reads this to say no question was put.
     vets: Vec<bravebot_agent::confirm::VetRequest>,
@@ -60628,6 +61072,9 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
         self.writes.push(request.clone());
+        if let Some(on_write) = &mut self.on_write {
+            on_write();
+        }
         let decision = if self.declines_writes {
             bravebot_agent::WriteDecision::reject()
         } else {
@@ -65826,6 +66273,26 @@ fn a_turn_that_reads_a_picture_in(
     then: Vec<String>,
     confirmer: &mut RecordingConfirmer,
 ) -> (Vec<String>, RecordingSink) {
+    a_turn_that_reads_a_picture_for(
+        scratch,
+        &Task::new("keep a copy of the screenshot"),
+        trust,
+        source,
+        then,
+        confirmer,
+    )
+}
+
+/// As [`a_turn_that_reads_a_picture_in`], running `task`, for a test that gives the task a file
+/// authority its confirmer also holds.
+fn a_turn_that_reads_a_picture_for<C: bravebot_agent::Confirmer + Send>(
+    scratch: &Scratch,
+    task: &Task,
+    trust: bravebot_core::trust::TrustStore,
+    source: &str,
+    then: Vec<String>,
+    confirmer: &mut C,
+) -> (Vec<String>, RecordingSink) {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let mut replies = vec![tool_request(
         "read_file",
@@ -65842,7 +66309,7 @@ fn a_turn_that_reads_a_picture_in(
         &config,
         &egress,
         &workspace,
-        &Task::new("keep a copy of the screenshot"),
+        task,
         &mut bravebot_agent::Conversation::new(),
         confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -93476,4 +93943,259 @@ fn a_respelled_file_nobody_vouched_for_is_a_reference_and_is_offered_for_a_vouch
         1,
         "the vouch was not offered for the file opened"
     );
+}
+
+/// Guards every test below that points the diagnostic log at a real directory, so two of them
+/// configuring it at once do not race (DIAG-7).
+static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A server that writes `sent` under a stated `Content-Length` of `announced`, which is larger,
+/// then calls `when_quiet` once that much is on the wire, and holds the connection open without
+/// writing the rest, so a client reading the announced length sees the body cut rather than
+/// finished.
+///
+/// As `serve_stalled_body_then` in `crates/net/tests/egress.rs`: the hook is how a test acts at a
+/// moment the client is known to be reading, which nothing on the client's side says.
+fn serve_stalled_raw_body_then(
+    content_type: &'static str,
+    announced: usize,
+    sent: &'static [u8],
+    when_quiet: impl FnOnce() + Send + 'static,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if line == "\r\n" || line == "\n" {
+                break;
+            }
+            line.clear();
+        }
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {announced}\r\n\r\n"
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(sent);
+        let _ = stream.flush();
+        when_quiet();
+        thread::sleep(std::time::Duration::from_secs(60));
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Points the diagnostic log at a scratch directory for the duration of `body`, and returns what
+/// was written to it. Serialised against every other test that does the same (`DIAG_LOG`).
+fn with_diagnostic_log(body: impl FnOnce()) -> String {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let _unconfigure = Unconfigure;
+
+    body();
+
+    std::fs::read_dir(dir.path().join("logs"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// DIAG-7: `fetch_url` reads its body through `fetch_watching`, the same reader every other
+/// egress caller does, and nothing had pinned that a body it cuts reaches the log, or that a body
+/// cut after the turn was stopped does not.
+///
+/// The stop arrives from the server's own thread, a second and a half after the reply began and
+/// well before the long idle bound given the stopped case would end the read on its own, so what
+/// ends the read is the stop and not the clock. The unstopped case is given a short idle bound
+/// instead, so the same cut server produces a genuine body failure for it to log.
+#[test]
+fn a_fetch_urls_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped() {
+    for stopped in [false, true] {
+        let scratch = Scratch::new("diag-fetch-url");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let pressed = cancel.clone();
+        let site = serve_stalled_raw_body_then(
+            "text/plain",
+            100,
+            b"the beginning of an answer",
+            move || {
+                if stopped {
+                    thread::sleep(std::time::Duration::from_millis(1_500));
+                    pressed.cancel();
+                }
+            },
+        );
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page"}}"#)),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: if stopped {
+                std::time::Duration::from_secs(4)
+            } else {
+                std::time::Duration::from_millis(400)
+            },
+            reply: std::time::Duration::from_secs(30),
+            ..bravebot_net::Timeouts::default()
+        });
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        let log = with_diagnostic_log(|| {
+            let ended = turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("read the page"),
+                &mut bravebot_agent::Conversation::new(),
+                &mut bravebot_agent::confirm::ApproveFetches,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &cancel,
+            )
+            .outcome;
+            if stopped {
+                assert!(
+                    matches!(ended, Err(turn::TurnError::Cancelled { .. })),
+                    "stopped: {stopped}: {ended:?}"
+                );
+            } else {
+                ended.expect("the turn runs");
+            }
+        });
+
+        // Scoped to this test's own host: the diagnostic log's state is process-wide, so a
+        // transport failure an unrelated test makes while this one holds it configured would
+        // otherwise be counted as this test's own.
+        let host = format!("host={}", site.trim_start_matches("http://"));
+        let cut = log
+            .lines()
+            .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+            .count();
+        if stopped {
+            assert_eq!(
+                cut, 0,
+                "stopped: {stopped}: a request the person stopped was logged as a failure: {log}"
+            );
+        } else {
+            assert_eq!(
+                cut, 1,
+                "stopped: {stopped}: a cut body was not logged: {log}"
+            );
+        }
+    }
+}
+
+/// DIAG-7: `download_url` reads its body through `fetch_streaming`, the other reader besides
+/// `fetch_watching` that shares the same diagnostic-log decision, and nothing had pinned it either.
+///
+/// As the previous test, with a destination path the person is also asked to approve.
+#[test]
+fn a_downloads_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped() {
+    for stopped in [false, true] {
+        let scratch = Scratch::new("diag-download-url");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let pressed = cancel.clone();
+        let site = serve_stalled_raw_body_then(
+            "application/octet-stream",
+            10_000,
+            b"the beginning of a download",
+            move || {
+                if stopped {
+                    thread::sleep(std::time::Duration::from_millis(1_500));
+                    pressed.cancel();
+                }
+            },
+        );
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "download_url",
+                &format!(r#"{{"url":"{site}/blob.bin","path":"blob.bin"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: if stopped {
+                std::time::Duration::from_secs(4)
+            } else {
+                std::time::Duration::from_millis(400)
+            },
+            reply: std::time::Duration::from_secs(30),
+            ..bravebot_net::Timeouts::default()
+        });
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut confirmer = ApprovesFetchesAndWrites::default();
+
+        let log = with_diagnostic_log(|| {
+            let ended = turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("save the blob"),
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &cancel,
+            )
+            .outcome;
+            if stopped {
+                assert!(
+                    matches!(ended, Err(turn::TurnError::Cancelled { .. })),
+                    "stopped: {stopped}: {ended:?}"
+                );
+            } else {
+                ended.expect("the turn runs");
+            }
+        });
+
+        // Scoped to this test's own host: the diagnostic log's state is process-wide, so a
+        // transport failure an unrelated test makes while this one holds it configured would
+        // otherwise be counted as this test's own.
+        let host = format!("host={}", site.trim_start_matches("http://"));
+        let cut = log
+            .lines()
+            .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+            .count();
+        if stopped {
+            assert_eq!(
+                cut, 0,
+                "stopped: {stopped}: a request the person stopped was logged as a failure: {log}"
+            );
+        } else {
+            assert_eq!(
+                cut, 1,
+                "stopped: {stopped}: a cut body was not logged: {log}"
+            );
+        }
+        assert!(
+            !scratch.path.join("blob.bin").exists(),
+            "stopped: {stopped}: a cut download left a partial file"
+        );
+    }
 }

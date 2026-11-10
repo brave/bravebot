@@ -21,8 +21,10 @@ arguments. The result is the map text, with a count of what it left out.
 ### MAP-1: only files the trust map vouches for are opened, and the others are counted and never named
 
 Which files are vouched for is a question about the trust map, answered from the path alone, so no
-byte of an unvouched file is read and none can steer what is read. The map is therefore trusted
-whenever it is returned. What it says of the files it left out is a number.
+byte of an unvouched file is read and none can steer what is read. A file is asked about under every
+name it has, as a read of it is ([TRUST-2](../trust-map.md#TRUST-2)): a hard link to a file the map
+distrusts is left out, and so is a file whose other names could not be looked up. The map is
+therefore trusted whenever it is returned. What it says of the files it left out is a number.
 
 **Why.** A map is text the planner reads, built from many files. Opening an unvouched file to decide
 whether to show it lets that file choose what the planner sees, and a name or a declaration is
@@ -33,6 +35,7 @@ are left out instead.
 `verified-by: bravebot_agent::workspace::a_repo_map_holds_only_files_the_trust_map_vouches_for`
 `verified-by: bravebot_agent::workspace::a_repo_map_never_opens_a_file_nobody_vouched_for`
 `verified-by: bravebot_agent::turn::a_repo_map_shows_vouched_declarations_and_none_from_an_unvouched_file`
+`verified-by: bravebot_agent::workspace::a_repo_map_does_not_open_a_hard_link_to_a_distrusted_file`
 
 <a id="MAP-2"></a>
 ### MAP-2: a declaration is ranked by how many other vouched files mention its name

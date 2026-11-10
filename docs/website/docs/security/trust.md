@@ -522,14 +522,18 @@ All of these are deliberate.
   have answered `n`. The line the session opens with, `/status` and `/forget-trust` are what is left
   of it.
 
-- **A symlink or a hard link inside the project gives one file two names, and each name is its own
-  rule.** A rule is keyed on the path an operation spelled, while confinement resolves where that
-  path lands, and the two do not have to agree. So content written as untrusted through one name is
-  read back as trusted under the other, which is the one way the round trip in
-  [What a write does](#what-a-write-does) stays open. A second path to the same tree, such as a
-  macOS firmlink or a Linux bind mount, does the same once you have opened both. Spellings that differ
-  only in punctuation or letter case are a single rule, so this is about a link or a mount and not
-  about those. If a tree holds a link to somewhere else inside itself, that is a tree to say no to.
+- **A link or a mount that the lookup cannot see leaves one file with two names, and each name is its
+  own rule.** A rule is keyed on the path an operation spelled, while confinement resolves where that
+  path lands. On Linux and macOS a read, a write and a second writer are also checked under the other
+  names the file has: where a symlink lands, its hard links, and its name beneath a second path to
+  the same tree, such as a macOS firmlink or a Linux bind mount. Opening a second path to a tree
+  that is already open is refused, so that last case is a pair that became two paths after both were
+  open. So content written as untrusted through one name is read back as untrusted under the others.
+  That lookup stops at the search cap and at a directory it cannot list, and the file is then read
+  as untrusted. It is not made on Windows, so there a hard link or a second path to a tree is still
+  two rules, and content written as untrusted through one name is read back as trusted under the
+  other. Spellings that differ only in punctuation or letter case are a single rule. If a tree holds
+  a link to somewhere else inside itself, that is a tree to say no to.
 
 - **Confinement is settled before an operation runs, not while it runs.** Where a path lands is worked
   out by resolving it, and the read or the write happens after that. A tree already arranged to escape

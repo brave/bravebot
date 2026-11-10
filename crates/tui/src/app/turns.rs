@@ -798,7 +798,7 @@ pub(super) fn run_turn_animated(
         session.give_way_to_the_queue(Instant::now());
     }
 
-    end_aside_beside_a_turn(session);
+    leave_the_aside_at_the_end_of_a_turn(session, &cancel);
     session.set_turn_files(None);
     let finished = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The

@@ -273,6 +273,18 @@ impl Workspace {
             });
         }
 
+        // The same tree under another name: a macOS firmlink, a Linux bind mount. Its files would
+        // have two names, the name under the working directory and the name under this one, and the
+        // trust map and the writer reservation are asked about one. Refused here with the other
+        // refusals, since every door that opens a directory comes through this function (TRUST-9).
+        #[cfg(unix)]
+        if let Some(reason) = self.is_another_path_to_an_open_tree(&canonical) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason,
+            });
+        }
+
         if self.reaches_scratch(&canonical) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -329,9 +341,25 @@ impl Workspace {
     pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let canonical = self.resolve_directory(directory)?;
 
+        // Kept out before the directory is open, as it always was, so there is no moment when a
+        // stage may write a directory the programs list does not hold.
         bravebot_sandbox::programs::keep_out(&canonical);
         let mut added = locked(&self.added);
         if !added.iter().any(|open| open.path() == canonical) {
+            // Asked again under the lock: two opens of two paths to one tree both pass the check in
+            // `resolve_directory` while neither is in the list, and the second to take the lock
+            // would otherwise add the pair (TRUST-9).
+            #[cfg(unix)]
+            {
+                let held: Vec<PathBuf> =
+                    added.iter().map(|open| open.path().to_path_buf()).collect();
+                if let Some(reason) = self.refuse_a_second_path_among(&canonical, &held) {
+                    return Err(WorkspaceError::Invalid {
+                        path: directory.to_string(),
+                        reason,
+                    });
+                }
+            }
             // Recorded as the directory it is now, so a name that later leads elsewhere is not
             // taken for it (SANDBOX-18). A name that cannot be read as a directory is not opened.
             let made = ScratchDirectory::observed(canonical.clone()).ok_or_else(|| {
@@ -583,7 +611,7 @@ impl Workspace {
             let mut added = locked(&self.added);
             let (overlapping, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut *added)
                 .into_iter()
-                .partition(|open| overlaps(open.path(), &canonical));
+                .partition(|open| self.overlaps_the_root(open.path(), &canonical));
             *added = kept;
             closed.extend(overlapping.iter().map(|open| open.path().to_path_buf()));
         }
@@ -594,6 +622,17 @@ impl Workspace {
             root: canonical,
             closed,
         })
+    }
+
+    /// Whether the added directory `open` overlaps the root `canonical` is about to become: the
+    /// same tree, or one holding the other, under the same spelling or another (TRUST-9). A second
+    /// path to the new root stays open otherwise, with every file under it named two ways.
+    fn overlaps_the_root(&self, open: &Path, canonical: &Path) -> bool {
+        #[cfg(unix)]
+        if Self::another_name_for_the_same_tree(canonical, open, self.identity) {
+            return true;
+        }
+        overlaps(open, canonical)
     }
 
     /// Close every directory added by name, leaving only the primary root.

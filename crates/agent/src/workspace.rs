@@ -19,6 +19,7 @@ use base64::Engine;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
+use bravebot_core::file_authority::Stamp;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{PathObserved, Policy};
 use bravebot_core::spelling::to_key;
@@ -113,8 +114,16 @@ mod volume;
 
 use error::{ENDS_CHECKOUTS, io_detail, read_failure};
 pub use error::{Remedy, WorkspaceError};
+pub(crate) use other_names::OtherKeys;
 #[cfg(unix)]
-use other_names::{LinkNames, directory_identity};
+use other_names::directory_identity;
+#[cfg(unix)]
+use other_names::distinct_identity;
+
+/// How a directory is told from another: the device and inode it is, or `None` where they cannot
+/// be read.
+#[cfg(unix)]
+type DirectoryIdentity = fn(&Path) -> Option<(u64, u64)>;
 pub(crate) use resolve::destination;
 pub use resolve::expand_home;
 use resolve::{named_home, refuse_unkeyable, written_below};
@@ -314,6 +323,15 @@ pub struct Workspace {
     /// standing refusal to override, and a session whose own directory went unreachable would fail
     /// every read and write in it (TRUST-16).
     reads_stay_inside: bool,
+    /// The device and inode of a directory, which is how two open directories are found to be one
+    /// tree under two names (TRUST-2, TRUST-9). The file system's answer unless a test supplies one,
+    /// so the rule is driven on a host that has no second path to a tree, such as one that has no
+    /// firmlink or bind mount.
+    ///
+    /// One function for the refusal to open a second path to an open tree and for the lookup of
+    /// a file's name under it, so the two cannot disagree about which directories are one.
+    #[cfg(unix)]
+    identity: DirectoryIdentity,
     /// Whether a name a run opens is judged as Windows reads it: the host's answer, and one a test
     /// supplies so the run tool's refusal is exercised on any host.
     windows_names: bool,
@@ -512,6 +530,8 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             reads_stay_inside: false,
+            #[cfg(unix)]
+            identity: directory_identity,
             windows_names: cfg!(windows),
             home: crate::home::profile(),
             state: crate::home::directory(),
@@ -598,6 +618,40 @@ impl Workspace {
     pub fn with_reads_kept_inside(mut self, kept: bool) -> Self {
         self.reads_stay_inside = kept;
         self
+    }
+
+    /// Decide which directories are the same one by `identity` in place of the file system's
+    /// answer, and by the file system's again for `None`. For a test of the rule where the host has
+    /// no second path to a tree (TRUST-2), and to open one that has, since the refusal of a second
+    /// path (TRUST-9) is what stands between a test and the pair it needs.
+    #[cfg(unix)]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_directory_identity(mut self, identity: Option<DirectoryIdentity>) -> Self {
+        self.identity = identity.unwrap_or(directory_identity);
+        self
+    }
+
+    /// Open `second`, which is another path to a directory this workspace holds open, beside the
+    /// directory it is a path to. Nothing where `second` is `None`, for a caller that goes through
+    /// a table whose rows are not all of this kind.
+    ///
+    /// For a test of what is done with a file that has two absolute names (TRUST-2). `/add-dir`
+    /// refuses the second path (TRUST-9), so it is opened while every path is a directory of its
+    /// own, and the file system's answer is back for everything after.
+    #[doc(hidden)]
+    pub fn with_second_path_open(mut self, second: Option<&str>) -> Result<Self, WorkspaceError> {
+        let Some(second) = second else {
+            return Ok(self);
+        };
+        #[cfg(unix)]
+        let identity = std::mem::replace(&mut self.identity, distinct_identity);
+        let opened = self.add_directory(second);
+        #[cfg(unix)]
+        {
+            self.identity = identity;
+        }
+        opened.map(|_| self)
     }
 
     /// Judge the names a run opens as Windows reads them, whatever the host.
@@ -803,14 +857,40 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        self.read_text_stamped(policy, path, reach)
+            .map(|(read, _)| read)
+    }
+
+    /// [`Workspace::read`] with the path's stamp, taken inside the boundary the bytes were read
+    /// in, so the stamp and the text describe one state of the map (TRUST-4).
+    ///
+    /// For a caller that puts the text to a person and later writes on their answer: the write is
+    /// refused unless the path still has this stamp.
+    pub fn read_stamped<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+    ) -> Result<(Labelled<String>, Stamp), WorkspaceError> {
+        self.read_text_stamped(policy, path, Reach::Confined)
+    }
+
+    fn read_text_stamped<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        reach: Reach,
+    ) -> Result<(Labelled<String>, Stamp), WorkspaceError> {
         // The gates read no file and decide nothing about one, so they run before the boundary is
         // taken. Inside it go the path lookup, the label lookup and the read, which have to agree.
         let relative = Self::gate_text_read(policy, path)?;
-        let (measured, read) = policy
-            .capture_files_shared(|policy| self.read_text_measured(policy, &relative, reach))?;
+        let (measured, read, stamp) = policy.capture_files_shared(|policy| {
+            let (measured, read) = self.read_text_measured(policy, &relative, reach)?;
+            let stamp = policy.file_authority().stamp_of(&self.trust_key(&relative));
+            Ok::<_, WorkspaceError>((measured, read, stamp))
+        })?;
         // After the boundary: the event reaches the sink while no writer waits for it.
         policy.record_path(Capability::FileRead, measured);
-        read
+        read.map(|text| (text, stamp))
     }
 
     fn read_text_captured<S: Sink>(
@@ -856,7 +936,13 @@ impl Workspace {
             Reach::Confined => self.resolve(relative).map_err(WorkspaceError::for_a_read)?,
             Reach::Dropped => self.resolve_attachment(relative, reach)?,
         };
-        let measured = policy.measure_path(&Capability::FileRead, &self.trust_key(relative))?;
+        let others = self.other_trust_keys(relative);
+        let measured = policy.measure_path_under_names(
+            &Capability::FileRead,
+            &self.trust_key(relative),
+            &others.keys,
+            others.complete,
+        )?;
         let label = measured.label();
 
         let read = std::fs::read(&resolved)
@@ -964,7 +1050,14 @@ impl Workspace {
             // The reach is the caller's, from the shape of the gesture that produced the path, and
             // never from anything the file holds.
             let resolved = self.resolve_attachment(&relative, reach)?;
-            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+            let others = self.other_trust_keys(&relative);
+            let measured = policy.measure_path_under_names(
+                &Capability::FileRead,
+                &self.trust_key(&relative),
+                &others.keys,
+                others.complete,
+            )?;
+            let label = policy.record_path(Capability::FileRead, measured);
 
             // Only a picture a gesture dropped is scaled (DROP-4), and only where the kernel
             // labelled the file trusted, which a drop's grant does (DROP-2). The same bytes read by
@@ -1142,9 +1235,14 @@ impl Workspace {
                 reason: "the path was not trusted",
             })?;
 
+        let others = self.other_trust_keys(&relative);
         let (measured, read) = policy.capture_files_shared(|policy| {
-            let measured =
-                policy.measure_path(&Capability::FileRead, &self.trust_key(&relative))?;
+            let measured = policy.measure_path_under_names(
+                &Capability::FileRead,
+                &self.trust_key(&relative),
+                &others.keys,
+                others.complete,
+            )?;
             let read = read(
                 &relative,
                 measured.label(),
@@ -1540,7 +1638,13 @@ impl Workspace {
         let text = bytes
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .unwrap_or_default();
-        let label = policy.label_in_force(&self.trust_key(relative));
+        let others = self.other_trust_keys(relative);
+        let own = self.trust_key(relative);
+        let label = if policy.read_is_quarantined_under_names(&own, &others.keys, others.complete) {
+            bravebot_core::label::Label::untrusted_private()
+        } else {
+            policy.label_in_force(&own)
+        };
         (
             Labelled::new(text.clone(), read_label()),
             Labelled::new(text, label),
@@ -1619,26 +1723,36 @@ impl Workspace {
     /// changed in between, whether by another process or the user's editor, the approved diff no
     /// longer describes what would happen, so the write is refused rather than applied to
     /// text nobody reviewed.
+    ///
+    /// `read_at` is the stamp [`Workspace::read_stamped`] returned with `expected`. The write is
+    /// refused unless the path's stamp is still that one, so a `run` line that started while the
+    /// person was asked voids the approval even when it left the bytes as they were (TRUST-4).
     pub fn write_endorsed_if_unchanged<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
         expected: &str,
+        read_at: Stamp,
     ) -> Result<PathBuf, WorkspaceError> {
         // Checked before the write gates so a stale edit is reported as staleness rather than
-        // consuming the single-use endorsement. Reading the path is itself gated, below.
+        // consuming the single-use endorsement. Reading the path is itself gated, below. The stamp
+        // is compared here for the same reason, and again in the write, where it is atomic with
+        // entry.
         let relative = self.peek_relative(policy, path)?;
-        let revision = policy.capture_files(|policy, capture| {
+        policy.capture_files(|policy, capture| {
+            if read_at != capture.stamp_of(&self.trust_key(&relative)) {
+                return Err(WorkspaceError::Stale { path: relative });
+            }
             let promoted = policy.promote_confined_read("edit_file", "path", path)?;
             let captured = self.read_text_captured(policy, &promoted, Reach::Confined)?;
             let current = policy.read_trusted_content("edit_file", &captured)?;
             if current != expected {
                 return Err(WorkspaceError::Stale { path: relative });
             }
-            Ok(capture.revision_of(&self.trust_key(&relative)))
+            Ok(())
         })?;
-        self.write_endorsed_at_revision(policy, path, contents, Some(revision))
+        self.write_endorsed_at_revision(policy, path, contents, Some(read_at))
     }
 
     /// The path as a plain string, for a check made on the user's behalf.
@@ -1682,7 +1796,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
     ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
 
@@ -1692,7 +1806,7 @@ impl Workspace {
         let relative = policy.before_endorsed_destination("file_write", "path", path)?;
         policy.before_action("file_write", "contents", Role::Content, contents)?;
 
-        self.write_after_gates(policy, relative, contents, expected_revision)
+        self.write_after_gates(policy, relative, contents, expected)
     }
 
     /// Write a file. The path is routing; the contents are content.
@@ -1726,13 +1840,13 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         relative: String,
         contents: &Labelled<String>,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
     ) -> Result<PathBuf, WorkspaceError> {
         self.write_released(
             policy,
             relative,
             contents.label(),
-            expected_revision,
+            expected,
             |resolved, proof| std::fs::write(resolved, contents.clone().declassify(proof)),
         )
     }
@@ -1750,7 +1864,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         label: bravebot_core::label::Label,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
         fill: impl FnOnce(
             &mut std::fs::File,
             &bravebot_core::policy::Declassification,
@@ -1766,20 +1880,14 @@ impl Workspace {
             &Labelled::new(String::new(), label),
         )?;
 
-        self.write_released(
-            policy,
-            relative,
-            label,
-            expected_revision,
-            |resolved, proof| {
-                let parent = resolved
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."));
-                let mut staged = Staged::create_in(parent)?;
-                fill(staged.file(), proof)?;
-                staged.keep_as(resolved)
-            },
-        )
+        self.write_released(policy, relative, label, expected, |resolved, proof| {
+            let parent = resolved
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let mut staged = Staged::create_in(parent)?;
+            fill(staged.file(), proof)?;
+            staged.keep_as(resolved)
+        })
     }
 
     /// The part of a write every body shares: reserve the path, capture what was there, release
@@ -1787,17 +1895,37 @@ impl Workspace {
     ///
     /// `label` is the body's, which is what the file's recorded trust follows. The bytes are
     /// `put`'s to carry, behind the proof it is handed.
+    ///
+    /// `expected` is the stamp the person's approval was drawn on. It is compared whole, the one
+    /// place any approval of a write is checked: the revision alone would miss a `run` line that
+    /// started while the question was open (TRUST-4).
     fn write_released<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         relative: String,
         label: bravebot_core::label::Label,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
         put: impl FnOnce(&Path, &bravebot_core::policy::Declassification) -> std::io::Result<()>,
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let written = policy.file_authority().key(&self.trust_key(&relative));
         let folds = volume_folds_case(&self.root);
+        // Every other name of the file is recorded and reserved with this one (TRUST-4). The walk
+        // for them runs before the boundary is taken, since it reads directories.
+        let others = self.other_trust_keys(&relative);
+        if label.integrity == bravebot_core::label::Integrity::Untrusted {
+            for other in &others.keys {
+                crate::memory::record_before_write(
+                    self.memories(),
+                    &policy.file_authority().key(other),
+                    folds,
+                )
+                .map_err(|e| WorkspaceError::Io {
+                    path: relative.clone(),
+                    detail: e.to_string(),
+                })?;
+            }
+        }
         // Before the capture rather than inside it, so no other write waits on the record's sync.
         // A write refused after this leaves a line distrusting a path it did not change, which
         // is the direction that trusts nothing.
@@ -1815,18 +1943,22 @@ impl Workspace {
         // long read of a large file keeps no other capture waiting.
         let (effect, captured_trust) = policy.capture_files(|policy, capture| {
             let key = self.trust_key(&relative);
-            if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
+            if expected.is_some_and(|stamp| stamp != capture.stamp_of(&key)) {
                 return Err(WorkspaceError::Stale {
                     path: relative.clone(),
                 });
             }
-            let captured_trust = if policy.read_is_quarantined(&key) {
-                bravebot_core::label::Integrity::Untrusted
-            } else {
-                bravebot_core::label::Integrity::Trusted
-            };
+            let captured_trust =
+                if policy.read_is_quarantined_under_names(&key, &others.keys, others.complete) {
+                    bravebot_core::label::Integrity::Untrusted
+                } else {
+                    bravebot_core::label::Integrity::Trusted
+                };
+            let names: Vec<&str> = std::iter::once(key.as_str())
+                .chain(others.keys.iter().map(String::as_str))
+                .collect();
             let effect = capture
-                .begin(&key)
+                .begin_all(&names)
                 .ok_or_else(|| WorkspaceError::Contended {
                     path: relative.clone(),
                 })?;
@@ -1853,6 +1985,14 @@ impl Workspace {
         self.interrupt_after_write()?;
         effect.complete(label.integrity);
         crate::memory::after_write(policy, self.memories(), &written, folds);
+        for other in &others.keys {
+            crate::memory::after_write(
+                policy,
+                self.memories(),
+                &policy.file_authority().key(other),
+                folds,
+            );
+        }
         Ok(resolved)
     }
 
@@ -2507,40 +2647,29 @@ struct WalkRules<'a, 'p, S: Sink> {
     /// other name is looked up.
     #[cfg(unix)]
     any_rule: bool,
-    /// Whether a directory is open beside the root, so a file can have a name under another path
-    /// to the same tree.
+    /// What the walk looks up about the other names of its entries, once for the walk. The
+    /// labelling of what the walk reported reads the same value, so a tree with hard links is
+    /// walked for them once.
     #[cfg(unix)]
-    second_trees: bool,
-    /// The names of each file that has more than one, or `None` where the walk for them could not
-    /// finish.
-    #[cfg(unix)]
-    links: std::cell::OnceCell<Option<HashMap<(u64, u64), LinkNames>>>,
+    names: &'a other_names::WalkNames,
     /// What the rules said of each file with more than one name, so the walk asks once per file
     /// whichever of its names it meets first.
     #[cfg(unix)]
     verdicts: std::cell::RefCell<HashMap<(u64, u64), bool>>,
-    /// The device and inode of each directory asked about, so the directories above the entries
-    /// of one directory are looked up once for the walk.
-    #[cfg(unix)]
-    identities: std::cell::RefCell<HashMap<PathBuf, Option<(u64, u64)>>>,
 }
 
 impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
-    fn of(workspace: &Workspace, policy: &'a Policy<'p, S>) -> Self {
+    fn of(policy: &'a Policy<'p, S>, names: &'a other_names::WalkNames) -> Self {
         #[cfg(not(unix))]
-        let _ = workspace;
+        let _ = names;
         Self {
             policy,
             #[cfg(unix)]
             any_rule: policy.any_read_is_denied(),
             #[cfg(unix)]
-            second_trees: !workspace.added_directories().is_empty(),
-            #[cfg(unix)]
-            links: std::cell::OnceCell::new(),
+            names,
             #[cfg(unix)]
             verdicts: std::cell::RefCell::default(),
-            #[cfg(unix)]
-            identities: std::cell::RefCell::default(),
         }
     }
 
@@ -2580,16 +2709,10 @@ impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
     /// tree.
     #[cfg(unix)]
     fn covers_under_another_tree(&self, workspace: &Workspace, path: &Path) -> bool {
-        if !self.any_rule || !self.second_trees {
+        if !self.any_rule || !self.names.has_second_trees() {
             return false;
         }
-        let identity = |directory: &Path| {
-            *self
-                .identities
-                .borrow_mut()
-                .entry(directory.to_path_buf())
-                .or_insert_with(|| directory_identity(directory))
-        };
+        let identity = |directory: &Path| self.names.identity(workspace, directory);
         Workspace::any_name_denied(self.policy, workspace.same_tree_names_of(path, identity))
     }
 
@@ -2598,7 +2721,7 @@ impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
         if let Some(&verdict) = self.verdicts.borrow().get(&identity) {
             return verdict;
         }
-        let verdict = match self.links.get_or_init(|| workspace.multi_link_names()) {
+        let verdict = match self.names.link_index(workspace) {
             Some(index) => index
                 .get(&identity)
                 .is_some_and(|names| names.covered_by(|name| self.policy.read_is_denied(name))),
@@ -2703,7 +2826,8 @@ impl Workspace {
                 patterns,
                 under: &under,
             });
-            let rules = WalkRules::of(self, policy);
+            let walk_names = other_names::WalkNames::of(self);
+            let rules = WalkRules::of(policy, &walk_names);
             let mut collected = Collected {
                 files: &mut found,
                 stopped_at: &mut stopped_at,
@@ -2726,11 +2850,13 @@ impl Workspace {
             // not under the spelling the listing shows: that is where the walk landed, which a
             // link or a reach outside every open directory makes a different key from the one the
             // file was vouched under.
-            let keys: Vec<String> = found
-                .iter()
-                .chain(stopped_at.iter())
-                .map(|reported| self.key_below(&relative, &root, reported))
-                .collect();
+            //
+            // A file has other names than the one it was reached by, and a read of it is asked
+            // under all of them (TRUST-2), so the listing is too: it is no more trusted than a
+            // read of any file in it. Looked up from the metadata of the paths the walk built,
+            // outside the boundary like the walk, and it can only lower the label.
+            let mut keyed = self.walked_keys(&walk_names, &relative, &root, &found, true);
+            keyed.extend(self.walked_keys(&walk_names, &relative, &root, &stopped_at, false));
             // The walk above reads directory entries and no file's bytes, and runs outside the
             // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
             // names, and the label of a name is the map's answer for its path, taken inside the
@@ -2738,7 +2864,12 @@ impl Workspace {
             // has already distrusted its path, so the label can only be as trusted as the map says
             // of the path now. The event is emitted after the boundary is released.
             let measured = policy.capture_files_shared(|policy| {
-                policy.measure_paths(&Capability::FileRead, keys.iter().map(String::as_str))
+                policy.measure_paths_under_names(
+                    &Capability::FileRead,
+                    keyed.iter().map(|(key, others)| {
+                        (key.as_str(), others.keys.as_slice(), others.complete)
+                    }),
+                )
             })?;
             let label = policy.record_paths(Capability::FileRead, measured);
 
@@ -2812,7 +2943,8 @@ impl Workspace {
             });
             let mut paths = Vec::new();
             let mut ignored = Vec::new();
-            let rules = WalkRules::of(self, policy);
+            let walk_names = other_names::WalkNames::of(self);
+            let rules = WalkRules::of(policy, &walk_names);
             let mut collected = Collected {
                 files: &mut paths,
                 stopped_at: &mut ignored,
@@ -2837,28 +2969,32 @@ impl Workspace {
 
             // Each file is asked about under the name a read of it by the typed spelling would be
             // asked under, and not under the spelling it is opened by, which is where the walk
-            // landed (TRUST-18). The two differ through a link or a reach outside every open
-            // directory.
-            let keyed: Vec<(String, String)> = paths
+            // landed (TRUST-18), and under every other name it has (TRUST-2): a file one of whose
+            // names is distrusted is not opened, as a read of it is not.
+            let keyed: Vec<(String, String, OtherKeys)> = paths
                 .into_iter()
                 .map(|path| {
                     let key = self.key_below(&relative, &root, &path);
-                    (path, key)
+                    let others = self.walked_other_keys(&walk_names, &path, &key, true);
+                    (path, key, others)
                 })
                 .collect();
-            let (vouched, unvouched): (Vec<_>, Vec<_>) = keyed
-                .into_iter()
-                .partition(|(_, key)| !policy.read_is_quarantined(key));
-            let label = policy.observe_paths(
+            let (vouched, unvouched): (Vec<_>, Vec<_>) =
+                keyed.into_iter().partition(|(_, key, others)| {
+                    !policy.read_is_quarantined_under_names(key, &others.keys, others.complete)
+                });
+            let label = policy.observe_paths_under_names(
                 Capability::FileRead,
-                vouched.iter().map(|(_, key)| key.as_str()),
+                vouched.iter().map(|(_, key, others)| {
+                    (key.as_str(), others.keys.as_slice(), others.complete)
+                }),
             )?;
 
             let mut texts: Vec<(String, String)> = Vec::new();
             let mut skipped = 0usize;
             let mut bytes = 0usize;
             let mut truncated = hit_the_cap;
-            for (path, key) in vouched {
+            for (path, key, _) in vouched {
                 let absolute = self.root.join(&path);
                 let size = std::fs::metadata(&absolute).map_or(usize::MAX, |meta| {
                     usize::try_from(meta.len()).unwrap_or(usize::MAX)
@@ -3088,6 +3224,7 @@ impl Workspace {
 
             let root = self.resolve(&relative)?;
 
+            let walk_names = other_names::WalkNames::of(self);
             let mut paths = Vec::new();
             let (unvisited, withheld, links) = if root.is_file() {
                 // A file named as the target is the whole walk. `resolve` has already confined it
@@ -3110,7 +3247,7 @@ impl Workspace {
                     patterns,
                     under: &under,
                 });
-                let rules = WalkRules::of(self, policy);
+                let rules = WalkRules::of(policy, &walk_names);
                 let mut collected = Collected {
                     files: &mut paths,
                     stopped_at: &mut ignored,
@@ -3133,11 +3270,9 @@ impl Workspace {
 
             // Trusted only if every file the search reads is trusted. Each file is asked about
             // under the name the call typed, as a read of it would be, and not under the
-            // spelling the result shows (TRUST-18).
-            let keys: Vec<String> = paths
-                .iter()
-                .map(|reported| self.key_below(&relative, &root, reported))
-                .collect();
+            // spelling the result shows (TRUST-18), and under every other name it has, as a read
+            // of it is (TRUST-2).
+            let keyed = self.walked_keys(&walk_names, &relative, &root, &paths, true);
             // The walk above names files and reads none, so it runs outside the boundary and a
             // long one does not hold an effect out (TRUST-4). The boundary is taken once per file
             // below, around that file's bytes and the map's answer for its path together. The
@@ -3145,7 +3280,7 @@ impl Workspace {
             // was when its bytes were taken. Files the loop never reached were not read and are
             // asked about after it, as the whole set was before.
             let mut observed = policy.measure_paths(&Capability::FileRead, [])?;
-            let mut reached = keys.len();
+            let mut reached = keyed.len();
 
             // Collected one past the cap for the same reason as `walk`: reaching the limit has
             // to be distinguishable from happening to have exactly that many matches.
@@ -3175,8 +3310,12 @@ impl Workspace {
                 }
                 let absolute = self.root.join(path);
                 let (looked, read) = policy.capture_files_shared(|policy| {
+                    let (key, others) = &keyed[index];
                     (
-                        policy.measure_paths(&Capability::FileRead, [keys[index].as_str()]),
+                        policy.measure_paths_under_names(
+                            &Capability::FileRead,
+                            [(key.as_str(), others.keys.as_slice(), others.complete)],
+                        ),
                         std::fs::read_to_string(&absolute),
                     )
                 });
@@ -3271,9 +3410,11 @@ impl Workspace {
 
             // No bytes of these were taken, so there is no pairing of bytes and label for a
             // boundary to keep (TRUST-4), and none is held while the event is emitted.
-            let unread = policy.measure_paths(
+            let unread = policy.measure_paths_under_names(
                 &Capability::FileRead,
-                keys[reached..].iter().map(String::as_str),
+                keyed[reached..]
+                    .iter()
+                    .map(|(key, others)| (key.as_str(), others.keys.as_slice(), others.complete)),
             )?;
             let label = policy.record_paths(Capability::FileRead, observed.with(unread));
             Ok(Labelled::new(
@@ -4240,8 +4381,8 @@ impl Workspace {
     /// the ancestor that reaches that directory rather than the whole destination, since keying on
     /// the destination hands back the rule for a *different* name: a file in an untrusted subtree
     /// would be readable as trusted through a link inside it. One file with two names of its own
-    /// therefore still has two rules, which is a cost of keying on the name that the spec records
-    /// rather than one this closes.
+    /// therefore still has two rules, so the callers that decide a read or a write also ask under
+    /// the file's other names (`other_trust_keys`, TRUST-4).
     ///
     /// A `..` that is left in the name leaves it alone, for the same reason the kernel's own
     /// normalisation leaves one as written: confinement refuses such a path rather than resolving
@@ -5726,9 +5867,13 @@ mod tests {
         let second =
             Path::new("/System/Volumes/Data").join(workspace.root().strip_prefix("/").unwrap());
         let second = second.to_str().unwrap().to_string();
+        // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is
+        // a directory of its own, and the real identity is back for what the test asks.
+        workspace = workspace.with_directory_identity(Some(distinct_identity));
         workspace
             .add_directory(&second)
             .expect("the firmlink path opens");
+        let workspace = workspace.with_directory_identity(None);
 
         let typed = format!("{second}/src/a.md");
         assert_eq!(workspace.same_tree_names(&typed).unwrap(), ["src/a.md"]);
@@ -5737,6 +5882,350 @@ mod tests {
         assert_eq!(workspace.same_tree_names(&created).unwrap(), ["not-yet.md"]);
         assert_eq!(workspace.same_tree_names("not-yet.md").unwrap(), [created]);
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// The other names of a file are the keys the trust map and the writer reservation are asked
+    /// under (TRUST-2, TRUST-4): a hard link, the landing of a symbolic link, and the spelling under
+    /// another open directory that is the same directory. Rejects a lookup that returns only the
+    /// typed name, one that drops the second-path spelling, and one that reports a name complete
+    /// when a walk could not finish.
+    #[cfg(unix)]
+    #[test]
+    fn the_other_names_of_a_file_are_its_hard_links_landing_and_second_path() {
+        let (path, workspace) = tree("other-keys");
+        std::fs::create_dir(path.join("src")).unwrap();
+        std::fs::write(path.join("src/a.md"), "a").unwrap();
+        std::fs::hard_link(path.join("src/a.md"), path.join("src/hard.md")).unwrap();
+        std::os::unix::fs::symlink(path.join("src/a.md"), path.join("src/soft.md")).unwrap();
+
+        let a = workspace.other_trust_keys("src/a.md");
+        assert!(a.complete);
+        assert_eq!(a.keys, [workspace.trust_key("src/hard.md")]);
+        let soft = workspace.other_trust_keys("src/soft.md");
+        assert!(soft.complete);
+        assert!(
+            soft.keys.contains(&workspace.trust_key("src/a.md")),
+            "{soft:?}",
+        );
+        let plain = workspace.other_trust_keys("not-yet.md");
+        assert!(plain.complete && plain.keys.is_empty());
+
+        let capped = workspace.clone().with_search_caps(Some(1), None);
+        assert!(
+            !capped.other_trust_keys("src/a.md").complete,
+            "a walk that gave up was read as complete"
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// An edit approved against the revision of a file under the name it was typed with is stale
+    /// once the file is written through another name of it (TRUST-4): the write enters every name
+    /// of the file, so each one's revision moves, and the later write at the old revision is
+    /// refused. Rejects an entry that reserves and revises only the name the write was made
+    /// through.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_through_a_hard_link_makes_an_edit_approved_under_the_typed_name_stale() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let (path, workspace) = tree("revision-other-name");
+        std::fs::create_dir(path.join("src")).unwrap();
+        std::fs::write(path.join("src/a.md"), "a").unwrap();
+        std::fs::write(path.join("src/control.md"), "c").unwrap();
+        std::fs::hard_link(path.join("src/a.md"), path.join("src/hard.md")).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority);
+
+        let stamp_of = |policy: &mut Policy<'_, RecordingSink>, name: &str| {
+            policy.capture_files(|_, capture| capture.stamp_of(&workspace.trust_key(name)))
+        };
+        let approved_at = stamp_of(&mut policy, "src/a.md");
+        let control_at = stamp_of(&mut policy, "src/control.md");
+
+        workspace
+            .write_released(
+                &mut policy,
+                "src/hard.md".to_string(),
+                Label::trusted_public(),
+                None,
+                |resolved, _| std::fs::write(resolved, "through the link"),
+            )
+            .expect("written through the other name");
+
+        assert_ne!(
+            stamp_of(&mut policy, "src/a.md"),
+            approved_at,
+            "a write through src/hard.md left the stamp of src/a.md where it was"
+        );
+        assert_eq!(
+            stamp_of(&mut policy, "src/control.md"),
+            control_at,
+            "a write moved the stamp of a file it did not write"
+        );
+        let stale = workspace.write_released(
+            &mut policy,
+            "src/a.md".to_string(),
+            Label::trusted_public(),
+            Some(approved_at),
+            |_, _| Ok(()),
+        );
+        assert!(
+            matches!(&stale, Err(WorkspaceError::Stale { path }) if path == "src/a.md"),
+            "{stale:?}"
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// The firmlink name of the working directory is another key for every file in it, so a write
+    /// through one is the write of the other (TRUST-4).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_firmlink_name_of_the_working_directory_is_another_key_for_the_file() {
+        let (path, mut workspace) = tree("firmlink-keys");
+        std::fs::create_dir(path.join("src")).unwrap();
+        std::fs::write(path.join("src/a.md"), "a").unwrap();
+        let second =
+            Path::new("/System/Volumes/Data").join(workspace.root().strip_prefix("/").unwrap());
+        let second = second.to_str().unwrap().to_string();
+        // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is
+        // a directory of its own, and the real identity is back for what the test asks.
+        workspace = workspace.with_directory_identity(Some(distinct_identity));
+        workspace
+            .add_directory(&second)
+            .expect("the firmlink path opens");
+        let workspace = workspace.with_directory_identity(None);
+
+        let typed = format!("{second}/src/a.md");
+        let from_first = workspace.other_trust_keys("src/a.md");
+        assert!(from_first.complete);
+        assert!(from_first.keys.contains(&workspace.trust_key(&typed)));
+        let from_second = workspace.other_trust_keys(&typed);
+        assert!(from_second.keys.contains(&workspace.trust_key("src/a.md")));
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// Two real directories that the injected identity calls one tree, the way a macOS firmlink or
+    /// a Linux bind mount makes two paths one directory. Any other directory is itself.
+    #[cfg(unix)]
+    fn twin_identity(directory: &Path) -> Option<(u64, u64)> {
+        match directory.file_name().and_then(|name| name.to_str()) {
+            Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+            _ => directory_identity(directory),
+        }
+    }
+
+    /// A scratch directory holding `twin-a`, `twin-b`, `plain` and `twin-a/proj`, canonical.
+    #[cfg(unix)]
+    fn twins(name: &str) -> PathBuf {
+        let base = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&base);
+        for directory in ["twin-a/proj", "twin-b", "plain"] {
+            std::fs::create_dir_all(base.join(directory)).expect("scratch");
+        }
+        base.canonicalize().expect("canonical scratch")
+    }
+
+    /// TRUST-9, R17-R19: a directory that is another path to a tree the workspace holds open is
+    /// refused, whichever door opens it, because its files would have two names and the trust map
+    /// and the writer reservation are asked about one. The primary root and an added directory are
+    /// both such trees, and a directory that is no tree held open still opens. Rejects an
+    /// `add_directory` that compares paths only (the pair opens), one that compares only the
+    /// primary root (the second pair opens), and a refusal of everything (the control fails).
+    #[cfg(unix)]
+    #[test]
+    fn a_second_path_to_an_open_tree_is_refused_at_every_door() {
+        let base = twins("second-path-refused");
+        let (a, b, plain) = (base.join("twin-a"), base.join("twin-b"), base.join("plain"));
+        let named = |path: &Path| path.to_str().expect("utf-8 path").to_string();
+
+        let mut root_pair = Workspace::new(&a)
+            .expect("workspace")
+            .with_directory_identity(Some(twin_identity));
+        let refusal = root_pair
+            .add_directory(&named(&b))
+            .expect_err("a second path to the root opened");
+        assert!(
+            matches!(&refusal, WorkspaceError::Invalid { reason, .. } if reason.contains("another path")),
+            "{refusal:?}"
+        );
+        assert!(
+            root_pair.open_directory(&named(&b)).is_err(),
+            "the shared-reference door opened a second path to the root"
+        );
+        assert!(root_pair.added_directories().is_empty());
+        root_pair
+            .add_directory(&named(&plain))
+            .expect("a directory that is no second path to an open tree opens");
+
+        let mut added_pair = Workspace::new(&plain)
+            .expect("workspace")
+            .with_directory_identity(Some(twin_identity));
+        added_pair
+            .add_directory(&named(&a))
+            .expect("first of the pair");
+        added_pair
+            .add_directory(&named(&b))
+            .expect_err("a second path to an added directory opened");
+        assert_eq!(added_pair.added_directories(), std::slice::from_ref(&a));
+
+        let referenced = Workspace::new(&a)
+            .expect("workspace")
+            .with_directory_identity(Some(twin_identity))
+            .with_references(
+                &[bravebot_config::Reference {
+                    alias: "mirror".to_string(),
+                    path: named(&b),
+                    description: None,
+                }],
+                &[],
+            );
+        assert_eq!(referenced.references().count(), 0);
+        assert!(
+            matches!(
+                referenced.reference_problems(),
+                [(alias, ReferenceProblem::NotOpened(reason))]
+                    if alias == "mirror" && reason.contains("another path")
+            ),
+            "{:?}",
+            referenced.reference_problems()
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-9, R20: a path that is another spelling of a directory holding the project is
+    /// refused, since the project's files would be named under it as well, and the directory that
+    /// holds the project under its own spelling still opens. Rejects a refusal of every ancestor
+    /// and one that looks only at the root itself.
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_an_ancestor_of_the_root_is_refused_and_the_plain_ancestor_is_not() {
+        let base = twins("second-path-ancestor");
+        let (a, b, proj) = (
+            base.join("twin-a"),
+            base.join("twin-b"),
+            base.join("twin-a/proj"),
+        );
+        let mut workspace = Workspace::new(&proj)
+            .expect("workspace")
+            .with_directory_identity(Some(twin_identity));
+
+        workspace
+            .add_directory(b.to_str().expect("utf-8 path"))
+            .expect_err("another spelling of the directory holding the project opened");
+        workspace
+            .add_directory(a.to_str().expect("utf-8 path"))
+            .expect("the directory holding the project, under its own spelling, is not refused");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-9, R19: moving the working directory to a second path of an added directory closes
+    /// that directory, as moving it onto the directory itself does. Rejects a move that compares
+    /// paths only, which keeps the pair open with every file in it named two ways.
+    #[cfg(unix)]
+    #[test]
+    fn moving_the_root_onto_a_second_path_of_an_added_directory_closes_it() {
+        let base = twins("second-path-move");
+        let (a, b, plain) = (base.join("twin-a"), base.join("twin-b"), base.join("plain"));
+        let mut workspace = Workspace::new(&plain)
+            .expect("workspace")
+            .with_directory_identity(Some(twin_identity));
+        workspace
+            .add_directory(a.to_str().expect("utf-8 path"))
+            .expect("added");
+
+        let moved = workspace
+            .change_root(b.to_str().expect("utf-8 path"))
+            .expect("moved");
+        assert!(moved.closed.contains(&a), "{:?}", moved.closed);
+        assert!(workspace.added_directories().is_empty());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-9: a directory whose identity the file system does not give cannot be shown not to be
+    /// another path to an open tree, so it is refused with a reason that says so, at both doors; a
+    /// directory that was added and is gone since is no tree and refuses nothing. Rejects an
+    /// unreadable identity passing the check as "not the same".
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_whose_identity_cannot_be_read_is_refused_and_a_removed_one_is_not() {
+        let base = twins("second-path-unreadable");
+        let named = |path: &Path| path.to_str().expect("utf-8 path").to_string();
+        let plain = base.join("plain");
+
+        let mut blind = Workspace::new(base.join("twin-a"))
+            .expect("workspace")
+            .with_directory_identity(Some(|_| None));
+        let refusal = blind
+            .add_directory(&named(&plain))
+            .expect_err("a directory with no readable identity opened");
+        assert!(
+            matches!(&refusal, WorkspaceError::Invalid { reason, .. } if reason.contains("cannot be checked")),
+            "{refusal:?}"
+        );
+        assert!(blind.open_directory(&named(&plain)).is_err());
+        assert!(blind.added_directories().is_empty());
+
+        // The control: the file system's own answer opens it, and once it is gone from disk the
+        // next directory still opens.
+        let mut real = Workspace::new(base.join("twin-a")).expect("workspace");
+        real.add_directory(&named(&plain)).expect("opens");
+        std::fs::remove_dir_all(&plain).unwrap();
+        real.add_directory(&named(&base.join("twin-b")))
+            .expect("a removed open directory refused the next one");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// TRUST-9: the second-path check is made again under the lock on the added directories, so two
+    /// opens of two paths to one tree cannot both pass the check made before it. The first path is
+    /// put in the list from inside the first check, after that check has read the list and before
+    /// the lock is taken, which is the order the race produces. Rejects an `open_directory` that
+    /// adds what the earlier check passed.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_path_that_passed_the_first_check_is_refused_under_the_lock() {
+        type Race = (Arc<Mutex<Vec<ScratchDirectory>>>, PathBuf);
+        static RACE: Mutex<Option<Race>> = Mutex::new(None);
+
+        fn racing_identity(directory: &Path) -> Option<(u64, u64)> {
+            if let Some((added, other)) = locked(&RACE).take() {
+                locked(&added).push(ScratchDirectory::observed(other).expect("a directory"));
+            }
+            twin_identity(directory)
+        }
+
+        let base = twins("second-path-race");
+        let (a, b) = (base.join("twin-a"), base.join("twin-b"));
+        let workspace = Workspace::new(base.join("plain"))
+            .expect("workspace")
+            .with_directory_identity(Some(racing_identity));
+        *locked(&RACE) = Some((Arc::clone(&workspace.added), a.clone()));
+
+        let refusal = workspace
+            .open_directory(b.to_str().expect("utf-8 path"))
+            .expect_err("the second path was added beside the first");
+        assert!(
+            matches!(&refusal, WorkspaceError::Invalid { reason, .. } if reason.contains("another path")),
+            "{refusal:?}"
+        );
+        assert!(locked(&RACE).is_none(), "the first check never ran");
+        assert_eq!(
+            workspace.added_directories(),
+            std::slice::from_ref(&a),
+            "the second path was added beside the first"
+        );
+        let _ = std::fs::remove_dir_all(base);
     }
 
     /// A link whose name is not UTF-8 is not reported under its lossy lookalike (PATH-003): the
@@ -5795,7 +6284,7 @@ mod tests {
         let invalid = workspace.root().join(OsStr::from_bytes(b"x-\xff"));
         let lookalike = workspace.root().join("x-\u{FFFD}");
 
-        let mut names = LinkNames::default();
+        let mut names = crate::workspace::other_names::LinkNames::default();
         names.record(&workspace, &lookalike);
         assert_eq!(names.spelled, ["x-\u{FFFD}"]);
         assert!(

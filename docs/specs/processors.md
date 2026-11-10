@@ -16,7 +16,6 @@ guards:
   - symbol: Policy::read_a_number
   - symbol: Policy::compose_processor_input
   - symbol: Policy::write_belongs_here
-  - symbol: Policy::declassify_into_workspace
 documented-by: docs/website/docs/how-it-works.md
 ---
 
@@ -210,7 +209,19 @@ the destination is a path the planner named and a person approved, the write is 
 the slot had with its confidentiality lowered, and the effect that writes the file decodes it while
 the driver reads nothing ([WRITE-9](tools/write-file.md#WRITE-9)).
 
-**Never** reach for it for a network body, a command line, or a message to someone.
+Three functions of `Policy` lower confidentiality for a write into the workspace, each for one
+source and one destination:
+
+- `declassify_into_workspace` takes a quarantined slot and the path of the file it becomes.
+- `declassify_written_into_workspace` takes what the planner wrote, once it has been shown private
+  content, and the path `write_file` or `edit_file` writes it to.
+- `declassify_checkout_into_workspace` takes the bytes of a file in a delegate's checkout and the
+  path in the working directory it goes back to ([CHECKOUT-14](checkouts.md#CHECKOUT-14)).
+
+Their call sites are pinned in the `guards` of [labels.md](labels.md), so a new use is a change to
+that list.
+
+**Never** reach for any of them for a network body, a command line, or a message to someone.
 
 `verified-by: bravebot_core::policy::a_write_back_into_the_workspace_lowers_only_confidentiality`
 `verified-by: bravebot_agent::turn::a_picture_slot_is_written_as_the_file_it_encodes_after_the_person_approves`

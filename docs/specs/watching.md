@@ -542,9 +542,11 @@ Every `/btw` is a row in the agents list, before the delegates and in the order 
 prompt is drawn in and the answer in the shape a reply is. The row says whether the record keeps
 the answer.
 
-Neither half is anywhere else. Nothing about an aside is drawn among the turn's own lines, because
+Neither half is anywhere else. Nothing of an aside is drawn among the turn's own lines, because
 neither half is in the conversation: the planner has read neither the question nor the answer, and
-an exchange drawn in the transcript is one a reader takes the planner to have had.
+an exchange drawn in the transcript is one a reader takes the planner to have had. The two lines
+[WATCH-19](#WATCH-19) puts there for a question asked beside a turn hold a key and a fixed sentence,
+and none of the question's words or the answer's.
 
 **Why.** The answer exists nowhere else at all, so a row is not a convenience here: without it the
 person would have asked a question and been shown nothing. Both halves are drawn because a
@@ -581,17 +583,40 @@ person typed the question a moment ago, and the press that asked for it came fro
 which this mode does not draw. An answer left behind a key they have not been told about is not an
 answer.
 
+**Why a line for the answers that do not open the view.** Without one, the row is announced only by
+the `ctrl-l 1 to open` count on the bottom line, which sits among the parts a narrow terminal drops
+first and says nothing of a question. Without a line when the question goes out, nothing shows it
+was taken, and an answer can arrive with nothing to say so. A question stopped when its turn ends on
+its own discards an answer the person asked for and is owed, and leaves only a line that the question
+was stopped, which reads as a request that never got an answer.
+
 The wait answers keys, so the mode standing over the session when the answer lands is whichever
 one the person opened during it. The scroller is drawn in front of this view, so an answer under
 one is on no screen at all; and while this view is open the field the transcript's offset lives in
 holds an offset into a watched row's lines, so taking it for the turn's own view brings the
 conversation back somewhere it never was.
 
-An answer that lands beside a running turn is a row of the agents list and nothing more: the view
-is not opened, because the turn's own view is the one on the screen and the person is not waiting
-on the answer ([CMD-8](commands.md#CMD-8)). The row is there for the next time they open the mode.
+An answer that lands beside a running turn is a row of the agents list and a line in the transcript
+that says it is in and names the key that opens it. The view is not opened, because the turn's own
+view is the one on the screen and the person may be typing the next prompt ([CMD-8](commands.md#CMD-8)).
+A question typed beside a turn also puts a line in the transcript when it goes out, naming the same
+key. Both lines are fixed sentences of the driver's and hold no word of the question or the answer.
+
+A question still out when its turn ends by itself is answered in the same way once it is: a row and
+a line, with the view left closed, because the person is at the box and a view that took keys would
+take the prompt they type next. The line is not counted as something the finished turn's commands
+said, and the transcript is not moved to its tail under a person reading it back. The record is
+written again for the row. A question that fails says why, as one beside a turn does.
+
+While a question asked with no turn running is out, the working indicator calls it that, in place
+of the word it has for a turn. The name goes with the request, so the next summary or goal check is
+not called an answer.
 
 `verified-by: bravebot_tui::app::a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view`
+`verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
+`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
+`verified-by: bravebot_tui::app::a_btw_that_failed_after_the_turn_ended_says_why`
+`verified-by: bravebot_tui::state::a_question_asked_at_rest_is_named_on_the_indicator_until_it_ends`
 `verified-by: bravebot_tui::state::answering_a_question_beside_the_work_opens_the_view_on_it`
 `verified-by: bravebot_tui::state::answering_a_question_while_the_view_is_open_keeps_the_turns_own_view`
 `verified-by: bravebot_tui::state::answering_a_question_closes_a_history_search_opened_during_the_wait`

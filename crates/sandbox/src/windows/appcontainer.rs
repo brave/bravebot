@@ -8,9 +8,9 @@
 //! refused, and how an argument is written onto a command line.
 
 use super::{
-    Grant, OWNER_ONLY_DIRECTORY_SDDL, OWNER_ONLY_FILE_SDDL, capability_names, command_line,
-    environment_block, grants_to_write, paths_that_are_not_there, profile_name, refusal_for,
-    refusal_for_program, text_of,
+    Grant, JobLimits, OWNER_ONLY_DIRECTORY_SDDL, OWNER_ONLY_FILE_SDDL, capability_names,
+    command_line, environment_block, grants_to_write, job_limits, job_refusal,
+    paths_that_are_not_there, profile_name, refusal_for, refusal_for_program, text_of,
 };
 use crate::policy::{Capabilities, SandboxPolicy};
 use crate::process::{Attached, ConfinedChild, Environment, Stream, Streams};
@@ -46,8 +46,12 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
 };
 use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
@@ -70,6 +74,14 @@ const _: () = {
         super::grant_for_writing().mask
             == FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE
     );
+    // The limits are spelled in the parent module for the same reason, and held here to the
+    // platform's flags. A flag that came to name another right would put a limit on the job that
+    // is not the one the parent's tests check.
+    assert!(super::UILIMIT_HANDLES == JOB_OBJECT_UILIMIT_HANDLES);
+    assert!(super::UILIMIT_READCLIPBOARD == JOB_OBJECT_UILIMIT_READCLIPBOARD);
+    assert!(super::UILIMIT_WRITECLIPBOARD == JOB_OBJECT_UILIMIT_WRITECLIPBOARD);
+    assert!(super::UILIMIT_GLOBALATOMS == JOB_OBJECT_UILIMIT_GLOBALATOMS);
+    assert!(super::UILIMIT_DESKTOP == JOB_OBJECT_UILIMIT_DESKTOP);
 };
 
 /// `SE_GROUP_ENABLED`: the capability is in force in the token rather than merely listed.
@@ -213,7 +225,7 @@ impl Sandbox for AppContainerSandbox {
             &args,
             Wiring::Streams(streams),
             &environment,
-            policy.starting_in.as_deref(),
+            policy,
         )
     }
 
@@ -234,7 +246,7 @@ impl Sandbox for AppContainerSandbox {
             &args,
             Wiring::Handles(attached),
             &environment,
-            policy.starting_in.as_deref(),
+            policy,
         )
     }
 }
@@ -413,14 +425,17 @@ impl CreatedProcess {
     }
 }
 
-/// A job that ends every process in it when its last handle is closed.
+/// A job that ends every process in it when its last handle is closed, keeps them from the
+/// clipboard, the global atom table, other desktops and the USER handles of processes outside the
+/// job, and holds them to `limits.active_processes` where that is set.
 ///
-/// Not inheritable, and handed to no process, so the handle this returns is the last one.
+/// Not inheritable, and handed to no process, so the handle this returns is the last one. A limit
+/// the platform will not set is an error, which the caller refuses the process for.
 #[allow(
     unsafe_code,
     reason = "calls `CreateJobObjectW` and `SetInformationJobObject`"
 )]
-fn job_ending_on_close() -> Result<OwnedHandle> {
+fn job_with(limits: JobLimits) -> Result<OwnedHandle> {
     // SAFETY: both arguments are null, so the job is unnamed and has default security. The call
     // reads no memory.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -433,20 +448,42 @@ fn job_ending_on_close() -> Result<OwnedHandle> {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
 
-    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    // SAFETY: the handle is the job created above, still open. `limits` is a local of exactly
+    let mut extended = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    extended.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if let Some(processes) = limits.active_processes {
+        extended.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        extended.BasicLimitInformation.ActiveProcessLimit = processes;
+    }
+    // SAFETY: the handle is the job created above, still open. `extended` is a local of exactly
     // the size passed, alive for the call, and the call only reads it.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let limited = unsafe {
         SetInformationJobObject(
             job.as_raw_handle() as HANDLE,
             JobObjectExtendedLimitInformation,
-            std::ptr::from_ref(&limits).cast::<c_void>(),
+            std::ptr::from_ref(&extended).cast::<c_void>(),
             size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
     };
     if limited == 0 {
+        return Err(Error::last_os_error());
+    }
+
+    let interface = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+        UIRestrictionsClass: limits.ui,
+    };
+    // SAFETY: the handle is the job created above, still open. `interface` is a local of exactly
+    // the size passed, alive for the call, and the call only reads it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let restricted = unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle() as HANDLE,
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_ref(&interface).cast::<c_void>(),
+            size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+        )
+    };
+    if restricted == 0 {
         return Err(Error::last_os_error());
     }
     Ok(job)
@@ -901,15 +938,9 @@ fn start(
     args: &[String],
     wiring: Wiring,
     environment: &Environment,
-    directory: Option<&Path>,
+    policy: &SandboxPolicy,
 ) -> std::result::Result<ConfinedChild, SandboxError> {
-    let job = job_ending_on_close().map_err(|e| SandboxError::SetupFailed {
-        mechanism: "appcontainer",
-        detail: format!(
-            "the job that ends a process with everything it starts could not be made ({e}); \
-             refusing rather than starting a program whose children would outlive it"
-        ),
-    })?;
+    let job = job_with(job_limits(policy)).map_err(|e| job_refusal(&e))?;
     // Under the gate every start of a program takes. The copies of the streams the process is
     // given are inheritable until it exists, and a program the standard library starts on another
     // thread meanwhile inherits every inheritable handle this process holds, so it would hold this
@@ -922,7 +953,7 @@ fn start(
             args,
             wiring,
             environment,
-            directory,
+            policy.starting_in.as_deref(),
             job,
         )
     })

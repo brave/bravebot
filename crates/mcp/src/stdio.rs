@@ -6,8 +6,9 @@
 //! sandbox and refused outright when confinement cannot be established.
 //!
 //! Messages are newline-delimited JSON on stdin/stdout. Where the server's stderr goes is
-//! the caller's to say: ours, so its diagnostics stay visible, or nowhere, where they
-//! would draw over a screen.
+//! the caller's to say. Every front end sends it nowhere (SERVERS-25), because the bytes are the
+//! server's and a terminal acts on escape sequences in them; a caller may still pass the stream
+//! on, which the tests do to read it.
 
 use crate::protocol::{
     Listing, PromptListing, PromptResult, RpcNotification, RpcRequest, RpcResponse, ToolOutput,

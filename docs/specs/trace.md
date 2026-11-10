@@ -558,7 +558,7 @@ way as well as the control characters. The terminal client draws only control ch
 that is tracked in brave/bravebot#3829. The trail Ctrl-T shows in the terminal and the audit
 inspector in the desktop window draw the same text the same way, so a control character is shown as
 a picture and is not dropped by the screen or the page. The desktop bridge sends, beside each audit
-event, the words `bravebot_approval::printable` makes of each string field of the event, and the
+event, the words `bravebot_agent::confirm::printable` makes of each string field of the event, and the
 inspector draws the sentence from those words, so the window holds no list of the characters to
 picture. The inspector leaves the recorded evidence beside it as the audit file holds it.
 

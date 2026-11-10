@@ -3869,10 +3869,17 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // not land rather than reading as the file simply being quarantined.
     let mut approval_outlived = false;
 
+    // The other names the file has are looked up only for a quarantined file the person could be
+    // asked about. A read of it is asked under all of them (TRUST-2), and a yes writes a rule about
+    // one name, so where another is distrusted, or the lookup of them did not finish, a yes would
+    // change nothing and the question is not put.
     if policy.read_is_quarantined(&keyed)
         && media.is_none()
         && workspace.names_a_file(&proposed_path)
-        && policy.should_offer_vouch(&keyed)
+        && {
+            let other_names = workspace.other_trust_keys(&proposed_path);
+            policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
+        }
     {
         // Whether the question is put has already been settled. What the file holds shapes the
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
@@ -4839,7 +4846,9 @@ fn download_refused<S: Sink>(
 
 /// Whether a write to `path` is to be put to a person, asked about the name as given and about
 /// the name it lands on and the other names of a file with a hard link. A rule that asks, or a table that does, about either one is enough: the
-/// second name can add a question and never removes one (PERM-7).
+/// second name can add a question and never removes one (PERM-7). A file whose other names could
+/// not all be found (the walk stopped at its cap or could not list a directory) asks, since a name
+/// that was not found may be the one a rule is written about.
 pub(crate) fn write_needs_approval<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -4851,7 +4860,7 @@ pub(crate) fn write_needs_approval<S: Sink>(
         || workspace.landing(path).is_some_and(|landed| {
             policy.write_needs_approval(&landed, contents, Destination::Named)
         })
-        || workspace.hard_links(path).is_some_and(|names| {
+        || workspace.hard_links(path).is_none_or(|names| {
             names
                 .iter()
                 .any(|name| policy.write_needs_approval(name, contents, Destination::Named))
@@ -4860,13 +4869,14 @@ pub(crate) fn write_needs_approval<S: Sink>(
 
 /// Whether `path`, as named or as it lands after links are followed, is one a write asks about
 /// whatever the mode or a rule says (MODE-2, PERM-9). Read off the routing path alone, and the
-/// other names of a file with a hard link, which a link is not followed to.
+/// other names of a file with a hard link, which a link is not followed to. A file whose other
+/// names could not all be found is protected: one of them may be a protected path.
 pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
     bravebot_core::protected::is_protected(path)
         || workspace
             .landing(path)
             .is_some_and(|landed| bravebot_core::protected::is_protected(&landed))
-        || workspace.hard_links(path).is_some_and(|names| {
+        || workspace.hard_links(path).is_none_or(|names| {
             names
                 .iter()
                 .any(|name| bravebot_core::protected::is_protected(name))
@@ -5808,9 +5818,11 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     //
     // Taken shared: the capture reads a file, which can be large, and enters no effect, so it
     // runs beside other readers and still waits for an effect (TRUST-4). The revision is read
-    // inside the same boundary, so it and the bytes are of one state of the map.
-    let (existing, pre_image, other_encoding, replaces, approved_revision) = policy
-        .capture_files_shared(|policy| {
+    // inside the same boundary, so it and the bytes are of one state of the map. The stamp is the
+    // revision and the count of `run` lines started, so a program that started while the question
+    // was open voids the yes even if it touched no path the authority was told of (TRUST-4).
+    let (existing, pre_image, other_encoding, replaces, approved_at) =
+        policy.capture_files_shared(|policy| {
             let key = workspace.trust_key(&proposed_path);
             let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
@@ -5818,7 +5830,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 peeks.1,
                 peeks.2,
                 workspace.names_a_file(&proposed_path),
-                policy.file_authority().revision_of(&key),
+                policy.file_authority().stamp_of(&key),
             )
         });
     // A file the trust map vouches for that is text in an encoding other than UTF-8 is not replaced
@@ -6035,7 +6047,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // this exact value. Issued for the path the question named, which an edit does not change.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
-    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
+    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_at)) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -6139,10 +6151,10 @@ fn write_a_picture<S: Sink, C: Confirmer>(
     let label = body.label();
 
     // What the file holds now is not read: it is replaced whole, and the person is told so.
-    let (replaces, approved_revision) = policy.capture_files(|_, capture| {
+    let (replaces, approved_at) = policy.capture_files(|_, capture| {
         (
             workspace.names_a_file(&proposed_path),
-            capture.revision_of(&workspace.trust_key(&proposed_path)),
+            capture.stamp_of(&workspace.trust_key(&proposed_path)),
         )
     });
     let intent = Intent::of_a_write(replaces);
@@ -6202,7 +6214,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         policy,
         &path,
         label,
-        Some(approved_revision),
+        Some(approved_at),
         |file, proof| {
             use std::io::Write;
             // No detail of why it did not decode: the error would name a byte of the URI.
@@ -6936,8 +6948,10 @@ fn edit_file<S: Sink, C: Confirmer>(
     // produces is trusted text, so interpolating the error's own path would hand the planner
     // exactly what the reference exists to withhold, in the driver's own voice. The deny-rule
     // road in `path_argument` already swaps the same name in, through `denied_by_rule`.
-    let source = match workspace.read(policy, &path) {
-        Ok(contents) => contents,
+    // The stamp is taken in the boundary the read is, so it and the text are of one state of the
+    // map. The approval below is spent only on that stamp (TRUST-4).
+    let (source, read_at) = match workspace.read_stamped(policy, &path) {
+        Ok(read) => read,
         Err(e) => {
             return file_tool_problem(
                 policy,
@@ -7104,7 +7118,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     let occurrences = replaced.occurrences;
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
-    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
+    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current, read_at) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -10023,6 +10037,39 @@ struct Settled {
     covered_by_record: bool,
 }
 
+/// The other names each file a `run` line's audited steps read has, by the operand as the line
+/// spelled it (TRUST-2, CMDLINE-8): what [`Policy::learn_operand_names`] is given.
+///
+/// Asked of the file system about the paths the line itself named, as an attachment is
+/// ([`Workspace::other_trust_keys`]): where a symbolic link lands, the hard links of a file and its
+/// spelling under another open directory that is the same directory. The name is looked up
+/// relative to the root where it is inside it, because [`Workspace::resolve`] refuses an absolute
+/// name inside the root and the file would then be found to have no other name. An operand the
+/// lookup could not finish for is recorded as incomplete, which the policy reads as untrusted.
+/// Empty for a line that is not read-proven, which has no operands to label.
+///
+/// A directory named as an operand is looked up as the directory; the names of the files beneath
+/// it are not, which TRUST-2 lists as a cost.
+fn operand_names_of<S: Sink>(
+    policy: &Policy<'_, S>,
+    workspace: &crate::Workspace,
+    plan: &bravebot_core::command::Plan,
+) -> std::collections::HashMap<String, (Vec<String>, bool)> {
+    let mut found = std::collections::HashMap::new();
+    for operand in policy.operands_read_by(plan).unwrap_or_default() {
+        if found.contains_key(&operand) {
+            continue;
+        }
+        let looked_up = match std::path::Path::new(&operand).strip_prefix(workspace.root()) {
+            Ok(relative) => relative.to_string_lossy().into_owned(),
+            Err(_) => operand.clone(),
+        };
+        let others = workspace.other_trust_keys(&looked_up);
+        found.insert(operand, (others.keys, others.complete));
+    }
+    found
+}
+
 /// Work out the confinement a `run` line starts under and whether the person is to be asked,
 /// refusing a request for a scope or for no profile that this session cannot honour.
 ///
@@ -10946,6 +10993,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     if let Some(lines) = &recalled {
         policy.recall(lines.clone());
     }
+
+    // The other names of each file the line's audited steps read, so the trust map is asked about
+    // the file and not only about the spelling the line used (TRUST-2, CMDLINE-8). Metadata of the
+    // paths the line itself named, taken here because the policy crate reaches no file system.
+    policy.learn_operand_names(operand_names_of(policy, tools.workspace, &plan));
 
     let Settled {
         mut confinement,
@@ -11962,10 +12014,10 @@ fn download_url<S: Sink, C: Confirmer>(
     }
 
     // What the file holds now is not read: it is replaced whole, and the person is told so.
-    let (replaces, approved_revision) = policy.capture_files(|_, capture| {
+    let (replaces, approved_at) = policy.capture_files(|_, capture| {
         (
             workspace.names_a_file(&proposed_path),
-            capture.revision_of(&workspace.trust_key(&proposed_path)),
+            capture.stamp_of(&workspace.trust_key(&proposed_path)),
         )
     });
     let intent = Intent::of_a_write(replaces);
@@ -12043,7 +12095,7 @@ fn download_url<S: Sink, C: Confirmer>(
         policy,
         &path,
         label,
-        Some(approved_revision),
+        Some(approved_at),
         |file, proof| {
             use std::io::Write;
             loop {
@@ -14061,7 +14113,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         // and an answer naming a file nobody vouched for is quarantined, as a listing is. A
         // `diagnostics` answer names no path the server reported, so it carries no taint.
         None => {
-            let label = match crate::lsp::label_for_locations(policy, &answer) {
+            let label = match crate::lsp::label_for_locations(policy, tools.workspace, &answer) {
                 Ok(label) => label,
                 Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
@@ -16172,6 +16224,57 @@ mod tests {
                 "{name} is listed and not offered"
             );
         }
+    }
+
+    /// PATHREQ-7, TRUST-9: a `request_path` grant that opens the directory for the file tools goes
+    /// through the one opening, so another path to the working directory is `Err` with the reason
+    /// `/add-dir` gives, the grant for programs is left for the caller to keep, and nothing is
+    /// vouched for. The identity is injected so the pair exists on any host. Rejects a door that
+    /// opens the directory without the check, which returns `Ok`.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_path_grant_to_another_path_to_the_working_directory_is_refused() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-request-path-second-path-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["twin-a", "twin-b"] {
+            std::fs::create_dir_all(root.join(name)).expect("scratch");
+        }
+        let root = root.canonicalize().expect("canonical");
+        let workspace = Workspace::new(root.join("twin-a"))
+            .expect("workspace")
+            .with_directory_identity(Some(|directory| {
+                use std::os::unix::fs::MetadataExt;
+                match directory.file_name().and_then(|name| name.to_str()) {
+                    Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+                    _ => std::fs::metadata(directory)
+                        .ok()
+                        .map(|found| (found.dev(), found.ino())),
+                }
+            }));
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "ask for a directory");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let refused =
+            open_for_the_file_tools(&mut policy, &workspace, &root.join("twin-b"), "auto");
+        let _ = std::fs::remove_dir_all(&root);
+        let reason = refused.expect_err("another path to the working directory was opened");
+        assert!(reason.contains("another path"), "{reason}");
+        assert!(workspace.added_directories().is_empty());
     }
 
     /// PATHREQ-7: the planner cannot see the permission mode, so the description is where it learns
@@ -25584,6 +25687,68 @@ mod tests {
             assert!(ask(&["Edit(.env)"], "alias.txt").is_err());
             assert!(ask(&[], "alias.txt").is_ok());
             assert!(ask(&["Edit(.env)"], "plain.txt").is_ok());
+        }
+
+        /// PERM-7, PERM-9, MODE-2: where the walk for a file's other names gives up, a write to a
+        /// file with several links asks and is protected, since a name the walk did not reach may be
+        /// one a rule or the protected list is about. A file with one link has no other name to
+        /// miss and is as it was, and so is a file that is not there. Rejects a walk that stopped
+        /// early being read as a file with no other names.
+        #[cfg(unix)]
+        #[test]
+        fn a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up()
+        {
+            let scratch = Scratch::new("write-hard-link-cap");
+            std::fs::write(scratch.path.join("shared.txt"), "one\n").unwrap();
+            std::fs::hard_link(
+                scratch.path.join("shared.txt"),
+                scratch.path.join("alias.txt"),
+            )
+            .unwrap();
+            std::fs::write(scratch.path.join("plain.txt"), "plain\n").unwrap();
+            let asked = |workspace: &Workspace, named: &str| {
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write a file");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileWrite]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_trust(trust);
+                write_needs_approval(
+                    &mut policy,
+                    workspace,
+                    named,
+                    Label::trusted_public(),
+                    Destination::Named,
+                )
+            };
+
+            let complete = Workspace::new(&scratch.path).expect("workspace");
+            let capped = Workspace::new(&scratch.path)
+                .expect("workspace")
+                .with_search_caps(Some(1), None);
+
+            // The control: with the walk finished, nothing about these names asks or protects.
+            assert!(!asked(&complete, "shared.txt"));
+            assert!(!write_is_protected(&complete, "shared.txt"));
+
+            // The walk gave up: the file with two links asks and is protected.
+            assert!(asked(&capped, "shared.txt"));
+            assert!(write_is_protected(&capped, "shared.txt"));
+            assert!(asked(&capped, "alias.txt"));
+            assert!(write_is_protected(&capped, "alias.txt"));
+
+            // One link, or no file yet: nothing to miss, so nothing is added.
+            assert!(!asked(&capped, "plain.txt"));
+            assert!(!write_is_protected(&capped, "plain.txt"));
+            assert!(!asked(&capped, "not-yet.txt"));
+            assert!(!write_is_protected(&capped, "not-yet.txt"));
         }
 
         /// PERM-1, PERM-7: the reason the person wrote beside a deny rule is in the refusal the

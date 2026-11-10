@@ -43,9 +43,16 @@ that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md
 `make check-spec` fails on a new one until somebody records it there, which is where a reviewer
 is asked whether it belongs. The gates themselves are pinned the same way, because a reshape
 releases content to a closure the driver wrote and hands back a value that is still labelled, so
-a new call site needs no `declassify` of its own and would otherwise move nothing. So is
-`note_for` in `crates/agent/src/tools.rs`, the one function that takes a closure from its caller
-and forwards it to a gate: a new caller of it writes such a closure without touching the gate.
+a new call site needs no `declassify` of its own and would otherwise move nothing. The eight
+functions that lower confidentiality for a write into the workspace or give bytes a trusted label
+(`declassify_into_workspace`, `declassify_written_into_workspace`,
+`declassify_checkout_into_workspace`, `promote_a_tool_list`, `promote_a_server_move`,
+`adopt_edited_body`, `promote_vetted` and `promote_vetted_picture`) are counted per file in
+[specs/labels.md](../specs/labels.md) as well, so a new caller of one fails `make check-spec`.
+Nothing checks the destination or the grant a caller passes, so a reviewer reads the new caller.
+`note_for` in `crates/agent/src/tools.rs` is pinned the same way. It is the one function that takes
+a closure from its caller and forwards it to a gate: a new caller of it writes such a closure
+without touching the gate.
 
 **4. A `Labelled` built by hand.** Never construct one to give a value a better label than its
 inputs had. That is laundering, whichever crate it happens in. If a value derived from

@@ -29,6 +29,8 @@ governs:
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
   - crates/tui/src/powershell.rs
+  - ui/scripts/host-card.test.mjs
+  - ui/scripts/shown.test.mjs
 guards:
   - symbol: find_in
     sites:
@@ -312,6 +314,11 @@ A backend says what it can enforce rather than what it was asked for, and a poli
 something the backend cannot deliver is refused. Which paths it can name is reported the same way.
 `bravebot doctor` reports the level this platform can enforce.
 
+On Windows the level is kernel-enforced, as on macOS. A container bounds the filesystem and the
+network, and the job a stage is created in ([SANDBOX-17](#SANDBOX-17)) holds a limit of one active
+process where the policy denies subprocesses, so a policy asking for that denial is applied there
+and not refused. Linux is the platform that still refuses it.
+
 **Why.** An overstated capability is the same failure as a silent fallback, reached by a different
 road. An understated one costs the caller a grant it did not mean: a caller that cannot ask whether
 a path missing from the disk is nameable reads the platform instead, and then creates a file nothing
@@ -329,7 +336,8 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_cli::doctor::doctor_says_whether_the_kernel_enforces_network_denial`
 `verified-by: bravebot_cli::doctor::confinement_that_could_not_be_established_fails_the_run`
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
-`verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_refused`
+`verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_applied`
+`verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
 `verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
 `verified-by: bravebot_sandbox::windows::a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own`
 `verified-by: bravebot_sandbox::windows::a_profile_name_fits_what_the_platform_accepts`
@@ -357,7 +365,10 @@ row names it too. A row the caller named that a backend grants as its entries is
 backend cannot list it, and at the exec when it has gone.
 
 On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
-not what a junction beneath the directory leads to.
+not what a junction beneath the directory leads to. That is shown for a junction made from outside a
+stage. The backend makes no reparse-point check when it writes an entry, and whether a grant crosses
+a junction a stage made inside a directory it was granted for writing has not been observed on
+Windows; it is listed with the known costs.
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -828,6 +839,8 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_sandbox::macos::the_profile_states_a_refusal_after_the_grant_it_narrows_and_a_lift_after_the_refusal`
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_agent::confine::a_stage_writes_only_the_session_the_temporary_directory_and_the_caches`
+`verified-by: bravebot_agent::confine::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
+`verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_sandbox::macos::a_program_linked_against_the_platforms_tls_library_starts_under_the_base`
 `verified-by: bravebot_sandbox::macos::a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base`
 
@@ -1426,12 +1439,17 @@ or `.cmd`) is refused there, because the command interpreter reads its argument 
 rules and a quoting that is safe for every other program is not safe for it. Any other program the
 platform cannot confine is refused as it is elsewhere. The stage is created in a job of its own,
 which the creation call names, so it is in the job before it runs and every program it starts is in
-that job too. Killing the stage
+that job too. The job also keeps the stage from the clipboard (read and write), the global atom
+table, creating or switching desktops and the USER handles of processes outside the job, whatever
+the policy. Where the policy denies subprocesses the job holds a limit of one active process, which
+is the stage itself, so the program it started is the only one in it and a second is refused by the
+platform; where the policy allows subprocesses there is no such limit. Killing the stage
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
 process is let go of and the platform does when this process ends, a crash included. The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
-ends then too, which is when the grants it ran under are taken off. A stage the platform will not
-put in a job is not started. The stage is created under the gate every start of a program takes
+ends then too, which is when the grants it ran under are taken off. A stage the platform will not put in a job carrying those limits is not started, and the refusal
+names what the platform reported, including when this process is itself in a job the platform will
+not nest them under. The stage is created under the gate every start of a program takes
 ([RPCVIEW-8](session-view.md#RPCVIEW-8)), so a program started at the same moment holds none of its
 streams, and it inherits the three standard streams it is given and no other handle this process
 holds. The stage is given a console of its own with no
@@ -1453,7 +1471,9 @@ session was opened on is refused by the kernel, since only redirections are open
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
 ([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
 that asks its question on the console rather than on its input waits until the line is cancelled
-or runs out of time, and the console's code page is the system's rather than one a person set with
+or runs out of time, the console host the platform adds may count against the process limit of a
+stage whose policy denies subprocesses (not shown on a Windows run yet), and the console's code
+page is the system's rather than one a person set with
 `chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
@@ -1471,6 +1491,14 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_agent::confine::a_program_left_running_is_confined_as_well`
 `verified-by: bravebot_agent::confine::a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
 `verified-by: bravebot_agent::confine::a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
+`verified-by: bravebot_sandbox::windows::the_job_carries_every_ui_limit_whatever_the_policy`
+`verified-by: bravebot_sandbox::windows::a_job_that_cannot_be_limited_refuses_the_stage_naming_the_cause`
+`verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_is_in_a_job_carrying_every_ui_limit`
+`verified-by: bravebot_sandbox::windows::a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_starts_a_child_where_its_policy_allows_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
@@ -2154,11 +2182,33 @@ file in `PYTHONSTARTUP`, which only an interactive interpreter reads (`python3 -
 closed did, on 3.15.0), and `sh -c` and a shell script
 did not run the file in `ENV`, which only an interactive `sh` reads. No workflow starts an
 interactive `python3` or `sh`, so none of the three is removed. `GOROOT` is removed, since
-`go vet` ran a `vet` planted under it. Planting a file under `GOPATH`, `GOBIN`, `GOWORK`,
-`GOPROXY`, `PYTHONBREAKPOINT`,
+`go vet` ran a `vet` planted under it. `GOENV` is removed, since `go vet` ran the program named by a
+`GOFLAGS=-toolexec=` line in the file `GOENV` names (go 1.27.3). Planting a file under `GOPATH`,
+`GOBIN`, `GOWORK`, `GOPROXY`, `PYTHONBREAKPOINT`,
 `npm_config_node_options`, and `GNUMAKEFLAGS` and `MFLAGS` on GNU Make 3.81 ran nothing
 ([SANDBOX-30](#SANDBOX-30) has the versions); the two make names and `GOTOOLCHAIN` stay listed or
 set by the suite because other versions read them.
+
+The other names in git(1) (Apple Git 2.54.0), GNU Make 3.81's manual and xcrun(1) that can name
+code were each tested with a script that appends a marker file, planted under the name and run
+against the git, `make` and `xcrun` commands of the workflows (init, add, commit, branch, merge,
+stash, worktree, diff, status, push, clone, fetch, pull, `make`). It ran only under `DEVELOPER_DIR`,
+`GIT_EXTERNAL_DIFF` (`git diff`), `MAKEFILES` and `MAKEFLAGS` with `SHELL=` or `-I`, which are
+handled above. It did not run under
+`GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_PAGER`, `PAGER`, `GIT_EDITOR`,
+`EDITOR`, `VISUAL`, `GIT_SEQUENCE_EDITOR`, `GIT_ATTR_SOURCE`, `GIT_CEILING_DIRECTORIES`, `GIT_SSH`,
+`GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_TRACE`, `GIT_TRACE2`, `GIT_TRACE2_EVENT`,
+`GIT_TRACE_CURL`, `GIT_DIFF_OPTS`, `GIT_SSL_NO_VERIFY`, `GIT_ALLOW_PROTOCOL`, `GIT_SSH_VARIANT`,
+`GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`,
+`GIT_REDIRECT_STDERR`, `GIT_NO_REPLACE_OBJECTS`, `TOOLCHAINS`, `SDKROOT`, `XCODE_DEVELOPER_DIR_PATH`,
+or, for `make`, `MFLAGS`, `GNUMAKEFLAGS`, `MAKEOVERRIDES`, `MAKELEVEL`, `SHELL` and
+`MAKEFILE_LIST`. Those commands start no rebase, so they do not settle `GIT_SEQUENCE_EDITOR`, which
+stays in the suite's list, as do `GIT_SSH`, `GIT_SSH_COMMAND` and `GIT_PROXY_COMMAND`, which only a
+remote transport reads and a local remote does not use. `GIT_ASKPASS` and `SSH_ASKPASS` are removed
+as host variables. The pager and editor names are
+read only when git has a terminal to page on or an editor to start, and no stage has a terminal or
+starts a commit without its message. A name in neither list reaches the programs as set, so a
+workflow that starts a terminal or an editor, or reaches a remote, needs the names it reads added.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
 `~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
@@ -2190,10 +2240,18 @@ since it depends on the host's login. Token variables are removed from the envir
 runs, so the row measures the stored login. The `gh` that reads the stored login is also a checked
 start with no names of its own, and every variable that begins `DYLD_` or `LD_` is removed from it
 whatever it holds, since a library the dynamic loader loads into it runs with the account's home.
-The two prefixes are a list in `crates/agent/src/usability.rs` and not in
-`CODE_SELECTOR_PREFIXES`, because the shared prefixes are applied to every checked start and a
-start that kept `LD_DEBUG` ([SANDBOX-30](#SANDBOX-30)) would lose it; `make check-code-selectors`
-covers only the shared lists, so a reviewer reads this one.
+The two prefixes are `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs`, removed with
+`withhold_prefixed`. They are not in `CODE_SELECTOR_PREFIXES`, which every checked start applies
+and which would remove `LD_DEBUG` from the starts that keep it ([SANDBOX-30](#SANDBOX-30)).
+`make check-code-selectors` reads `LOADER_PREFIXES` and `HOST_VARIABLES`
+([checks.md](../development/checks.md)). It does not apply the prefixes to other starts, so a
+reviewer reads any other start that holds the loader's names.
+
+The two loader tests start a copy of the host's shell that keeps the loader's names, since the
+`gh` on a host can be built without the protection that ignores them. A host that cannot make that
+copy prints `skipped`, and a run with `CI` set fails instead, so a green run on a CI machine means
+the check ran. The `LD_` test uses a shell that records the names it is given. It has not been run
+against a Linux loader, which [SANDBOX-30](#SANDBOX-30) records as #3810.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -2232,6 +2290,7 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_hooks_directory`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_second_configuration_pair_that_names_a_program`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_parameters`
+`verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_configuration_that_names_a_signing_program`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_an_exec_path`
 `verified-by: bravebot_agent::usability::a_setup_commit_is_not_handed_a_common_directory`
 `verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_makefiles`
@@ -2261,8 +2320,10 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_a_module_path`
 `verified-by: bravebot_agent::usability::a_setup_python_keeps_a_module_path_no_stage_can_write`
 `verified-by: bravebot_agent::usability::the_names_found_by_running_cargo_npm_go_and_python_are_removed`
+`verified-by: bravebot_agent::usability::a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
+`verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_settings_file`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
@@ -2351,7 +2412,9 @@ the directory: the scratch directory and a person's own `allowWrite` entries are
 settings file and a `--settings` file outside the workspace are read for the key, as for `sandbox.mode`:
 a checkout's project or local file that sets it is not obeyed and is reported as an unread key. Any
 value but `true` asks for nothing. A `denyWrite` entry naming the temporary directory refuses it as well,
-and is the way to hold back one path of it.
+and is the way to hold back one path of it. On Windows a session with a directory of its own grants no
+stage the account's temporary directory, so the setting changes nothing there; the `temp` directory
+inside the session's own stays written, like the scratch directory.
 
 The managed file's `sandbox.mode` is a floor and not a default. A flag or a settings file that names
 a mode looser than it refuses the session before it starts, naming both files, saying which of
@@ -3839,21 +3902,41 @@ file. A new spawn that looks a name up through
   is not empty and every entry, split as `PATH` is, is one program (accepted as a program is) alone
   or followed by ` %s`, with no whitespace, control character or shell character in it, so a value
   with arguments, a second command or a shell line is removed whole. A variable in no list is left
-  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program. Every checked start is given
+  as it is, so `HOME`, `GIT_CONFIG` and `LD_DEBUG` reach the program, except that the browser
+  opener judges `HOME` as described below. Every checked start is given
   the generic table, which `programs::withhold_code_selectors_with` applies together with the
   program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
   ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
   `doctor --push-identity`'s in `crates/cli/src/push_identity.rs`, the browser opener's in
   `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
   the sandbox usability suite's in `crates/agent/src/usability.rs`.
-  The browser opener adds `BROWSER` and the four `XDG_` directories that `xdg-open` reads to choose
-  the handler it runs (`XDG_DATA_DIRS` is also in the generic table). The AWS CLI, the gcloud
-  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list the same names,
+  The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP` and
+  `HOME`. `GIO_LAUNCH_DESKTOP` is one file (`Names::File`): `gio open` executes the wrapper it names
+  with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
+  3100, read only when the process is not setuid), so a value is removed unless it is an existing
+  file outside every directory a stage may write. `HOME` is a
+  directory: `gio open`, which `xdg-open` runs under a GNOME session, reads
+  `$HOME/.config/mimeapps.list` and `$HOME/.local/share/applications` when `XDG_CONFIG_HOME` and
+  `XDG_DATA_HOME` are not set. The opener removes `HOME` when it does not name an existing directory
+  outside every directory a stage may write, and also when `$HOME/.config` or
+  `$HOME/.local/share/applications` leads to one (a path that does not exist is judged by the
+  nearest directory above it that does, below `HOME`). A session opened on `~/.config` or
+  `~/.local/share/applications` has no row for `HOME` itself, which is why those two are judged. The
+  generic table does not list `HOME`, so gcloud, the AWS CLI and `ssh` keep it. The AWS CLI, the gcloud
+  launcher and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity` list `BROWSER` and the
+  four `XDG_` directories,
   since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
   Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
-  helper that git's configuration names can do the same. The desktop application deletes the same
-  five names from its own environment before it asks Electron to open an address or a file, since
-  it starts the opener through Electron and not through this start. The names another program
+  helper that git's configuration names can do the same. `xdg-open` itself reads `BROWSER` only in
+  its generic path, so under GNOME with `gio` installed it is not read. The desktop application deletes `BROWSER`,
+  `GIO_LAUNCH_DESKTOP` and the four `XDG_` directories from its own environment before it asks
+  Electron to open an address or a file, since
+  it starts the opener through Electron and not through this start. It does not delete `HOME`: the
+  application reads `HOME` itself, `process.env` is shared with the agent it starts, and a `HOME`
+  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`. On Linux
+  under a GNOME session the application's opener therefore still reads a `HOME` a stage may write.
+  [#3904](https://github.com/brave/bravebot/issues/3904) tracks that. The names another program
   reads are added to its start when that program is audited. The usability suite's list
   (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
   `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
@@ -3881,10 +3964,10 @@ file. A new spawn that looks a name up through
   `GOROOT`, `GOENV` and `CARGO_HOME` whatever they hold, and records the names it examined and
   left (`TOOLCHAINS`, `SDKROOT`,
   `XCODE_DEVELOPER_DIR_PATH`, `VIMINIT`, `PYTHONSTARTUP`, `ENV`) with the reason. The `DYLD_` and
-  `LD_` prefixes are a list in `crates/agent/src/usability.rs`, since `CODE_SELECTOR_PREFIXES`
-  applies to every checked start and would remove `LD_DEBUG` from gcloud and the browser opener;
-  `make check-code-selectors` does not read that prefix list. `make check-code-selectors` runs
-  `contrib/check-code-selectors.py`. It fails a call of `start` or `start_against`
+  `LD_` prefixes are `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs`, kept out of
+  `CODE_SELECTOR_PREFIXES`, which applies to every checked start and would remove `LD_DEBUG` from
+  gcloud and the browser opener. `make check-code-selectors` runs
+  `contrib/check-code-selectors.py` ([checks.md](../development/checks.md)). It fails a call of `start` or `start_against`
   whose fourth argument is not written at the call as `CodeSelectors::Kept` or
   `CodeSelectors::Checked(&names)`, a kept start in production code with no comment giving its
   reason, a start in production code that passes `CodeSelectors::Checked(&[])` with no comment at
@@ -3967,8 +4050,8 @@ file. A new spawn that looks a name up through
   use for. A variable not listed is left as set. A variable that
   more than one list names is defined once in `programs::selectors`. The lists are `CODE_SELECTORS`
   in `crates/agent/src/gcloud.rs` ([BACKEND-65](backends.md#BACKEND-65)), in
-  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs` and in
-  `crates/tui/src/powershell.rs`:
+  `crates/bedrock/src/credentials.rs`, in `crates/cli/src/push_identity.rs`, in
+  `crates/tui/src/opener.rs`, in `crates/tui/src/powershell.rs` and in `crates/agent/src/usability.rs`:
 
   | `gcloud` variable | Names | Why it selects code |
   |---|---|---|
@@ -4120,9 +4203,9 @@ program's documentation or launcher and what was run. These were not shown by ru
   loader. It is tracked by #3810.
 - `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
   and no names of their own, and have not been run on Linux. It is tracked by #3810.
-- A Homebrew or pip `aws` script, an asdf or pyenv shim and `gio open` and `kde-open` start an
+- A Homebrew or pip `aws` script and an asdf or pyenv shim start an
   interpreter or another program by variables of their own, which are not listed. It is tracked by
-  #3809.
+  #3809. The variables `gio open` and `kde-open` read are recorded in the next bullet.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
   mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
@@ -4131,29 +4214,122 @@ program's documentation or launcher and what was run. These were not shown by ru
   `XDG_CURRENT_DESKTOP=GNOME`, `xdg-open` runs `gio open`, and `gio open` started a handler planted
   in a directory named by each of those four, so each selects the program that opens the address.
   `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs
-  that for `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, and fails when any one of them
-  is left out of the list. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
+  that for each of the four and fails when any one of them is left out of the list. For
+  `XDG_DATA_DIRS` it opens an address with the scheme `bravebot-test`, which no system handler
+  opens: with the planted value removed `gio open` reads the system's directories and finds no
+  handler, where an address with the scheme `https` would start the host's real browser. It sets
+  `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode` runs
+  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` with every variable that names a desktop
+  environment removed, so
+  `xdg-open` takes its generic path. That path asks `xdg-mime query default` for the handler of the
+  scheme only when `DISPLAY` or `WAYLAND_DISPLAY` is set (`has_display`, `xdg-open.in` line 507),
+  so the run sets `WAYLAND_DISPLAY` to a name no socket has. Nothing connects to it: `xdg-open`
+  and `xdg-mime` only test it for emptiness, and `xprop`, the one program on that path that would
+  open a display, reads `DISPLAY`, which is removed. `BROWSER` names an installed stand-in, so
+  a lookup that finds no handler runs the stand-in and not the browsers `xdg-open` tries when
+  `BROWSER` is unset. `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+  runs `BROWSER` in that mode.
+  `xdg-open` reads `BROWSER` only in that generic path (`open_generic`, after the scheme handler
+  lookup). With `gio` installed it takes the GNOME path, runs `gio open` and never reads `BROWSER`,
+  so there is no `BROWSER` test under GNOME. Each of these asserts that the helper or
+  `mimeapps.list` in a directory a stage may write is not run or read and that the one in an
+  installed directory is. Each prints `skipped` and passes where `xdg-open` (and, for the `XDG_`
+  directories, `gio` under GNOME and `xdg-mime` in generic mode) is not installed, as on
+  macOS, and where the installed `xdg-open` does not run the installed handler, so on such a host
+  they assert nothing. The generic-desktop run of the three `XDG_` directories was run on macOS
+  against `xdg-open` and `xdg-mime` 1.2.1 built from their published source, with the `uname`
+  test changed so that they take the generic path, and with a planted name left out of the opener's
+  list it failed with `(true, true)` for each of the three. It has not run on Linux, and the
+  under-GNOME tests have so far passed only through the skip.
   Electron 44.9.3 on Linux, run under Xvfb, was made to call `openExternal` and `openPath` of
   `ui/src/main/external-open.ts` with all five names set to directories and a script a stage could
   have written. It started `xdg-open` for each call with none of the five in its environment. The
   same two calls made on Electron's `shell` without the deletion started `xdg-open` with all five,
-  so Electron hands its environment to `xdg-open` and the deletion is what removes them. That run
-  was made by hand and no test repeats it. It needed `--no-sandbox` and `--disable-dev-shm-usage`
-  on the host that ran it.
+  so Electron hands its environment to `xdg-open` and the deletion is what removes them.
+  `ui/scripts/external-open-electron.test.mjs` repeats that run, with both the calls through
+  `external-open.ts` and the control, and fails when `openPath` skips the deletion. It prints
+  `skipped` where there is no Linux, `xvfb-run` or Electron binary. It needed `--no-sandbox` and
+  `--disable-dev-shm-usage` on the host that ran it. The by-hand run was made before
+  `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets six.
+  `make check-code-selectors` fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or
+  `NAMES` in that test differs from `CODE_SELECTORS` in `crates/tui/src/opener.rs` other than by
+  `HOME`, which the desktop application leaves set because it and the agent it starts read it.
+  Under KDE `xdg-open` starts `kde-open` (`kde-open5` under `KDE_SESSION_VERSION=5`) with the
+  address. `a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
+  runs the opener's real launch path with `XDG_CURRENT_DESKTOP=KDE` and `KDE_SESSION_VERSION=6`
+  against the installed `xdg-open`, with a stand-in `kde-open` first on `PATH` that logs its
+  arguments and the names of the opener's list it can see. For each name it asserts that the
+  stand-in is started with the address, that a value in an installed directory reaches it and that
+  a value a stage may write does not. It shows what the opener hands on and not what the real
+  `kde-open` reads, which was read from the source. It prints `skipped` where there is no
+  `xdg-open`. It was run on macOS with the `xdg-open` 1.2.1 built from source, and with the
+  opener's list replaced by `Checked(&[])` it failed with `BROWSER reached kde-open`. It has not
+  run against a KDE session. `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
+  builds the Windows command on every host and asserts that its program and arguments are
+  `rundll32`, `url.dll,FileProtocolHandler` and the address, an address with `&`, `|`, `^`, `%` and
+  `"` included. That `rundll32` opens a page has not been observed.
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
   the five names, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
   `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
   launchers whose names are fixed, `KDE_SESSION_VERSION` to complete the name `kde-open5`,
   `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`, and `XDG_RUNTIME_DIR`
   for a `flatpak-info` file that switches to `gdbus`. None of those names a file to run.
-  `HOME` is not removed and does choose the handler: with `XDG_CURRENT_DESKTOP=GNOME` and no other
-  name set, an `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a
-  `.desktop` entry started the planted handler through `gio open`. It is tracked by #3849.
-  These were not run: the Windows `rundll32` start, which was read and is tracked by #3860; `kde-open` and a KDE session,
-  because `kde-open` is not installed on the host that ran the rest, so what it reads is
-  unobserved; a logged-in GNOME session; and `XDG_DATA_DIRS` through `gio open`, since removing a
-  planted value there lets `gio open` use the system's handlers and start a real browser. They
-  are tracked by #3822.
+  `xdg-mime` 1.2.1 also reads `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX` as file-name prefixes
+  (`<desktop>-mimeapps.list`, `<prefix>defaults.list`, `<prefix>mimeinfo.cache`) and
+  `KDE_SESSION_VERSION` as a suffix of program names (`kde-open5`, `kbuildsycoca<version>`,
+  `ktraderclient<version>`, `kde<version>-config`). None of the three is in the opener's list. The
+  prefixes are joined to directories the opener already judges, and a file read that way supplies
+  only a desktop-entry id, which is looked up in those directories. `xdg-mime` does not validate
+  either prefix, so a value containing `/` can select a file outside them, and what that file
+  supplies is limited in the same way. The program names built from `KDE_SESSION_VERSION` are
+  resolved on the reduced `PATH`. The `eval` at `xdg-mime.in` line 37 and the `kde<version>-config`
+  start at line 832 are reached only by the install, uninstall and makedefault actions, and
+  `xdg-open` runs `xdg-mime query` only. These readings are from the source and were not run.
+  `gio open` was read in GLib 2.88.4 (`gio-tool-open.c`, `gappinfo.c`, `gdesktopappinfo.c`,
+  `gportalsupport.c`, `gio-launch-desktop.c`, `glib/gutils.c`); the runs above used `gio` 2.86.0.
+  `gio open` never reads `BROWSER`. It reads `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`,
+  `XDG_CONFIG_DIRS` and `HOME` for the directories that hold `mimeapps.list` and the `.desktop`
+  files whose `Exec` line it runs, `PATH` to find that program, and `XDG_CURRENT_DESKTOP` only as a
+  file-name prefix, accepted only when it is letters, digits, `-` and `_`. It also reads
+  `GIO_LAUNCH_DESKTOP`, the path of the wrapper it executes with the handler's whole command line
+  (`gdesktopappinfo.c` line 3100; ignored when the process is setuid). `GIO_LAUNCH_DESKTOP` is in
+  the opener's list, and
+  `gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
+  holds it on the disk. The other names it reads do not choose a program or directory:
+  `GIO_USE_PORTALS` (first character only), `GIO_LAUNCHED_DESKTOP_FILE` (a journal identifier),
+  `PARENT_WINDOW_ID` (read from a launch context, which `gio open` does not pass) and
+  `XDG_RUNTIME_DIR` (used only in a test build of GLib).
+  `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
+  `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
+  mirror of the KDE repositories. Those files read `PATH` directly, reference no `BROWSER`, and
+  read no `XDG_*` or `KDE_*` variable. The terminal emulator comes from the KDE configuration file
+  and not from the environment.
+  `HOME` is in the opener's list. With `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
+  `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
+  started the planted handler through `gio open`.
+  `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs that, and
+  `a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk` runs the judgment on the
+  disk. What `gio` does with `HOME` removed was not run: the test removes nothing it can see
+  `gio` fall back from, and does not run on a host where the account has handlers of its own.
+  These were not run: the Windows `rundll32` start, which was read, which no test on another
+  system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
+  (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
+  ran the rest and installing it there with apt would add 152 packages, so what it reads is
+  unobserved; a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
+  with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
+  planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
+  browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
+  stand-in for `xdg-open` instead; Qt's `QDesktopServices` and
+  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig`, which were not read, so that
+  `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`,
+  `XDG_CONFIG_DIRS` and `XDG_CURRENT_DESKTOP` is expected and unverified; the parts of GLib not
+  read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
+  the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
+  set, which is shown only by a test of the opener's judgment of the value. The list of variables
+  the launchers read is therefore complete only for `xdg-open` and `xdg-mime` 1.2.1 and, for the
+  files named above, `gio open` and `kde-open`.
+  They are tracked by #3822.
 - `osascript` reads plug-in directories that follow `HOME`. A changed `HOME` is not checked. It is
   tracked by #3809.
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
@@ -4328,6 +4504,7 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_sandbox::programs::a_checked_start_judges_a_value_against_the_directories_recorded_for_the_lookup`
 `verified-by: bravebot_sandbox::programs::the_table_holds_each_name_sandbox_30_lists`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
+`verified-by: bravebot_sandbox::programs::the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
 `verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
@@ -4338,6 +4515,14 @@ program's documentation or launcher and what was run. These were not shown by ru
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_an_opener_that_runs_browser`
 `verified-by: bravebot_tui::opener::a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
 `verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
+`verified-by: bravebot_tui::opener::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode`
+`verified-by: bravebot_tui::opener::a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`
+`verified-by: bravebot_tui::opener::a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk`
+`verified-by: bravebot_tui::opener::gio_launch_desktop_is_removed_for_a_wrapper_a_stage_may_write_and_kept_for_an_installed_one`
+`verified-by: bravebot_tui::opener::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`
+`verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
+`verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the six names set and the same calls on Electron's shell start it with all six; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME)`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
@@ -4552,7 +4737,7 @@ whose plan never named them.
 | on macOS, the developer directory `xcode-select -p` names as the session opens, where it is `/Library/Developer/CommandLineTools` or an application bundle's directly in `/Applications`, which is then the bundle whole | read |
 | the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
 
-On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own.
+On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own. A Windows session that has a directory of its own is also granted a `temp` directory inside it, read and written, in place of the temporary-directory row, and a stage's `TEMP` and `TMP` name it ([trust-map.md](trust-map.md#TRUST-17)). The account's temporary directory is then granted to no stage. Without a directory of its own the row is the account's temporary directory.
 
 Four rows is the whole of what stays invisible, and each one is here because every program needs it
 and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
@@ -4838,12 +5023,22 @@ reported as what it is.
   a file outside those directories is refused by the kernel until its plan names the file.
 - A grant on a single file is written without inheritance, which is the entry a file takes. The
   program started is granted as a file this way, and that is also unexercised.
-- Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
-  reaches rather than whether it creates children, and a child of a confined process is inside the
-  same container rather than outside it, so a policy asking for that denial is refused on both
-  rather than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that the two
-  platforms confine nothing for a caller whose policy wants a program to have no children, where
-  Seatbelt applies one.
+- Whether a grant crosses a junction a stage made inside a directory it was granted for writing is
+  not settled. `set_entry` makes no reparse-point check, so an entry written on the directory may be
+  inherited by what the junction leads to. The test
+  `bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_a_stage_made` reads the
+  target's access list while a second stage runs, prints `junction grant crossed` or `junction
+  grant did not cross`, and fails if the second stage can read the target. The stage of that test
+  cannot create the junction on the Windows runner, so the test ends before the observation and
+  no clause is claimed from it. Where the grant crosses, `set_entry`
+  has to skip reparse points. The session's own `temp` directory, which a stage can replace by a
+  link, is checked by name as the scratch directory is, and the junction case of that check is
+  reasoned and not run on Windows.
+- Subprocess denial has no mechanism on Linux. A container bounds what a process reaches rather
+  than whether it creates children, so a policy asking for that denial is refused there rather
+  than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that Linux confines nothing
+  for a caller whose policy wants a program to have no children, where Seatbelt and a Windows job
+  apply one.
 - A macOS developer directory outside the two places the platform installs one, an Xcode kept
   under the home or in a folder inside `/Applications`, is in no row, so on that machine every
   `/usr/bin` developer shim is refused under the base. A row for it names a directory of the
@@ -4893,4 +5088,9 @@ reported as what it is.
   the agent's other tests that start a confined process. The two tests that watch a loopback
   listener run on Unix only, so whether a container reaches a loopback listener, and with it the
   denial of egress on Windows, is shown by the capability the token is built with and not by a
-  connection.
+  connection. No test connects from a container granted the network to a private-network address
+  either, so that a granted container reaches neither loopback nor a private network is not shown.
+  The Windows tests that connect out (`a_container_connects_out_only_when_its_policy_asks_for_the_network`
+  and `a_container_without_the_network_cannot_look_up_a_name`) need `github.com` reachable from the
+  machine directly, without a proxy, and fail where it is not, as a machine that cannot make a
+  container fails them, and do not skip.

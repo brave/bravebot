@@ -286,7 +286,8 @@ pub fn nobody() -> Person<std::io::Empty, std::io::Sink> {
 ///
 /// `requested` is each alias with the settings file that asked for it. `project` is the workspace
 /// root, which is what answer 2 records. `managed` is the machine's layer, whose refusals no answer
-/// reaches. `diagnostics` is where a local server's stderr goes.
+/// reaches. `diagnostics` is where a local server's stderr goes; every front end passes
+/// [`Stream::Null`] (SERVERS-25).
 pub fn reach<A: Asker + ?Sized>(
     requested: &[(PathBuf, String)],
     project: &Path,

@@ -1271,10 +1271,14 @@ The answer opens in the mode
 [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
 opens, as a row of its own before the delegates, which is the one screen it exists
 on. Typed while a turn runs, `/btw` is carried out as you press Enter: the question goes out beside the
-turn over the exchange the turn last sent, the turn is not told, and the answer becomes a row without
-opening the mode over the turn. It needs the turn to have sent a request, one question is out at a time
-beside a turn, a dropped file is refused, and stopping the turn stops the question. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
-is one a reader takes the planner to have had.
+turn over the exchange the turn last sent, and the turn is not told. A line in the transcript says the
+question is out and names the key that opens the answer, and another says when the answer is in. The
+answer becomes a row without opening the mode over the turn. It needs the turn to have sent a request,
+one question is out at a time beside a turn, a dropped file is refused, and stopping the turn stops the
+question. A turn that ends on its own does not stop it: the answer arrives after the turn, as the same
+row and line. Neither line holds a word of the question or the answer, because an exchange drawn in the
+transcript is one a reader takes the planner to have had. Typed with no turn running, the working line
+reads `Answering your /btw question` until the answer opens.
 
 One request, and no tools in it. **An aside cannot be asked about**: there is no box to follow up in,
 so pressing further means a second `/btw`, over an exchange that still knows nothing of the first.

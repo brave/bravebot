@@ -56,7 +56,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [xai-sign-in.md](xai-sign-in.md) | `XAI` | 22 | signing in to xAI with a SuperGrok subscription through a code a person enters on any device, from a typed command or the window's own sign-in, the file the tokens are kept in, replacing an access token before it expires, and how the account's models are named (proposed; the command, the turn's request and the account's models are built) |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 33 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 16 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
-| [mcp-servers.md](mcp-servers.md) | `SERVERS` | 24 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
+| [mcp-servers.md](mcp-servers.md) | `SERVERS` | 25 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 46 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
@@ -189,7 +189,12 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
 - **`verified-by:`** lines name the tests that pin a clause, as `crate::module::test_name`. The
   coverage check reads them, fails when a name does not resolve to a test that exists, and drafts a
   bug for any clause whose value is `none`. `by-construction` is for a clause nothing can execute,
-  such as a crate having no dependencies, and says in brackets what makes it hold.
+  such as a crate having no dependencies, and says in brackets what makes it hold. A file the
+  bracket names by its path from a repository-root directory has to exist: the check fails a path
+  that does not, so a test file that is renamed or deleted fails here and not only in the job that
+  runs it. Write the path bare, because the reader of a `verified-by` line stops at a backtick. A
+  test file the bracket relies on is also listed in the spec's `governs`, so a change to it
+  re-reviews the spec.
   **A named test is a Rust test.** The check resolves a name against the `#[test]` functions in
   `crates/`, so a test written in anything else cannot be cited however it is spelled. A clause about
   behaviour only another language implements therefore has two honest forms and no third: a Rust test
