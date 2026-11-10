@@ -329,7 +329,8 @@ fn serialized_len(row: &Row) -> usize {
     }
     let mut count = Count(0);
     // Writing a `Value` to a writer that never fails cannot fail.
-    let _ = serde_json::to_writer(&mut count, row);
+    let written = serde_json::to_writer(&mut count, row);
+    debug_assert!(written.is_ok(), "a row could not be written as JSON");
     count.0
 }
 
