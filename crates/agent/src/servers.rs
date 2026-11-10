@@ -538,6 +538,10 @@ enum Plan {
         allowed_hosts: Option<Vec<String>>,
         ask_every_call: bool,
         choice_arguments: ChoiceArguments,
+        /// The arguments its declaration says a row of an `apply` step may fill.
+        apply_arguments: bravebot_config::mcp::ApplyArguments,
+        /// The tools its declaration marks plan-covered in an `apply` step.
+        covered_tools: bravebot_config::mcp::CoveredTools,
     },
     Http {
         url: String,
@@ -951,6 +955,8 @@ fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, 
         allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
         ask_every_call: declaration.asks_every_call(),
         choice_arguments: declaration.choice_arguments().clone(),
+        apply_arguments: declaration.apply_arguments().clone(),
+        covered_tools: declaration.covered_tools().clone(),
     })
 }
 
@@ -2794,11 +2800,14 @@ fn start_under(
                 allowed_hosts,
                 ask_every_call,
                 choice_arguments,
+                apply_arguments,
+                covered_tools,
             } => {
                 #[cfg(not(unix))]
                 {
                     let _ = (program, arguments, image, declared, tools, exclude_tools);
                     let _ = (allowed_hosts, ask_every_call, choice_arguments, timeouts);
+                    let _ = (apply_arguments, covered_tools);
                     notes.push(t!(servers_openshell_unsupported, alias = alias).to_string());
                     continue;
                 }
@@ -2842,6 +2851,8 @@ fn start_under(
                                     .in_a_sandbox_for_manifest_runs(sandbox, shown)
                                     .asking_every_call(ask_every_call)
                                     .choosing(choice_arguments)
+                                    .applying(apply_arguments)
+                                    .covered(covered_tools)
                                     .noting(vec![started])
                             })
                         });
@@ -7885,6 +7896,35 @@ done
         assert_eq!(arguments, vec!["-u".to_string(), "server.py".to_string()]);
         assert_eq!(image, PINNED_IMAGE);
         assert_eq!(allowed_hosts, Some(vec!["example.com".to_string()]));
+    }
+
+    /// SERVERS-26. A server in an OpenShell sandbox serves manifest runs, where `apply` runs, so
+    /// what its declaration says a row may fill and which tools a plan's approval covers reach the
+    /// plan it starts from. The regression it rejects is a sandboxed server that drops both, so a
+    /// declaration the person approved with them offers no apply step and covers nothing.
+    #[test]
+    fn an_openshell_declaration_keeps_what_a_row_may_fill_and_what_the_plan_covers() {
+        let applies: bravebot_config::mcp::ApplyArguments = [(
+            "move_mark".to_string(),
+            [("url".to_string(), "entry".to_string())].into(),
+        )]
+        .into();
+        let covered: bravebot_config::mcp::CoveredTools = ["move_mark".to_string()].into();
+        let declaration = in_openshell(&["server"])
+            .applying(applies.clone())
+            .expect("apply arguments")
+            .marking_covered(covered.clone())
+            .expect("a mark");
+        let Plan::OpenShell {
+            apply_arguments,
+            covered_tools,
+            ..
+        } = planned(&declaration, &|_| None).expect("a plan")
+        else {
+            panic!("an OpenShell declaration was not planned as one");
+        };
+        assert_eq!(apply_arguments, applies);
+        assert_eq!(covered_tools, covered);
     }
 
     /// Nothing of this machine's environment or files is passed into a sandbox yet, so a

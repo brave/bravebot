@@ -2582,5 +2582,6 @@ A server asking every call has said each of its calls is put on its own, which n
 `verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
 `verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
 `verified-by: bravebot_config::mcp::plan_covers_marks_only_a_tool_with_an_apply_declaration_on_a_local_server`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_keeps_what_a_row_may_fill_and_what_the_plan_covers`
 `verified-by: bravebot_cli::mcp::add_writes_the_plan_covers_marks_and_the_question_and_get_say_them`
 `verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`
