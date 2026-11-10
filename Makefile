@@ -178,6 +178,8 @@ check:
 	@python3 contrib/check-code-selectors.py --selftest
 	@python3 contrib/check-code-selectors.py
 	@python3 contrib/check-toolchain.py
+	@python3 contrib/check-fuzz-lints.py --selftest
+	@python3 contrib/check-fuzz-lints.py
 
 # Whether every call of programs::start and programs::start_against states CodeSelectors, and every
 # variable in a CODE_SELECTORS list (crates/sandbox/src/programs.rs, crates/agent/src/gcloud.rs,
@@ -458,10 +460,21 @@ fuzz-cmin: fuzz-prerequisites fuzz-named-target
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz cmin -a $(TARGET) fuzz/corpus/$(TARGET) -- -max_len=$(call fuzz_max_len,$(TARGET))
 
 # Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
+# Whether fuzz/Cargo.toml's [lints.clippy] table still matches the root workspace's
+# [workspace.lints.clippy]. The fuzz crate cannot inherit it with `[lints] workspace = true`: it
+# declares its own `[workspace]` so the root workspace never compiles libFuzzer, and a package in
+# a workspace of its own has no outer table to inherit from. Run by `check` and by `check-fuzz`,
+# and first in both, since it answers at once and needs no toolchain.
+.PHONY: check-fuzz-lints
+check-fuzz-lints:
+	@python3 contrib/check-fuzz-lints.py --selftest
+	@python3 contrib/check-fuzz-lints.py
+
+# Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
 # replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
 # FUZZ_SECONDS. Stops at the first failure.
 .PHONY: check-fuzz
-check-fuzz: fuzz-prerequisites
+check-fuzz: fuzz-prerequisites check-fuzz-lints
 	cargo +$(FUZZ_TOOLCHAIN) fmt --manifest-path fuzz/Cargo.toml -- --check
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) test --manifest-path fuzz/Cargo.toml --lib --locked
