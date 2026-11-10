@@ -920,6 +920,11 @@ pub struct Session {
     /// ask the model until the report arrives, so without it the screen names nothing at all for
     /// the whole wait.
     waiting_on: Vec<bravebot_agent::report::DelegateId>,
+    /// Whether the request in flight is a `/btw` question asked with no turn running.
+    ///
+    /// Separate from [`Session::phase`] for the reason a check is: it is not a phase of a turn,
+    /// since there is no turn, and the interface that sets it is the one that knows what it asked.
+    answering: bool,
     /// The agents this session has started and where each stands, one for each delegate entry of
     /// the transcript and in the same order. The rules for it are
     /// [`bravebot_agent::roster::Roster`]'s, which the desktop bridge uses as well, and
@@ -1508,6 +1513,7 @@ impl Session {
             checking: None,
             hook: None,
             waiting_on: Vec::new(),
+            answering: false,
             roster: bravebot_agent::roster::Roster::new(),
             running: None,
             movable: None,
@@ -1687,6 +1693,13 @@ impl Session {
                 indicator_waiting_on_delegate,
                 delegate = named.join(", ")
             ));
+        }
+
+        // A `/btw` question asked with no turn running has no phase of its own and nothing on the
+        // lines above it, so the turn's own word would be the only thing naming a wait that is
+        // for a question the person typed.
+        if self.answering {
+            return Some(t!(indicator_answering).to_string());
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the
@@ -1970,6 +1983,10 @@ impl Session {
         // exchange is gone, so the question no longer has anything to be about, and a row that
         // outlived it would offer an answer to a conversation nobody can read.
         self.asides.clear();
+        // And a question still out beside a turn that has ended, whose answer would arrive as a
+        // row of the conversation that replaced the one it was about.
+        self.stop_aside_beside_a_turn();
+        self.aside_flight = None;
         self.watching = None;
         self.held_view = None;
         self.sessions_screen = None;
@@ -4270,6 +4287,12 @@ impl Session {
         self.started = Some(Instant::now());
     }
 
+    /// Name the request [`Session::begin_aside`] began as a `/btw` question, so the indicator says
+    /// what is being waited for. Ended with the request, by whatever ends it.
+    pub fn answering_a_question(&mut self) {
+        self.answering = true;
+    }
+
     /// Leave it again, adding what it cost to the session's total.
     ///
     /// Charged to the turn in flight, since `/compact` is asked for in the middle of one and its
@@ -4325,6 +4348,7 @@ impl Session {
         self.checking = None;
         self.hook = None;
         self.waiting_on.clear();
+        self.answering = false;
         self.running = None;
         self.movable = None;
     }
@@ -6617,6 +6641,31 @@ mod tests {
                 "an aside outlived its exchange"
             );
             assert!(session.watching().is_none(), "the view outlived its aside");
+        }
+
+        /// A question still out beside a turn that has ended is about the exchange `/clear` empties,
+        /// and its answer would arrive as a row of the conversation that replaced it. Rejects
+        /// leaving it to land, and leaving the request running with nobody to read it.
+        #[test]
+        fn clearing_stops_and_drops_a_question_still_out() {
+            let mut session = Session::new("none");
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let (_sender, from_worker) = std::sync::mpsc::channel();
+            session.begin_aside_beside_a_turn(AsideFlight {
+                asked: "why recursive?".to_string(),
+                cancel: cancel.clone(),
+                from_worker,
+                worker: std::thread::spawn(|| Err("stopped".to_string())),
+            });
+            assert!(session.aside_in_flight());
+
+            session.clear();
+
+            assert!(
+                !session.aside_in_flight(),
+                "a question outlived its exchange"
+            );
+            assert!(cancel.is_cancelled(), "its request was left running");
         }
 
         /// The one thing this view holds that outlives the session that produced it, and the
@@ -12308,6 +12357,35 @@ mod tests {
         s.submit();
         let second = s.indicator().expect("working").verb;
         assert_ne!(first, second);
+    }
+
+    /// A `/btw` question asked with no turn running is called that on the indicator, in place of the
+    /// turn's own word, for as long as it is out. Rejects a label that outlives the request: the
+    /// next summary, which has no word of its own at rest, would be called an answer.
+    #[test]
+    fn a_question_asked_at_rest_is_named_on_the_indicator_until_it_ends() {
+        let mut s = session();
+        s.begin_aside();
+        let unnamed = s.indicator().expect("working").verb;
+        assert_ne!(
+            unnamed,
+            t!(indicator_answering),
+            "the label was always there"
+        );
+
+        s.answering_a_question();
+        assert_eq!(
+            s.indicator().expect("working").verb,
+            t!(indicator_answering)
+        );
+
+        s.end_aside(0);
+        s.begin_aside();
+        assert_ne!(
+            s.indicator().expect("working").verb,
+            t!(indicator_answering),
+            "the label outlived the question"
+        );
     }
 
     /// The `/context` rows must add up to the measured total, so each share is a whole number

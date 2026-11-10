@@ -387,6 +387,9 @@ pub(super) fn ask_animated(
         })
         .collect();
     session.begin_aside();
+    if writing.is_none() && !recap {
+        session.answering_a_question();
+    }
 
     let worker = thread::spawn(move || {
         // Dropped when this thread ends, which is how the loop driving it learns it has: it draws
@@ -733,8 +736,12 @@ pub(super) fn aside_reported(session: &mut Session, message: crate::remote_confi
 /// The question is asked over the exchange the turn last sent, which the turn published at that
 /// request ([`Session::fork`]), and its policy reads the turn's own file decisions
 /// ([`Session::turn_files`]), shared and not copied. Nothing here takes the terminal: the turn's
-/// loop keeps it, drains the worker each frame ([`settle_aside_beside_a_turn`]) and the stop that
-/// ends the turn ends the question with it.
+/// loop keeps it and drains the worker each frame ([`settle_aside_beside_a_turn`]). A stop of the
+/// turn ends the question with it. A turn that ends by itself leaves it out, and the loop that waits
+/// for the person drains it from then ([`settle_aside_between_turns`]).
+///
+/// Says in the transcript that the question is out, since its answer is a row and not a line of the
+/// turn's.
 ///
 /// There is no sign-in, because the turn running beside it has signed in to the same backend. A
 /// second question while one is out is refused and not queued, and so is one with dropped files:
@@ -808,67 +815,132 @@ pub(super) fn ask_aside_beside_a_turn(
         from_worker,
         worker,
     });
+    // The answer is a row of the agents list and nothing is drawn among the turn's lines for it
+    // (WATCH-18), so without this nothing on the screen says the line typed went anywhere.
+    let chord = session.bindings().watch_name();
+    session.note(t!(btw_asked_beside_a_turn, chord = chord));
 }
 
-/// Take what the question asked beside the running turn has done since the last frame.
+/// A question asked beside a turn whose worker has ended, and what it came to.
+struct EndedAside {
+    /// What the row will say was asked.
+    asked: String,
+    /// Whether its stop was pressed, which is what tells a refusal from a request walked away from.
+    stopped: bool,
+    done: crate::state::AsideDone,
+}
+
+/// Wait for the worker of a question asked beside a turn and take what it came to.
 ///
-/// Run on every frame of the turn. The worker says nothing while it works, and its end is what the
-/// channel reports. Once the worker has ended, the answer becomes a row in the agents list without opening the view, which would take
-/// the screen from a person reading the turn (WATCH-19), and what it cost is charged to the turn it
-/// interrupted (SESSION-11). A stop of the turn stops the question with it (INPUT-4).
-pub(super) fn settle_aside_beside_a_turn(session: &mut Session, turn_cancel: &Cancel) {
-    if turn_cancel.is_cancelled() {
-        session.stop_aside_beside_a_turn();
-    }
-    let Some(flight) = session.take_aside_flight() else {
-        return;
-    };
-    loop {
-        match flight.from_worker.try_recv() {
-            // The worker holds the `Sender` to end with it and sends nothing, and `aside_sharing`
-            // takes no confirmer, so no `Reply` is owed for anything that did arrive.
-            Ok(_) => {}
-            Err(mpsc::TryRecvError::Empty) => {
-                session.begin_aside_beside_a_turn(flight);
-                return;
-            }
-            Err(mpsc::TryRecvError::Disconnected) => break,
-        }
-    }
+/// Called once the worker has ended, or once its stop has been pressed, which it returns to
+/// promptly as a stopped summary does. An answer that arrived before a stop did is kept and not
+/// reported as stopped: the request was not walked away from.
+fn join_the_aside(flight: crate::state::AsideFlight) -> EndedAside {
     let stopped = flight.cancel.is_cancelled();
     let done = flight
         .worker
         .join()
         .unwrap_or_else(|_| Err(t!(btw_ended_unexpectedly).to_string()));
-    session.answer_while_working(|session| match done {
+    EndedAside {
+        asked: flight.asked,
+        stopped,
+        done,
+    }
+}
+
+/// Take the question asked beside a turn if its worker has ended, and leave it out if not.
+///
+/// The worker holds the `Sender` to end with it and sends nothing, and `aside_sharing` takes no
+/// confirmer, so no `Reply` is owed for anything that did arrive.
+fn take_the_ended_aside(session: &mut Session) -> Option<EndedAside> {
+    let flight = session.take_aside_flight()?;
+    loop {
+        match flight.from_worker.try_recv() {
+            Ok(_) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                session.begin_aside_beside_a_turn(flight);
+                return None;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+    Some(join_the_aside(flight))
+}
+
+/// Keep what a question asked beside a turn came to, and say so.
+///
+/// An answer becomes a row of the agents list without opening the view, which would take the screen
+/// from a person reading the turn or typing the next prompt (WATCH-19), and what it cost is charged
+/// to the turn it was asked beside (SESSION-11). The note names the key that opens the row, since
+/// the row is otherwise announced by a count on the bottom line that a narrow terminal drops.
+fn land_the_aside(session: &mut Session, ended: EndedAside) {
+    match ended.done {
         Ok(answered) => {
             session.charge_aside_beside_a_turn(answered.usage);
             session.kept_aside_beside_a_turn(bravebot_session::sessions::Aside {
-                question: flight.asked,
+                question: ended.asked,
                 answer: Some(answered.shown),
                 kept: answered.kept.is_some(),
             });
+            let chord = session.bindings().watch_name();
+            session.note(t!(btw_answered_beside_a_turn, chord = chord));
         }
-        Err(_) if stopped => session.note(t!(btw_stopped)),
+        Err(_) if ended.stopped => session.note(t!(btw_stopped)),
         Err(message) => session.note(t!(btw_failed, problem = message)),
-    });
+    }
 }
 
-/// End a question still out when the turn it was asked beside has ended.
+/// Take what the question asked beside the running turn has done since the last frame.
 ///
-/// The answer is not waited for: the turn is over and the person is back at the box, so the request
-/// is stopped and said to be, as a stopped question is.
+/// Run on every frame of the turn. The worker says nothing while it works, and its end is what the
+/// channel reports. Once the worker has ended the answer is kept and said (WATCH-19). A stop of the
+/// turn stops the question with it (INPUT-4).
+pub(super) fn settle_aside_beside_a_turn(session: &mut Session, turn_cancel: &Cancel) {
+    if turn_cancel.is_cancelled() {
+        session.stop_aside_beside_a_turn();
+    }
+    if let Some(ended) = take_the_ended_aside(session) {
+        session.answer_while_working(|session| land_the_aside(session, ended));
+    }
+}
+
+/// Take what the question asked beside a turn has done, once that turn has ended.
+///
+/// Run on every pass of the loop that waits for the person, and says whether the question ended so
+/// the caller can write the record down. Not [`Session::answer_while_working`]: no turn is open to
+/// count the note as something a command said, and that call would also move the view to the tail
+/// of a transcript somebody may be reading back. The row is not opened for the reason the turn's
+/// is not: the person is at the box, and a view taking keys would take the next prompt they type
+/// (WATCH-19).
+pub(super) fn settle_aside_between_turns(session: &mut Session) -> bool {
+    let Some(ended) = take_the_ended_aside(session) else {
+        return false;
+    };
+    land_the_aside(session, ended);
+    true
+}
+
+/// What becomes of a question still out when the turn it was asked beside has ended.
+///
+/// A turn that ended by itself leaves its question out, for [`settle_aside_between_turns`]. One that
+/// was stopped ends it, for the reason [`end_aside_beside_a_turn`] gives.
+pub(super) fn leave_the_aside_at_the_end_of_a_turn(session: &mut Session, turn_cancel: &Cancel) {
+    if turn_cancel.is_cancelled() {
+        end_aside_beside_a_turn(session);
+    }
+}
+
+/// End a question still out when the turn it was asked beside has been stopped.
+///
+/// A turn that ended any other way leaves its question out, for [`settle_aside_between_turns`]:
+/// the person asked it and is owed the answer, and stopping it here would have thrown away a
+/// request that was nearly done. A stop is the person asking for the work to end, which a question
+/// asked beside it is part of (INPUT-4), so it is stopped and said to be.
 pub(super) fn end_aside_beside_a_turn(session: &mut Session) {
     session.stop_aside_beside_a_turn();
     if let Some(flight) = session.take_aside_flight() {
-        let ended = flight.worker.join();
-        session.answer_while_working(|session| match ended {
-            Ok(_) => session.note(t!(btw_stopped)),
-            Err(_) => session.note(t!(
-                btw_failed,
-                problem = t!(btw_ended_unexpectedly).to_string()
-            )),
-        });
+        let ended = join_the_aside(flight);
+        session.answer_while_working(|session| land_the_aside(session, ended));
     }
 }
 

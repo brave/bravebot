@@ -5,7 +5,8 @@ use super::*;
 /// A question asked beside a running turn, while its worker is out (CMD-8).
 ///
 /// Held by the session so the turn's own loop can drain it each frame: the loop that waits for a
-/// question asked between turns takes the terminal, and this one must not.
+/// question asked between turns takes the terminal, and this one must not. A turn that ends by
+/// itself leaves it here, and the loop that waits for the person drains it from then.
 #[derive(Debug)]
 pub struct AsideFlight {
     /// What the row will say was asked.
