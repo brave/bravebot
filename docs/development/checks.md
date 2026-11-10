@@ -281,14 +281,15 @@ agree about how many exceptions to the rule are admitted, whether every crate ke
 client of its own is one the egress register admits and no comment claims a dependency a manifest
 beside it declares, whether the register admitting them leaves as many prompts out of a verdict's
 reach as the clause deciding that does, whether a field documented as read in one place is read in
-one place, whether a trait reaches into a `Labelled`, whether a spec pins the constructors of one as
-well as the releases, whether every gate handing released content to a closure the driver wrote is
-counted rather than merely named and so is every function forwarding its caller's closure to one,
-whether `clippy.toml` still refuses the calls that start a program and no second clippy
-configuration hides them from a crate, and whether every allow of that refusal covers one start and
-carries a reason, since `make check` fails the start and cannot read the reason, whether every
-workflow step is on a commit
-rather than a tag its owner can move, whether every container image this tree runs
+one place, whether a trait, an inherent function outside the type's own seven, or a conversion
+taking a `Labelled` as an argument reaches into a `Labelled`, whether a spec pins the constructors
+of one as well as the releases, whether every gate handing released content to a closure the
+driver wrote is counted rather than merely named and so is every function forwarding its caller's
+closure to one, whether `clippy.toml` still refuses the calls that start a program and no second
+clippy configuration hides them from a crate, and whether every allow of that refusal covers one
+start and carries a reason, since `make check` fails the start and cannot read the reason, whether
+every workflow step is on a commit rather than a tag its owner can move, whether every container
+image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm or pnpm dependency, which every step in that job could read the
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
