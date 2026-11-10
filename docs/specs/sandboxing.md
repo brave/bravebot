@@ -314,6 +314,11 @@ A backend says what it can enforce rather than what it was asked for, and a poli
 something the backend cannot deliver is refused. Which paths it can name is reported the same way.
 `bravebot doctor` reports the level this platform can enforce.
 
+On Windows the level is kernel-enforced, as on macOS. A container bounds the filesystem and the
+network, and the job a stage is created in ([SANDBOX-17](#SANDBOX-17)) holds a limit of one active
+process where the policy denies subprocesses, so a policy asking for that denial is applied there
+and not refused. Linux is the platform that still refuses it.
+
 **Why.** An overstated capability is the same failure as a silent fallback, reached by a different
 road. An understated one costs the caller a grant it did not mean: a caller that cannot ask whether
 a path missing from the disk is nameable reads the platform instead, and then creates a file nothing
@@ -331,7 +336,8 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_cli::doctor::doctor_says_whether_the_kernel_enforces_network_denial`
 `verified-by: bravebot_cli::doctor::confinement_that_could_not_be_established_fails_the_run`
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
-`verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_refused`
+`verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_applied`
+`verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
 `verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
 `verified-by: bravebot_sandbox::windows::a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own`
 `verified-by: bravebot_sandbox::windows::a_profile_name_fits_what_the_platform_accepts`
@@ -359,7 +365,10 @@ row names it too. A row the caller named that a backend grants as its entries is
 backend cannot list it, and at the exec when it has gone.
 
 On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
-not what a junction beneath the directory leads to.
+not what a junction beneath the directory leads to. That is shown for a junction made from outside a
+stage. The backend makes no reparse-point check when it writes an entry, and whether a grant crosses
+a junction a stage made inside a directory it was granted for writing has not been observed on
+Windows; it is listed with the known costs.
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -830,6 +839,8 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_sandbox::macos::the_profile_states_a_refusal_after_the_grant_it_narrows_and_a_lift_after_the_refusal`
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_agent::confine::a_stage_writes_only_the_session_the_temporary_directory_and_the_caches`
+`verified-by: bravebot_agent::confine::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
+`verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_sandbox::macos::a_program_linked_against_the_platforms_tls_library_starts_under_the_base`
 `verified-by: bravebot_sandbox::macos::a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base`
 
@@ -1428,12 +1439,17 @@ or `.cmd`) is refused there, because the command interpreter reads its argument 
 rules and a quoting that is safe for every other program is not safe for it. Any other program the
 platform cannot confine is refused as it is elsewhere. The stage is created in a job of its own,
 which the creation call names, so it is in the job before it runs and every program it starts is in
-that job too. Killing the stage
+that job too. The job also keeps the stage from the clipboard (read and write), the global atom
+table, creating or switching desktops and the USER handles of processes outside the job, whatever
+the policy. Where the policy denies subprocesses the job holds a limit of one active process, which
+is the stage itself, so the program it started is the only one in it and a second is refused by the
+platform; where the policy allows subprocesses there is no such limit. Killing the stage
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
 process is let go of and the platform does when this process ends, a crash included. The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
-ends then too, which is when the grants it ran under are taken off. A stage the platform will not
-put in a job is not started. The stage is created under the gate every start of a program takes
+ends then too, which is when the grants it ran under are taken off. A stage the platform will not put in a job carrying those limits is not started, and the refusal
+names what the platform reported, including when this process is itself in a job the platform will
+not nest them under. The stage is created under the gate every start of a program takes
 ([RPCVIEW-8](session-view.md#RPCVIEW-8)), so a program started at the same moment holds none of its
 streams, and it inherits the three standard streams it is given and no other handle this process
 holds. The stage is given a console of its own with no
@@ -1455,7 +1471,9 @@ session was opened on is refused by the kernel, since only redirections are open
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
 ([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
 that asks its question on the console rather than on its input waits until the line is cancelled
-or runs out of time, and the console's code page is the system's rather than one a person set with
+or runs out of time, the console host the platform adds may count against the process limit of a
+stage whose policy denies subprocesses (not shown on a Windows run yet), and the console's code
+page is the system's rather than one a person set with
 `chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
@@ -1473,6 +1491,14 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_agent::confine::a_program_left_running_is_confined_as_well`
 `verified-by: bravebot_agent::confine::a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
 `verified-by: bravebot_agent::confine::a_job_with_a_stage_that_cannot_be_confined_is_refused_with_no_stage_left_running`
+`verified-by: bravebot_sandbox::windows::the_job_carries_every_ui_limit_whatever_the_policy`
+`verified-by: bravebot_sandbox::windows::a_job_that_cannot_be_limited_refuses_the_stage_naming_the_cause`
+`verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_is_in_a_job_carrying_every_ui_limit`
+`verified-by: bravebot_sandbox::windows::a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_starts_a_child_where_its_policy_allows_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
@@ -2386,7 +2412,9 @@ the directory: the scratch directory and a person's own `allowWrite` entries are
 settings file and a `--settings` file outside the workspace are read for the key, as for `sandbox.mode`:
 a checkout's project or local file that sets it is not obeyed and is reported as an unread key. Any
 value but `true` asks for nothing. A `denyWrite` entry naming the temporary directory refuses it as well,
-and is the way to hold back one path of it.
+and is the way to hold back one path of it. On Windows a session with a directory of its own grants no
+stage the account's temporary directory, so the setting changes nothing there; the `temp` directory
+inside the session's own stays written, like the scratch directory.
 
 The managed file's `sandbox.mode` is a floor and not a default. A flag or a settings file that names
 a mode looser than it refuses the session before it starts, naming both files, saying which of
@@ -4592,7 +4620,7 @@ whose plan never named them.
 | on macOS, the developer directory `xcode-select -p` names as the session opens, where it is `/Library/Developer/CommandLineTools` or an application bundle's directly in `/Applications`, which is then the bundle whole | read |
 | the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
 
-On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own.
+On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own. A Windows session that has a directory of its own is also granted a `temp` directory inside it, read and written, in place of the temporary-directory row, and a stage's `TEMP` and `TMP` name it ([trust-map.md](trust-map.md#TRUST-17)). The account's temporary directory is then granted to no stage. Without a directory of its own the row is the account's temporary directory.
 
 Four rows is the whole of what stays invisible, and each one is here because every program needs it
 and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
@@ -4878,12 +4906,21 @@ reported as what it is.
   a file outside those directories is refused by the kernel until its plan names the file.
 - A grant on a single file is written without inheritance, which is the entry a file takes. The
   program started is granted as a file this way, and that is also unexercised.
-- Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
-  reaches rather than whether it creates children, and a child of a confined process is inside the
-  same container rather than outside it, so a policy asking for that denial is refused on both
-  rather than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that the two
-  platforms confine nothing for a caller whose policy wants a program to have no children, where
-  Seatbelt applies one.
+- Whether a grant crosses a junction a stage made inside a directory it was granted for writing is
+  not settled. `set_entry` makes no reparse-point check, so an entry written on the directory may be
+  inherited by what the junction leads to. The test
+  `bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_a_stage_made` reads the
+  target's access list while a second stage runs, prints `junction grant crossed` or `junction
+  grant did not cross`, and fails if the second stage can read the target. It has not been run on
+  Windows, and a clause is not claimed from it until it has. Where the grant crosses, `set_entry`
+  has to skip reparse points. The session's own `temp` directory, which a stage can replace by a
+  link, is checked by name as the scratch directory is, and the junction case of that check is
+  reasoned and not run on Windows.
+- Subprocess denial has no mechanism on Linux. A container bounds what a process reaches rather
+  than whether it creates children, so a policy asking for that denial is refused there rather
+  than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that Linux confines nothing
+  for a caller whose policy wants a program to have no children, where Seatbelt and a Windows job
+  apply one.
 - A macOS developer directory outside the two places the platform installs one, an Xcode kept
   under the home or in a folder inside `/Applications`, is in no row, so on that machine every
   `/usr/bin` developer shim is refused under the base. A row for it names a directory of the
@@ -4933,4 +4970,9 @@ reported as what it is.
   the agent's other tests that start a confined process. The two tests that watch a loopback
   listener run on Unix only, so whether a container reaches a loopback listener, and with it the
   denial of egress on Windows, is shown by the capability the token is built with and not by a
-  connection.
+  connection. No test connects from a container granted the network to a private-network address
+  either, so that a granted container reaches neither loopback nor a private network is not shown.
+  The Windows tests that connect out (`a_container_connects_out_only_when_its_policy_asks_for_the_network`
+  and `a_container_without_the_network_cannot_look_up_a_name`) need `github.com` reachable from the
+  machine directly, without a proxy, and fail where it is not, as a machine that cannot make a
+  container fails them, and do not skip.

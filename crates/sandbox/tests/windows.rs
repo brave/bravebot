@@ -15,7 +15,7 @@ use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::windows::AppContainerSandbox;
 use bravebot_sandbox::{
-    ConfinedChild, ConfinedStdin, Environment, Sandbox, SandboxError, Stream, Streams,
+    ConfinedChild, ConfinedStdin, Environment, Sandbox, SandboxError, Stream, Streams, Variables,
 };
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -76,19 +76,24 @@ fn run(
     args: &[&str],
     policy: &SandboxPolicy,
 ) -> Result<(Option<i32>, String), SandboxError> {
+    run_with(sandbox, program, args, policy, Environment::Inherited)
+}
+
+/// [`run`] with the environment the stage starts with named.
+fn run_with(
+    sandbox: &AppContainerSandbox,
+    program: &str,
+    args: &[&str],
+    policy: &SandboxPolicy,
+    environment: Environment,
+) -> Result<(Option<i32>, String), SandboxError> {
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
     let streams = Streams {
         stdin: Stream::Null,
         stdout: Stream::Piped,
         stderr: Stream::Piped,
     };
-    let mut child = sandbox.spawn(
-        program.as_ref(),
-        &args,
-        policy,
-        streams,
-        Environment::Inherited,
-    )?;
+    let mut child = sandbox.spawn(program.as_ref(), &args, policy, streams, environment)?;
     let mut printed = Vec::new();
     child
         .take_stdout()
@@ -288,6 +293,123 @@ fn a_grant_does_not_reach_through_a_junction_to_where_it_leads() {
         let (code, printed) = read(&path);
         assert_ne!(code, Some(0), "{} was read", path.display());
         assert!(!printed.contains("outside"), "{printed}");
+    }
+}
+
+/// The access list of `path` as `icacls` prints it, which names every account with an entry, so a
+/// list that gained one compares unequal to the list before.
+fn access_list_of(path: &Path) -> String {
+    let listed = spawned(
+        Command::new("icacls")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("icacls ends");
+    assert!(
+        listed.status.success(),
+        "the access list was not read: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    String::from_utf8_lossy(&listed.stdout).into_owned()
+}
+
+/// SANDBOX-6 for a junction a stage made. The regression it rejects: a later stage's grant being
+/// written through a junction an earlier stage left inside the granted directory, which hands the
+/// later container the directory the junction leads to. The earlier test makes its junction from
+/// this process, outside any container; this one makes it from a stage that had write access to
+/// the directory, which is what an attacker's program would do.
+///
+/// A grant is taken off when its stage ends, so a list read after the second stage has run shows
+/// nothing whichever way the grant went. The target's access list is therefore read while a second
+/// stage is still running with the directory granted, and compared whole with the list before, so
+/// an entry for any account counts and not only one this test could name. The observation is
+/// printed whichever way it goes, as `junction grant crossed` or `junction grant did not cross`,
+/// so a log of the Windows job settles whether a grant reaches through a junction a stage made
+/// (R15, R17) and does not depend on the assertion that follows. The assertion is the property the
+/// spec promises: a later stage granted the directory cannot read the target, by either path.
+#[test]
+fn a_grant_does_not_reach_through_a_junction_a_stage_made() {
+    let granted = scratch("stage-junction-granted");
+    let withheld = scratch("stage-junction-withheld");
+    std::fs::write(withheld.join("note.txt"), "outside\n").expect("a file");
+    let link = granted.join("link");
+    let before = access_list_of(&withheld);
+
+    {
+        let making = sandbox();
+        let policy = the_base("stage-junction-making").allow_write(&granted);
+        let line = format!("mklink /J {} {}", link.display(), withheld.display());
+        let (code, printed) = cmd(&making, &line, &policy).expect("the first stage starts");
+        assert_eq!(code, Some(0), "the stage made no junction: {printed}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(link.join("note.txt")).expect("the junction leads to the target"),
+        "outside\n",
+        "the junction is not one that leads to the target"
+    );
+
+    let reading = sandbox();
+    let policy = the_base("stage-junction-reading").allow_write(&granted);
+
+    // The observation: a stage that stays running, so its grants are in place when the target's
+    // list is read.
+    let during = {
+        let streams = Streams {
+            stdin: Stream::Piped,
+            stdout: Stream::Null,
+            stderr: Stream::Null,
+        };
+        let mut waiting = reading
+            .spawn(
+                "cmd.exe".as_ref(),
+                &[OsString::from("/c"), OsString::from("cmd")],
+                &policy,
+                streams,
+                Environment::Inherited,
+            )
+            .expect("the second stage starts");
+        let input = waiting.take_stdin().expect("a stdin that was piped");
+        let during = access_list_of(&withheld);
+        drop(input);
+        let _ = waiting.kill();
+        let _ = waiting.wait();
+        during
+    };
+    let crossed = during != before;
+    eprintln!(
+        "{}: the access list of {} {} while a stage granted {} ran\n--- before ---\n{before}\n--- during ---\n{during}",
+        if crossed {
+            "junction grant crossed"
+        } else {
+            "junction grant did not cross"
+        },
+        withheld.display(),
+        if crossed {
+            "gained entries"
+        } else {
+            "was unchanged"
+        },
+        granted.display(),
+    );
+
+    for path in [withheld.join("note.txt"), link.join("note.txt")] {
+        let (code, printed) = cmd(&reading, &format!("type {}", path.display()), &policy)
+            .expect("the second stage starts");
+        assert_ne!(
+            code,
+            Some(0),
+            "{} was read; observed: junction grant {}",
+            path.display(),
+            if crossed { "crossed" } else { "did not cross" }
+        );
+        assert!(
+            !printed.contains("outside"),
+            "{printed}; observed: junction grant {}",
+            if crossed { "crossed" } else { "did not cross" }
+        );
     }
 }
 
@@ -782,6 +904,287 @@ fn a_stage_is_not_attached_to_the_console_this_process_runs_in() {
     assert!(
         !attached.contains(&stage),
         "the stage {stage} is attached to this process's console: {attached:?}"
+    );
+}
+
+/// The regression it rejects: a job whose process limit counts more than the stage itself, so a
+/// stage under a policy that denies subprocesses, which starts no child, is refused its own start
+/// or is ended with it (the console host a stage without a window is given is the process the
+/// limit might count). The stage runs a `cmd.exe` built-in, which starts no process, so the only
+/// processes in the job are the stage and what the platform adds for its console. Whether a child
+/// is refused is pinned in the tests that follow it, not here.
+#[test]
+fn a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses() {
+    let sandbox = sandbox();
+    let policy = the_base("no-children");
+    let denied = SandboxPolicy {
+        allow_subprocesses: false,
+        ..policy
+    };
+    assert!(!denied.allow_subprocesses);
+
+    let (code, printed) = cmd(&sandbox, "echo hello", &denied)
+        .expect("a policy denying subprocesses is applied by the job and not refused");
+
+    assert_eq!(code, Some(0), "{printed}");
+    assert_eq!(printed, "hello");
+}
+
+/// The line the next two tests hand `cmd.exe`: it starts a second `cmd.exe`, which is a program
+/// the first creates rather than a built-in it runs itself, and prints a word only that second
+/// one can print.
+const STARTING_A_CHILD: &str = "cmd /c echo child-ran";
+
+/// SANDBOX-17 on Windows: a policy that denies subprocesses holds a stage to the program it
+/// started. The regression it rejects: a job with no process limit, which is what a policy
+/// denying subprocesses had before the limit existed and what a limit set but never applied
+/// leaves, so the stage's `cmd.exe` starts the second one and prints its word. The paired test
+/// below runs the same line under a policy that allows subprocesses, so a child that failed to
+/// start for another reason (the program missing, a path not granted) is not mistaken for one the
+/// limit refused.
+#[test]
+fn a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses() {
+    let sandbox = sandbox();
+    let denied = SandboxPolicy {
+        allow_subprocesses: false,
+        ..the_base("child-denied")
+    };
+
+    let (code, printed) = cmd(&sandbox, STARTING_A_CHILD, &denied)
+        .expect("a policy denying subprocesses is applied by the job and not refused");
+
+    assert_ne!(code, Some(0), "the stage started a child: {printed}");
+    assert!(
+        !printed.contains("child-ran"),
+        "the stage started a child: {printed}"
+    );
+}
+
+/// The paired half of the test above. The regression it rejects: a process limit applied to every
+/// policy, which would stop a stage starting the programs its policy allows (the base allows them,
+/// so a build or a `git` run from a shell would fail).
+#[test]
+fn a_stage_starts_a_child_where_its_policy_allows_subprocesses() {
+    let sandbox = sandbox();
+    let allowed = the_base("child-allowed");
+    assert!(allowed.allow_subprocesses);
+
+    let (code, printed) = cmd(&sandbox, STARTING_A_CHILD, &allowed).expect("cmd.exe starts");
+
+    assert_eq!(code, Some(0), "{printed}");
+    assert_eq!(printed, "child-ran");
+}
+
+/// Set when this binary is started again inside a stage to say what its job limits.
+const PROBING_THE_JOB: &str = "BRAVEBOT_TEST_PROBING_THE_JOB";
+
+/// The word a probe prints before what it found, so the test that started it picks the line out of
+/// what the test harness prints around it.
+const PROBED: &str = "job-probe";
+
+/// What the job the calling process is in limits, as the process itself reads it, or why it
+/// cannot.
+fn the_job_this_process_is_in() -> Result<(u32, u32, u32), std::io::Error> {
+    use std::mem::size_of;
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    };
+
+    let mut interface = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+    // SAFETY: a null job names the job of the calling process. `interface` is a local of exactly
+    // the size passed, alive for the call, and the call writes at most that many bytes into it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let queried = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_mut(&mut interface).cast(),
+            size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if queried == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut extended = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    // SAFETY: as above, with `extended` the local of the size passed.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let queried = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_mut(&mut extended).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if queried == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        interface.UIRestrictionsClass,
+        extended.BasicLimitInformation.LimitFlags,
+        extended.BasicLimitInformation.ActiveProcessLimit,
+    ))
+}
+
+/// Run only inside a stage that [`the_job_a_stage_is_in`] started, where it prints what the stage's
+/// job limits. Started any other way it does nothing, so the ordinary run of this binary passes
+/// it without reading the job of the terminal or runner it is in.
+#[test]
+fn probe_the_job_this_stage_is_in() {
+    if std::env::var_os(PROBING_THE_JOB).is_none() {
+        return;
+    }
+    match the_job_this_process_is_in() {
+        Ok((interface, flags, processes)) => {
+            println!("{PROBED} interface={interface} flags={flags} processes={processes}");
+        }
+        Err(error) => println!("{PROBED} error={error}"),
+    }
+}
+
+/// What a stage's job limits, as a program in the stage reads it.
+struct JobSeen {
+    /// The `JOB_OBJECT_UILIMIT_*` flags.
+    interface: u32,
+    /// The `JOB_OBJECT_LIMIT_*` flags.
+    flags: u32,
+    /// The active process limit, which means nothing unless `flags` holds the limit.
+    processes: u32,
+}
+
+/// Start this test binary as a stage under `policy` and read its job from inside it.
+///
+/// The binary is copied into a directory of its own that the stage is granted, since the
+/// directory it was built in holds every other artefact of the build and a grant is written onto
+/// each file beneath it.
+fn the_job_a_stage_is_in(name: &str, policy: SandboxPolicy) -> JobSeen {
+    let sandbox = sandbox();
+    let directory = scratch(&format!("{name}-probe"));
+    let probe = directory.join("probe.exe");
+    std::fs::copy(std::env::current_exe().expect("this test binary"), &probe)
+        .expect("the test binary is copied");
+    let policy = policy.allow_read(&directory);
+    let environment = Environment::Only(
+        Variables::new()
+            .with(
+                "SystemRoot",
+                std::env::var_os("SystemRoot").expect("the system directory is named"),
+            )
+            .with(PROBING_THE_JOB, "1"),
+    );
+
+    let (code, printed) = run_with(
+        &sandbox,
+        &probe.display().to_string(),
+        &[
+            "--exact",
+            "probe_the_job_this_stage_is_in",
+            "--nocapture",
+            "--quiet",
+            "--test-threads=1",
+        ],
+        &policy,
+        environment,
+    )
+    .expect("the probe starts");
+
+    assert_eq!(code, Some(0), "the probe failed: {printed}");
+    let found = printed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(PROBED))
+        .unwrap_or_else(|| panic!("the probe printed no {PROBED} line: {printed}"));
+    assert!(!found.contains("error="), "the job was not read: {found}");
+    let field = |key: &str| {
+        found
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix(key))
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or_else(|| panic!("the probe line has no {key}: {found}"))
+    };
+    JobSeen {
+        interface: field("interface="),
+        flags: field("flags="),
+        processes: field("processes="),
+    }
+}
+
+/// SANDBOX-17 on Windows: the job a stage is in carries the UI limits and ends its programs when
+/// it is closed, whatever the policy. The regressions it rejects: a flag left out of the set (the
+/// clipboard read or write, the atom table, desktops, USER handles), and a job made without them
+/// that a request for them would have to be refused for. The flags are read by a program in the
+/// stage from its own job, and compared with the platform's constants and not this crate's.
+#[test]
+fn a_stage_is_in_a_job_carrying_every_ui_limit() {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
+        JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+        JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    };
+
+    for (name, policy) in [
+        ("ui-allowing", the_base("ui-allowing")),
+        (
+            "ui-denying",
+            SandboxPolicy {
+                allow_subprocesses: false,
+                ..the_base("ui-denying")
+            },
+        ),
+    ] {
+        let seen = the_job_a_stage_is_in(name, policy);
+
+        for (limit, flag) in [
+            ("clipboard read", JOB_OBJECT_UILIMIT_READCLIPBOARD),
+            ("clipboard write", JOB_OBJECT_UILIMIT_WRITECLIPBOARD),
+            ("global atoms", JOB_OBJECT_UILIMIT_GLOBALATOMS),
+            ("desktop", JOB_OBJECT_UILIMIT_DESKTOP),
+            ("USER handles", JOB_OBJECT_UILIMIT_HANDLES),
+        ] {
+            assert_eq!(
+                seen.interface & flag,
+                flag,
+                "the {limit} limit is not in the job of the {name} stage"
+            );
+        }
+        assert_eq!(
+            seen.flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            "the job of the {name} stage does not end its programs when closed"
+        );
+    }
+}
+
+/// SANDBOX-17 on Windows: the job's process limit is present for a policy that denies
+/// subprocesses, is one, and is absent for a policy that allows them. The regressions it rejects:
+/// no limit where the policy denies subprocesses, a limit above one, which lets a child start, and
+/// a limit on every policy. Read by a program in the stage from its own job, so it is the limit in
+/// force and not the one this crate meant to set.
+#[test]
+fn a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses() {
+    use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+
+    let denied = the_job_a_stage_is_in(
+        "processes-denying",
+        SandboxPolicy {
+            allow_subprocesses: false,
+            ..the_base("processes-denying")
+        },
+    );
+    let allowed = the_job_a_stage_is_in("processes-allowing", the_base("processes-allowing"));
+
+    assert_eq!(
+        denied.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        "the job of a stage denied subprocesses has no process limit"
+    );
+    assert_eq!(denied.processes, 1);
+    assert_eq!(
+        allowed.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        0,
+        "the job of a stage allowed subprocesses has a process limit"
     );
 }
 

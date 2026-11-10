@@ -1296,7 +1296,10 @@ another account created first, a link and a file are not used, and the session's
 in the temporary directory itself, so the name cannot be used to refuse a session its directory or
 to point it elsewhere. The account's directory serves the
 session, server and checkout directories alike, and is not removed with any of them. Windows has no
-account's directory, since its temporary path is the account's own already.
+account's directory, since its temporary path is the account's own already. Where the session has a
+directory of its own, a stage on Windows is given a `temp` directory inside it as `TEMP` and `TMP`
+and is granted that and not the account's temporary directory
+([SANDBOX-12](sandboxing.md#SANDBOX-12)).
 
 Created rather than adopted, and its owner's alone, because that directory is shared. On macOS it is the
 account's own, but on Linux it is ordinarily the world-writable `/tmp`, where a name this program
@@ -1503,7 +1506,7 @@ which nothing is reading it, and reaching the programs a line starts is the whol
 variable is for. A line the person typed themselves has nothing added to it, keeping their own
 environment as it keeps everything else about their terminal ([RUN-12](tools/run.md#RUN-12)).
 
-`$TMPDIR` for a program a `run` starts stays what it was, since the map governs the operations this
+`$TMPDIR` for a program a `run` starts stays what it was on Linux and macOS, since the map governs the operations this
 program performs and the redirection targets a line spells rather than what a program opens for
 itself. A program's own temporary file is named in no plan and read back by nothing, so pointing that
 variable at the session's directory would put files nobody decided anything about inside a directory
@@ -1512,6 +1515,18 @@ purpose. Whether a confined program reaches a
 temporary directory at all is a question for the base profile [sandboxing.md](sandboxing.md)
 describes.
 
+On Windows `TEMP` and `TMP` for a stage are the exception, where the session has a directory of its
+own: they name a `temp` directory inside it, made as the session opens, and the stage is granted that
+directory in place of the account's temporary directory. A grant there is an entry written onto every
+file beneath the directory as the stage starts, and the account's temporary directory holds the
+files of every program the account runs, so granting it costs time proportional to what other
+programs left and writes entries onto files that are not the session's. A `TEMP` or `TMP` the line
+itself assigns is the line's, as `TMPDIR` is. With no directory of its own the session keeps the
+account's temporary directory.
+
+`verified-by: bravebot_agent::confine::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
+`verified-by: bravebot_agent::confine::a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins`
+`verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_agent::exec::a_stage_is_told_where_the_sessions_own_directory_is`
 `verified-by: bravebot_agent::exec::a_background_stage_is_told_where_the_sessions_own_directory_is`
 `verified-by: bravebot_agent::exec::a_steps_own_assignment_wins_over_the_directory_it_was_given`
