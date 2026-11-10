@@ -890,6 +890,34 @@ def qualifier_spellings(code, qualifier, tail):
     return found
 
 
+# What a `type` line can sit directly inside, for telling an alias from an associated type.
+TYPE_HOLDER = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?(?:impl|trait|mod|fn)\b")
+
+
+def associated_type_lines(code):
+    """The numbers of the lines that sit directly in an `impl` or `trait` block.
+
+    `type Item = Labelled;` there is an associated type, which names no alias that `::new` can be
+    called on. The block is read from the indentation, as `owned_definitions` reads it, and a `fn`
+    counts as a block too, so a `type` inside a method body is still an alias."""
+    inside = set()
+    blocks = []
+    for number, raw in enumerate(code, start=1):
+        body = raw.lstrip()
+        if not ITEM.match(body):
+            continue
+        indent = len(raw) - len(body)
+        while blocks and blocks[-1][0] >= indent:
+            blocks.pop()
+        if blocks and blocks[-1][1] in ("impl", "trait"):
+            inside.add(number)
+        hold = TYPE_HOLDER.match(body)
+        if hold:
+            kind = re.search(r"impl|trait|mod|fn", hold.group(0)).group(0)
+            blocks.append((indent, kind))
+    return inside
+
+
 def qualifier_aliases(code, qualifier):
     """Where `qualifier` is given another name, as `(line, name)`.
 
@@ -902,10 +930,14 @@ def qualifier_aliases(code, qualifier):
         rf"\b{named}\s+as\s+(\w+)"
         rf"|\btype\s+(\w+)\s*(?:{GENERICS})?\s*=\s*(?:\w+\s*::\s*)*{named}\b(?!\s*::)"
     )
-    return [
-        (text.count("\n", 0, match.start()) + 1, match.group(1) or match.group(2))
-        for match in alias.finditer(text)
-    ]
+    associated = associated_type_lines(code)
+    found = []
+    for match in alias.finditer(text):
+        number = text.count("\n", 0, match.start()) + 1
+        if match.group(2) and number in associated:
+            continue
+        found.append((number, match.group(1) or match.group(2)))
+    return found
 
 
 def unseen_aliases(qualifier, sources):

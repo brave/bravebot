@@ -873,6 +873,31 @@ CASES = [
         {"guard-spelling-unseen"},
     ),
     (
+        "an associated type naming the guarded type in a trait impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Iterator for Reach {\n    type Item = Gate;\n\n"
+            "    fn next(&mut self) -> Option<Gate> {\n        None\n    }\n}"
+        ),
+        None,
+    ),
+    (
+        "a type alias of the guarded type inside a function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    fn build(&self) -> Gate {\n        type G = Gate;\n"
+            '        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type after an impl that holds an associated type",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Iterator for Reach {\n    type Item = Gate;\n\n"
+            "    fn next(&mut self) -> Option<Gate> {\n        None\n    }\n}\n\n"
+            'type G = Gate;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
         "another type's constructor through its own turbofish",
         open_the_gate_by_another_spelling(
             "fn build() -> Vec<Gate> {\n    Vec::<Gate>::new()\n}\n\n"
