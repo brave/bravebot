@@ -507,7 +507,7 @@ fn options(remember: bool, allow: &str, reject: &str) -> Value {
 fn pictured(text: &str) -> String {
     text.replace("\r\n", "\n")
         .split('\n')
-        .map(bravebot_approval::printable)
+        .map(bravebot_agent::confirm::printable)
         .collect::<Vec<_>>()
         .join("\n")
 }

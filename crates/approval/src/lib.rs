@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use bravebot_agent::confirm::shown_argument;
+use bravebot_agent::confirm::{printable, shown_argument};
 use bravebot_agent::diff::Change;
 use bravebot_i18n::t;
 
@@ -33,25 +33,6 @@ pub const QUARANTINE_BAR: &str = "\u{2503}";
 /// [`vet_lines`]), since a yes releases every byte of either to the planner and a line counted
 /// rather than shown would be approved unread.
 pub const MOST_CONTENT_LINES: usize = 40;
-
-/// Replace control characters, so shown text cannot move the cursor or recolour the screen.
-///
-/// The margin in front of every row is written by the caller. An escape sequence in the content
-/// would let the content write one instead, and a forged margin is worse than no margin, since
-/// drawing one is the whole claim being made about the block.
-pub fn printable(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if !c.is_control() || c == '\t' {
-                c
-            } else {
-                // The Unicode pictures for C0, so an escape reads as ␛ rather than vanishing: a
-                // character silently dropped is one nobody can tell was ever in the file.
-                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
-            }
-        })
-        .collect()
-}
 
 /// Quarantined content as rows, each behind a margin, capped.
 ///

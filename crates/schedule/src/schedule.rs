@@ -978,7 +978,7 @@ fn project_directory(named: Option<PathBuf>, here: Option<&Path>) -> Result<Path
                 // Drawn: the directory is a name the person's checkout is under (LAYER-3).
                 t!(
                     sessions_import_no_project,
-                    path = bravebot_approval::printable(&directory.display().to_string())
+                    path = bravebot_agent::confirm::printable(&directory.display().to_string())
                 ),
             )
         })
@@ -1035,7 +1035,7 @@ fn row(entry: &Entry, paused: bool) -> String {
     let destination = match &entry.destination {
         Some(path) => t!(
             schedule_destination_to,
-            path = bravebot_approval::printable(&path.display().to_string())
+            path = bravebot_agent::confirm::printable(&path.display().to_string())
         ),
         None => t!(schedule_destination_none).to_string(),
     };
@@ -1046,7 +1046,7 @@ fn row(entry: &Entry, paused: bool) -> String {
             id = entry.id.as_str(),
             cron = entry.cron.as_str(),
             scheduler = entry.scheduler.word(),
-            directory = bravebot_approval::printable(&entry.directory.display().to_string()),
+            directory = bravebot_agent::confirm::printable(&entry.directory.display().to_string()),
             limit = entry.mode.limit(),
             prompt = search::clean(&entry.prompt, LONGEST_PROMPT)
         ),
@@ -1379,7 +1379,7 @@ impl Undelivered {
     /// The sentence for standard error. It names the entry and the program the person chose, and
     /// carries nothing the program or the run printed.
     fn sentence(&self, id: &str, program: &Path, limit: Duration) -> String {
-        let path = bravebot_approval::printable(&program.display().to_string());
+        let path = bravebot_agent::confirm::printable(&program.display().to_string());
         match self {
             Self::NotStarted => t!(schedule_delivery_not_started, id = id, path = path),
             Self::Failed => t!(schedule_delivery_failed, id = id, path = path),
@@ -2481,7 +2481,8 @@ mod tests {
         std::fs::set_permissions(&not_executable, std::fs::Permissions::from_mode(0o644))
             .expect("mode");
         let gone = directory.path().join("gone");
-        let path = |program: &Path| bravebot_approval::printable(&program.display().to_string());
+        let path =
+            |program: &Path| bravebot_agent::confirm::printable(&program.display().to_string());
         let cases = [
             (
                 &failing,
@@ -2619,7 +2620,7 @@ mod tests {
         let sentence = t!(
             schedule_delivery_timed_out,
             id = "1",
-            path = bravebot_approval::printable(&program.display().to_string()),
+            path = bravebot_agent::confirm::printable(&program.display().to_string()),
             seconds = 0
         )
         .to_string();

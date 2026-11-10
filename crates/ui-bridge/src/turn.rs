@@ -571,8 +571,8 @@ impl BridgeSink {
     }
 }
 
-/// Each top-level string field of a recorded event, drawn by `bravebot_approval::printable`, keyed
-/// by the field's name (TRACE-11).
+/// Each top-level string field of a recorded event, drawn by `bravebot_agent::confirm::printable`,
+/// keyed by the field's name (TRACE-11).
 ///
 /// Sent beside the event, which stays as the audit file holds it. The window draws these words
 /// instead of the field, so the terminal and the window picture a control character with one
@@ -589,7 +589,7 @@ fn pictured_fields(event: &serde_json::Value) -> serde_json::Map<String, serde_j
             let text = value.as_str()?;
             Some((
                 field.clone(),
-                serde_json::Value::String(bravebot_approval::printable(text)),
+                serde_json::Value::String(bravebot_agent::confirm::printable(text)),
             ))
         })
         .collect()

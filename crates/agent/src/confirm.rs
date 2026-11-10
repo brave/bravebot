@@ -1152,6 +1152,43 @@ pub fn shown_text(text: &str) -> String {
     shown(&text.chars().map(Piece::Char).collect::<Vec<_>>(), false)
 }
 
+/// Replace control characters, so shown text cannot move the cursor or recolour the screen.
+///
+/// The one implementation behind every `printable` a front end draws through. The margin in front
+/// of a row is written by the caller, and an escape sequence in the content would let the content
+/// write one instead, so each control character becomes its Unicode picture (an escape reads as
+/// `␛`) and is not dropped: a character silently removed is one nobody can tell was ever there.
+/// A tab is kept, for a surface that lays it out as indentation (a diff body in `--plain` or in an
+/// editor). [`printable_with_tab_pictured`] pictures it as well, for the terminal interface, whose
+/// drawing library drops a tab without drawing anything.
+///
+/// A map from characters to characters: no branch is taken on what the text says.
+pub fn printable(text: &str) -> String {
+    pictured(text, true)
+}
+
+/// [`printable`] with a tab pictured (`␉`) like every other control character.
+///
+/// For the terminal interface. A caller that lays a tab out as width does so before this.
+pub fn printable_with_tab_pictured(text: &str) -> String {
+    pictured(text, false)
+}
+
+fn pictured(text: &str, keep_tab: bool) -> String {
+    if !text.chars().any(char::is_control) {
+        return text.to_string();
+    }
+    text.chars()
+        .map(|c| {
+            if !c.is_control() || (keep_tab && c == '\t') {
+                c
+            } else {
+                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
+            }
+        })
+        .collect()
+}
+
 /// One argument of a call to a server's tool, as the rows a person reads it in (SERVERS-7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShownArgument {
@@ -3436,6 +3473,44 @@ mod tests {
             assert_eq!(shown.head, value, "{value:?}");
             assert!(shown.rows.is_empty(), "{value:?}");
         }
+    }
+
+    /// LAYER-3: every control character is drawn as its picture and none is dropped. A string with
+    /// none comes back as it was, so text that needs no change is not altered.
+    #[test]
+    fn a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged() {
+        for plain in [
+            "",
+            "note.md",
+            "two words.md",
+            "caf\u{e9} \u{1f600} \u{202e}",
+        ] {
+            assert_eq!(printable(plain), plain, "{plain:?}");
+            assert_eq!(printable_with_tab_pictured(plain), plain, "{plain:?}");
+        }
+        for (text, drawn) in [
+            ("a\u{1b}b", "a\u{241b}b"),
+            ("a\u{7}b", "a\u{2407}b"),
+            ("a\u{0}b", "a\u{2400}b"),
+            ("a\u{1f}b", "a\u{241f}b"),
+            ("a\u{1b}[31mred", "a\u{241b}[31mred"),
+        ] {
+            assert_eq!(printable(text), drawn, "{text:?}");
+            assert_eq!(printable_with_tab_pictured(text), drawn, "{text:?}");
+        }
+    }
+
+    /// LAYER-3: the terminal interface pictures a tab, because its drawing library drops one, and
+    /// the approval text keeps it as indentation. The two differ in nothing else.
+    #[test]
+    fn a_tab_is_kept_by_printable_and_pictured_by_the_terminal_variant() {
+        assert_eq!(printable("\tindented\tcode"), "\tindented\tcode");
+        assert_eq!(
+            printable_with_tab_pictured("\tindented\tcode"),
+            "\u{2409}indented\u{2409}code"
+        );
+        assert_eq!(printable("\t\u{1b}"), "\t\u{241b}");
+        assert_eq!(printable_with_tab_pictured("\t\u{1b}"), "\u{2409}\u{241b}");
     }
 
     /// PROMPT-1: a name that would draw as nothing, or as another name, is drawn as what it is,
