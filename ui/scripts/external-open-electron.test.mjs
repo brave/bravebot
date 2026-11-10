@@ -1,11 +1,11 @@
 // What `xdg-open` is started with when the real Electron on Linux opens an address or a file
 // through `src/main/external-open.ts` (SANDBOX-30).
 //
-// `external-open.test.mjs` stubs `shell`, so it shows the five names are gone at the moment of each
+// `external-open.test.mjs` stubs `shell`, so it shows the six names are gone at the moment of each
 // call and cannot show that Electron hands its environment to `xdg-open`. Here Electron runs under
 // Xvfb with a script named `xdg-open` first on `PATH` that records which of the names it was
 // started with. The same two calls on Electron's own `shell`, with no deletion, are the control:
-// they must reach the script with all five names, or an empty record from the first run would say
+// they must reach the script with all six names, or an empty record from the first run would say
 // nothing about Electron.
 //
 // Needs Linux, `xvfb-run` and the Electron binary `pnpm install` fetches. Anywhere else it prints
@@ -20,7 +20,9 @@ import { delimiter, join } from 'node:path'
 import { buildSync } from 'esbuild'
 
 const require = createRequire(import.meta.url)
-const NAMES = ['BROWSER', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS']
+// The same names as `OPENER_SELECTORS` in `src/main/external-open.ts`, which `make check-code-selectors`
+// compares with this list and with `CODE_SELECTORS` in `crates/tui/src/opener.rs`.
+const NAMES = ['BROWSER', 'GIO_LAUNCH_DESKTOP', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS']
 
 function unavailable() {
   if (process.platform !== 'linux') return 'not Linux'
@@ -84,7 +86,7 @@ app.whenReady().then(async () => {
   }).sort((a, b) => a.call.localeCompare(b.call))
 }
 
-test('electron on linux starts xdg-open without the five names through external-open.ts and with them without it', { timeout: 240000 }, (context) => {
+test('electron on linux starts xdg-open without the six names through external-open.ts and with them without it', { timeout: 240000 }, (context) => {
   const why = unavailable()
   if (why) {
     console.log(`skipped: ${why}`)
@@ -105,7 +107,7 @@ test('electron on linux starts xdg-open without the five names through external-
     assert.deepEqual(through.map((record) => record.call.startsWith('https://') ? 'address' : 'file').sort(), ['address', 'file'])
     for (const record of through) assert.deepEqual(record.names, [], `${record.call} was started with ${record.names}`)
 
-    // The control: Electron's `shell` starts it with all five, so the empty record above is the
+    // The control: Electron's `shell` starts it with all six, so the empty record above is the
     // deletion's work and not something Electron does by itself.
     const control = started(root, 'direct')
     assert.equal(control.length, 2)

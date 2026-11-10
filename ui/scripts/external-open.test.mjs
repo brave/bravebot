@@ -3,8 +3,9 @@
 // other file in src/main calls the three opening functions of electron's `shell` directly.
 //
 // `xdg-open` runs the commands in `BROWSER` and reads its handler from the `XDG_` directories, and
-// a program a person approved with `run` may have written what those name. `shell` is stubbed here
-// and records, for each call, which of the five names were still set.
+// `gio open` executes the wrapper `GIO_LAUNCH_DESKTOP` names. A program a person approved with
+// `run` may have written what those name. `shell` is stubbed here and records, for each call, which
+// of the six names were still set.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -13,7 +14,7 @@ import { join } from 'node:path'
 import { buildSync } from 'esbuild'
 
 const require = createRequire(import.meta.url)
-const NAMES = ['BROWSER', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS']
+const NAMES = ['BROWSER', 'GIO_LAUNCH_DESKTOP', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS']
 
 const calls = []
 const electron = {
@@ -40,7 +41,7 @@ function planted() {
   calls.length = 0
 }
 
-test('the five names are the ones the opener scripts read', () => {
+test('the six names are the ones the opener scripts read', () => {
   // The fault is a list that drops one, or that adds `PATH`, which the opener's own reduced search
   // path already covers and which every other program needs.
   assert.deepEqual([...OPENER_SELECTORS].sort(), [...NAMES].sort())

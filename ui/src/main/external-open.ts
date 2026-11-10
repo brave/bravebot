@@ -2,10 +2,12 @@
  * Every address, file and folder the main process hands to the system goes through here.
  *
  * On Linux Electron starts `xdg-open` (or `xdg-mime`) with this process's own environment. Those
- * scripts run the commands in `BROWSER` before they look at a desktop environment, and read the
- * handler that opens an address or a file from the `XDG_` directories. A program the person
- * approved with `run` may have written the file any of these name, and the opener then runs it
- * outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
+ * scripts read the handler that opens an address or a file from the `XDG_` directories, and in
+ * their generic path (no desktop environment detected, or the desktop tool missing) run the
+ * commands in `BROWSER`. Under a GNOME session with `gio` installed they run `gio open`, which
+ * does not read `BROWSER` and executes the wrapper `GIO_LAUNCH_DESKTOP` names with the handler's
+ * command line. A program the person approved with `run` may have written the file any of these
+ * name, and the opener then runs it outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
  * `crates/tui/src/opener.rs`, which also judges `HOME` and removes it from the opener's own start.
  * `HOME` is not deleted here: this process and the agent it starts read it, so under a GNOME
  * session on Linux the opener still reads a `HOME` the sandbox let a program write.
@@ -23,6 +25,7 @@ import { shell } from 'electron'
 /** The variables the opener scripts read to choose a program. Keep in step with `CODE_SELECTORS` in `crates/tui/src/opener.rs`. */
 export const OPENER_SELECTORS = [
   'BROWSER',
+  'GIO_LAUNCH_DESKTOP',
   'XDG_DATA_HOME',
   'XDG_DATA_DIRS',
   'XDG_CONFIG_HOME',
