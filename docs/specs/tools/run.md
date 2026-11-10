@@ -958,7 +958,9 @@ Being left running is not a reason to ask for less.
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting
 on the part before it, and nothing waits here; a redirection names a destination the background has
 no reader for. Both are refused rather than half-honoured, and so is a redirection that opens no
-file: what a background run cannot honour is a route, whether or not it names one.
+file: what a background run cannot honour is a route, whether or not it names one. A redirection
+inside a `$(...)` assignment value ([CMDLINE-17](command-line.md#CMDLINE-17)) is a route of the line:
+the checks made when a destination is opened are not made for a job, so the line is refused.
 
 **The turn owns it, or the session does.** Dropping the handle stops the pipeline as
 [RUN-11](#RUN-11) stops one at its deadline. A one-shot run, an incognito session and a delegate own
@@ -1045,6 +1047,12 @@ the job names the driver minted.
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::turn::a_refused_background_run_starts_nothing`
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
 `verified-by: bravebot_agent::turn::a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own`
@@ -2090,7 +2098,9 @@ nothing else about the line. A prompt the person sends while the line runs makes
 
 **Only a line a job can hold.** One pipeline with no redirection, which is RUN-15's shape and for
 the same reasons: a line with `&&` or `||` waits on its own first part to decide on the second, and
-a route, including `2>&1`, is something the background does not honour. A line fed a reference
+a route, including `2>&1`, is something the background does not honour. A route inside a `$(...)`
+assignment value counts as a route of the line ([CMDLINE-17](command-line.md#CMDLINE-17)), so such
+a line is not offered either. A line fed a reference
 through `stdin_ref` and a delegate's line are not offered either. The first would be writing a value
 into a job nobody waits for, and the second is not the line the screen shows running. Such a line
 is waited for as before, whatever key is pressed.
@@ -2141,6 +2151,8 @@ whenever it guessed wrong.
 `verified-by: bravebot_agent::turn::only_a_line_a_job_can_hold_is_offered_to_be_moved`
 `verified-by: bravebot_agent::turn::a_delegates_line_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::command::only_a_pipeline_without_a_route_is_one_a_job_can_hold`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
+`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::cancel::a_handoff_requested_on_one_thread_is_seen_on_another`
 `verified-by: bravebot_core::policy::moving_a_command_to_the_background_is_recorded_in_the_audit_trail`
 `verified-by: bravebot_tui::state::a_press_moves_the_turns_command_once`

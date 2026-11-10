@@ -551,15 +551,20 @@ impl Steps {
         out
     }
 
-    /// The steps, where this is one pipeline and no step of it has a route.
+    /// The steps, where this is one pipeline and no step of it, or of a substitution inside it,
+    /// has a route.
     ///
     /// The one shape a background job can be: a join waits on its own parts to decide where to go
-    /// next, and a route is a destination the background has no reader for. Read off the routes
-    /// rather than the plan's write and read sets, because `2>&1` opens no file and so is in
-    /// neither of those.
+    /// next, and a route is a destination the background has no reader for. The routes of the
+    /// steps inside a `$(...)` count as well, because they open files at the same moment the
+    /// pipeline's own do and a job starts none of the checks made when a route is opened. Read off
+    /// the routes rather than the plan's write and read sets, because `2>&1` opens no file and so
+    /// is in neither of those.
     pub fn unrouted_pipeline(&self) -> Option<&[Step]> {
         match self {
-            Self::Pipeline(steps) if steps.iter().all(|step| step.routes.is_empty()) => Some(steps),
+            Self::Pipeline(steps) if self.steps().iter().all(|step| step.routes.is_empty()) => {
+                Some(steps)
+            }
             _ => None,
         }
     }
@@ -1057,6 +1062,67 @@ mod tests {
             right: Box::new(Steps::Pipeline(vec![step("b", &[])])),
         };
         assert!(joined.unrouted_pipeline().is_none(), "a join was holdable");
+    }
+
+    /// A pipeline whose step takes a value from a substitution is held only if no step inside the
+    /// substitution has a route either: the job starts none of the checks made when a route is
+    /// opened. Each spelling is a case of its own, `2>&1` and `<` because they are in neither of
+    /// the plan's sets or only one of them.
+    #[test]
+    fn a_route_inside_a_substitution_is_a_route_of_the_line() {
+        let substituting = |inner: Step| {
+            let mut outer = step("echo", &[]);
+            outer.expansions = vec![Expansion {
+                name: "A".to_string(),
+                parts: vec![ValuePart::Substitution {
+                    source: "inner".to_string(),
+                    steps: Box::new(Steps::Pipeline(vec![inner])),
+                }],
+            }];
+            Steps::Pipeline(vec![outer])
+        };
+
+        let path = || PathBuf::from("/work/out.txt");
+        for (spelling, route) in [
+            (
+                ">",
+                Route::Stdout {
+                    path: path(),
+                    append: false,
+                },
+            ),
+            (
+                ">>",
+                Route::Stdout {
+                    path: path(),
+                    append: true,
+                },
+            ),
+            ("<", Route::Stdin { path: path() }),
+            ("2>&1", Route::StderrToStdout),
+        ] {
+            let mut inner = step("gen", &[]);
+            inner.routes = vec![route];
+            assert!(
+                substituting(inner).unrouted_pipeline().is_none(),
+                "a `{spelling}` inside a substitution was holdable"
+            );
+        }
+
+        assert_eq!(
+            substituting(step("gen", &[]))
+                .unrouted_pipeline()
+                .map(<[Step]>::len),
+            Some(1),
+            "a substitution with no route was not holdable"
+        );
+
+        let mut routed = step("echo", &[]);
+        routed.routes = vec![Route::StderrToStdout];
+        assert!(
+            Steps::Pipeline(vec![routed]).unrouted_pipeline().is_none(),
+            "a route on the line's own step was holdable"
+        );
     }
 
     /// A step boundary is part of what is endorsed, so splitting one command into two must not
