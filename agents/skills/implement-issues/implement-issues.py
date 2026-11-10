@@ -12,6 +12,12 @@ line of <argument> that starts with `Notes:`, and `--notes` adds such a line aft
 reads them (step 1). This script takes no issue, link or query from them, and they do not change which
 issues it claims.
 
+Once the claim is written, the session is given a line that starts with `Claimed:`, between <argument>
+and the notes. It says when the script assigned the account and added the label, to which issues, and
+that those writes are this run's, so the skill does not read them as another session's work. It holds
+the account, the time and issue numbers, and nothing that GitHub returned. A line of <argument> that
+starts with `Claimed:` ends the list as one that starts with `Notes:` does.
+
 Before the session opens, from the same reading of <argument> as step 1 of the skill, and with no
 model:
 
@@ -30,6 +36,7 @@ names the sweep that removes it.
 
 import argparse
 import concurrent.futures
+import datetime
 import importlib.util
 import json
 import os
@@ -51,8 +58,9 @@ STATE = re.compile(r"\b(?:is|state):(?:open|closed)\b", re.IGNORECASE)
 READ = "{state: .state, pull: (.pull_request != null), assignees: [.assignees[].login], labels: [.labels[].name]}"
 SEARCH = ".items[] | select(.pull_request == null) | .number"
 READ_JOBS = 8
-# The notes of an argument begin at a line that starts with this and run to the end of the argument.
-NOTES = re.compile(r"^Notes:", re.MULTILINE)
+# The issues of an argument end at the first line that starts with this: the notes run from there to the
+# end of the argument, and the claim line is the one this script writes ahead of them.
+LIST_ENDS = re.compile(r"^(?:Notes|Claimed):", re.MULTILINE)
 # Statuses after which the skill does nothing more with an item (SKILL.md, step 0), so it needs no claim.
 FINISHED = {"done", "skipped", "blocked"}
 # What GitHub answers (HTTP 404) when the label is not on the issue, which the session may have removed already.
@@ -94,9 +102,9 @@ def current_user():
     return login
 
 
-def split_notes(argument):
-    """The part of the argument that names the issues, and the notes that follow it, or an empty string."""
-    found = NOTES.search(argument)
+def split_list(argument):
+    """The part of the argument that names the issues, and what follows it, or an empty string."""
+    found = LIST_ENDS.search(argument)
     return (argument[: found.start()], argument[found.start():]) if found else (argument, "")
 
 
@@ -261,6 +269,48 @@ def undo(assigned, labelled, me):
             print(f"could not unassign {me} from #{number}: {problem}", file=sys.stderr)
 
 
+def stamp():
+    """The time as a UTC timestamp to the second, which is how the claim line dates the writes."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def claim_line(me, when, issues, assigned, labelled):
+    """The line that tells the session which assignments and labels this run wrote, and when.
+
+    `pr-fix.py issue` prints the labels of an issue, and a session that finds `bot/in-progress` on an
+    issue it was given has stopped on it as another session's work, although this script added it. The
+    line holds the account, the time and issue numbers only, so no text that GitHub returned reaches the
+    model.
+    """
+    wrote = []
+    if assigned:
+        wrote.append(f"assigned {me} to {listed(assigned)}")
+    if labelled:
+        wrote.append(f"added {LABEL} to {listed(labelled)}")
+    said = [f"Claimed: at {when}, before this session opened, implement-issues.py {' and '.join(wrote) or 'had nothing to write'}."]
+    if wrote:
+        said.append("Those writes are this run's own, so they are no reason to skip or stop on an item.")
+    before = [number for number, issue in issues.items() if LABEL in issue["labels"]]
+    if before:
+        said.append(f"{LABEL} was on {listed(before)} before this run and was left as found. That does not make an item anyone else's.")
+    return " ".join(said)
+
+
+def prompt_for(argument, notes, claimed):
+    """The line the client opens on: the argument as written with the claim line after its list, then the notes.
+
+    The claim goes where the notes begin, so that the lines before it are still the list and the notes
+    are still everything from the first `Notes:` line to the end.
+    """
+    named_in, rest = split_list(argument)
+    prompt = f"/{SKILL} {named_in.rstrip(chr(10))}\n{claimed}"
+    if rest:
+        prompt += f"\n{rest}"
+    if notes.strip():
+        prompt += f"\nNotes: {notes.strip()}"
+    return prompt
+
+
 def claim(issues, me):
     """Assign `me` to each issue that lacks them and label each that lacks the label.
 
@@ -320,7 +370,7 @@ def main(argv=None):
     parser.add_argument("--notes", default="", help="notes for the skill, which reads them; no issue is taken from them")
     parser.add_argument("argument", help="what the skill takes, which it receives unchanged")
     args = parser.parse_args(argv)
-    named_in, _ = split_notes(args.argument)
+    named_in, _ = split_list(args.argument)
     if not named_in.strip():
         die("name the issues to implement, or a search for them. Nothing was changed.")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -329,9 +379,6 @@ def main(argv=None):
     if client is None:
         die(f"{args.bravebot} is not on PATH. Nothing was changed.")
     me = current_user()
-    prompt = f"/{SKILL} {args.argument}"
-    if args.notes.strip():
-        prompt += f"\nNotes: {args.notes.strip()}"
 
     numbers, notes = resolve(named_in)
     issues, more = open_issues(numbers)
@@ -348,6 +395,7 @@ def main(argv=None):
         assigned, labelled = claim(issues, me)
     except RuntimeError as problem:
         die(f"{problem}\nWhat had been written was undone.")
+    prompt = prompt_for(args.argument, args.notes, claim_line(me, stamp(), issues, assigned, labelled))
     print(f"issues: {listed(issues)}", flush=True)
     print(f"assigned {me}: {listed(assigned) or 'none, already theirs'}", flush=True)
     print(f"labelled {LABEL}: {listed(labelled) or 'none, already labelled'}", flush=True)
