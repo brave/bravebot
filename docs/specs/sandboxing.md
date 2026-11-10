@@ -2256,7 +2256,7 @@ The two loader tests start a copy of the host's shell that keeps the loader's na
 `gh` on a host can be built without the protection that ignores them. A host that cannot make that
 copy prints `skipped`, and a run with `CI` set fails instead, so a green run on a CI machine means
 the check ran. The `LD_` test uses a shell that records the names it is given. It has not been run
-against a Linux loader, which [SANDBOX-30](#SANDBOX-30) records as #3810.
+against a Linux loader. [SANDBOX-30](#SANDBOX-30) records which Linux runs have not been made.
 
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
@@ -3898,10 +3898,10 @@ file. A new spawn that looks a name up through
 
   | Variable | Names |
   |---|---|
-  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
-  | `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `LD_ORIGIN_PATH`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
   | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
-  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
 
   `SHELLOPTS`, `PS4`, `BASH_FUNC_` and the asdf and pyenv names are in the generic table and not in
   one program's list because an asdf or pyenv shim is a `#!/usr/bin/env bash` script that is found
@@ -4240,9 +4240,9 @@ file. A new spawn that looks a name up through
   | File | Start | Names read | Basis |
   |---|---|---|---|
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
-  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` is not read on macOS and is tracked by #3810 | the strings of the macOS binaries. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` has four starts, `--user daemon-reload` (twice), `--user enable --now` and `--user disable --now`, each through `succeeds` in `schedule.rs`, which sends stdin, stdout and stderr to `/dev/null`. None passes `edit`, `-H` or `-M`. No name is listed for it. The systemctl manual page (freedesktop.org, latest) was read: `SYSTEMD_PAGER` and `PAGER` can only disable the pager unless `SYSTEMD_PAGERSECURE` is set, and `SYSTEMD_EDITOR`, `EDITOR` and `VISUAL` run only for `systemctl edit`, which `crates/` never calls. `SYSTEMD_UNIT_PATH`, `SYSTEMD_LIB_DIR` and `DBUS_SESSION_BUS_ADDRESS` are not named by the page read and are not listed. `Names` has no kind that judges a D-Bus address. Not run on Linux | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads. For `systemctl`, the manual page, with no run on any host |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
-  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` and `osascript`, which have lists of their own | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. The Linux tools are tracked by #3810 | the strings of the macOS binaries, for those two only |
+  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` and `osascript`, which have lists of their own | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. For `systemd-inhibit`, `xclip`, `xsel` and `wl-copy` no name was added to a list. The bullets on what a checked start does not cover give the manual pages read. None of the four was run on Linux | the strings of the macOS binaries for those two, and the manual pages for the Linux tools |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
 
   The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
@@ -4294,10 +4294,68 @@ shown by running the program, or not entirely:
   running `powershell` on Windows that any variable in it changes what runs, or that no other
   variable does. `gcloud.cmd` and `APPDATA` are not in it, and have not been checked on Windows. It
   is tracked by #3808.
-- The dynamic-loader names (`LD_*`, `GCONV_PATH`) are read from ld.so(8) and not shown by running a
-  loader. It is tracked by #3810.
-- `systemd-inhibit`, `systemctl --user`, `xclip`, `xsel` and `wl-copy` are given the generic table
-  and no names of their own, and have not been run on Linux. It is tracked by #3810.
+- The dynamic-loader names (`LD_*`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`) have two tests in
+  `crates/sandbox/tests/linux_loader.rs`, which is compiled only on Linux. Neither has been run on
+  a Linux host or loader. The file was compiled and linted for `x86_64-unknown-linux-gnu` on
+  macOS. The first,
+  `a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_one_still_loads`,
+  builds libraries that write a marker file when the loader runs them. For `LD_PRELOAD`,
+  `LD_AUDIT`, `LD_LIBRARY_PATH` and `GCONV_PATH` (a converter module named by a `gconv-modules`
+  file) it starts a program through a kept start and a checked start, and asserts only whether a
+  marker is present, since the count of constructor runs depends on the loader. The second,
+  `locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
+  starts a program that reports its environment. It shows what the start hands the process and
+  runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
+  `LD_ORIGIN_PATH` is in the generic table and no test starts a program with it.
+  The names come from ld.so(8) on man7.org, which was read. Its secure-execution section says that
+  in that mode "the effects of some environment variables are voided or modified, and furthermore
+  those environment variables are stripped from the environment", and lists `GCONV_PATH`,
+  `GETCONF_DIR`, `HOSTALIASES`, `LOCALDOMAIN`, `LD_AUDIT`, `LD_DEBUG`, `LD_DEBUG_OUTPUT`,
+  `LD_DYNAMIC_WEAK`, `LD_HWCAP_MASK`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH`, `LD_PRELOAD`,
+  `LD_PROFILE`, `LD_SHOW_AUXV`, `LOCPATH`, `MALLOC_TRACE`, `NIS_PATH`, `NLSPATH`,
+  `RESOLV_HOST_CONF`, `RES_OPTIONS`, `TMPDIR` and `TZDIR`. Its entry for `LD_ORIGIN_PATH` says it
+  is ignored in secure-execution mode since glibc 2.4. glibc's `sysdeps/generic/unsecvars.h`
+  (fetched from sourceware.org, version not recorded) lists these and also `GLIBC_TUNABLES`,
+  `LD_BIND_NOT`, `LD_BIND_NOW`, `LD_PROFILE_OUTPUT`, `LD_VERBOSE`, `LD_WARN` and eight `MALLOC_`
+  names. Both files show which names glibc distrusts under privilege. Neither says which of the names
+  outside the table select code. The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and
+  `LD_PRELOAD`, which name a library, a module or a directory searched for libraries, and `LOCPATH`
+  (`Names::Directories`) and `NLSPATH` (`Names::Options`, since it is a list of templates). `LOCPATH`
+  and `NLSPATH` are there because #3810 lists them as candidates. No source read shows that either
+  runs code. `TZDIR` and `RESOLV_HOST_CONF` are named by ld.so(8) and `unsecvars.h` too, are not
+  among the candidates in #3810, and are left out. The other names in the two lists are left out
+  for the same reason: nothing read shows that they name a library or program to run. No start in
+  `crates/` runs `getconf` on Linux, so `GETCONF_DIR` has no start to apply to.
+  `GLIBC_TUNABLES` is listed in `unsecvars.h` and is not in the table. The glibc manual page on
+  tunables (sourceware.org) was read and showed only the `GLIBC_TUNABLES=glibc.malloc...` syntax.
+  It gave no basis that the variable selects code to run, so there is no mechanism to judge. It
+  stays out until a Linux run shows one. #3810 lists it.
+  No musl documentation was read and no musl loader was run. `LD_LIBRARY_PATH` and `LD_PRELOAD`
+  are in the table by name, so a checked start removes them whichever loader the program uses.
+  `ci.yml` has no musl or Alpine job. `linux_loader.rs` uses a glibc converter module and
+  `RUNPATH`, so it is written for glibc.
+- `systemd-inhibit` and `systemctl --user` are given the generic table and no names of their own.
+  Neither was run on Linux. The manual pages read were systemctl(1) and systemd-inhibit(1) from
+  freedesktop.org (latest). Both say that without `SYSTEMD_PAGERSECURE`, `SYSTEMD_PAGER` and
+  `PAGER` can only disable the pager. Each `systemctl` start (`crates/schedule/src/schedule.rs`:
+  `--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, all through
+  `succeeds`) and the `systemd-inhibit` start (`crates/tui/src/caffeinate.rs`, `start_program`)
+  sends stdout and stderr to `/dev/null`. The systemctl page documents `SYSTEMD_EDITOR`, `EDITOR`
+  and `VISUAL` for `systemctl edit` only. No start in `crates/` passes `edit`, `-H` or `-M`
+  to `systemctl`. Neither page names `DBUS_SESSION_BUS_ADDRESS`, `DBUS_SYSTEM_BUS_ADDRESS` or
+  `SYSTEMD_UNIT_PATH`, so none is judged. The row for `crates/schedule/src/schedule.rs` in the
+  empty-list table has the rest.
+- `xclip`, `xsel` and `wl-copy` are given the generic table and no names of their own. None was
+  run on Linux. The pages read were xclip(1) and xsel(1) from linux.die.net and wl-copy(1) from
+  man.archlinux.org. The xclip page documents `DISPLAY`, the xsel page documents the X display
+  (`--display`), and the wl-copy page documents `WAYLAND_DISPLAY`, `WAYLAND_DEBUG` and `WL_SEAT`.
+  Each names a server to connect to and none selects code to run in the tool, so no name was added
+  and the start has an empty list. A server a stage
+  wrote can read what is copied, which this entry does not decide. The wl-copy page says it runs
+  `xdg-mime(1)` on the content to infer its type; the variables of `xdg-mime` are listed under the
+  browser opener below. The three pages do not name `XAUTHORITY`, `XLOCALEDIR` or `XCOMPOSEFILE`,
+  and what Xlib or libwayland read was not read, so those are unchecked. The starts are in
+  `crates/tui/src/clipboard.rs`.
 - A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
   examined for the variables they read to choose code, by running each where it could be run, and
   the names are in the generic table or in the list of the start that runs the program (the AWS
@@ -4690,6 +4748,8 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::powershell::a_script_library_under_a_planted_user_home_does_not_run_through_the_checked_start`
 `verified-by: bravebot_sandbox::programs::a_checked_start_keeps_what_the_inherits_rule_withheld`
 `verified-by: bravebot_sandbox::programs::the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start`
+`verified-by: bravebot_sandbox::linux_loader::a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_one_still_loads`
+`verified-by: bravebot_sandbox::linux_loader::locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`
 `verified-by: bravebot_sandbox::programs::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list`
 `verified-by: bravebot_sandbox::programs::a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`

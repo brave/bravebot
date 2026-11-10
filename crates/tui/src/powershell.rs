@@ -115,7 +115,10 @@ fn start_against(
             Inherits::All,
             SearchPath::Reduced,
             // A clipboard or inhibitor tool other than PowerShell and `osascript`: the generic
-            // table alone (SANDBOX-30, empty-list starts).
+            // table alone (SANDBOX-30, empty-list starts). For `xclip`, `xsel` and `wl-copy` no
+            // name of their own was added. The manual pages were read and name only `DISPLAY`,
+            // `WAYLAND_DISPLAY`, `WAYLAND_DEBUG` and `WL_SEAT`, none of which selects code. No
+            // Linux run was made. The reasons are in the SANDBOX-30 bullet.
             CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,

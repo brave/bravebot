@@ -658,8 +658,13 @@ fn tool(name: &str) -> Option<std::process::Command> {
         &bravebot_sandbox::programs::Resolved::found_earlier(&found),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-        // `crontab -l` and `crontab -`, `launchctl` and `systemctl --user`: none is known to read a
-        // variable of its own that selects code (SANDBOX-30, empty-list starts).
+        // `crontab -l` and `crontab -`, `launchctl` and `systemctl --user`: no variable of its own
+        // is listed. The basis for `systemctl` is its manual page, which was read. The variables
+        // that run a program are `SYSTEMD_PAGER` and `PAGER`, which the manual describes as used to
+        // disable the pager unless `SYSTEMD_PAGERSECURE` is set, and `SYSTEMD_EDITOR`, `EDITOR` and
+        // `VISUAL`, which run only for `systemctl edit`, which is never called here. The starts
+        // send stdout and stderr to null. No run was made on Linux. The row for this file in
+        // SANDBOX-30 (empty-list starts) says which names stay out.
         bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
     ))
 }
