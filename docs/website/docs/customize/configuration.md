@@ -192,10 +192,11 @@ as your shell sources the hook, so export it before the line in your shell's sta
 evaluates the hook, and the hook records in that directory.
 
 :::warning
-A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium key are,
-and not a directory `BRAVEBOT_HOME` puts anywhere else
-([what a stage cannot reach](../security/security.md)). Keep it somewhere you would not mind a
-program a `run` starts reading, or leave the variable unset.
+A program a `run` starts is refused the state directory: `~/.bravebot`, or the directory
+`BRAVEBOT_HOME` puts elsewhere, where the gateway keys and the premium key are
+([what a stage cannot reach](../security/security.md)). A value that is your home directory, a
+directory above it or a filesystem root is not refused, since that would refuse your own files; keep
+the state directory in a directory of its own.
 :::
 
 ## Choosing a model

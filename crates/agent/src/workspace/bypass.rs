@@ -137,7 +137,15 @@ impl Workspace {
                 None => return false,
             }
         }
-        if judged_request(judged, write, reach.profile.as_deref(), &reach.person).is_err() {
+        if judged_request(
+            judged,
+            write,
+            reach.profile.as_deref(),
+            self.state.as_deref(),
+            &reach.person,
+        )
+        .is_err()
+        {
             return false;
         }
         let directory = if resolved.is_dir() {

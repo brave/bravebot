@@ -579,7 +579,8 @@ fn attempt(
     let confinement = if confined {
         Some(
             Confinement::here(vec![places.session.clone()], None, Some(&places.home))
-                .ok_or(Unavailable::NoBase)?,
+                .ok_or(Unavailable::NoBase)?
+                .with_state_directory(crate::home::directory()),
         )
     } else {
         None
@@ -812,6 +813,7 @@ pub fn login_row_for(
     }
     let confinement = Confinement::here(vec![session.clone()], None, Some(&home))
         .ok_or(Unavailable::NoBase)?
+        .with_state_directory(crate::home::directory())
         .with_filesystem(lists);
     let failed = |kind, code| {
         Outcome::Failed(Failure {

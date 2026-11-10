@@ -256,7 +256,11 @@ pub struct Workspace {
     /// Behind a lock and a handle because a turn holds a clone of the workspace, and a directory
     /// bypass mode opens in the middle of a turn has to be reachable by the file tools in that turn
     /// and listed by the session that outlives it. A delegate's checkout takes a copy instead.
-    added: Arc<Mutex<Vec<PathBuf>>>,
+    added: Arc<Mutex<Vec<ScratchDirectory>>>,
+    /// The working directory as it was when the session opened it or moved to it, which is what a
+    /// stage is given a row for only while its name still leads there (SANDBOX-18). None where it
+    /// could not be read as a directory then.
+    root_made: Option<ScratchDirectory>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
@@ -319,6 +323,10 @@ pub struct Workspace {
     /// Held rather than read at each use, so every answer about one path (where it resolves, what
     /// it is keyed under, what a rule and a watch are told it is) comes from one home.
     home: Option<PathBuf>,
+    /// The state directory in force, as [`crate::home::directory`] answers it when the workspace is
+    /// built. A directory `BRAVEBOT_HOME` puts outside the profile directory is refused where a
+    /// directory is added or a path is reached, as `~/.bravebot` is (SANDBOX-12).
+    state: Option<PathBuf>,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -496,6 +504,7 @@ impl Workspace {
             while_reading: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             while_backing_up: Arc::new(Mutex::new(None)),
+            root_made: ScratchDirectory::observed(canonical.clone()),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -505,6 +514,7 @@ impl Workspace {
             reads_stay_inside: false,
             windows_names: cfg!(windows),
             home: crate::home::profile(),
+            state: crate::home::directory(),
             stores: crate::home::directory()
                 .map(|state| Self::refused_in(&state))
                 .unwrap_or_default(),
@@ -548,6 +558,12 @@ impl Workspace {
     /// The home directory a leading `~` stands for in this workspace.
     pub(crate) fn profile_directory(&self) -> Option<&Path> {
         self.home.as_deref()
+    }
+
+    /// The state directory in force, which the refusals of a credential location include beside
+    /// `~/.bravebot` where `BRAVEBOT_HOME` moves it (SANDBOX-12).
+    pub(crate) fn state_directory(&self) -> Option<&Path> {
+        self.state.as_deref()
     }
 
     /// Put a search under the caps somebody configured, keeping the built-in one for each cap
@@ -3982,7 +3998,8 @@ impl Workspace {
         locked(&self.kept.session_checkouts).push(entry.clone());
 
         let mut delegate = self.clone();
-        delegate.added = Arc::new(Mutex::new(self.added_directories()));
+        delegate.added = Arc::new(Mutex::new(locked(&self.added).clone()));
+        delegate.root_made = ScratchDirectory::observed(target.clone());
         delegate.root = target;
         delegate.backups = Arc::new(Mutex::new(Vec::new()));
         delegate.rewind = Arc::default();
@@ -5949,10 +5966,11 @@ mod tests {
             .expect("an ordinary file is confined in");
     }
 
-    /// RECALL-8, MODE-4: bypass takes the file tools outside the workspace, but never into the
-    /// stores, or a bypass session could read private facts or write a rule with no yes.
+    /// RECALL-8, MODE-4, SANDBOX-12: bypass takes the file tools outside the workspace, but never
+    /// into the stores, or a bypass session could read private facts or write a rule with no yes.
+    /// A state directory `BRAVEBOT_HOME` moves outside the profile directory is refused whole.
     #[test]
-    fn bypass_reaches_beside_the_stores_but_not_into_them() {
+    fn bypass_reaches_neither_the_stores_nor_a_moved_state_directory() {
         let (home, project) = home_and_project("bypass-stores");
         // Outside home, where the bypass refusals do not already cover it, as a state directory
         // moved elsewhere is.
@@ -5969,19 +5987,21 @@ mod tests {
             person: bravebot_sandbox::rules::resolve(
                 &bravebot_sandbox::rules::Lists::default(),
                 Some(&home),
+                None,
                 &project,
             ),
             excluded: Vec::new(),
             write: true,
         }));
+        // SANDBOX-12: this directory is the state directory in force and outside the profile
+        // directory, so it is refused whole as `~/.bravebot` is, not only the stores in it. A file
+        // beside the stores is refused too (#2917).
         let beside = state.join("notes.md");
-        workspace
-            .resolve(&beside.display().to_string())
-            .expect("bypass reaches outside the workspace");
-        workspace
-            .confines_writing(&beside)
-            .expect("and confines it");
-        for refused in [state.join("facts/x.md"), state.join("AGENTS.md")] {
+        for refused in [
+            beside.clone(),
+            state.join("facts/x.md"),
+            state.join("AGENTS.md"),
+        ] {
             assert!(
                 workspace.resolve(&refused.display().to_string()).is_err(),
                 "{}",

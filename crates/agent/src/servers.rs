@@ -2873,6 +2873,7 @@ fn confinement_here(
         own,
         &temporary_directory(),
         crate::home::profile().as_deref(),
+        crate::home::directory().as_deref(),
         developer_directory().as_deref(),
     )
 }
@@ -2939,13 +2940,14 @@ fn confinement(
     own: &Path,
     temporary: &Path,
     home: Option<&Path>,
+    moved: Option<&Path>,
     developer: Option<&Path>,
 ) -> Option<SandboxPolicy> {
     let mut policy = base(prelude?, temporary, developer, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
-    for directory in crate::confine::server_program_reads(program, searched, home) {
+    for directory in crate::confine::server_program_reads(program, searched, home, moved) {
         policy = policy.allow_read(directory);
     }
     // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by
@@ -4200,6 +4202,44 @@ mod tests {
         policy.writable.iter().any(|grant| grant.path == path)
     }
 
+    /// SANDBOX-12, #2917: a local server's confinement carries the state directory in force, so a
+    /// program directory inside it, or one that holds it, is not read where `BRAVEBOT_HOME` moved
+    /// it out of `~/.bravebot`. The regression it rejects: `confinement` passing no state directory
+    /// on to the program's reads, which reads the moved directory with its program. The call with
+    /// no state directory is the control that the directories are read.
+    #[test]
+    fn a_servers_confinement_does_not_read_a_state_directory_that_is_moved() {
+        let root = scratch("cli-servers-moved-state");
+        let home = root.join("home");
+        let moved = root.join("outer/state");
+        let program = installed(&moved.join("bin"), "tool");
+        std::fs::create_dir_all(&home).expect("home");
+        let kept = root.join("kept");
+        std::fs::create_dir_all(&kept).expect("the server's own directory");
+        let policy = |state: Option<&Path>| {
+            confinement(
+                Some(Prelude::MacOs),
+                &program,
+                &[moved.join("bin"), root.join("outer")],
+                &[],
+                None,
+                &kept,
+                &root.join("tmp"),
+                Some(&home),
+                state,
+                None,
+            )
+            .expect("a policy")
+        };
+
+        let without = policy(None);
+        assert!(reads(&without, &moved.join("bin")), "the control");
+        assert!(reads(&without, &root.join("outer")), "the control");
+        let with = policy(Some(&moved));
+        assert!(!reads(&with, &moved.join("bin")));
+        assert!(!reads(&with, &root.join("outer")));
+    }
+
     #[test]
     fn a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory() {
         let root = scratch("cli-servers-confinement");
@@ -4228,6 +4268,7 @@ mod tests {
             &kept,
             &temporary,
             Some(&home),
+            None,
             None,
         )
         .expect("a policy");
@@ -4268,6 +4309,7 @@ mod tests {
             &temporary,
             Some(&home),
             None,
+            None,
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
@@ -4281,6 +4323,7 @@ mod tests {
                 &kept,
                 &temporary,
                 Some(&home),
+                None,
                 None,
             )
             .is_none()
@@ -4308,6 +4351,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&linked),
+            None,
             None,
         )
         .expect("a policy");
@@ -4369,6 +4413,7 @@ mod tests {
             &root.join("tmp"),
             Some(&home),
             None,
+            None,
         )
         .expect("a policy");
 
@@ -4421,6 +4466,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&home),
+            None,
             None,
         )
         .expect("a policy");
@@ -4573,6 +4619,7 @@ mod tests {
                 &root.join("kept"),
                 &root.join("tmp"),
                 Some(&root.join("home")),
+                None,
                 None,
             )
             .expect("a policy on this platform's base");
@@ -7688,6 +7735,7 @@ done
             None,
             &own,
             Path::new("/tmp"),
+            None,
             None,
             None,
         )

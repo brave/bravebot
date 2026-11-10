@@ -264,9 +264,9 @@ impl Grant {
 
     /// The directory to open, judged again against `home` now. A link that has since been pointed
     /// at `~/.ssh` is refused here whatever it was when it was allowed.
-    pub fn directory(&self, home: &Path) -> Option<PathBuf> {
+    pub fn directory(&self, home: &Path, state: Option<&Path>) -> Option<PathBuf> {
         match &self.reached {
-            Reached::Directory(path) => judged_directory(path, home, self.write),
+            Reached::Directory(path) => judged_directory(path, home, state, self.write),
             Reached::Scope(_) => None,
         }
     }
@@ -937,7 +937,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
                 Some(rest) => profile.join(rest),
                 None => PathBuf::from(entry),
             };
-            match judged_directory(&named, profile, write) {
+            match judged_directory(&named, profile, Some(typed.home), write) {
                 Some(path) => Reached::Directory(path),
                 None => return t!(reach_refused_entry, entry = entry),
             }
@@ -1544,7 +1544,10 @@ mod tests {
         assert!(!held.is_empty());
         for grant in &held {
             assert!(!grant.write);
-            assert_eq!(grant.directory(&place.profile), Some(sessions.clone()));
+            assert_eq!(
+                grant.directory(&place.profile, None),
+                Some(sessions.clone())
+            );
         }
     }
 
@@ -1560,12 +1563,12 @@ mod tests {
         place.say("s", &format!("{} -- ls", named.display()));
         let held = place.held("s");
         assert_eq!(held.len(), 1);
-        assert!(held[0].directory(&place.profile).is_some());
+        assert!(held[0].directory(&place.profile, None).is_some());
 
         std::fs::remove_dir(&named).expect("remove");
         std::os::unix::fs::symlink(place.profile.join(".ssh"), &named).expect("link");
 
-        assert_eq!(held[0].directory(&place.profile), None);
+        assert_eq!(held[0].directory(&place.profile, None), None);
     }
 
     /// Write is a directory's alone, and a line with an assignment in front of a stage is refused.

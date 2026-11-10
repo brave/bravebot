@@ -12,7 +12,7 @@
 //! assignment in front of it, gets no scope: what would run with the credential is not what the
 //! plan says would run.
 
-use crate::base::{STATE_DIRECTORY, every_credential_directory, under};
+use crate::base::{every_credential_directory, under};
 use crate::policy::SandboxPolicy;
 use crate::programs::program_name;
 use crate::signing::Place;
@@ -158,25 +158,31 @@ impl Scope {
     /// without one gets one created rather than a directory nobody asked for. A tool's directory
     /// is read and never written, since what a write there leaves is a command the person's own
     /// shell runs later: a `credential_process`, an exec plugin, a `credsStore` helper.
-    pub fn grant(self, policy: SandboxPolicy, home: &Path, place: &Place) -> SandboxPolicy {
+    pub fn grant(
+        self,
+        policy: SandboxPolicy,
+        home: &Path,
+        moved: Option<&Path>,
+        place: &Place,
+    ) -> SandboxPolicy {
         match self {
             Self::Remote => {
                 let mut policy = policy;
                 for row in REMOTE {
                     policy = policy.allow_read(under(home, row));
                 }
-                for public_key in named_public_keys(home) {
+                for public_key in named_public_keys(home, moved) {
                     policy = policy.allow_read(public_key);
                 }
                 // A pull that merges or rebases signs the commit it makes.
-                for key in crate::signing::lent(home, place) {
+                for key in crate::signing::lent(home, moved, place) {
                     policy = policy.allow_read(key);
                 }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
             }
             Self::Signing => {
                 let mut policy = policy;
-                for key in crate::signing::lent(home, place) {
+                for key in crate::signing::lent(home, moved, place) {
                     policy = policy.allow_read(key);
                 }
                 policy
@@ -278,11 +284,13 @@ fn variables_of(scope: Scope, program: &str) -> &'static [Moves] {
 /// several files, one refused entry takes none of the others with it.
 ///
 /// Only what the caller passes counts: the environment the stage starts with, in which an
-/// assignment written in front of the line has already removed the scope.
+/// assignment written in front of the line has already removed the scope. `moved` is the state
+/// directory in force where it is not under `home`, which is refused as `~/.bravebot` is.
 pub fn environment_reach(
     scope: Scope,
     program: &str,
     home: &Path,
+    moved: Option<&Path>,
     environment: &[(String, String)],
 ) -> Vec<Reach> {
     let set = |name: &str| {
@@ -314,7 +322,7 @@ pub fn environment_reach(
                 "" => named,
                 beneath => named.join(beneath),
             };
-            if let Some(path) = judged(&named, how.names == Names::Directory, home, false)
+            if let Some(path) = judged(&named, how.names == Names::Directory, home, moved, false)
                 && !already_read(scope, &path, home)
                 && !reached.iter().any(|held: &Reach| held.path == path)
             {
@@ -332,14 +340,19 @@ pub fn environment_reach(
 /// by name ([SANDBOX-26](../../../docs/specs/sandboxing.md#SANDBOX-26)) and so has no program of
 /// that scope to key on: the places of every program the scope has, judged as
 /// [`environment_reach`] judges them.
-pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String)]) -> Vec<Reach> {
+pub fn requested_reach(
+    scope: Scope,
+    home: &Path,
+    moved: Option<&Path>,
+    environment: &[(String, String)],
+) -> Vec<Reach> {
     let programs: &[&str] = match scope {
         Scope::Remote => &["gh", "git"],
         Scope::Aws | Scope::Kubernetes | Scope::Docker | Scope::Signing => &[""],
     };
     programs
         .iter()
-        .flat_map(|program| environment_reach(scope, program, home, environment))
+        .flat_map(|program| environment_reach(scope, program, home, moved, environment))
         .collect()
 }
 
@@ -353,10 +366,15 @@ pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String
 /// reads ([`readable_state_locations`](crate::base::readable_state_locations)), which is judged like
 /// any other directory; a write there is refused. It must also be a directory that exists, since a
 /// grant of a path nothing is at reads as a grant of whatever is created there later.
-pub fn judged_directory(named: &Path, home: &Path, write: bool) -> Option<PathBuf> {
-    judged(named, true, home, !write)
+pub fn judged_directory(
+    named: &Path,
+    home: &Path,
+    moved: Option<&Path>,
+    write: bool,
+) -> Option<PathBuf> {
+    judged(named, true, home, moved, !write)
         .filter(|path| path.is_dir())
-        .filter(|path| !crate::rules::inside_a_credential_location_for(path, home, write))
+        .filter(|path| !crate::rules::inside_a_credential_location_for(path, home, moved, write))
 }
 
 /// The socket a stage's `SSH_AUTH_SOCK` names, as the sandbox will be told it, or `None` where the
@@ -370,8 +388,8 @@ pub fn judged_directory(named: &Path, home: &Path, write: bool) -> Option<PathBu
 /// check is made as each stage starts. A name relinked between the check and the sandbox opening
 /// the row is not caught. Where there are no unix sockets (Windows) the type is not checked, since
 /// the agent there is a named pipe.
-pub fn judged_socket(named: &Path, home: &Path) -> Option<PathBuf> {
-    let resolved = judged(named, false, home, false)?;
+pub fn judged_socket(named: &Path, home: &Path, moved: Option<&Path>) -> Option<PathBuf> {
+    let resolved = judged(named, false, home, moved, false)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
@@ -379,7 +397,7 @@ pub fn judged_socket(named: &Path, home: &Path) -> Option<PathBuf> {
             return None;
         }
     }
-    (!crate::rules::inside_a_credential_location_for(&resolved, home, true)
+    (!crate::rules::inside_a_credential_location_for(&resolved, home, moved, true)
         && !crate::rules::inside_a_persistence_location(&resolved, home))
     .then_some(resolved)
 }
@@ -387,7 +405,13 @@ pub fn judged_socket(named: &Path, home: &Path) -> Option<PathBuf> {
 /// `named` as the sandbox will be told it, or `None` where it is refused. `state_read` says the
 /// path is read and not written, so an entry of the state directory that a stage reads is not
 /// refused for being inside it.
-fn judged(named: &Path, directory: bool, home: &Path, state_read: bool) -> Option<PathBuf> {
+fn judged(
+    named: &Path,
+    directory: bool,
+    home: &Path,
+    moved: Option<&Path>,
+    state_read: bool,
+) -> Option<PathBuf> {
     if !named.is_absolute() || named.components().any(|part| part == Component::ParentDir) {
         return None;
     }
@@ -398,12 +422,24 @@ fn judged(named: &Path, directory: bool, home: &Path, state_read: bool) -> Optio
     // A grant of a path is a grant of everything under it, so a file is refused where it is the
     // home or above it, or a directory, as a directory is: what a variable names as a file is no
     // reason to read the tree it turns out to be.
+    let states = |home: &Path| {
+        let mut states = crate::base::state_directories(home, moved);
+        // The directory a link leads to is the one a program opens, so a name that is that
+        // directory's real path is inside it though it is not spelled so.
+        let leads_to: Vec<PathBuf> = states
+            .iter()
+            .map(|state| crate::rules::resolved(state))
+            .collect();
+        states.extend(leads_to);
+        states
+    };
     let refused = (!directory && resolved.is_dir())
         || [named, resolved.as_path()].iter().any(|named| {
             [home, real_home.as_path()].iter().any(|home| {
                 named.starts_with(under(home, ".ssh"))
-                    || (named.starts_with(under(home, STATE_DIRECTORY))
-                        && !(state_read && crate::rules::reads_readable_state(named, home, false)))
+                    || (states(home).iter().any(|state| named.starts_with(state))
+                        && !(state_read
+                            && crate::rules::reads_readable_state(named, home, moved, false)))
                     || home.starts_with(named)
                     || (directory
                         && [".config", ".cache", "Library"]
@@ -456,7 +492,7 @@ const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
 /// read, and a repository's `core.sshCommand`, an `Include` and a `Match` are not followed. A file
 /// that cannot be read adds nothing, and the configuration is read to a fixed length and for a
 /// fixed count of keys.
-fn named_public_keys(home: &Path) -> Vec<PathBuf> {
+fn named_public_keys(home: &Path, moved: Option<&Path>) -> Vec<PathBuf> {
     let configuration = ssh_configuration(home);
     let mut keys: Vec<PathBuf> = Vec::new();
     for line in configuration.split(|byte| *byte == b'\n') {
@@ -468,7 +504,7 @@ fn named_public_keys(home: &Path) -> Vec<PathBuf> {
         let Some(named) = identity_file(line) else {
             continue;
         };
-        let Some(path) = judged_public_key(&named, home) else {
+        let Some(path) = judged_public_key(&named, home, moved) else {
             continue;
         };
         if already_read(Scope::Remote, &path, home) || keys.contains(&path) {
@@ -499,7 +535,7 @@ fn ssh_configuration(home: &Path) -> Vec<u8> {
 /// [`candidate_public_keys`] leaves out because a stage could not read it: one that is missing,
 /// is not a regular `*.pub` file, or is in a credential location other than `~/.ssh`. A line that
 /// spells no absolute name adds nothing, since ssh would read it from somewhere this cannot know.
-pub fn refused_identity_files(home: &Path) -> usize {
+pub fn refused_identity_files(home: &Path, moved: Option<&Path>) -> usize {
     let configuration = ssh_configuration(home);
     let mut refused: Vec<PathBuf> = Vec::new();
     for line in configuration.split(|byte| *byte == b'\n') {
@@ -510,7 +546,7 @@ pub fn refused_identity_files(home: &Path) -> usize {
         let Some(named) = identity_file(line) else {
             continue;
         };
-        if judged_public_key(&named, home).is_none() && !refused.contains(&named) {
+        if judged_public_key(&named, home, moved).is_none() && !refused.contains(&named) {
             refused.push(named);
         }
     }
@@ -520,16 +556,16 @@ pub fn refused_identity_files(home: &Path) -> usize {
 /// Every public key file ssh could offer a remote for the account whose home is `home`: the ones at
 /// ssh's default names and the ones its configuration names, each judged as the remote scope
 /// judges one, so a key listed here is a key a stage with that scope reads.
-pub fn candidate_public_keys(home: &Path) -> Vec<PathBuf> {
+pub fn candidate_public_keys(home: &Path, moved: Option<&Path>) -> Vec<PathBuf> {
     let mut keys: Vec<PathBuf> = Vec::new();
     for row in REMOTE.iter().filter(|row| row.ends_with(".pub")) {
-        if let Some(path) = judged_public_key(&under(home, row), home)
+        if let Some(path) = judged_public_key(&under(home, row), home, moved)
             && !keys.contains(&path)
         {
             keys.push(path);
         }
     }
-    for path in named_public_keys(home) {
+    for path in named_public_keys(home, moved) {
         if !keys.contains(&path) {
             keys.push(path);
         }
@@ -589,7 +625,11 @@ fn public_name(path: PathBuf) -> Option<PathBuf> {
 
 /// A public key file a configuration named, as the sandbox will be told it, or `None` where it is
 /// refused.
-pub(crate) fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
+pub(crate) fn judged_public_key(
+    named: &Path,
+    home: &Path,
+    moved: Option<&Path>,
+) -> Option<PathBuf> {
     let spelled = match named.strip_prefix("~") {
         Ok(beneath) => home.join(beneath),
         Err(_) => named.to_path_buf(),
@@ -605,16 +645,24 @@ pub(crate) fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
     let resolved = std::fs::canonicalize(&spelled).ok()?;
     let a_public_key = resolved.extension().is_some_and(|ending| ending == "pub")
         && std::fs::metadata(&resolved).is_ok_and(|held| held.is_file());
-    (a_public_key && !in_another_credential_location(&resolved, home)).then_some(resolved)
+    (a_public_key && !in_another_credential_location(&resolved, home, moved)).then_some(resolved)
 }
 
-/// Whether `resolved`, already resolved, is in a credential location other than `~/.ssh`.
-pub(crate) fn in_another_credential_location(resolved: &Path, home: &Path) -> bool {
+/// Whether `resolved`, already resolved, is in a credential location other than `~/.ssh`, the state
+/// directory `moved` puts elsewhere among them.
+pub(crate) fn in_another_credential_location(
+    resolved: &Path,
+    home: &Path,
+    moved: Option<&Path>,
+) -> bool {
     let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     [home, real_home.as_path()].iter().any(|home| {
         every_credential_directory()
             .filter(|row| **row != ".ssh")
             .any(|row| resolved.starts_with(under(home, row)))
+            || crate::base::moved_state_directory(home, moved).is_some_and(|state| {
+                resolved.starts_with(&state) || resolved.starts_with(crate::rules::resolved(&state))
+            })
     })
 }
 
@@ -953,12 +1001,12 @@ fn address_in(argument: &str) -> Option<Address> {
 /// `~/`, with `.pub` added to a name that does not end in it, so an entry naming a private key
 /// reads the public file beside it and never the key. The file must be a regular file named
 /// `*.pub` once a link is followed and outside every credential location other than `~/.ssh`.
-pub fn identity_key(written: &str, home: &Path) -> Option<PathBuf> {
+pub fn identity_key(written: &str, home: &Path, moved: Option<&Path>) -> Option<PathBuf> {
     let named = PathBuf::from(written);
     if !(written.starts_with("~/") || named.is_absolute()) {
         return None;
     }
-    judged_public_key(&public_name(named)?, home)
+    judged_public_key(&public_name(named)?, home, moved)
 }
 
 /// The `GIT_SSH_COMMAND` that has ssh offer the host `key` first, and after it only the keys an
@@ -1045,10 +1093,16 @@ mod tests {
 
     /// The paths the environment `pairs` moves `program`'s `scope` to, under `A_HOME`.
     fn reached(scope: Scope, program: &str, pairs: &[(&str, &str)]) -> Vec<PathBuf> {
-        environment_reach(scope, program, Path::new(A_HOME), &the_environment(pairs))
-            .into_iter()
-            .map(|reach| reach.path)
-            .collect()
+        environment_reach(
+            scope,
+            program,
+            Path::new(A_HOME),
+            None,
+            &the_environment(pairs),
+        )
+        .into_iter()
+        .map(|reach| reach.path)
+        .collect()
     }
 
     fn argv(line: &str) -> Vec<String> {
@@ -1063,6 +1117,7 @@ mod tests {
         scope.grant(
             SandboxPolicy::strict(),
             Path::new(A_HOME),
+            None,
             &Place::default(),
         )
     }
@@ -1530,7 +1585,7 @@ mod tests {
     fn read_for_the_configuration(home: &Path) -> Vec<PathBuf> {
         let fixed: Vec<PathBuf> = REMOTE.iter().map(|row| under(home, row)).collect();
         Scope::Remote
-            .grant(SandboxPolicy::strict(), home, &Place::default())
+            .grant(SandboxPolicy::strict(), home, None, &Place::default())
             .readable
             .into_iter()
             .filter(|row| !fixed.contains(row))
@@ -1565,7 +1620,7 @@ mod tests {
                 home.join(".ssh/work.pub"),
             ]
         );
-        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, &Place::default());
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, None, &Place::default());
         for private in [".ssh/work", ".ssh/quoted", ".ssh"] {
             assert!(
                 !granted_paths(&policy).contains(&home.join(private)),
@@ -1595,7 +1650,7 @@ mod tests {
         );
 
         assert_eq!(
-            candidate_public_keys(&home),
+            candidate_public_keys(&home, None),
             [home.join(".ssh/id_ed25519.pub"), home.join(".ssh/work.pub")]
         );
         std::fs::remove_dir_all(&home).unwrap();
@@ -1706,13 +1761,13 @@ mod tests {
             b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\n",
         )
         .unwrap();
-        assert_eq!(refused_identity_files(&home), 0);
+        assert_eq!(refused_identity_files(&home, None), 0);
         std::fs::write(
             home.join(".ssh/config"),
             b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/gone\n",
         )
         .unwrap();
-        assert_eq!(refused_identity_files(&home), 1);
+        assert_eq!(refused_identity_files(&home, None), 1);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -1732,7 +1787,7 @@ mod tests {
             .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
         std::fs::write(&spelled, "a key").unwrap();
         std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
-        assert_eq!(refused_identity_files(&home), 0);
+        assert_eq!(refused_identity_files(&home, None), 0);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -1775,7 +1830,7 @@ mod tests {
             NAMED_PUBLIC_KEYS_LIMIT
         );
         for scope in [Scope::Aws, Scope::Kubernetes, Scope::Docker] {
-            let policy = scope.grant(SandboxPolicy::strict(), &home, &Place::default());
+            let policy = scope.grant(SandboxPolicy::strict(), &home, None, &Place::default());
             assert!(!reaches(
                 &policy,
                 home.join(".ssh/key-0.pub").to_str().unwrap()
@@ -1798,7 +1853,7 @@ mod tests {
         );
 
         for scope in EVERY_SCOPE {
-            let policy = scope.grant(base.clone(), Path::new(A_HOME), &Place::default());
+            let policy = scope.grant(base.clone(), Path::new(A_HOME), None, &Place::default());
             assert!(policy.readable.starts_with(&base.readable), "{scope:?}");
             assert!(policy.writable.starts_with(&base.writable), "{scope:?}");
             assert_eq!(policy.allow_network, base.allow_network, "{scope:?}");
@@ -1888,6 +1943,7 @@ mod tests {
                 Scope::Remote,
                 "gh",
                 &home,
+                None,
                 &the_environment(&[("GH_CONFIG_DIR", directory.to_str().unwrap())]),
             )
             .into_iter()
@@ -2011,7 +2067,7 @@ mod tests {
             (Scope::Kubernetes, vec!["/home/a-person/d"]),
             (Scope::Docker, vec!["/home/a-person/e"]),
         ] {
-            let found: Vec<PathBuf> = requested_reach(scope, Path::new(A_HOME), &everything)
+            let found: Vec<PathBuf> = requested_reach(scope, Path::new(A_HOME), None, &everything)
                 .into_iter()
                 .map(|reach| reach.path)
                 .collect();
@@ -2019,7 +2075,7 @@ mod tests {
             assert_eq!(found, expected, "{scope:?}");
         }
         let xdg = the_environment(&[("XDG_CONFIG_HOME", "/home/a-person/xdg")]);
-        let found: Vec<PathBuf> = requested_reach(Scope::Remote, Path::new(A_HOME), &xdg)
+        let found: Vec<PathBuf> = requested_reach(Scope::Remote, Path::new(A_HOME), None, &xdg)
             .into_iter()
             .map(|reach| reach.path)
             .collect();
@@ -2048,7 +2104,7 @@ mod tests {
             ),
         ]);
         for scope in EVERY_SCOPE {
-            let found: Vec<PathBuf> = requested_reach(scope, Path::new(A_HOME), &refused)
+            let found: Vec<PathBuf> = requested_reach(scope, Path::new(A_HOME), None, &refused)
                 .into_iter()
                 .map(|reach| reach.path)
                 .collect();
@@ -2180,6 +2236,7 @@ mod tests {
                 Scope::Aws,
                 "aws",
                 &home,
+                None,
                 &the_environment(&[(variable, value.to_str().unwrap())]),
             )
         };
@@ -2198,7 +2255,7 @@ mod tests {
         ] {
             for write in [false, true] {
                 assert_eq!(
-                    judged_directory(&spelled, &home, write),
+                    judged_directory(&spelled, &home, None, write),
                     None,
                     "{spelled:?} write={write}"
                 );
@@ -2210,13 +2267,139 @@ mod tests {
             home.join(".bravebot/sessions/-repo"),
         ] {
             assert!(
-                judged_directory(&spelled, &home, false).is_some(),
+                judged_directory(&spelled, &home, None, false).is_some(),
                 "{spelled:?}"
             );
-            assert_eq!(judged_directory(&spelled, &home, true), None, "{spelled:?}");
+            assert_eq!(
+                judged_directory(&spelled, &home, None, true),
+                None,
+                "{spelled:?}"
+            );
         }
-        assert!(judged_directory(&home.join(".bravebotx"), &home, true).is_some());
+        assert!(judged_directory(&home.join(".bravebotx"), &home, None, true).is_some());
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-12, #2917: the state directory in force is judged by where its own links lead as
+    /// well as by its spelling. `BRAVEBOT_HOME` names it through a link, and a variable naming a
+    /// file in it by its real path (a link resolved, as `judged` resolves every name) is refused
+    /// as the default directory is. The regression it rejects: the moved directory compared only
+    /// as spelled, so the real path of the same directory is read as a name outside it. The
+    /// `None` calls are the control that the names are fine.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_inside_a_state_directory_that_is_moved_through_a_link_is_refused() {
+        use std::os::unix::fs::symlink;
+        let root = std::fs::canonicalize({
+            let root = scratch_dir("moved-state-directory-link");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            root
+        })
+        .unwrap();
+        let home = root.join("home");
+        let real = root.join("outer/state");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(real.join("sessions/-repo")).unwrap();
+        std::fs::write(real.join("gateway-keys.json"), "").unwrap();
+        let spelled = root.join("link-to-state");
+        symlink(&real, &spelled).unwrap();
+        let file = real.join("gateway-keys.json");
+
+        assert!(judged_directory(&real, &home, None, false).is_some());
+        assert_eq!(judged_directory(&real, &home, Some(&spelled), false), None);
+        assert_eq!(judged_directory(&real, &home, Some(&spelled), true), None);
+        assert_eq!(
+            judged_directory(&real.join("sessions"), &home, Some(&spelled), true),
+            None
+        );
+        let reached = |state: Option<&Path>| {
+            environment_reach(
+                Scope::Aws,
+                "aws",
+                &home,
+                state,
+                &the_environment(&[("AWS_CONFIG_FILE", file.to_str().unwrap())]),
+            )
+            .len()
+        };
+        assert_eq!(reached(None), 1, "control");
+        assert_eq!(reached(Some(&spelled)), 0);
+    }
+
+    /// The state directory in force is refused to a scope's reach as `~/.bravebot` is when
+    /// `BRAVEBOT_HOME` puts it elsewhere (SANDBOX-12, #2917): a variable naming a file in it, a
+    /// remembered directory in it or a link to it, for reading and writing, with the same read of
+    /// its `sessions`, and a public key kept in it. The regression it rejects: the judgement built
+    /// from the home directory alone. The `None` calls are the control that the names are fine.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_inside_the_state_directory_that_is_moved_is_refused_as_the_default_is() {
+        use std::os::unix::fs::symlink;
+        let root = std::fs::canonicalize({
+            let root = scratch_dir("moved-state-directory-reach");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            root
+        })
+        .unwrap();
+        let home = root.join("home");
+        let moved = root.join("outer/state");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(moved.join("sessions/-repo")).unwrap();
+        std::fs::write(moved.join("gateway-keys.json"), "").unwrap();
+        std::fs::write(moved.join("key.pub"), "ssh-ed25519 AAAA\n").unwrap();
+        symlink(&moved, root.join("to-state")).unwrap();
+        let file = |variable: &str, value: &Path, state: Option<&Path>| {
+            environment_reach(
+                Scope::Aws,
+                "aws",
+                &home,
+                state,
+                &the_environment(&[(variable, value.to_str().unwrap())]),
+            )
+        };
+        for spelled in [
+            moved.join("gateway-keys.json"),
+            root.join("to-state/gateway-keys.json"),
+        ] {
+            assert_eq!(
+                file("AWS_CONFIG_FILE", &spelled, None).len(),
+                1,
+                "control {spelled:?}"
+            );
+            assert!(
+                file("AWS_CONFIG_FILE", &spelled, Some(&moved)).is_empty(),
+                "{spelled:?}"
+            );
+        }
+        for spelled in [moved.clone(), root.join("to-state")] {
+            for write in [false, true] {
+                assert!(
+                    judged_directory(&spelled, &home, None, write).is_some(),
+                    "control {spelled:?}"
+                );
+                assert_eq!(
+                    judged_directory(&spelled, &home, Some(&moved), write),
+                    None,
+                    "{spelled:?} write={write}"
+                );
+            }
+        }
+        let records = moved.join("sessions/-repo");
+        assert!(judged_directory(&records, &home, Some(&moved), false).is_some());
+        assert_eq!(judged_directory(&records, &home, Some(&moved), true), None);
+        // A key kept in the directory is not lent, and the same key elsewhere is.
+        let key = moved.join("key.pub");
+        assert!(judged_public_key(&key, &home, None).is_some());
+        assert_eq!(judged_public_key(&key, &home, Some(&moved)), None);
+        // The default directory is refused whichever directory is in force.
+        std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+        assert_eq!(
+            judged_directory(&home.join(".bravebot"), &home, Some(&moved), false),
+            None
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// A remembered directory is refused at every credential location of the base's table and
@@ -2240,14 +2423,14 @@ mod tests {
             for spelled in [&at, &inner, &link] {
                 for write in [false, true] {
                     assert_eq!(
-                        judged_directory(spelled, &home, write),
+                        judged_directory(spelled, &home, None, write),
                         None,
                         "{spelled:?} write={write}"
                     );
                 }
             }
             assert!(
-                judged_directory(&beside, &home, true).is_some(),
+                judged_directory(&beside, &home, None, true).is_some(),
                 "{beside:?}"
             );
         }
@@ -2271,6 +2454,7 @@ mod tests {
                 Scope::Aws,
                 "aws",
                 &home,
+                None,
                 &the_environment(&[("AWS_CONFIG_FILE", file.to_str().unwrap())]),
             )
         };
@@ -2333,6 +2517,7 @@ mod tests {
             Scope::Remote,
             "gh",
             Path::new(A_HOME),
+            None,
             &the_environment(&[("XDG_CONFIG_HOME", "/home/a-person/xdg")]),
         );
         assert_eq!(
@@ -2450,7 +2635,7 @@ mod tests {
     #[cfg(unix)]
     fn the_signing_scope_reads_the_public_key_and_nothing_else() {
         let home = a_home_that_signs("signing-scope-grant");
-        let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default());
+        let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, None, &Place::default());
         assert_eq!(granted_paths(&policy), [home.join("keys/work.pub")]);
         assert!(policy.writable.is_empty());
         std::fs::remove_dir_all(&home).unwrap();
@@ -2469,7 +2654,8 @@ mod tests {
             "[user]\nsigningkey = ~/keys/work.pub\n",
         ] {
             std::fs::write(home.join(".gitconfig"), gitconfig).unwrap();
-            let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default());
+            let policy =
+                Scope::Signing.grant(SandboxPolicy::strict(), &home, None, &Place::default());
             assert!(granted_paths(&policy).is_empty(), "{gitconfig}");
         }
         std::fs::remove_dir_all(&home).unwrap();
@@ -2481,7 +2667,7 @@ mod tests {
     #[cfg(unix)]
     fn the_remote_scope_reads_the_signing_key_as_well() {
         let home = a_home_that_signs("signing-remote-grant");
-        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, &Place::default());
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, None, &Place::default());
         assert!(granted_paths(&policy).contains(&home.join("keys/work.pub")));
         for private in ["keys/work", ".ssh/id_ed25519", ".ssh"] {
             assert!(
@@ -2510,7 +2696,7 @@ mod tests {
             ..Place::default()
         };
         for scope in [Scope::Signing, Scope::Remote] {
-            let granted = granted_paths(&scope.grant(SandboxPolicy::strict(), &home, &place));
+            let granted = granted_paths(&scope.grant(SandboxPolicy::strict(), &home, None, &place));
             assert!(granted.contains(&home.join("keys/work.pub")), "{scope:?}");
             assert!(granted.contains(&home.join(".ssh/repo.pub")), "{scope:?}");
             assert!(
@@ -2519,8 +2705,12 @@ mod tests {
             );
             assert!(!granted.contains(&home.join(".ssh/repo")), "{scope:?}");
         }
-        let alone =
-            granted_paths(&Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default()));
+        let alone = granted_paths(&Scope::Signing.grant(
+            SandboxPolicy::strict(),
+            &home,
+            None,
+            &Place::default(),
+        ));
         assert_eq!(alone, [home.join("keys/work.pub")]);
         std::fs::remove_dir_all(&home).unwrap();
     }
@@ -2634,15 +2824,15 @@ mod tests {
         let spare = home.join("keys/spare.pub");
 
         assert_eq!(
-            identity_key("~/.ssh/work", &home),
+            identity_key("~/.ssh/work", &home, None),
             Some(home.join(".ssh/work.pub"))
         );
         assert_eq!(
-            identity_key("~/.ssh/work.pub", &home),
+            identity_key("~/.ssh/work.pub", &home, None),
             Some(home.join(".ssh/work.pub"))
         );
         assert_eq!(
-            identity_key(spare.to_str().unwrap(), &home),
+            identity_key(spare.to_str().unwrap(), &home, None),
             Some(spare.clone())
         );
         for refused in [
@@ -2655,7 +2845,7 @@ mod tests {
             "work.pub",
             "",
         ] {
-            assert_eq!(identity_key(refused, &home), None, "{refused}");
+            assert_eq!(identity_key(refused, &home, None), None, "{refused}");
         }
         std::fs::remove_dir_all(&home).unwrap();
     }

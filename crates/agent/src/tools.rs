@@ -637,6 +637,38 @@ pub(crate) mod scripted_hosts {
     }
 }
 
+/// The filesystem lists a unit test sets for the runs on its thread, read in place of the settled
+/// ones, for the reason [`scripted_hosts`] is.
+#[cfg(all(test, unix))]
+pub(crate) mod scripted_filesystem {
+    use bravebot_sandbox::rules::Lists;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HELD: RefCell<Option<Lists>> = const { RefCell::new(None) };
+    }
+
+    /// Hold the runs on this thread to `lists` until the returned guard is dropped.
+    pub(crate) fn hold(lists: Lists) -> Held {
+        HELD.with(|held| *held.borrow_mut() = Some(lists));
+        Held
+    }
+
+    pub(super) fn held() -> Option<Lists> {
+        HELD.with(|held| held.borrow().clone())
+    }
+
+    /// Clears the lists when dropped, so a test that fails part way leaves nothing for the next
+    /// test on this thread.
+    pub(crate) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            HELD.with(|held| *held.borrow_mut() = None);
+        }
+    }
+}
+
 impl<'a> Tools<'a> {
     /// The facts this turn's calls reach outside the workspace under (MODE-4).
     pub(crate) fn reach_facts(&self) -> ReachFacts<'_> {
@@ -664,21 +696,28 @@ impl<'a> Tools<'a> {
         if !self.confines_programs() {
             return None;
         }
+        // Held to the directories the session recorded, so a name a stage has relinked since is
+        // given no row (SANDBOX-18). The paths are the same names, for the callers that read them.
+        let recorded = self.workspace.session_directories();
         let roots = std::iter::once(self.workspace.root().to_path_buf())
-            .chain(self.workspace.added_directories().iter().cloned())
+            .chain(self.workspace.added_directories())
             .collect();
         let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
         #[cfg(all(test, unix))]
         let scripted = scripted_hosts::held();
         #[cfg(all(test, unix))]
         let hosts = scripted.as_ref().or(hosts);
+        let lists = bravebot_config::sandbox_filesystem();
+        #[cfg(all(test, unix))]
+        let lists = scripted_filesystem::held().unwrap_or(lists);
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch_made(), self.profile)?
+                .with_session_directories(&recorded)
                 .with_network(bravebot_config::run_network())
                 .with_hosts(hosts)
                 .with_mode(self.sandbox)
                 .with_temporary_held_back(bravebot_config::holds_back_temporary_directory())
-                .with_filesystem(&bravebot_config::sandbox_filesystem())
+                .with_filesystem(&lists)
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(
                     self.permission_mode.get() == crate::PermissionMode::Bypass
@@ -690,7 +729,8 @@ impl<'a> Tools<'a> {
                 )
                 .with_withheld_writes(self.workspace.checkout_exclusions())
                 .with_host_grants(&self.workspace.granted_hosts())
-                .with_identities(bravebot_config::git_identities::settled());
+                .with_identities(bravebot_config::git_identities::settled())
+                .with_state_directory(self.home.map(std::path::Path::to_path_buf));
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -9339,6 +9379,7 @@ impl ReachFacts<'_> {
         let person = bravebot_sandbox::rules::resolve(
             &bravebot_config::sandbox_filesystem(),
             self.profile,
+            workspace.state_directory(),
             workspace.root(),
         );
         Some(crate::workspace::BypassReach {
@@ -9482,6 +9523,7 @@ fn request_path<S: Sink, C: Confirmer>(
         std::path::Path::new(&path),
         write,
         tools.profile,
+        tools.home,
         confinement.filesystem(),
     );
     let resolved = match judged {
@@ -27134,6 +27176,130 @@ mod tests {
             }
         }
 
+        /// SANDBOX-12, #2917: the confinement of a turn is told the state directory the session
+        /// runs under (`Tools::home`, which is `home::directory()` in production), so a stage is
+        /// refused it where `BRAVEBOT_HOME` moved it out of `~/.bravebot`. The regression it
+        /// rejects: a confinement built from the profile directory alone, which refuses only the
+        /// default. A turn with no state directory refuses none, which is the control.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_refuses_the_state_directory_the_turn_runs_under() {
+            let project = Scratch::new("turn-state-project");
+            let outer = Scratch::new("turn-state-outer");
+            let moved = outer.path.join("state");
+            std::fs::create_dir_all(&moved).expect("the state directory");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let workspace = Workspace::new(&project.path).expect("workspace");
+            let profile: &'static std::path::Path =
+                Box::leak(project.path.clone().into_boxed_path());
+            let state: &'static std::path::Path = Box::leak(moved.clone().into_boxed_path());
+            let refused = |home: Option<&'static std::path::Path>| {
+                let policy = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(profile);
+                    tools.home = home;
+                    tools
+                        .confinement(true)
+                        .expect("a platform with a base")
+                        .policy(&step, workspace.root(), &[])
+                });
+                let spellings = [moved.clone(), moved.canonicalize().expect("canonical")];
+                policy
+                    .unreadable
+                    .iter()
+                    .any(|row| spellings.iter().any(|spelling| row == spelling))
+            };
+            assert!(!refused(None), "the control: no state directory in force");
+            assert!(refused(Some(state)), "the state directory is not refused");
+        }
+
+        /// SANDBOX-12, #2917: a person's own `sandbox.filesystem` allow entry at, or over, the state
+        /// directory the turn runs under is refused as one at `~/.bravebot` is, and that is judged
+        /// whichever of the lists and the state directory the confinement was given first. The
+        /// regression it rejects: the lists resolved before the state directory is known (the
+        /// builder order in `Tools::confinement`), which leaves the moved directory a row a stage is
+        /// granted. The turn with no state directory is the control that the entries are fine.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under() {
+            use bravebot_sandbox::rules::{Entry, List, Lists, Reason, State};
+            let project = Scratch::new("turn-list-project");
+            let outer = Scratch::new("turn-list-outer");
+            let moved = outer.path.join("state");
+            std::fs::create_dir_all(&moved).expect("the state directory");
+            let moved = moved.canonicalize().expect("canonical");
+            let entry = |path: &std::path::Path| Entry {
+                path: path.to_string_lossy().into_owned(),
+                by: None,
+                pinned: false,
+            };
+            let _held = scripted_filesystem::hold(Lists {
+                allow_read: vec![entry(&moved), entry(&moved.join("gateway-keys.json"))],
+                allow_write: vec![entry(&moved.join("logs"))],
+                ..Lists::default()
+            });
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let workspace = Workspace::new(&project.path).expect("workspace");
+            let profile: &'static std::path::Path =
+                Box::leak(project.path.clone().into_boxed_path());
+            let state: &'static std::path::Path = Box::leak(moved.clone().into_boxed_path());
+            let judged = |home: Option<&'static std::path::Path>| {
+                with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(profile);
+                    tools.home = home;
+                    let confinement = tools.confinement(true).expect("a platform with a base");
+                    let in_force = confinement.filesystem().in_force().count();
+                    let refused: Vec<(List, Reason)> = confinement
+                        .filesystem()
+                        .items()
+                        .iter()
+                        .filter_map(|item| match item.state {
+                            State::Refused(reason) => Some((item.list, reason)),
+                            State::InForce(_) => None,
+                        })
+                        .collect();
+                    let policy = confinement.policy(&step, workspace.root(), &[]);
+                    (in_force, refused, policy)
+                })
+            };
+            let (in_force, refused, _) = judged(None);
+            assert_eq!((in_force, refused.len()), (3, 0), "the control");
+            let (in_force, refused, policy) = judged(Some(state));
+            assert_eq!(in_force, 0, "an entry on the state directory is in force");
+            assert_eq!(
+                refused,
+                [
+                    (List::AllowRead, Reason::StateDirectory),
+                    (List::AllowRead, Reason::StateDirectory),
+                    (List::AllowWrite, Reason::StateDirectory),
+                ]
+            );
+            assert!(
+                !policy
+                    .writable
+                    .iter()
+                    .any(|row| row.path.starts_with(&moved)),
+                "{policy:?}"
+            );
+        }
+
         /// SANDBOX-18: the confinement of a turn holds the session's scratch directory to the
         /// directory the session made, which the workspace carries from the session's own claim.
         /// The regression it rejects: a confinement given the identity of whatever the name leads
@@ -27197,6 +27363,78 @@ mod tests {
             assert!(refused_for_the_scratch_directory(&workspace));
             let _ = std::fs::remove_file(session.path());
             let _ = std::fs::remove_dir_all(&aside);
+        }
+
+        /// SANDBOX-18: the confinement of a turn holds the working directory and every added
+        /// directory to the directory the workspace recorded when it was opened or added. The
+        /// regressions it rejects: a confinement built from the names alone, which grants wherever
+        /// a name leads when the line starts, and one that records the directory when the line
+        /// starts, which takes the identity of whatever directory stands at the name then and so
+        /// grants a directory made again in place of the one added.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_holds_each_session_directory_to_the_one_the_workspace_recorded() {
+            let project = Scratch::new("session-directories-project");
+            let added = Scratch::new("session-directories-added");
+            let elsewhere = Scratch::new("session-directories-elsewhere");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                expansions: Vec::new(),
+                routes: Vec::new(),
+            };
+            let mut workspace = Workspace::new(&project.path).expect("workspace");
+            let named = workspace
+                .add_directory(added.path.to_str().expect("utf-8 path"))
+                .expect("the directory is added");
+            let target = elsewhere.path.canonicalize().expect("canonical");
+            let policy = |workspace: &Workspace| {
+                with_tools(workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools
+                        .confinement(true)
+                        .expect("a platform with a base")
+                        .policy(&step, workspace.root(), &[])
+                })
+            };
+            let writes = |policy: &bravebot_sandbox::policy::SandboxPolicy,
+                          path: &std::path::Path| {
+                policy.writable.iter().any(|row| row.path == path)
+            };
+            let before = policy(&workspace);
+            assert!(writes(&before, &named), "no row for the directory added");
+            assert!(
+                writes(&before, &project.path.canonicalize().expect("canonical")),
+                "no row for the working directory"
+            );
+
+            // The directory added is moved aside and kept, not removed: a filesystem can give a
+            // freed inode number to the next directory made, and the one made again below would
+            // then have the identity recorded.
+            let aside = crate::testutil::moved_aside_and_replaced(&named, |name| {
+                std::os::unix::fs::symlink(&target, name).expect("link")
+            });
+            let after = policy(&workspace);
+            assert!(!writes(&after, &named), "a row for the name of a link");
+            assert!(!writes(&after, &target), "a row for where the link leads");
+            assert!(
+                !after.readable.contains(&target),
+                "a read row for where the link leads"
+            );
+
+            std::fs::remove_file(&named).expect("the link removed");
+            std::fs::create_dir(&named).expect("a directory made again in its place");
+            let again = policy(&workspace);
+            assert!(
+                !writes(&again, &named),
+                "a row for a directory made again at the name"
+            );
+            let _ = std::fs::remove_dir(&named);
+            let _ = std::fs::remove_dir_all(&aside);
+            workspace.close_added_directories();
         }
 
         /// The reach a person remembered is read from the state directory for the session that has

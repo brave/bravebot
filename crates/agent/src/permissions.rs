@@ -491,7 +491,7 @@ mod tests {
             deny_write: vec![entry("secret.env"), entry("../../outside-the-root")],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &session);
+        let rules = resolve(&lists, None, None, &session);
         let cannot = t!(sandbox_rule_cannot_subtract);
         let climbs = filesystem_reason(bravebot_sandbox::rules::Reason::Climbs);
         let standing = |capabilities: Option<&bravebot_sandbox::policy::Capabilities>| {
@@ -548,7 +548,7 @@ mod tests {
             deny_write: vec![entry(&secret)],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &session);
+        let rules = resolve(&lists, None, None, &session);
         let why = |capabilities: &bravebot_sandbox::policy::Capabilities| {
             filesystem_standing(&rules, &session, Some(capabilities))
                 .into_iter()

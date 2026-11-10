@@ -494,6 +494,7 @@ mod resolution {
             bravebot_sandbox::base::Prelude::Linux,
             Path::new("/scratch"),
             Some(Path::new("/somebody")),
+            None,
         )
         .unreadable;
         let (_, state) = resolve([named("HOME", "/somebody")]).expect("a home");

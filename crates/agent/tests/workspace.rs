@@ -10539,6 +10539,119 @@ fn a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout(
     .expect("a directory the parent opened is reachable from the checkout");
 }
 
+/// SANDBOX-18. The working directory and each directory added are recorded as the directories they
+/// were when they were opened, and the record of one made again at its name does not stand. Moving
+/// the working directory records the new one in place of the old. The faults it rejects: a record
+/// taken when `session_directories` is asked, which stands for whatever is at the name; and a move
+/// that keeps the record of the directory it left.
+#[cfg(unix)]
+#[test]
+fn the_session_directories_are_the_directories_recorded_as_they_were_opened() {
+    let scratch = Scratch::new("recorded-directories");
+    let other = outside("recorded-directories");
+    let moved = outside("recorded-directories-moved");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let paths = |workspace: &Workspace| -> Vec<PathBuf> {
+        workspace
+            .session_directories()
+            .iter()
+            .map(|made| made.path().to_path_buf())
+            .collect()
+    };
+    let stands = |workspace: &Workspace, path: &std::path::Path| -> bool {
+        workspace
+            .session_directories()
+            .iter()
+            .find(|made| made.path() == path)
+            .expect("a recorded directory")
+            .stands_as_made_at(path)
+    };
+
+    assert_eq!(
+        paths(&workspace),
+        vec![workspace.root().to_path_buf(), opened.clone()],
+        "the working directory comes first"
+    );
+    assert!(stands(&workspace, workspace.root()));
+    assert!(stands(&workspace, &opened));
+
+    let aside = opened.with_extension("aside");
+    std::fs::rename(&opened, &aside).expect("move the added directory aside");
+    std::fs::create_dir(&opened).expect("make it again");
+    assert!(
+        !stands(&workspace, &opened),
+        "a directory made again at the name stands for the one opened"
+    );
+    assert!(stands(&workspace, workspace.root()));
+
+    workspace
+        .change_root(moved.path.to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+    let first = workspace.session_directories().remove(0);
+    assert_eq!(
+        first.path(),
+        workspace.root(),
+        "the old root is still first"
+    );
+    assert!(first.stands_as_made_at(workspace.root()));
+    let old = scratch.path.canonicalize().expect("canonical");
+    assert!(
+        !paths(&workspace).contains(&old),
+        "the directory left is still recorded"
+    );
+
+    let _ = std::fs::remove_dir_all(&aside);
+}
+
+/// SANDBOX-18, CHECKOUT-7. A delegate's workspace records its own working directory, the checkout,
+/// and carries the records its parent held for the directories added, so a directory the parent
+/// had made again is not taken for the one opened. The faults it rejects: a delegate that keeps the
+/// parent's working directory as its first record, and one that records the added directories
+/// again from their names when the checkout is made.
+#[cfg(unix)]
+#[test]
+fn a_delegates_checkout_records_its_own_root_and_carries_its_parents_records() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-records", &[("README", "hello\n")]);
+    let other = outside("checkout-records");
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let aside = opened.with_extension("aside");
+    std::fs::rename(&opened, &aside).expect("move the added directory aside");
+    std::fs::create_dir(&opened).expect("make it again");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let held = made.session_directories();
+    assert_ne!(made.root(), workspace.root());
+    assert_eq!(
+        held[0].path(),
+        made.root(),
+        "the first record is not the checkout"
+    );
+    assert!(held[0].stands_as_made_at(made.root()));
+    assert!(
+        held.iter().all(|made| made.path() != workspace.root()),
+        "the parent's working directory is recorded for the delegate"
+    );
+    let carried = held
+        .iter()
+        .find(|made| made.path() == opened)
+        .expect("the added directory is carried");
+    assert!(
+        !carried.stands_as_made_at(&opened),
+        "the directory made again is taken for the one the parent opened"
+    );
+    let _ = std::fs::remove_dir_all(&aside);
+}
+
 /// CHECKOUT-7. The session's own directory outside the project stays reachable from the delegate's
 /// workspace by the same absolute path, for a read and for a write, so a delegate leaves its
 /// intermediate files where the session does.
@@ -13728,6 +13841,7 @@ impl BypassPlaces {
             person: bravebot_sandbox::rules::resolve(
                 &lists,
                 Some(&self.home),
+                None,
                 self.workspace.root(),
             ),
             excluded,
@@ -14205,6 +14319,7 @@ fn a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another
         person: bravebot_sandbox::rules::resolve(
             &bravebot_sandbox::rules::Lists::default(),
             Some(&home.path),
+            None,
             made.root(),
         ),
         excluded,

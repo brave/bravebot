@@ -316,7 +316,7 @@ LANES = (
 # The calls that turn a name into a thing, or ask what a name is: the places a decision made on a
 # spelling and a use of the thing by that spelling can be separated by a stage or a clone.
 IDENTITY_CALLS = re.compile(
-    r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b"
+    r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b|\blibc::O_PATH\b"
 )
 # A deny rule asked about a path as it is spelled. A call that names one file is judged under every
 # name the file has, and a walk that asks the same question of each entry it meets judges the name

@@ -365,6 +365,7 @@ impl Workspace {
     #[must_use]
     pub(crate) fn with_state(mut self, state: &Path) -> Self {
         self.stores = Self::refused_in(state);
+        self.state = Some(state.to_path_buf());
         self
     }
 
@@ -645,7 +646,11 @@ impl Workspace {
             resolved.parent()
         };
         if let (Some(directory), Some(home)) = (to_open, self.home.as_deref())
-            && bravebot_sandbox::rules::inside_a_credential_location(directory, home)
+            && bravebot_sandbox::rules::inside_a_credential_location(
+                directory,
+                home,
+                self.state.as_deref(),
+            )
         {
             return if itself {
                 Remedy::Nothing
