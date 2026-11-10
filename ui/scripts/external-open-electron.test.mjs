@@ -10,10 +10,8 @@
 //
 // `openExternal` and `openPath` are one test and `showItemInFolder` is another, each with its own
 // Electron run. `showItemInFolder` asks the file manager over D-Bus and may run `xdg-open` on the
-// folder that holds the file when that fails, and how many starts that makes is Electron's choice.
-// The run points `DBUS_SESSION_BUS_ADDRESS` at a socket that does not exist. The folder test
-// asserts that each run starts `xdg-open` at least once, and about every start that happens. How
-// many starts Electron makes is its choice, so no count is asserted.
+// folder that holds the file when that fails, so the run points `DBUS_SESSION_BUS_ADDRESS` at a
+// socket that does not exist.
 //
 // Needs Linux, `xvfb-run` and the Electron binary `pnpm install` fetches. Anywhere else it prints
 // `skipped` and passes, and under `CI` on Linux a missing `xvfb-run` or Electron fails it.
