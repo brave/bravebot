@@ -266,7 +266,7 @@ The view keeps its current state and its most recent rows, at most `retainedRows
 <a id="RPCVIEW-10"></a>
 ### RPCVIEW-10: every send carries a message id its client gave it
 
-`turn.send` takes a required `messageId`: 1 to 64 ASCII letters, digits, `-` or `_`. A request without one, or with any other value, is refused with `bad_request` before a turn starts, and the model is sent nothing. A client gives each Send action a new id. The desktop window, the desktop's own bot and summoned turns, the ACP adapter and the TypeScript client all do. The local host offers `messageId` on `turn.send`. A turn a watch starts has no client and carries no id. The bridge does not yet record or compare ids, so a repeated id starts a second turn.
+`turn.send` takes a required `messageId`: 1 to 64 ASCII letters, digits, `-` or `_`. A request without one, or with any other value, is refused with `bad_request` before a turn starts, and the model is sent nothing. A client gives each Send action a new id. An id needs to be new only within its session handle: the ACP adapter numbers each session's prompts from `acp-1`, and a new handle starts again. The desktop window, the desktop's own bot and summoned turns, and the TypeScript client generate random ids. The local host offers `messageId` on `turn.send`. A turn a watch starts has no client and carries no id. The bridge does not yet record or compare ids, so a repeated id starts a second turn.
 
 `verified-by: bravebot_ui_bridge::host_process::a_send_without_a_message_id_is_refused_before_a_turn_starts`
 `verified-by: bravebot_ui_bridge::wire::a_message_id_is_a_short_ascii_word_and_is_required`

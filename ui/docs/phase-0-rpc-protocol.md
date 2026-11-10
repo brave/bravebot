@@ -634,7 +634,7 @@ than patching what it drew.
 
 #### `turn.send`
 
-`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10).
+`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10).
 
 The optional `model` parameter selects a model ID for this and subsequent turns on the
 open session handle. Provider IDs remain qualified (for example,
