@@ -3001,6 +3001,9 @@ indicator-hook = Running hook: { $program } ({ $moment })
 # The same, over a picture or a PDF, which has no lines to count.
 indicator-checking-picture = Checking a picture
 indicator-checking-pdf = Checking a PDF
+# Said while a /btw question asked with no turn running waits for its answer, which is the only thing
+# the session is doing and would otherwise be called by the turn's own word.
+indicator-answering = Answering your /btw question
 # Said while a turn is being stopped, from the press that asks for it until the turn ends. The turn
 # ends once its worker and every delegate it started have returned, which can take seconds, and a
 # screen still saying what it said before the press reads as a press nobody heard.
@@ -4562,6 +4565,13 @@ btw-no-files-beside-a-turn = /btw does not read dropped files while a turn runs;
 btw-one-at-a-time = a question is already being answered beside the turn; ask again when it has
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
+# Said when a question typed during a turn goes out. Its answer is a row of the agents list and not
+# a line among the turn's, so this is the only place that says the question is out. The chord is the
+# one that opens the list.
+btw-asked-beside-a-turn = answering your /btw question beside the turn; { $chord } opens the answer when it is ready
+# Said when that answer is in, whether the turn is still running or has ended. The row it became is
+# otherwise announced only by a count on the bottom line, which a narrow terminal drops.
+btw-answered-beside-a-turn = your /btw question is answered; { $chord } opens it
 
 handoff-needs-a-goal = /handoff takes the next piece of work, which the brief is written for
 handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record until its first turn ends
