@@ -929,8 +929,10 @@ mod tests {
     /// address. With the name set to a path a stage may write, the stand-in is still started with
     /// the address and does not see the name. With it set to a path in an installed directory the
     /// stand-in sees it, which shows the log can hold the name and that a safe value still opens the
-    /// address. The regression it rejects: a name left out of the opener's list or kept whatever it
-    /// holds, so the real `kde-open` would read it from the environment the opener passed.
+    /// address. A name that [`Names::Options`] judges is removed with either value and the address
+    /// is still opened. The regression it rejects: a name left out of the opener's list or kept
+    /// whatever it holds, so the real `kde-open` would read it from the environment the opener
+    /// passed.
     ///
     /// The stand-in shows what the opener hands on, not what `kde-open` reads: that is from the source
     /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). It prints `skipped` and passes
@@ -947,7 +949,7 @@ mod tests {
             return;
         };
         let test = "opener::tests::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts";
-        for (variable, _) in CODE_SELECTORS {
+        for (variable, names) in CODE_SELECTORS {
             let Some(installed) = kde_open_saw(test, variable, &opener, false) else {
                 println!("skipped {variable}: the xdg-open here did not start the kde-open");
                 continue;
@@ -963,7 +965,15 @@ mod tests {
                 Some("ARGS https://example.invalid/"),
                 "{variable}: {installed}"
             );
-            assert_eq!(sets(&installed), [variable], "{variable} was not kept");
+            // An options name is removed whatever it holds, so the safe value is not kept either.
+            if names == Names::Options {
+                assert!(
+                    sets(&installed).is_empty(),
+                    "{variable} reached kde-open: {installed}"
+                );
+            } else {
+                assert_eq!(sets(&installed), [variable], "{variable} was not kept");
+            }
             let planted = kde_open_saw(test, variable, &opener, true)
                 .unwrap_or_else(|| panic!("{variable}: the address was not opened"));
             assert_eq!(
