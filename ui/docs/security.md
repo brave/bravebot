@@ -83,7 +83,10 @@ sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX
 tracked by [#3904](https://github.com/brave/bravebot/issues/3904)).
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
-launcher it starts is a script that records which of the six names it was started with.
+launcher it starts is a script that records which of the six names it was started with. The
+Electron test has a case for `openExternal` and `openPath` and a case for `showItemInFolder`. Neither
+case has been run on Linux since the test was changed, and the `showItemInFolder` case has never
+been run there.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 

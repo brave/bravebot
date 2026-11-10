@@ -68,7 +68,11 @@ export function openPath(path: string): Promise<string> {
   return shell.openPath(path)
 }
 
-/** Reveal a file in the system's file manager. */
+/**
+ * Reveal a file in the system's file manager. On Linux Electron asks the file manager over D-Bus
+ * and, when that fails, starts `xdg-open` on the folder, so the deletion applies here as it does to
+ * `openPath`. `scripts/external-open-electron.test.mjs` records that start.
+ */
 export function showItemInFolder(path: string): void {
   removeOpenerSelectors()
   shell.showItemInFolder(path)

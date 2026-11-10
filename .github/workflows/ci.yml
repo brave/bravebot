@@ -117,6 +117,20 @@ jobs:
         with:
           tool: cargo-nextest@0.9.146
 
+      # The opener's tests run the installed `xdg-open` under generic, GNOME and KDE settings. The
+      # KDE test fails on CI when `xdg-open` or `kde-open` (kde-cli-tools) is missing.
+      - name: Install the browser opener's programs
+        timeout-minutes: 15
+        run: |
+          for attempt in 1 2 3 4; do
+            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y --no-install-recommends xdg-utils libglib2.0-bin kde-cli-tools'; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or timed out" >&2
+            sleep 5
+          done
+          exit 1
+
       # Everything but the usability suite, which the step after next runs once with its output.
       - name: Test
         run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'

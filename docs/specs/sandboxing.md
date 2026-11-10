@@ -4422,68 +4422,51 @@ shown by running the program, or not entirely:
     names have no read in the files searched, which does not show they are never read. A run of
     `kde-open` on Linux is tracked by #3822.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
-  were run on Linux against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0. In generic-desktop
-  mode `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open` ran and passed,
-  and `xdg-mime query default` returned a handler planted in a directory named by each of
-  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS`. With
-  `XDG_CURRENT_DESKTOP=GNOME`, `xdg-open` runs `gio open`, and `gio open` started a handler planted
-  in a directory named by each of those four, so each selects the program that opens the address.
-  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs
-  that for each of the four and fails when any one of them is left out of the list. For
-  `XDG_DATA_DIRS` it opens an address with the scheme `bravebot-test`, which no system handler
-  opens: with the planted value removed `gio open` reads the system's directories and finds no
-  handler, where an address with the scheme `https` would start the host's real browser. It sets
-  `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
-  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode` runs
-  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` with every variable that names a desktop
-  environment removed, so
-  `xdg-open` takes its generic path. That path asks `xdg-mime query default` for the handler of the
-  scheme only when `DISPLAY` or `WAYLAND_DISPLAY` is set (`has_display`, `xdg-open.in` line 507),
-  so the run sets `WAYLAND_DISPLAY` to a name no socket has. Nothing connects to it: `xdg-open`
-  and `xdg-mime` only test it for emptiness, and `xprop`, the one program on that path that would
-  open a display, reads `DISPLAY`, which is removed. `BROWSER` names an installed stand-in, so
-  a lookup that finds no handler runs the stand-in and not the browsers `xdg-open` tries when
-  `BROWSER` is unset. `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
-  runs `BROWSER` in that mode.
-  `xdg-open` reads `BROWSER` only in that generic path (`open_generic`, after the scheme handler
-  lookup). With `gio` installed it takes the GNOME path, runs `gio open` and never reads `BROWSER`,
-  so there is no `BROWSER` test under GNOME. Each of these asserts that the helper or
-  `mimeapps.list` in a directory a stage may write is not run or read and that the one in an
-  installed directory is. Each prints `skipped` and passes where `xdg-open` (and, for the `XDG_`
-  directories, `gio` under GNOME and `xdg-mime` in generic mode) is not installed, as on
-  macOS, and where the installed `xdg-open` does not run the installed handler, so on such a host
-  they assert nothing. The generic-desktop run of the three `XDG_` directories was run on macOS
-  against `xdg-open` and `xdg-mime` 1.2.1 built from their published source, with the `uname`
-  test changed so that they take the generic path, and with a planted name left out of the opener's
-  list it failed with `(true, true)` for each of the three. It has not run on Linux, and the
-  under-GNOME tests have so far passed only through the skip.
+  were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
+  cells marked run below. Every test added after that run is not run: the host here is macOS,
+  the opener tests are Linux-only and print `skipped` elsewhere, and CI has not yet run them. In the
+  `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
+  `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
+  `xdg-open`, `gio` or `kde-open` is missing, or when the installed handler does not start. The
+  generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
+  those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
+  What is covered, per name and per desktop mode:
+
+  | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |
+  |---|---|---|---|
+  | `BROWSER` | Test, run on Linux: the planted helper is not run and an installed one is. | No test. `xdg-open` reaches `BROWSER` in `open_generic`, which `open_gnome` reaches only without `gio` (per the 1.1.x script; not checked against 1.2.1), and the GNOME test needs `gio`. Not run. | Test, not run: the planted helper must not run if an installed `BROWSER` helper runs. If it does not, the test prints that `kde-open` does not read `BROWSER` and asserts nothing. |
+  | `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Test, not run: the planted handler is not run and an installed one is. `xdg-mime query default` was run on Linux and returned a handler planted under each. | Test, run on Linux: `gio open` started a handler planted under each, so each selects the program that opens the address. The test was changed after that run and its new form is not run. | Test, not run: the planted handler is not run and an installed one is. |
+
+  The opener tests are `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
+  (generic, `BROWSER`),
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode`,
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` and
+  `a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`.
+  The KDE test sets `KDE_SESSION_VERSION=5` where `kde-open5` is found, and it was not checked
+  which of the two names `xdg-open` 1.2.1 starts. The GNOME test opens an address with the scheme
+  `bravebot-test`, since with `XDG_DATA_DIRS` removed `gio open` would start the host's browser
+  for `https`. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
+
   Electron 44.9.3 on Linux, run under Xvfb, was made to call `openExternal` and `openPath` of
   `ui/src/main/external-open.ts` with all five names set to directories and a script a stage could
   have written. It started `xdg-open` for each call with none of the five in its environment. The
   same two calls made on Electron's `shell` without the deletion started `xdg-open` with all five,
-  so Electron hands its environment to `xdg-open` and the deletion is what removes them.
-  `ui/scripts/external-open-electron.test.mjs` repeats that run, with both the calls through
-  `external-open.ts` and the control, and fails when `openPath` skips the deletion. It prints
-  `skipped` where there is no Linux, `xvfb-run` or Electron binary. It needed `--no-sandbox` and
-  `--disable-dev-shm-usage` on the host that ran it. The by-hand run was made before
-  `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets fifteen.
-  `make check-code-selectors` fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or
-  `NAMES` in that test differs from `CODE_SELECTORS` in `crates/tui/src/opener.rs` other than by
-  `HOME`, which the desktop application leaves set because it and the agent it starts read it.
-  Under KDE `xdg-open` starts `kde-open` (`kde-open5` under `KDE_SESSION_VERSION=5`) with the
-  address. `a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
-  runs the opener's real launch path with `XDG_CURRENT_DESKTOP=KDE` and `KDE_SESSION_VERSION=6`
-  against the installed `xdg-open`, with a stand-in `kde-open` first on `PATH` that logs its
-  arguments and the names of the opener's list it can see. For each name it asserts that the
-  stand-in is started with the address, that a value in an installed directory reaches it and that
-  a value a stage may write does not. It shows what the opener hands on and not what the real
-  `kde-open` reads, which was read from the source. It prints `skipped` where there is no
-  `xdg-open`. It was run on macOS with the `xdg-open` 1.2.1 built from source, and with the
-  opener's list replaced by `Checked(&[])` it failed with `BROWSER reached kde-open`. It has not
-  run against a KDE session. `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
-  builds the Windows command on every host and asserts that its program and arguments are
-  `rundll32`, `url.dll,FileProtocolHandler` and the address, an address with `&`, `|`, `^`, `%` and
-  `"` included. That `rundll32` opens a page has not been observed.
+  so Electron hands its environment to `xdg-open` and the deletion is what removes them. The
+  by-hand run was made before `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets
+  fifteen. `ui/scripts/external-open-electron.test.mjs` repeats that run as the test case `electron
+  on linux starts xdg-open without the fifteen names for openExternal and openPath through
+  external-open.ts and with them without it`, which expects exactly two starts in each run. It
+  needed `--no-sandbox` and `--disable-dev-shm-usage` on the host that ran it. The case `electron
+  on linux starts any xdg-open for showItemInFolder without the fifteen names through
+  external-open.ts and with them without it` asserts no start count, since how many times Electron
+  starts `xdg-open` is Electron's choice. Each start through `external-open.ts` must carry none of
+  the names and each control start all fifteen, and the case prints a line when the control starts
+  none. It sets `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to
+  `xdg-open`, which rests on a recollection of Electron's source. Both cases print `skipped` where
+  there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
+  or Electron fails them. Neither has been run on Linux since the test was changed. The
+  `showItemInFolder` case has never been run on Linux.
+
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
   the five names, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
   `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
@@ -4768,6 +4751,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the six names set and the same calls on Electron's shell start it with all six; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME)`
+`verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
@@ -4787,6 +4771,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
+`verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the fifteen names where Electron's own shell starts it with all fifteen; its showItemInFolder case is a test case of its own and has never been run on Linux; the ui job of CI runs it through make check-ui-build on ubuntu-latest and it prints skipped elsewhere)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
