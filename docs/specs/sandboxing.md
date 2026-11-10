@@ -4343,7 +4343,9 @@ shown by running the program, or not entirely:
   builds libraries that write a marker file when the loader runs them. For `LD_PRELOAD`,
   `LD_AUDIT`, `LD_LIBRARY_PATH` and `GCONV_PATH` (a converter module named by a `gconv-modules`
   file) it starts a program through a kept start and a checked start, and asserts only whether a
-  marker is present, since the count of constructor runs depends on the loader. The second,
+  marker is present, since the count of constructor runs depends on the loader. The converter
+  module exports no converter, so on the first CI run glibc aborted the `GCONV_PATH` program after
+  the module's constructor had run, and the test does not assert that program's exit status. The second,
   `locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
   starts a program that reports its environment. It shows what the start hands the process and
   runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
@@ -4468,9 +4470,14 @@ shown by running the program, or not entirely:
   the opener tests are Linux-only and print `skipped` elsewhere, and CI has not yet run them. In the
   `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
-  `xdg-open`, `gio` or `kde-open` is missing, or when the installed handler does not start. The
+  `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
+  the installed handler does not start. The KDE test skips when the installed handler does not
+  start, since `kde-open` may need a session bus that a headless runner lacks. The
   generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
   those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
+  The first CI run failed the generic-mode and KDE tests: with no `DISPLAY` or `WAYLAND_DISPLAY`,
+  `xdg-open` 1.2.1 does not look up a scheme handler in generic mode, so the generic test now
+  sets `DISPLAY`, and `kde-open` did not run the installed handler on the runner.
   What is covered, per name and per desktop mode:
 
   | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |
@@ -4483,8 +4490,9 @@ shown by running the program, or not entirely:
   `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode`,
   `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` and
   `a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`.
-  The KDE test sets `KDE_SESSION_VERSION=5` where `kde-open5` is found, and it was not checked
-  which of the two names `xdg-open` 1.2.1 starts. The GNOME test opens an address with the scheme
+  The KDE test sets `KDE_SESSION_VERSION=5` where `kde-open5` is found and `6` otherwise, since
+  `xdg-open` 1.2.1 runs `kfmclient exec` when it is unset, `kde-open5` for 5 and `kde-open` for 4
+  and 6. The GNOME test opens an address with the scheme
   `bravebot-test`, since with `XDG_DATA_DIRS` removed `gio open` would start the host's browser
   for `https`. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
 

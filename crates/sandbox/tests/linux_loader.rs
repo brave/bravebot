@@ -51,9 +51,9 @@ const PLAIN: &str = "int main(void) { return 0; }\n";
 const LINKED: &str = "int needed(void);\nint main(void) { return needed(); }\n";
 
 /// A program that asks the C library to convert from a character set only a `gconv-modules` file
-/// found through `GCONV_PATH` defines. Whether the conversion works does not matter, so the exit
-/// status is zero either way: the module the file names is loaded, and runs its constructor, before
-/// the conversion is known to fail.
+/// found through `GCONV_PATH` defines. The module the file names is loaded, and runs its
+/// constructor, before the conversion is known to fail. The module exports no converter, so glibc
+/// can abort the process while it releases the module, and the exit status is not asserted.
 const CONVERTING: &str = r#"
 #include <iconv.h>
 
@@ -282,7 +282,7 @@ impl Fixture {
         holding(&mut command, name, value);
         let status = command.status().unwrap();
         assert!(
-            status.success(),
+            status.success() || program == self.converting,
             "{} with {name}={}",
             program.display(),
             value.display()
