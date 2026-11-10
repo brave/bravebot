@@ -37,7 +37,10 @@ why it is sound. The lint is not in the workspace table because other crates and
 `crates/agent/src/preamble.rs` and the tests of `bravebot-agent`, `bravebot-tui`,
 `bravebot-ui-bridge`, `bravebot-cli` and `bravebot-session`. It is checked on the Linux, macOS and
 Windows clippy runs, which each compile different blocks. Place the comment directly above the
-`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item.
+`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item. Besides the
+`unsafe impl Send` and `Sync` in `swap.rs`, the sandbox crate has one more: the allocator of
+`crates/sandbox/src/alloc_probe.rs`, a test harness that ends a forked child on a call to the
+allocator ([SANDBOX-34](../specs/sandboxing.md#SANDBOX-34), [LAYER-4](../specs/layering.md#LAYER-4)).
 
 Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
 runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
@@ -382,7 +385,8 @@ with no comment at the call or whose file has no row in the table of empty-list 
 `docs/specs/sandboxing.md`, and holds each variable in a `CODE_SELECTORS` list, in
 `crates/sandbox/src/programs.rs` (the generic table), `crates/agent/src/gcloud.rs`,
 `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`, the browser opener's in
-`crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
+`crates/tui/src/opener.rs`, the Windows `powershell` starts' (and `osascript`'s, in a second
+list named `OSASCRIPT_CODE_SELECTORS`) in `crates/tui/src/powershell.rs` and
 the sandbox usability suite's in `crates/agent/src/usability.rs`, to
 a test that keeps a safe value and a test that removes one a stage may write. It fails when the
 opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read
@@ -393,7 +397,13 @@ read it (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only
 cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
 `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in
-`crates/agent/src/usability.rs`, which are not `CODE_SELECTORS` lists. It fails when
+`crates/agent/src/usability.rs`, which are not `CODE_SELECTORS` lists. A list that serves one
+program of a file that holds another is named `<PROGRAM>_CODE_SELECTORS` and read with the first. The generic
+table also holds `CODE_SELECTOR_PREFIXES` (names that begin with a prefix) and
+`CODE_SELECTOR_PATTERNS` (names with a fixed start and end, such as `ASDF_<tool>_VERSION`). This
+script reads `CODE_SELECTOR_PREFIXES` only to compare it with `LOADER_PREFIXES`, and does not read
+`CODE_SELECTOR_PATTERNS`; `an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name`
+pins them. It fails when
 `LOADER_PREFIXES` is missing or empty, shares a prefix with `CODE_SELECTOR_PREFIXES` (which every
 checked start applies, so `LD_DEBUG` would go from gcloud and the opener), or is not passed to
 `withhold_prefixed` by the usability suite's stored-login `gh` start, and when a prefix in it has

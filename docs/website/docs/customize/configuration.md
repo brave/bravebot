@@ -232,8 +232,8 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 
 | Variable | What it sets |
 |---|---|
-| `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in ([Brave's premium service](premium.md#what-is-sent-and-where)) |
+| `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to; your own file, the environment or the build, and never a project or local file |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in, from the same three places ([Brave's premium service](premium.md#what-is-sent-and-where)) |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
 | `BRAVEBOT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
@@ -265,12 +265,14 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Nine names are read from your own file and a `--settings` file outside the project, and from no
+Seventeen names are read from your own file and a `--settings` file outside the project, and from no
 project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
 `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
-because they choose the AWS account a conversation is sent through. `bravebot doctor` reports one a
-project or local file names and the name decides nothing; see
+because they choose the AWS account a conversation is sent through, and `BRAVE_AI_CHAT_ENDPOINT` and
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, because they choose the host a conversation and a premium key are
+sent to. A build that carries an endpoint outranks your file, and a source build carries none.
+`bravebot doctor` reports one a project or local file names and the name decides nothing; see
 [certificates and proxies](../security/security.md#certificates-and-proxies) for the network names
 and [Bedrock](providers/bedrock.md) for the AWS ones.
 

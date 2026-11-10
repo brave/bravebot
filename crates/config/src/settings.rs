@@ -1313,11 +1313,7 @@ impl Settings {
             for value in misshapen_rule_lists(&root, &["deny", "ask", "allow"]) {
                 misshapen.push((path.clone(), value));
             }
-            for name in crate::env_var::NETWORK
-                .into_iter()
-                .chain(crate::env_var::GOOGLE)
-                .chain(crate::env_var::BEDROCK)
-            {
+            for name in crate::env_var::person_only() {
                 let Some(value) = env_string(&root, name) else {
                     continue;
                 };
@@ -1419,11 +1415,7 @@ impl Settings {
         // Put back to what the entitled layers said, a checkout's value having been merged in above
         // under the same name. Scrubbed on the way, the values being a proxy address that may carry
         // a credential.
-        for name in crate::env_var::NETWORK
-            .into_iter()
-            .chain(crate::env_var::GOOGLE)
-            .chain(crate::env_var::BEDROCK)
-        {
+        for name in crate::env_var::person_only() {
             if let Some(mut stale) = settings.env.remove(name) {
                 crate::scrub(&mut stale);
             }
@@ -8469,17 +8461,6 @@ mod tests {
         }
     }
 
-    /// The names of [`crate::managed::PINNABLE`] that a checkout's project or local file can state
-    /// today.
-    ///
-    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds the six network names, the
-    /// three Google names and the six Bedrock names from a checkout, so the endpoints are the ones
-    /// that resolve to the closest layer. BACKEND-35 says a project layer can name the endpoints on
-    /// a source build. Moving a name out of this list means reading it from the person's layers
-    /// alone, and the test below then fails until the name is taken off.
-    const CHECKOUT_SETTABLE: [&str; 2] =
-        [crate::env_var::ENDPOINT, crate::env_var::PREMIUM_ENDPOINT];
-
     /// Whether the project layer, and then the local layer, alone decide `name` for a session.
     fn a_checkouts_files_decide(name: &str) -> (bool, bool) {
         let text = format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
@@ -8498,41 +8479,127 @@ mod tests {
         )
     }
 
-    /// A name a managed layer may pin is either read from the person's layers alone or listed in
-    /// [`CHECKOUT_SETTABLE`], so a name added to `PINNABLE` has to be placed on one side, and a name
-    /// moved to the person's layers has to come off the list.
+    /// Every name a managed layer may pin is read from the person's layers alone, so a name added
+    /// to `PINNABLE` has to be placed in the person-only lists of `env_var`, which is what keeps a
+    /// checkout from choosing the host that receives a conversation or a credential (BACKEND-33).
     #[test]
-    fn every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it() {
-        // The control: a name that is withheld from a checkout reads as withheld, so a helper that
-        // answered `true` for every name would not pass for the list below.
-        for name in crate::env_var::NETWORK
-            .into_iter()
-            .chain(crate::env_var::GOOGLE)
-            .chain(crate::env_var::BEDROCK)
-        {
-            assert_eq!(a_checkouts_files_decide(name), (false, false), "{name}");
+    fn no_pinnable_name_is_decided_by_a_checkouts_files() {
+        // The control: names a checkout's files do decide read as decided, so a helper that
+        // answered `false` for every name would not pass for the list below.
+        for name in [
+            crate::env_var::KEY_ID,
+            crate::env_var::SIGNING_KEY,
+            crate::env_var::DEFAULT_MODEL,
+        ] {
+            assert_eq!(a_checkouts_files_decide(name), (true, true), "{name}");
         }
         for name in crate::managed::PINNABLE {
-            let listed = CHECKOUT_SETTABLE.contains(&name);
             assert_eq!(
                 a_checkouts_files_decide(name),
-                (listed, listed),
-                "{name} is {} a checkout's files, and the list says {}",
-                if listed {
-                    "withheld from"
-                } else {
-                    "decided by"
-                },
-                if listed {
-                    "decided by them"
-                } else {
-                    "withheld"
-                },
+                (false, false),
+                "{name} is decided by a checkout's files"
+            );
+            assert!(
+                crate::env_var::is_person_only(name),
+                "{name} is not in the person-only lists"
             );
         }
-        for name in CHECKOUT_SETTABLE {
-            assert!(crate::managed::PINNABLE.contains(&name), "{name}");
+    }
+
+    /// BACKEND-33: which host receives a conversation, and which host the premium credential is
+    /// presented to, is the person's to choose, so a checkout's project and local files decide
+    /// neither endpoint, on a build that bakes nothing in. `doctor` reports the checkout's names.
+    #[test]
+    fn a_checkouts_endpoints_configure_no_host_and_the_persons_own_still_do() {
+        let block = r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "http://checkout.invalid:1",
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.checkout.invalid"}}"#;
+
+        let project = Layers::new("endpoints-checkout-project")
+            .project(block)
+            .read();
+        let local = Layers::new("endpoints-checkout-local").local(block).read();
+        for (file, settings) in [("project", &project), ("local", &local)] {
+            assert_eq!(
+                settings.get("BRAVE_AI_CHAT_ENDPOINT"),
+                None,
+                "a {file} file chose the host the conversation goes to"
+            );
+            assert_eq!(
+                settings.get("BRAVE_AI_CHAT_PREMIUM_ENDPOINT"),
+                None,
+                "a {file} file chose the host the premium credential goes to"
+            );
+            let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+            assert_eq!(
+                reported,
+                ["BRAVE_AI_CHAT_ENDPOINT", "BRAVE_AI_CHAT_PREMIUM_ENDPOINT"],
+                "{file}"
+            );
+            assert_eq!(settings.network_values().count(), 0, "{file}");
         }
+
+        // Each name alone, in each checkout file. The names are spelled here and not taken from the
+        // list under test, so a name left out of `env_var::ENDPOINTS` fails its own case.
+        for name in ["BRAVE_AI_CHAT_ENDPOINT", "BRAVE_AI_CHAT_PREMIUM_ENDPOINT"] {
+            let text = format!(r#"{{"env": {{"{name}": "https://checkout.invalid"}}}}"#);
+            for (file, layers) in [
+                (
+                    "project",
+                    Layers::new(&format!("endpoint-only-project-{name}")).project(&text),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("endpoint-only-local-{name}")).local(&text),
+                ),
+            ] {
+                let settings = layers.read();
+                assert_eq!(settings.get(name), None, "a {file} file decided {name}");
+                let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+                assert_eq!(reported, [name], "a {file} file's {name} was not reported");
+            }
+        }
+
+        let own = Layers::new("endpoints-home")
+            .global(
+                r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://person.invalid",
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.person.invalid"}}"#,
+            )
+            .read();
+        assert_eq!(
+            own.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("https://person.invalid")
+        );
+        assert_eq!(
+            own.get("BRAVE_AI_CHAT_PREMIUM_ENDPOINT"),
+            Some("https://premium.person.invalid")
+        );
+        assert_eq!(own.network_ignored().count(), 0);
+        // The transport is handed its six names and no others.
+        assert_eq!(own.network_values().count(), 0);
+
+        // The person's value wins over the checkout's, and the checkout's is neither the winner nor
+        // reported as having overridden the person's.
+        let both = Layers::new("endpoints-home-and-checkout")
+            .global(r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://person.invalid"}}"#)
+            .project(block)
+            .read();
+        assert_eq!(
+            both.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("https://person.invalid")
+        );
+        assert_eq!(both.overridden().count(), 0);
+
+        // A file the command line named decides when it sits outside the checkout and not inside.
+        let outside = Layers::new("endpoints-named-outside").named(block).read();
+        assert_eq!(
+            outside.get("BRAVE_AI_CHAT_ENDPOINT"),
+            Some("http://checkout.invalid:1")
+        );
+        let inside = Layers::new("endpoints-named-inside")
+            .named_inside_the_workspace(block)
+            .read();
+        assert_eq!(inside.get("BRAVE_AI_CHAT_ENDPOINT"), None);
+        assert_eq!(inside.network_ignored().count(), 2);
     }
 
     /// The person's own file and a file the command line named outside the checkout decide every

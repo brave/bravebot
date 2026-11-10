@@ -64,8 +64,10 @@ With a key stored, a request for the Brave backend goes to the premium host's `/
 with `Authorization: Bearer <key>`. Such a request is not signed, so it carries no `digest` header and
 no `Signature` authorization. A redirect in answer is a failure and is not followed.
 
-`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, baked into a build or exported, is an optional override of the host. A
-value with no scheme, or with a `?` or a `#`, is not used and the compiled-in host stands.
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, baked into a build, exported, or written in the `env` block of your
+own `~/.bravebot/settings.json`, is an optional override of the host. A project or local settings
+file does not set it. A value with no scheme, or with a `?` or a `#`, is not used and the compiled-in
+host stands.
 
 **The key is never sent to the free endpoint or to a host that is not Brave's.** A host is Brave's when it
 ends in `.brave.com`, `.brave.software` or `.bravesoftware.com`. The host is the one a request connects

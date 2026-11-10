@@ -6,7 +6,9 @@
  * their generic path (no desktop environment detected, or the desktop tool missing) run the
  * commands in `BROWSER`. Under a GNOME session with `gio` installed they run `gio open`, which
  * does not read `BROWSER` and executes the wrapper `GIO_LAUNCH_DESKTOP` names with the handler's
- * command line. A program the person approved with `run` may have written the file any of these
+ * command line. Under KDE they run `kde-open`. GLib loads modules from `GIO_EXTRA_MODULES` and
+ * `GIO_MODULE_DIR`, and Qt loads plug-ins from the `QT_` names and the service cache from
+ * `KDESYCOCA`. A program the person approved with `run` may have written the file any of these
  * name, and the opener then runs it outside the sandbox (SANDBOX-30). The same names are checked for the terminal client's opener in
  * `crates/tui/src/opener.rs`, which also judges `HOME` and removes it from the opener's own start.
  * `HOME` is not deleted here: this process and the agent it starts read it, so under a GNOME
@@ -31,6 +33,15 @@ export const OPENER_SELECTORS = [
   'XDG_DATA_DIRS',
   'XDG_CONFIG_HOME',
   'XDG_CONFIG_DIRS',
+  'GIO_EXTRA_MODULES',
+  'GIO_MODULE_DIR',
+  'QT_PLUGIN_PATH',
+  'QT_QPA_PLATFORM_PLUGIN_PATH',
+  'QT_QPA_PLATFORMTHEME',
+  'QT_QPA_GENERIC_PLUGINS',
+  'QT_QPA_PLATFORM',
+  'QT_STYLE_OVERRIDE',
+  'KDESYCOCA',
 ] as const
 
 /** Delete each opener selector from `env`, and return the names that were set. */

@@ -219,7 +219,8 @@ entry does not say that a start the diff does not touch complies. The generic ta
 (`CODE_SELECTORS` in `crates/sandbox/src/programs.rs`) is applied to every checked start, and a
 program's own names are the `CODE_SELECTORS` list in `crates/agent/src/gcloud.rs`,
 `crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
-`crates/tui/src/opener.rs` or `crates/tui/src/powershell.rs`, so a diff that adds a start lists only the names its program reads that
+`crates/tui/src/opener.rs` or `crates/tui/src/powershell.rs` (which also holds `osascript`'s
+`OSASCRIPT_CODE_SELECTORS`), so a diff that adds a start lists only the names its program reads that
 the table does not hold, or passes `Checked(&[])` and records the gap as
 [GAP-001](gaps.md#GAP-001) asks. A launcher that takes its handler from a list of commands, such as
 `BROWSER`, is listed as `Names::Commands`: every entry must be one program, alone or followed by
@@ -229,7 +230,10 @@ In a diff that adds or changes the start of a program bravebot starts for itself
 the program's launcher and documentation for every variable that names an interpreter, a plugin or
 module directory, a configuration directory it runs files from, or a wrapper to run first. Each one
 is either in the generic table, listed in the start's own names with tests, or the diff says why the
-program never reads it. A variable the launcher reads that is in neither breaks the rule. A
+program never reads it. A program that is a script found under another program's name (an asdf or pyenv
+shim, an `aws` from pip or Homebrew) is a bash or Python program, so the names of the interpreter
+and of the shell are in the generic table. Which names a program reads is recorded in SANDBOX-30 as
+run or as read from source, with the version, and a name read from source alone is not described as run. A variable the launcher reads that is in neither breaks the rule. A
 program's names are passed to `start` and the check stays in shared code ([PATH-006](#PATH-006)).
 
 `make check-code-selectors` confirms that every call of `start` and `start_against` states

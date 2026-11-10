@@ -17,7 +17,8 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
 3. A `CodeSelectors::Checked(&NAME)` call in a file that does not define `const CODE_SELECTORS`.
 4. A file that must hold a CODE_SELECTORS list (the generic list and the three above) and does
    not, or whose list this script reads as empty.
-5. A name in a `const CODE_SELECTORS` list, in any file, that lacks a test in the same file:
+5. A name in a `const CODE_SELECTORS` list, or in a `const <PROGRAM>_CODE_SELECTORS` list a file
+   keeps for one program, in any file, that lacks a test in the same file:
    - an assertion that the name is removed (`assert!(withheld("NAME", ...))` or
      `assert!(checked("NAME", ...))`), which a loop that keeps every value fails, and
    - for a name whose value is a path, program or list, an assertion that a safe value is kept
@@ -85,7 +86,9 @@ SOURCES = [
     "crates/tui/src/powershell.rs",
 ]
 
-LIST = re.compile(r"const\s+CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
+# A program's list is `const CODE_SELECTORS`, and a file that gives a second program a list of its own
+# names it `const <PROGRAM>_CODE_SELECTORS`. Every such list in a file is read.
+LIST = re.compile(r"const\s+(?:\w+_)?CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
 ENTRY = re.compile(
     r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)'
     r"|\bselectors::([A-Z0-9_]+)"
@@ -131,15 +134,15 @@ def listed_in_spec(spec, label):
 
 
 def selectors(text):
-    """The names in CODE_SELECTORS, or None where the list is not found.
+    """The names in every CODE_SELECTORS list of a file, or None where there is none.
 
     A parser that matches nothing would report every list covered, so an absent list and an empty
     one are both reported by the caller rather than passed.
     """
-    found = LIST.search(text)
+    found = list(LIST.finditer(text))
     if not found:
         return None
-    return [a or b for a, b in ENTRY.findall(found.group(1))]
+    return [a or b for match in found for a, b in ENTRY.findall(match.group(1))]
 
 
 APPLICATION_LIST = re.compile(
@@ -202,13 +205,16 @@ def application_complaints(opener_text, application_text, application_test_text)
 
 
 def options_in(text):
-    """The names in CODE_SELECTORS that take options and not a path.
+    """The names in the CODE_SELECTORS lists that take options and not a path.
 
     An option string names nothing outside a stage-writable directory, so it is removed whatever it
     holds and has no value that is kept. Such a name needs the removal assertion only.
     """
-    found = LIST.search(text)
-    return re.findall(r'"([A-Za-z0-9_]+)"\s*,\s*Names::Options\b', found.group(1)) if found else []
+    return [
+        name
+        for match in LIST.finditer(text)
+        for name in re.findall(r'"([A-Za-z0-9_]+)"\s*,\s*Names::Options\b', match.group(1))
+    ]
 
 
 def shared_mismatches(text):
@@ -595,6 +601,30 @@ fn command() -> Command {
 }
 """
 
+# A file with a list for one program beside the list for the rest.
+TWO_LISTS = """\
+const CODE_SELECTORS: [(&str, Names); 2] = [
+    ("A_PROGRAM", Names::Program),
+    ("A_FILE", Names::File),
+];
+const OSASCRIPT_CODE_SELECTORS: [(&str, Names); 2] = [
+    ("AN_OSASCRIPT_DIRECTORY", Names::Directory),
+    ("AN_OSASCRIPT_OPTION", Names::Options),
+];
+#[cfg(test)]
+mod tests {
+    fn t() {
+        assert!(withheld("A_PROGRAM", &planted, &session));
+        assert!(!withheld("A_PROGRAM", &genuine, &session));
+        assert!(withheld("A_FILE", &planted, &session));
+        assert!(!withheld("A_FILE", &genuine, &session));
+        assert!(withheld("AN_OSASCRIPT_DIRECTORY", &planted, &session));
+        assert!(!withheld("AN_OSASCRIPT_DIRECTORY", &genuine, &session));
+        assert!(withheld("AN_OSASCRIPT_OPTION", &planted, &session));
+    }
+}
+"""
+
 CALLER_AGAINST = """\
 fn command() -> Command {
     bravebot_sandbox::programs::start_against(
@@ -787,6 +817,32 @@ def selftest():
         len(list_complaints(unlooped)) == 1,
         list_complaints(unlooped),
     )
+
+    # A second list in one file, kept for one program (`OSASCRIPT_CODE_SELECTORS`), is read too.
+    got = selectors(TWO_LISTS)
+    case(
+        "parse: a second list named for its program is read with the first",
+        got == ["A_PROGRAM", "A_FILE", "AN_OSASCRIPT_DIRECTORY", "AN_OSASCRIPT_OPTION"],
+        got,
+    )
+    got = options_in(TWO_LISTS)
+    case(
+        "parse: an options name in the second list is read as options",
+        got == ["AN_OSASCRIPT_OPTION"],
+        got,
+    )
+    got = list_complaints(TWO_LISTS)
+    case("verdict: two covered lists pass", got == [], got)
+    got = list_complaints(
+        TWO_LISTS.replace(
+            'assert!(!withheld("AN_OSASCRIPT_DIRECTORY"', 'assert!(withheld("AN_OSASCRIPT_DIRECTORY"'
+        )
+    )
+    case("verdict: the second list's name with no keep assertion fails once", len(got) == 1, got)
+    got = list_complaints(
+        TWO_LISTS.replace('assert!(withheld("AN_OSASCRIPT_OPTION"', 'let _ = ("AN_OSASCRIPT_OPTION"')
+    )
+    case("verdict: the second list's options name with no removal fails once", len(got) == 1, got)
 
     new_one = '("A_DIRECTORY", Names::Directory),\n    ("A_NEW_ONE", Names::Program),'
     new_options = '("A_OPTIONS", Names::Options),\n    ("A_NEW", Names::Options),'
