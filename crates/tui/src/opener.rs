@@ -1150,7 +1150,8 @@ mod tests {
     /// the XDG names, so a module directory, a launcher, a plug-in directory, a plug-in name or a
     /// service cache a stage wrote is loaded or read by the program the opener starts. A name whose
     /// value is a path has a value a stage may write, which is removed, and a safe one, which is
-    /// kept; an option is removed whatever it holds.
+    /// kept; an option is removed whatever it holds. `GIO_LAUNCH_DESKTOP` is one file, so what
+    /// it keeps is shown on the disk by a test of its own.
     #[test]
     fn the_opener_removes_a_glib_or_qt_name_that_selects_code_a_stage_may_write() {
         assert!(withheld("HOME", "/stage/home"));
@@ -1168,10 +1169,6 @@ mod tests {
         assert!(!withheld("GIO_MODULE_DIR", "/safe/modules"));
 
         assert!(withheld("GIO_LAUNCH_DESKTOP", "/stage/launcher"));
-        assert!(!withheld(
-            "GIO_LAUNCH_DESKTOP",
-            "/safe/libexec/gio-launch-desktop"
-        ));
 
         assert!(withheld("QT_PLUGIN_PATH", "/stage/plugins"));
         assert!(withheld("QT_PLUGIN_PATH", "/safe/plugins:/stage/plugins"));
