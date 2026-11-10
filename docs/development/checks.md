@@ -281,8 +281,12 @@ agree about how many exceptions to the rule are admitted, whether every crate ke
 client of its own is one the egress register admits and no comment claims a dependency a manifest
 beside it declares, whether the register admitting them leaves as many prompts out of a verdict's
 reach as the clause deciding that does, whether a field documented as read in one place is read in
-one place, whether a trait, an inherent function outside the type's own seven, or a conversion
-taking a `Labelled` as an argument reaches into a `Labelled`, whether a spec pins the constructors
+one place, whether a trait, an inherent function outside the type's own seven or one of the seven
+with another visibility or signature, or a conversion
+taking a `Labelled` as an argument reaches into a `Labelled` (read through `Box`, a type alias and a
+wrapper declared beside it, with raw strings blanked before braces are counted), whether every
+public function of `crates/core/src/policy.rs` that builds a trusted or public label is counted by
+a spec's `guards` or named in `LABEL_BUILDERS_NOT_GATES` with a reason, whether a spec pins the constructors
 of one as well as the releases, whether every gate handing released content to a closure the
 driver wrote is counted rather than merely named and so is every function forwarding its caller's
 closure to one, whether `clippy.toml` still refuses the calls that start a program and no second

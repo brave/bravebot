@@ -139,23 +139,45 @@ RELEASE = "Labelled::declassify"
 # What `Labelled` is allowed to implement. Everything else would hand a caller a way to read or
 # compare content without a witness, which is the guarantee the absent implementations are.
 # `labels.md` states this as holding by construction, and `check_labelled_impls` fails an
-# implementation outside this list, an inherent function outside the next one, and an
-# implementation for another type that takes a `Labelled` as an argument of its trait.
+# implementation outside this list, an inherent function outside the next one or one of them with
+# another visibility or signature, and an implementation for another type that takes a `Labelled`
+# as an argument of its trait.
 ALLOWED_IMPLS = {"fmt::Debug"}
-# The functions `Labelled` has of its own. One of any other name is an accessor, or a conversion
-# to the content, that a caller could use without a witness. A function on this list that changes
-# what it takes or returns is not seen: only a new name is.
-ALLOWED_FUNCTIONS = {"new", "trusted", "label", "declassify", "into_trusted", "relabel", "shape"}
+# The functions `Labelled` has of its own, each with the visibility and the signature it has. One of
+# any other name is an accessor, or a conversion to the content, that a caller could use without a
+# witness. One of these names with another visibility or signature is the same thing under a name
+# the list allows: `shape` returning the bytes, or `pub(crate)` widened to `pub`. A parameter's name
+# is part of the signature, so renaming one is an edit to this table too. Generics of the `impl`
+# are not part of it.
+ALLOWED_FUNCTIONS = {
+    "new": ("pub", "fn new(value: T, label: Label) -> Self"),
+    "trusted": ("pub", "fn trusted(value: T) -> Self"),
+    "label": ("pub", "fn label(&self) -> Label"),
+    "declassify": ("pub", "fn declassify(self, _proof: &Declassification) -> T"),
+    "into_trusted": ("pub", "fn into_trusted(self) -> Result<T, Self>"),
+    "relabel": ("pub", "fn relabel(self, to: Label) -> Option<Self>"),
+    "shape": ("pub(crate)", "fn shape(&self) -> Shape"),
+}
 IMPL_START = re.compile(r"^\s*impl\b")
-# `Labelled` as the type an `impl` is for, bare or behind a reference, a lifetime or a path.
-LABELLED_SUBJECT = r"(?:&\s*(?:'\w+\s+)?(?:mut\s+)?)?(?:\w+::)*Labelled\b"
-# What a scan of an `impl` block steps over or stops at: a string or a character literal, which
-# may hold a brace or the word `fn`, then the name of a function and a brace.
-IMPL_TOKEN = re.compile(
-    r"(?P<string>\"(?:\\.|[^\"\\])*\")|(?P<char>'(?:\\.[^']*|[^'\\])')"
-    r"|\bfn\s+(?P<fn>\w+)|(?P<brace>[{}])",
+# What a scan of an `impl` block stops at, on text `_mask` has already emptied of comments and
+# literals: the name of a function, a brace, and the semicolon that ends an item with no block.
+IMPL_TOKEN = re.compile(r"\bfn\s+(?P<fn>\w+)|(?P<brace>[{}])|(?P<semi>;)")
+# What `_mask` blanks: line and block comments, raw strings with any number of `#`, strings and
+# character literals. A lifetime is not one, because a character literal closes after one
+# character or one escape.
+LITERALS = re.compile(
+    r"//[^\n]*"
+    r"|/\*.*?\*/"
+    r'|(?<!\w)b?r(?P<hashes>#*)".*?"(?P=hashes)'
+    r'|"(?:\\.|[^"\\])*"'
+    r"|'(?:\\.[^'\n]*|[^'\\\n])'",
     re.S,
 )
+# A `type` item at the margin, or one with a visibility. An associated type of an impl has neither.
+TYPE_ALIAS = re.compile(
+    r"^(?:[ \t]*pub(?:\([^)]*\))?[ \t]+|)type[ \t]+(\w+)[^=;{]*=([^;]+);", re.M
+)
+TYPE_DECLARATION = re.compile(r"\b(?:struct|enum)\s+(\w+)")
 STRUCT_LABELLED = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+Labelled\b")
 # A derive writes the same implementation an `impl` does, inside the module that can see the
 # private fields, so it is held to the same list. `Clone` is the one the type derives.
@@ -1361,51 +1383,157 @@ def check_exhaustive_reader_docs(sources):
             )
 
 
-def _impl_header(text):
+def _mask(text):
+    """`text` with every comment, string, raw string and character literal blanked, newlines kept.
+
+    A brace or the word `fn` inside one is not code, and the blanked text has the same line
+    numbers as the original, so a position found in it is a position in the file.
+    """
+    return LITERALS.sub(lambda found: re.sub(r"[^\n]", " ", found.group(0)), text)
+
+
+def _item_extent(text, start):
+    """The end of the item whose name ends at `start`: the `;` of a unit or tuple item, or the
+    bracket that closes its first body, with every bracket kind counted."""
+    depth = 0
+    for at in range(start, len(text)):
+        char = text[at]
+        if char in "{([":
+            depth += 1
+        elif char in "})]":
+            depth -= 1
+            if depth <= 0:
+                return at
+        elif char == ";" and depth == 0:
+            return at
+    return len(text)
+
+
+def _labelled_names(sources):
+    """Every name that stands for a `Labelled`: the type itself, each `type` alias that names one
+    (found again for an alias of an alias), and each struct or enum declared in a file that
+    declares `Labelled` whose body names one.
+
+    A wrapper is read only beside the declaration because the fields are private: a type in another
+    file can hold a `Labelled` and has no way to reach its content, so an implementation for it
+    reaches nothing. An alias is read wherever it is, since it is the same type.
+    """
+    masked = {path: _mask("\n".join(lines)) for path, lines in sources.items()}
+    names = {"Labelled"}
+    aliases = [
+        (found.group(1), found.group(2))
+        for text in masked.values()
+        if "type" in text
+        for found in TYPE_ALIAS.finditer(text)
+    ]
+    wrappers = []
+    for text in masked.values():
+        if not any(STRUCT_LABELLED.match(line) for line in text.split("\n")):
+            continue
+        for found in TYPE_DECLARATION.finditer(text):
+            if found.group(1) != "Labelled":
+                wrappers.append((found.group(1), text[found.end():_item_extent(text, found.end())]))
+    grew = True
+    while grew:
+        grew = False
+        for name, body in aliases + wrappers:
+            if name not in names and any(word in names for word in re.findall(r"\w+", body)):
+                names.add(name)
+                grew = True
+    return names
+
+
+def _generic_parameters(generics):
+    """The names an `impl`'s own generic list declares: `T` and `a` in `<'a, T: Clone, U = u8>`."""
+    inner = generics[1:-1] if generics.startswith("<") else ""
+    parts, depth, current = [], 0, ""
+    for char in inner:
+        depth += char in "<([" 
+        depth -= char in ">)]"
+        if char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += char
+    parts.append(current)
+    names = []
+    for part in parts:
+        found = re.match(r"\s*(?:const\s+)?'?(\w+)", part)
+        if found:
+            names.append(found.group(1))
+    return names
+
+
+def _impl_header(text, names, declares):
     """What an `impl` header makes of `Labelled`, as `(kind, name)`, or None when it is not about it.
 
-    `kind` is "trait" for a trait implemented for `Labelled`, whatever reference or path the type
-    is written behind, with the trait as `name`. It is "inherent" for the type's own block, which
-    has no name. It is "argument" for an implementation for another type whose trait takes a
-    `Labelled`, such as `From<Labelled<String>> for String`, with the trait and its arguments as
-    `name`. A `Labelled` in the generics or the `where` clause is a bound on the implementation and
-    is not read.
+    `kind` is "trait" for a trait implemented for a type that names `Labelled` or one of `names`,
+    whatever reference, `Box` or path it is written behind, with the trait as `name`. It is
+    "inherent" for the type's own block, which has no name. It is "argument" for an implementation
+    for another type whose trait takes a `Labelled`, such as `From<Labelled<String>> for String`,
+    with the trait and its arguments as `name`. It is "unresolved" for an implementation whose
+    subject is one of its own generic parameters or a projection such as `<A as B>::C`, in the file
+    that declares `Labelled` only, since only there are its private fields in reach: the check
+    cannot tell it from an implementation for `Labelled`, and says so rather than passing it.
+    A `Labelled` in the generics or the `where` clause is a bound on the implementation and is not
+    read.
 
-    `text` starts at the `impl` keyword. Generics are skipped by counting angle brackets, so a
-    bound such as `T: AsRef<str>` does not end them early, and the header runs to the first `{`
-    or `where` at the top level, which lets it wrap over any number of lines.
+    `text` starts at the `impl` keyword, with comments and literals already blanked. Generics are
+    skipped by counting angle brackets, so a bound such as `T: AsRef<str>` does not end them
+    early, and the header runs to the first `{` or `where` at the top level, which lets it wrap
+    over any number of lines.
     """
     rest = text[len("impl"):].lstrip()
+    generics = ""
     if rest.startswith("<"):
         depth = 0
         for at, char in enumerate(rest):
             depth += char == "<"
             depth -= char == ">" and rest[at - 1] != "-"
             if depth == 0:
-                rest = rest[at + 1:]
+                generics, rest = rest[: at + 1], rest[at + 1:]
                 break
     header = re.split(r"\{|\bwhere\b", rest, maxsplit=1)[0]
     header = " ".join(header.split())
+    mentions = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, names))) + r")\b")
     found = re.match(r"(.+?)\s+for\s+(.+)", header)
-    if found:
-        trait, subject = found.group(1).strip(), found.group(2)
-        if re.match(LABELLED_SUBJECT, subject):
-            return ("trait", trait)
-        if re.search(r"\bLabelled\b", trait):
-            return ("argument", trait)
-        return None
-    if re.match(LABELLED_SUBJECT, header):
-        return ("inherent", None)
+    subject = found.group(2).strip() if found else header
+    if mentions.search(subject):
+        return ("trait", found.group(1).strip()) if found else ("inherent", None)
+    if found and mentions.search(found.group(1)):
+        return ("argument", found.group(1).strip())
+    if declares:
+        bare = re.sub(r"^&\s*(?:'\w+\s+)?(?:mut\s+)?", "", subject)
+        if bare.startswith("<") or "$" in bare or bare in _generic_parameters(generics):
+            return ("unresolved", header)
     return None
 
 
-def _inherent_functions(lines, start):
-    """The `(line index, name)` of each function declared directly in the block that the `impl`
-    on line `start` opens, found by brace depth. A function nested in another function's body is
-    not one the type has, and a brace in a string or character literal does not count.
+QUALIFIERS = re.compile(
+    r"(?P<visibility>pub(?:\s*\([^)]*\))?\s+)?(?P<qualifiers>(?:(?:const|async|unsafe|extern)\s+)*)\Z"
+)
+
+
+def _tidy(text):
+    """A signature with its whitespace made one space and none beside a bracket or before a comma,
+    so a wrapped signature, one with a trailing comma and one on a single line read the same."""
+    text = " ".join(text.split())
+    text = re.sub(r"\s*([(),:<>])\s*", r"\1", text)
+    text = re.sub(r",\)", ")", text)
+    return re.sub(r"([,:])(?=\S)", r"\1 ", text).replace("->", " -> ").replace("  ", " ").strip()
+
+
+def _inherent_functions(text, start):
+    """The `(line index, name, visibility, signature)` of each function declared directly in the
+    block that the `impl` at character `start` of `text` opens, found by brace depth.
+
+    `text` has had its comments and literals blanked by `_mask`, so a brace in a raw string, a
+    string or a character literal does not count and neither does `fn` in one. A function nested in
+    another function's body is not one the type has. The signature runs from the qualifiers in
+    front of `fn` to the `{` or `;` that ends it, and the visibility is what stands in front of
+    those (`pub`, `pub(crate)`, or nothing).
     """
-    text = "\n".join(lines[start:])
-    opened = text.find("{")
+    opened = text.find("{", start)
     if opened < 0:
         return
     depth = 0
@@ -1415,7 +1543,20 @@ def _inherent_functions(lines, start):
             if depth == 0:
                 return
         elif token.group("fn") and depth == 1:
-            yield start + text.count("\n", 0, token.start()), token.group("fn")
+            front = QUALIFIERS.search(text[: token.start()])
+            visibility = _tidy(front.group("visibility") or "") if front else ""
+            qualifiers = (front.group("qualifiers") if front else "") or ""
+            ends, nest = token.end(), 0
+            for at in range(token.end(), len(text)):
+                if text[at] in "([":
+                    nest += 1
+                elif text[at] in ")]":
+                    nest -= 1
+                elif nest == 0 and text[at] in "{;":
+                    ends = at
+                    break
+            signature = _tidy(qualifiers + text[token.start():ends])
+            yield text.count("\n", 0, token.start()), token.group("fn"), visibility, signature
 
 
 ATTRIBUTES_AT_END = re.compile(r"(?:#!?\[(?:[^\[\]]|\[[^\]]*\])*\]\s*)+\Z")
@@ -1442,30 +1583,52 @@ def check_labelled_impls(sources):
     several lines, a `#[derive(...)]` above the struct, which expands inside the module that
     sees the private fields, a function of the type's own block that is not one of
     `ALLOWED_FUNCTIONS`, and an implementation for another type whose trait takes a `Labelled`,
-    which converts it to something readable.
+    which converts it to something readable. A function with an allowed name is held to the
+    visibility and signature `ALLOWED_FUNCTIONS` records for it. The subject of an `impl` is read
+    through `Box`, a `type` alias and a wrapper type declared beside `Labelled`, and an `impl`
+    there whose subject is one of its own generic parameters or a projection is reported, because
+    it cannot be told from one for `Labelled`. Comments, strings, raw strings and character
+    literals are blanked first, so a brace in one moves nothing.
     """
+    names = _labelled_names(sources)
     for path, lines in sources.items():
-        stripped = mechanics.strip_comments(lines)
+        text = _mask("\n".join(lines))
+        stripped = text.split("\n")
+        offsets = [0]
+        for line in stripped:
+            offsets.append(offsets[-1] + len(line) + 1)
+        declares = any(STRUCT_LABELLED.match(line) for line in stripped)
         candidates = []
         for index, raw in enumerate(stripped):
             if IMPL_START.match(raw):
                 held = " ".join(stripped[index:index + 8])
-                about = _impl_header(held.lstrip())
+                about = _impl_header(held.lstrip(), names, declares)
                 if about is None:
                     continue
                 kind, trait = about
                 if kind == "inherent":
-                    for at, name in _inherent_functions(stripped, index):
-                        if name not in ALLOWED_FUNCTIONS:
-                            candidates.append((at, "function", name, stripped[at]))
+                    for at, name, visibility, signature in _inherent_functions(
+                        text, offsets[index]
+                    ):
+                        allowed = ALLOWED_FUNCTIONS.get(name)
+                        if allowed is None:
+                            candidates.append((at, "function", name, lines[at], None))
+                        elif visibility != allowed[0]:
+                            candidates.append(
+                                (at, "visibility", name, lines[at], (visibility or "private", allowed[0]))
+                            )
+                        elif signature != _tidy(allowed[1]):
+                            candidates.append((at, "signature", name, lines[at], signature))
                 else:
-                    candidates.append((index, kind, trait, raw))
+                    candidates.append((index, kind, trait, lines[index], None))
             elif STRUCT_LABELLED.match(raw):
                 for name in _derives_above(stripped, index):
                     if name in ALLOWED_DERIVES:
                         continue
-                    candidates.append((index, "trait", name, f"#[derive({name})] on {raw.strip()}"))
-        for index, kind, trait, raw in candidates:
+                    candidates.append(
+                        (index, "trait", name, f"#[derive({name})] on {lines[index].strip()}", None)
+                    )
+        for index, kind, trait, raw, detail in candidates:
             if kind == "trait" and trait in ALLOWED_IMPLS:
                 continue
             if kind == "function":
@@ -1476,6 +1639,30 @@ def check_labelled_impls(sources):
                     "content without a witness"
                 )
                 fix = f"remove it, or add it to `ALLOWED_FUNCTIONS` and record it in `{LABELS_SPEC}`"
+            elif kind == "visibility":
+                title = f"{trait} of Labelled has another visibility than the one recorded, so a caller may reach it"
+                summary = (
+                    f"`{trait}` is one of the functions `Labelled` has, declared `{detail[0]}` where "
+                    f"`ALLOWED_FUNCTIONS` records `{detail[1]}`, so a crate that could not call it "
+                    "may now"
+                )
+                fix = f"restore the visibility, or change `ALLOWED_FUNCTIONS` and `{LABELS_SPEC}` together"
+            elif kind == "signature":
+                title = f"{trait} of Labelled has another signature than the one recorded, so it may return content"
+                summary = (
+                    f"`{trait}` is one of the functions `Labelled` has, and is declared `{detail}`, "
+                    "which is not the signature `ALLOWED_FUNCTIONS` records for it, so what it "
+                    "takes or returns may now be the content"
+                )
+                fix = f"restore the signature, or change `ALLOWED_FUNCTIONS` and `{LABELS_SPEC}` together"
+            elif kind == "unresolved":
+                title = "an impl in the file that declares Labelled has a subject the check cannot resolve"
+                summary = (
+                    f"`impl {trait}` is for a generic parameter or a projection, which may be "
+                    "`Labelled` itself, and the check cannot tell, so the trait it implements is "
+                    "not read"
+                )
+                fix = "write the subject as a named type, or move the implementation out of this file"
             elif kind == "argument":
                 title = f"{trait} is implemented with a Labelled as its argument, so content can be converted without a witness"
                 summary = (
@@ -1811,6 +1998,109 @@ def check_gates_pinned(specs, sources):
                 gain="the same as the unpinned gate, reached through a helper the count does not "
                 "see: the closure is written by the caller and runs on content the gate released",
             )
+
+
+POLICY_SOURCE = Path("crates/core/src/policy.rs")
+FUNCTION_START = re.compile(r"^([ \t]*)(pub(?:\([^)]*\))?[ \t]+)?(?:(?:const|async|unsafe)[ \t]+)*fn[ \t]+(\w+)", re.M)
+TRUSTED_LABEL = re.compile(r"Label::(?:trusted_public|trusted_private)\(\)")
+LABEL_NEW = re.compile(r"Label::new\(")
+# Functions that build a trusted or a public label and that no spec counts the calls of, each with
+# the reason it is not a way for bytes to improve their label. Every other function that builds one
+# has to be counted by some spec, so a new one is a decision somebody writes down here or in a
+# `guards` entry rather than a function nothing reads.
+LABEL_BUILDERS_NOT_GATES = {
+    "label_kept_fact": "the first label of a fact the person kept, read from their own memory file",
+    "record_note": "the first label of a note the person typed, which no earlier label preceded",
+    "measure_a_run": "the label of what a run printed, decided by the steps the person vouched for",
+    "declassify_into_place": "returns a witness and records the label the release would have; "
+    "the release goes only to a destination the plan named",
+    "declassify": "returns a witness and records the label the release would have; "
+    "only a slot the plan precommitted is released",
+}
+
+
+def label_builders(sources):
+    """The non-test `pub fn`s of `crates/core/src/policy.rs` that build a label no worse than
+    trusted or no more private than public, as `{name: line}`.
+
+    A function that lowers a label's confidentiality or gives bytes a trusted one writes
+    `Label::trusted_public()`, `Label::trusted_private()` or a `Label::new(..)` naming
+    `Integrity::Trusted` or `Confidentiality::Public`. A comparison against one of the named
+    constructors is not building a label and is left out, and so are the lines under `#[cfg(test)]`.
+    The extent of a function is from its `fn` to the next one at the same indentation or less, so a
+    nested function belongs to its parent.
+    """
+    lines = sources.get(POLICY_SOURCE)
+    if not lines:
+        return {}
+    covered = test_lines(lines)
+    masked = _mask("\n".join(lines)).split("\n")
+    text = "\n".join("" if number in covered else line for number, line in enumerate(masked, start=1))
+    starts = list(FUNCTION_START.finditer(text))
+    found = {}
+    for position, start in enumerate(starts):
+        if not start.group(2):
+            continue
+        indent = len(start.group(1))
+        end = len(text)
+        for later in starts[position + 1:]:
+            if len(later.group(1)) <= indent:
+                end = later.start()
+                break
+        body = text[start.end():end]
+        builds = False
+        for constructor in TRUSTED_LABEL.finditer(body):
+            line_start = body.rfind("\n", 0, constructor.start()) + 1
+            before = body[line_start:constructor.start()]
+            if not re.search(r"[=!]=\s*$", before) and not re.match(r"\s*(?:debug_)?assert\w*!\(", before):
+                builds = True
+        for constructor in LABEL_NEW.finditer(body):
+            depth, at = 1, constructor.end()
+            while depth and at < len(body):
+                depth += body[at] == "("
+                depth -= body[at] == ")"
+                at += 1
+            arguments = body[constructor.end():at]
+            if "Integrity::Trusted" in arguments or "Confidentiality::Public" in arguments:
+                builds = True
+        if builds:
+            found[start.group(3)] = text.count("\n", 0, start.start()) + 1
+    return found
+
+
+def check_label_builders_accounted(specs, sources):
+    """A function in the policy layer that builds a trusted or public label and that nothing counts.
+
+    `labels.md` pins the gates that lower confidentiality or promote bytes to a trusted label by
+    call site, and the self-test of `check-spec` lists the eight by hand. A ninth function written
+    the same way is in neither, so no count moves and no finding appears. This finds the functions
+    from the code and requires each to be counted by some spec's `guards` or to be named in
+    `LABEL_BUILDERS_NOT_GATES` with a reason.
+    """
+    counted = set()
+    for spec in specs:
+        counted.update(symbol.rpartition("::")[2] for symbol in spec.allowlists)
+        counted.update(symbol.rpartition("::")[2] for symbol in spec.guards)
+    for name, line in sorted(label_builders(sources).items(), key=lambda item: item[1]):
+        if name in counted or name in LABEL_BUILDERS_NOT_GATES:
+            continue
+        yield finding(
+            ERROR,
+            "label-builder-unaccounted",
+            f"{name} builds a trusted or public label and no spec counts its calls",
+            f"`{name}` in `{POLICY_SOURCE}` builds a label that is trusted or public, which is how "
+            "a gate promotes bytes or lowers their confidentiality, and no `guards` entry in any "
+            "spec counts its call sites and `LABEL_BUILDERS_NOT_GATES` does not name it",
+            "trust",
+            "low",
+            evidence=[f"{POLICY_SOURCE}:{line} {name}"],
+            fix=f"add a `guards` entry for `Policy::{name}` with a `sites:` count per file to "
+            f"`{LABELS_SPEC}` and add it to `LABEL_GATES` in `agents/skills/check-spec/selftest.py`, "
+            "or name it in `LABEL_BUILDERS_NOT_GATES` with the reason it is not a gate",
+            gain="nothing on its own. What it buys is the next caller: a function that lowers "
+            "confidentiality or labels bytes trusted, called from anywhere, moves no count and "
+            "raises no finding",
+        )
 
 
 def carries_the_guarantee(spec):
@@ -3664,6 +3954,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_gates_pinned(specs, sources))
+    findings += list(check_label_builders_accounted(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_key_steps_join_no_names(specs, sources))
     findings += list(check_pinned_actions())
