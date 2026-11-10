@@ -27411,8 +27411,12 @@ mod tests {
                 "no row for the working directory"
             );
 
-            std::fs::remove_dir(&named).expect("the added directory removed");
-            std::os::unix::fs::symlink(&target, &named).expect("link");
+            // The directory added is moved aside and kept, not removed: a filesystem can give a
+            // freed inode number to the next directory made, and the one made again below would
+            // then have the identity recorded.
+            let aside = crate::testutil::moved_aside_and_replaced(&named, |name| {
+                std::os::unix::fs::symlink(&target, name).expect("link")
+            });
             let after = policy(&workspace);
             assert!(!writes(&after, &named), "a row for the name of a link");
             assert!(!writes(&after, &target), "a row for where the link leads");
@@ -27429,6 +27433,7 @@ mod tests {
                 "a row for a directory made again at the name"
             );
             let _ = std::fs::remove_dir(&named);
+            let _ = std::fs::remove_dir_all(&aside);
             workspace.close_added_directories();
         }
 
