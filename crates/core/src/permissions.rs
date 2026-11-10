@@ -1383,7 +1383,9 @@ enum Wrapper {
         /// Words between the options and the program.
         positional: usize,
     },
-    /// `env`: options, `NAME=value` words and `--` are all read before the program.
+    /// `env`: its `-i` and `-u NAME` options, then an optional `--` that ends the options only,
+    /// then every word containing `=` as an assignment whatever its name (`A-B=1`, `1A=x`, `=1`,
+    /// `-X=1` after the `--`, and `-X=1` after another assignment). The next word is the program.
     Environment,
 }
 
@@ -1423,15 +1425,6 @@ fn wrapper(program: &str) -> Option<Wrapper> {
     })
 }
 
-/// Whether a word is `NAME=value` with a name a shell could assign.
-fn is_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty()
-            && !name.starts_with(|c: char| c.is_ascii_digit())
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
-}
-
 /// What follows one leading wrapper, or `None` where the first word is not in the table, where an
 /// option is not one the table reads, or where nothing is left to run.
 fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
@@ -1445,16 +1438,32 @@ fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
             positional,
         } => (flags, valued, long_valued, numeric, positional),
         Wrapper::Environment => {
+            // `env` runs any word with an `=` as an assignment, whatever the name.
+            // Before `--`, a word starting with `-` is an option. `-i` and `-u NAME` are read
+            // and any other leaves `env` whole.
+            // After an assignment, an option is still read the same way. That reads more than
+            // `env` does and stays in the safe direction.
+            // After an assignment, a word starting with `-` that has an `=` is an assignment.
+            // After `--`, no word is an option. A word with an `=` is an assignment and one
+            // without is the program, even when it starts with `-`.
+            let mut options = true;
+            let mut assigned = false;
             while let Some((word, tail)) = rest.split_first() {
                 match *word {
-                    "--" => {
+                    "--" if options => {
+                        options = false;
                         rest = tail;
-                        break;
                     }
-                    "-i" | "--ignore-environment" => rest = tail,
-                    "-u" | "--unset" => rest = tail.get(1..)?,
-                    _ if word.starts_with("--unset=") || is_assignment(word) => rest = tail,
-                    _ if word.starts_with('-') => return None,
+                    "-i" | "--ignore-environment" if options => rest = tail,
+                    "-u" | "--unset" if options => rest = tail.get(1..)?,
+                    _ if options && word.starts_with("--unset=") => rest = tail,
+                    _ if options && word.starts_with('-') && !(assigned && word.contains('=')) => {
+                        return None;
+                    }
+                    _ if word.contains('=') => {
+                        assigned = true;
+                        rest = tail;
+                    }
                     _ => break,
                 }
             }
@@ -3419,6 +3428,21 @@ mod tests {
             "env -u HOME git push",
             "env FOO=bar git push",
             "env -- git push",
+            "env -- FOO=bar git push",
+            "env A-B=1 git push",
+            "env 1A=x git push",
+            "env a.b=1 git push",
+            "env =1 git push",
+            "env -i A=1 git push",
+            "env -- A=1 B-2=3 git push",
+            "env -i -- A=1 B-2=3 git push",
+            "env -u HOME A-B=1 git push",
+            "env -- -X=1 git push",
+            "env A=1 -X=1 git push",
+            "env A=1 --foo=bar git push",
+            "env A=1 -i git push",
+            "env A=1 -u HOME git push",
+            "timeout 5 env -- FOO=bar git push",
             "timeout 5 nice -n 3 nohup env A=1 git push",
         ];
         for list in 0..2 {
@@ -3476,6 +3500,7 @@ mod tests {
             "nice -x git push",
             "command -v git push",
             "env -S git push",
+            "env -X=1 git push",
             "env -u",
             "time -o",
             "env FOO=bar",
@@ -3512,6 +3537,72 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "a space in a deny rule covers a space inside the program's word"
         );
+    }
+
+    /// After `--` no word is an option, so a word that looks like one is the program `env` runs.
+    /// A rule for what follows it is not matched, and a rule spelling that word is.
+    #[test]
+    fn env_reads_no_option_after_a_double_dash() {
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        for line in [
+            "env -- -u HOME git push",
+            "env -- -i git push",
+            "env -- --unset X git push",
+            "env -- --ignore-environment git push",
+            "env -- -- git push",
+            "env A=1 -- -u HOME git push",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+        let permissions = rules(&["Bash(-u HOME git push)", "Bash(-- git push)"], &[], &[]);
+        for line in ["env -- -u HOME git push", "env -- -- git push"] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Ruled(Ruling::Deny),
+                "{line}"
+            );
+        }
+    }
+
+    /// A word of the program's own arguments that holds an `=` stays where it was written, so a
+    /// rule spelling it matches, and the same rule does not match a different value.
+    #[test]
+    fn env_keeps_an_equals_word_after_the_program() {
+        for (rule, covered, unmatched) in [
+            (
+                "Bash(git push --foo=bar)",
+                &[
+                    "env git push --foo=bar",
+                    "env -- git push --foo=bar",
+                    "env A=1 git push --foo=bar",
+                    "env -i -- A=1 git push --foo=bar",
+                ][..],
+                "env A=1 git push --foo=baz",
+            ),
+            (
+                "Bash(git -c a=b push)",
+                &["env git -c a=b push", "env A=1 git -c a=b push"][..],
+                "env A=1 git -c a=c push",
+            ),
+        ] {
+            let permissions = rules(&[rule], &[], &[]);
+            for line in covered {
+                assert_eq!(
+                    permissions.for_command(&words(line)),
+                    Decision::Ruled(Ruling::Deny),
+                    "{rule} should match {line}"
+                );
+            }
+            assert_eq!(
+                permissions.for_command(&words(unmatched)),
+                Decision::Unmatched,
+                "{rule} should not match {unmatched}"
+            );
+        }
     }
 
     /// A pattern of nothing but wildcards must cost time in the length of what it is matched

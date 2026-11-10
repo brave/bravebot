@@ -1135,10 +1135,15 @@ word that is not an option is the program they run: `timeout`, `time`, `nice`, `
 `command`, `builtin`, `noglob` and `env`. The table is not configurable, and each entry has the
 options it reads: `timeout` its signal and kill-after options and its duration, `nice` an adjustment,
 `stdbuf` its three buffer options, `command` `-p`, `time` `-p`, `-v`, `-a`, `-f` and `-o`, and `env`
-its `-i`, its `-u`, `NAME=value` words and `--`. A wrapper with an option the table does not list, a
-`command -v`, a wrapper with nothing after it to run, a wrapper named by a path, and a program that
-only runs another one by another way (`xargs`, `npx`, `devbox run`, `docker exec`) are left whole,
-so a rule is matched against the words that were written and never against a reading of them.
+its options (`-i`, `--ignore-environment`, `-u NAME`, `--unset NAME` and `--unset=NAME`), then an
+optional `--` that ends the options only, then every word containing `=` as an assignment whatever
+its name (`A-B=1`, `1A=x` and `=1` included, and `-X=1` after the `--` or after another
+assignment), then the program. `env` is read as having its options anywhere before the program, so
+an option after an assignment is skipped too, which can only make a deny or ask rule match more. A
+wrapper with an option the table does not list, a `command -v`, a wrapper with nothing after it to
+run, a wrapper named by a path, and a program that only runs another one by another way (`xargs`,
+`npx`, `devbox run`, `docker exec`) are left whole, so a rule is matched against the words that were
+written and never against a reading of them.
 
 An `allow` rule is matched as written. `Bash(git push *)` in `allow` does not grant
 `timeout 30 git push`, which is a program the rule never named, and a deny rule written for the
@@ -1153,6 +1158,8 @@ vouch for the same reason. The decision reads the argv and nothing else.
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
 `verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
 `verified-by: bravebot_core::permissions::a_wrapper_the_table_cannot_read_is_left_whole`
+`verified-by: bravebot_core::permissions::env_reads_no_option_after_a_double_dash`
+`verified-by: bravebot_core::permissions::env_keeps_an_equals_word_after_the_program`
 `verified-by: bravebot_core::permissions::a_rule_naming_the_wrapper_still_matches_the_whole_stage`
 
 ## Known costs
