@@ -6888,10 +6888,21 @@ fn holding_config_app_env(name: &str) -> Scratch {
 /// Runs one `run` call with `arguments` in `scratch` under `deny`, approving any prompt a run
 /// raises. Returns what the planner was told.
 fn run_under_a_deny_rule(scratch: &Scratch, arguments: serde_json::Value, deny: &str) -> String {
+    run_under_a_deny_rule_shaped(scratch, arguments, deny, |task| task)
+}
+
+/// [`run_under_a_deny_rule`] with `shape` applied to the task, for a test that needs the turn set
+/// up some other way (a sandbox mode, confined runs).
+fn run_under_a_deny_rule_shaped(
+    scratch: &Scratch,
+    arguments: serde_json::Value,
+    deny: &str,
+    shape: impl FnOnce(Task) -> Task,
+) -> String {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", &arguments.to_string()),
+        tool_request_2("run", &arguments.to_string()),
         reply_with("understood"),
     ]);
     let config = config_for(&endpoint);
@@ -6903,7 +6914,7 @@ fn run_under_a_deny_rule(scratch: &Scratch, arguments: serde_json::Value, deny: 
         &config,
         &egress,
         &workspace,
-        &Task::new("touch the env file").with_permissions(rules(&[deny], &[], &[])),
+        &shape(Task::new("touch the env file").with_permissions(rules(&[deny], &[], &[]))),
         &mut bravebot_agent::Conversation::new(),
         &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
         &mut reporter,
@@ -6942,6 +6953,54 @@ fn a_project_relative_deny_rule_refuses_a_redirection_to_the_file() {
     }
 }
 
+/// CMDLINE-5: the rules written in advance are asked again when the run opens a redirection's
+/// file. A link an earlier part of the line left at the name approved leads to the denied file,
+/// which the check before the line could not see, so the run opened and overwrote it.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_refuses_a_redirection_through_a_link_an_earlier_part_made() {
+    for deny in ["Edit(.env)", "Read(.env)"] {
+        let (left, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-linked-{}", deny.len()),
+            "ln -s .env alias ; echo overwritten > alias",
+            deny,
+        );
+        assert_eq!(
+            left, "SECRET_TOKEN=hunter2",
+            "{deny} did not stop a write through a link the line made"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused: {told}"
+        );
+        assert!(
+            told.contains("covers alias,"),
+            "{deny}: the refusal did not name the destination as the line spelled it: {told}"
+        );
+    }
+}
+
+/// The same through a hard link, which needs no symbolic link and leaves a name no rule spells.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_refuses_a_redirection_through_a_hard_link_an_earlier_part_made() {
+    for deny in ["Edit(.env)", "Read(.env)"] {
+        let (left, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-hard-linked-{}", deny.len()),
+            "ln .env alias ; echo overwritten > alias",
+            deny,
+        );
+        assert_eq!(
+            left, "SECRET_TOKEN=hunter2",
+            "{deny} did not stop a write through a hard link the line made"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused: {told}"
+        );
+    }
+}
+
 /// The read half: `< .env` feeds the file to a program, which a `Read` rule forbids.
 #[test]
 fn a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file() {
@@ -6954,6 +7013,109 @@ fn a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file() {
     assert!(
         !told.contains("hunter2"),
         "the denied file's contents reached the planner: {told}"
+    );
+}
+
+/// CMDLINE-5, PERM-7: a redirection's source is asked of the rules again when it is opened. A link or
+/// hard link an earlier part of the line left at the name approved leads to the denied file, which
+/// the check before the line could not see, so the run opened it and fed it to a program.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_refuses_a_redirection_that_reads_through_a_link_an_earlier_part_made() {
+    for (link, label) in [("ln -s .env alias", "symbolic"), ("ln .env alias", "hard")] {
+        let (_, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-read-linked-{label}"),
+            &format!("{link} ; cat < alias"),
+            "Read(.env)",
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{label} link: the planner was not told a rule refused the read: {told}"
+        );
+        assert!(
+            !told.contains("hunter2"),
+            "{label} link: the denied file's contents reached the planner: {told}"
+        );
+    }
+}
+
+/// CMDLINE-5, PERM-7: the rules are asked at every open of a destination, the second included. A
+/// destination the line already opened once is entered again after a part of the line replaced it
+/// with a link to the denied file, so a check made only for the first open lets the second write.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_refuses_a_destination_reopened_after_an_earlier_part_linked_it_to_the_file() {
+    for deny in ["Edit(.env)", "Read(.env)"] {
+        let (left, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-reopened-{}", deny.len()),
+            "echo first > alias ; rm alias ; ln -s .env alias ; echo overwritten > alias",
+            deny,
+        );
+        assert_eq!(
+            left, "SECRET_TOKEN=hunter2",
+            "{deny} did not stop the second open of a destination a part of the line relinked"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused: {told}"
+        );
+    }
+}
+
+/// CMDLINE-5, PERM-7: the person's deny rules refuse a destination whether or not the line has a
+/// profile. Under the `off` sandbox mode a redirection may leave the workspace, so the
+/// confinement check is skipped, and a check gated on it would let a link reach the denied file.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_refuses_a_redirection_through_a_link_when_the_sandbox_is_off() {
+    let scratch = Scratch::new("permissions-run-redirect-linked-off");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    let told = run_under_a_deny_rule_shaped(
+        &scratch,
+        json!({ "command": "ln -s .env alias ; echo overwritten > alias" }),
+        "Edit(.env)",
+        |task| {
+            task.with_profile(Some(
+                bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+            ))
+            .with_confined_runs(true)
+            .with_sandbox_mode(bravebot_sandbox::SandboxMode::Off)
+        },
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "a line with no profile wrote the denied file through a link"
+    );
+    assert!(
+        told.contains("a deny rule") && told.contains("Do not retry"),
+        "the planner was not told a rule refused: {told}"
+    );
+}
+
+/// CMDLINE-5, PERM-7: a redirection inside a substitution is opened by the same run and takes the
+/// same check. The link is made by the line's first part and the substitution is worked out after
+/// it, so the check before the line did not see where the destination lands. A substitution is
+/// accepted in the assignment prefix of a program in bypass mode only, so the turn runs in it.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_refuses_a_redirection_inside_a_substitution_through_a_link_an_earlier_part_made() {
+    let scratch = Scratch::new("permissions-run-redirect-substitution-linked");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    let told = run_under_a_deny_rule_shaped(
+        &scratch,
+        json!({ "command": "ln -s .env alias ; NAME=\"$(echo overwritten > alias)\" echo done" }),
+        "Edit(.env)",
+        |task| task.with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+    );
+    let left = std::fs::read_to_string(scratch.path.join(".env")).unwrap();
+    assert_eq!(
+        left, "SECRET_TOKEN=hunter2",
+        "a redirection inside a substitution wrote the denied file through a link"
+    );
+    assert!(
+        told.contains("a deny rule") && told.contains("Do not retry"),
+        "the planner was not told a rule refused: {told}"
     );
 }
 
@@ -53935,6 +54097,215 @@ fn a_limited_delegates_redirection_is_held_to_its_definitions_files() {
     );
     assert!(
         every_request(&received)
+            .iter()
+            .any(|body| body.contains("limits the files you may write")),
+        "the delegate was not told why its redirection was refused"
+    );
+}
+
+/// DELEGATE-28. A link made earlier in the delegate's own line, from inside the pattern to a file
+/// outside it, is judged when the redirection is opened: the name given is covered by `docs/**`
+/// and the file it then reaches is not. The link did not exist when the line was compiled.
+#[cfg(unix)]
+#[test]
+fn a_limited_delegate_cannot_redirect_through_a_link_its_own_line_made_out_of_its_files() {
+    let scratch = Scratch::new("delegate-writes-redirect-made-link");
+    let home = Scratch::new("delegate-writes-redirect-made-link-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}\n").expect("seed main.rs");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-LINK-IN-A-LINE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"scribe","task":"LINK-THEN-REDIRECT"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "LINK-THEN-REDIRECT",
+            vec![
+                tool_request(
+                    "run",
+                    r#"{"command":"ln -s ../src/main.rs docs/link ; echo clobbered > docs/link"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-LINK-IN-A-LINE").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        scratch.path.join("docs/link").is_symlink(),
+        "the first part did not leave a link, so nothing here asks where the open goes"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "a redirection wrote outside the files the definition names through a link its line made"
+    );
+    assert!(
+        every_request(&received)
+            .iter()
+            .any(|body| body.contains("limits the files you may write")),
+        "the delegate was not told why its redirection was refused"
+    );
+}
+
+/// Runs `line` as the only `run` call of a delegate whose definition limits its writes to `docs/**`,
+/// in a workspace holding `src/main.rs` and an empty `docs`, with the walk for a file's other
+/// names capped at `search_files` files when given. Returns every request the delegate's model
+/// received, so a test can read what it was told.
+#[cfg(unix)]
+fn run_as_a_scribe_limited_to_docs(
+    name: &str,
+    line: &str,
+    search_files: Option<usize>,
+) -> (Scratch, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let home = Scratch::new(&format!("{name}-home"));
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}\n").expect("seed main.rs");
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(search_files, None);
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-RUN-A-LINE",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"scribe","task":"RUN-THE-LINE"}"#),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "RUN-THE-LINE",
+            vec![
+                tool_request("run", &json!({ "command": line }).to_string()),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-RUN-A-LINE").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+    let bodies = every_request(&received);
+    (scratch, bodies)
+}
+
+/// DELEGATE-28. A hard link inside the pattern to a file outside it is the same file, so it is
+/// judged under every name the file has: the name given is covered by `docs/**` and `src/main.rs`
+/// is not. A name that lands on the file is not a link a path lookup follows, so only the walk for
+/// the file's other names can say so.
+#[cfg(unix)]
+#[test]
+fn a_limited_delegate_cannot_redirect_through_a_hard_link_its_own_line_made_out_of_its_files() {
+    let (scratch, bodies) = run_as_a_scribe_limited_to_docs(
+        "delegate-writes-redirect-made-hard-link",
+        "ln src/main.rs docs/hard ; echo clobbered > docs/hard",
+        None,
+    );
+
+    assert!(
+        scratch.path.join("docs/hard").exists(),
+        "the first part did not leave a hard link, so nothing here asks which file the open reaches"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "a redirection wrote outside the files the definition names through a hard link its line made"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("limits the files you may write")),
+        "the delegate was not told why its redirection was refused"
+    );
+}
+
+/// DELEGATE-28. Where the walk for a file's other names could not finish, a name outside the limit
+/// may exist, so a delegate whose writes are limited does not open a file with a second name.
+#[cfg(unix)]
+#[test]
+fn a_limited_delegate_does_not_redirect_into_a_file_with_a_second_name_when_the_names_cannot_be_listed()
+ {
+    let (scratch, bodies) = run_as_a_scribe_limited_to_docs(
+        "delegate-writes-redirect-hard-link-walk-capped",
+        "ln src/main.rs docs/hard ; echo clobbered > docs/hard",
+        Some(1),
+    );
+
+    assert!(
+        scratch.path.join("docs/hard").exists(),
+        "the first part did not leave a hard link, so nothing here asks which file the open reaches"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "a redirection opened a file with a second name that the walk could not list"
+    );
+    assert!(
+        bodies
             .iter()
             .any(|body| body.contains("limits the files you may write")),
         "the delegate was not told why its redirection was refused"

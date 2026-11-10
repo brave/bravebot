@@ -4582,9 +4582,10 @@ fn refuse_denied_path_as<S: Sink>(
     // A hard link opens the file under a name no rule spells, and nothing in the name says which.
     // Where the walk for the file's other names gave up, a rule about a path may be about
     // this file, so it is refused rather than passed.
-    match workspace.hard_links(path) {
+    let hard_links = workspace.hard_links(path);
+    match &hard_links {
         Some(names) => {
-            for name in &names {
+            for name in names {
                 ask(policy, name)?;
             }
         }
@@ -4622,6 +4623,20 @@ fn refuse_denied_path_as<S: Sink>(
             policy
                 .refuse_write_outside_limits(name)
                 .map_err(|_| outside_write_limit(shown))?;
+        }
+        // A hard link inside the limit to a file outside it is the same file, so every name the
+        // file has is judged and one outside refuses the write. Where the walk for the names gave
+        // up, a name outside may exist, so a limit in force refuses (DELEGATE-28).
+        match &hard_links {
+            Some(names) => {
+                for name in names {
+                    policy
+                        .refuse_write_outside_limits(name)
+                        .map_err(|_| outside_write_limit(shown))?;
+                }
+            }
+            None if policy.has_write_limits() => return Err(outside_write_limit(shown)),
+            None => {}
         }
     }
     Ok(())
@@ -10027,30 +10042,47 @@ fn check_the_plan_before_asking<S: Sink>(
         (&plan.reads, Purpose::Read),
     ] {
         for path in paths {
-            let named = tools.workspace.relative_display(path);
             // The rules are asked under the landing-based name, and the refusal says the name
             // under the directory as typed (LABEL-3, TOOL-4).
             let shown = told(path);
             if let Err(refusal) =
-                refuse_denied_path_as(policy, tools.workspace, purpose, &named, &shown)
+                refuse_redirection_target_by_rules(policy, tools.workspace, purpose, path, &shown)
             {
                 return Err(Box::new(Produced::problem(refusal)));
-            }
-            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
-            // from a `directory`), which no rule's segments match across and which the landing
-            // asked about above does not resolve, so the file's other names are asked about too.
-            for reached in tools.workspace.names_reached(path) {
-                if reached != named
-                    && let Err(refusal) =
-                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &shown)
-                {
-                    return Err(Box::new(Produced::problem(refusal)));
-                }
             }
         }
     }
 
     Ok(reaches_anywhere)
+}
+
+/// Ask the rules written in advance about a redirection's file, as the plan names it and under the
+/// other names it reaches. Asked when the line is compiled and again immediately before the run
+/// opens the file, so a link or hard link an earlier part of the line left at the name is judged
+/// by the file it reaches (CMDLINE-5, PERM-7, DELEGATE-28). Both asks are this one function, so
+/// they cannot differ in what they cover or in what they say.
+///
+/// `shown` is the name the refusal gives, which is the destination under the directory as the
+/// planner typed it and never under where the workspace landed it (LABEL-3, TOOL-4). Only rules,
+/// settings and file-system names decide: no byte of a file is read.
+fn refuse_redirection_target_by_rules<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    purpose: Purpose,
+    path: &std::path::Path,
+    shown: &str,
+) -> Result<(), String> {
+    let named = workspace.relative_display(path);
+    refuse_denied_path_as(policy, workspace, purpose, &named, shown)?;
+    // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env` from a
+    // `directory`), which no rule's segments match across and which the landing asked about above
+    // does not resolve, so the file's other names are asked about too.
+    for reached in workspace.names_reached(path) {
+        if reached != named {
+            refuse_denied_path_as(policy, workspace, purpose, &reached, shown)?;
+        }
+    }
+    Ok(())
 }
 
 /// What `run` decides about how a line is held before the person is asked: the confinement it
@@ -11284,6 +11316,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             Err(error) => Err(error),
         }
     } else {
+        // Both open-time hooks ask the policy, and each is called between the other's calls.
+        let asked = std::cell::RefCell::new(&mut *policy);
         crate::exec::run_plan_observed_reading(
             &plan,
             tools.cancel,
@@ -11292,6 +11326,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
             confinement.as_ref(),
             &mut |path| {
+                let mut asking = asked.borrow_mut();
+                let policy = &mut **asking;
                 // Confined again where it lands now, since the parts of the line before this one
                 // have run since the check above and may have left a link at this name. At every
                 // open and not only the first, because a part run between two opens of one
@@ -11308,6 +11344,31 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
                         detail,
+                    });
+                }
+                // The rules written in advance, asked again about the file the destination lands
+                // on now. A link or hard link an earlier part of the line left at this name
+                // reaches a file the check before the line did not see, and a rule covers the
+                // file and not the name it was approved under. At every open, a destination
+                // already entered included, and whether or not the line has a profile: the
+                // person's deny rules and a delegate's `writes` limit refuse a path either way
+                // (CMDLINE-5, PERM-7, DELEGATE-28).
+                let target = told_destination(
+                    tools.workspace,
+                    path,
+                    &plan.directory,
+                    (!at_the_root).then_some(told_directory.as_str()),
+                );
+                if let Err(refusal) = refuse_redirection_target_by_rules(
+                    policy,
+                    tools.workspace,
+                    Purpose::Effect,
+                    path,
+                    &target,
+                ) {
+                    return Err(crate::exec::ExecError::Redirection {
+                        path: target,
+                        detail: refusal,
                     });
                 }
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
@@ -11364,18 +11425,36 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 // Read again where it lands now, for the reason a destination is confined again
                 // above: an earlier part of the line may have left a link at this name that leads
                 // into the stores, which the check before the line could not see (RECALL-8).
+                let target = told_destination(
+                    tools.workspace,
+                    path,
+                    &plan.directory,
+                    (!at_the_root).then_some(told_directory.as_str()),
+                );
                 let lands = crate::workspace::destination(path);
                 if lands.is_some_and(|lands| tools.workspace.in_the_stores(&lands)) {
                     return Err(crate::exec::ExecError::Redirection {
-                        path: told_destination(
-                            tools.workspace,
-                            path,
-                            &plan.directory,
-                            (!at_the_root).then_some(told_directory.as_str()),
-                        ),
+                        path: target,
                         detail: "refused: kept facts, rules and session records are not read by \
                                  a command line"
                             .to_string(),
+                    });
+                }
+                // And the rules written in advance, asked about the file the source lands on now,
+                // as for a destination: a `Read` deny rule covers the file and not the name the
+                // line was approved under (CMDLINE-5, PERM-7).
+                let mut asking = asked.borrow_mut();
+                let policy = &mut **asking;
+                if let Err(refusal) = refuse_redirection_target_by_rules(
+                    policy,
+                    tools.workspace,
+                    Purpose::Read,
+                    path,
+                    &target,
+                ) {
+                    return Err(crate::exec::ExecError::Redirection {
+                        path: target,
+                        detail: refusal,
                     });
                 }
                 Ok(())
@@ -28633,6 +28712,54 @@ mod tests {
                             root.display()
                         );
                     }
+                }
+            }
+        }
+
+        /// RECALL-8, CMDLINE-5: the run opens a redirection's destination itself, so a write into
+        /// the stores is refused when it is opened, through a link an earlier part of the line
+        /// left, from a workspace that holds the stores and from one that does not. The check
+        /// before the line cannot see the link. The regression it rejects is a kept fact or the
+        /// home rules file overwritten by `>`, which no sandbox profile sees.
+        #[cfg(unix)]
+        #[test]
+        fn a_redirection_writing_into_the_stores_is_refused_when_it_is_opened() {
+            let scratch = Scratch::new("run-write-store");
+            let state = scratch.path.join("state");
+            std::fs::create_dir_all(state.join("facts")).expect("facts");
+            std::fs::write(state.join("facts/x.md"), "kept fact").expect("fact");
+            std::fs::write(state.join("AGENTS.md"), "kept rule").expect("rules");
+            std::fs::create_dir_all(scratch.path.join("project")).expect("project");
+            for root in [scratch.path.clone(), scratch.path.join("project")] {
+                let workspace = Workspace::new(&root).expect("workspace").with_state(&state);
+                for (file, kept) in [("facts/x.md", "kept fact"), ("AGENTS.md", "kept rule")] {
+                    let mut sink = RecordingSink::new();
+                    let mut policy = policy(&mut sink);
+                    let command = format!(
+                        "ln -sf {} through; echo overwritten > through",
+                        state.join(file).display()
+                    );
+                    let produced = with_tools(&workspace, |tools| {
+                        run(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveRuns,
+                            &mut crate::report::IgnoreReports,
+                            &json!({ "command": command }),
+                        )
+                    });
+                    let said = told(&mut policy, &produced.text);
+                    assert!(
+                        said.contains("refused") || said.contains("resolves outside"),
+                        "{command} from {}: {said}",
+                        root.display()
+                    );
+                    assert_eq!(
+                        std::fs::read_to_string(state.join(file)).unwrap(),
+                        kept,
+                        "{command} from {}: the store was written",
+                        root.display()
+                    );
                 }
             }
         }

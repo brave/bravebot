@@ -391,6 +391,30 @@ destination is held to its definition's `writes:` limit as a tool's write is
 `verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target`
 
+The rules written in advance are asked again at the same moments, and not the confinement alone. The
+permission rules ([PERM-7](../permissions.md#PERM-7)) and a delegate's `writes:` limit
+([DELEGATE-28](../delegation.md#DELEGATE-28)) are asked about a destination immediately before each
+open, including one the line has already opened once, and whether or not the line has a profile.
+They are asked about the file the name lands on at that moment and about each other name that file
+has, a hard link included, as they were asked when the line was compiled. A link or a hard link that
+an earlier part of the line left at the name approved therefore reaches the same refusal as the file
+named directly. A rule or limit that covers the file refuses the open and the line stops there. The
+planner is told what the check before the line would have told it, under the destination as the line
+spelled it under the directory as typed and not under the file it landed on. A destination inside a
+command substitution is opened by the same run and takes the same check. A `<` source takes the
+`Read` rules again in the same way. The asks are made at every open and are not remembered, so the
+search for a file's other names is repeated for each; that cost is accepted. The check compares
+names, settings and file-system identity, never the bytes of a file.
+
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_hard_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_that_reads_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_destination_reopened_after_an_earlier_part_linked_it_to_the_file`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_when_the_sandbox_is_off`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_inside_a_substitution_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_limited_delegate_cannot_redirect_through_a_link_its_own_line_made_out_of_its_files`
+`verified-by: bravebot_agent::tools::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
+
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
 standard-input gate of [run.md](run.md#RUN-6) whichever file it names. `2>&1` renames a
