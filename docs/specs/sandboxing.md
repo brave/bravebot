@@ -4472,13 +4472,16 @@ shown by running the program, or not entirely:
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
   the installed handler does not start. The KDE test skips a name whose installed handler does not
-  start, since `kde-open` may need a session bus that a headless runner lacks, and on Linux with
-  `CI` set it fails when none of the four `XDG_*` names reached a handler. The
+  start, since `kde-open` needs a session bus that a headless runner lacks and ran no installed
+  handler on the CI runner. The test that puts a stand-in `kde-open` first on `PATH` and reads what
+  the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
+  stand-in, so the opener's names are checked there against a started `kde-open`. The
   generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
   those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
   With no `DISPLAY` or `WAYLAND_DISPLAY`, `xdg-open` 1.2.1 does not look up a scheme handler in
-  generic mode, so the generic test sets `WAYLAND_DISPLAY` to a name no socket has. `kde-open` did
-  not run the installed handler on the CI runner.
+  generic mode, so the generic test sets `DISPLAY`. The generic-mode test failed on the CI runner
+  with the installed handler not run; its run now prints `xdg-open`'s debug output when that
+  happens.
   What is covered, per name and per desktop mode:
 
   | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |

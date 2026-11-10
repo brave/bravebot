@@ -566,6 +566,7 @@ mod tests {
                 default(&directory.join("mimeapps.list"), marker);
             }
         }
+        let mut logs: Vec<String> = Vec::new();
         for directory in [&planted, &genuine] {
             let value = if variable == "BROWSER" {
                 OsString::from(format!("{} %s", directory.join("helper.sh").display()))
@@ -610,17 +611,35 @@ mod tests {
                         .env("WAYLAND_DISPLAY", "bravebot-test-no-such-display")
                         .env_remove("DBUS_SESSION_BUS_ADDRESS");
                 }
-                command.env(variable, value).output().unwrap()
+                command
+                    .env("XDG_UTILS_DEBUG_LEVEL", "3")
+                    .env(variable, value)
+                    .output()
+                    .unwrap()
             };
+            logs.push(format!(
+                "{variable} in {}:\nstdout:\n{}\nstderr:\n{}",
+                directory.display(),
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            ));
             assert!(
                 child.status.success(),
                 "{}",
                 String::from_utf8_lossy(&child.stderr)
             );
         }
+        // The handler is started by `xdg-open` and may be slow to run on a loaded host, so wait
+        // for its marker rather than for the opener to return.
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !session.join("genuine-ran").exists() && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !session.join("genuine-ran").exists() {
+            eprintln!(
+                "the handler in the installed directory did not run for {variable}:\n{}",
+                logs.join("\n")
+            );
         }
         let ran = (
             session.join("planted-ran").exists(),
@@ -794,8 +813,8 @@ mod tests {
     /// Where there is no `xdg-open` or no `kde-open` it prints `skipped` and passes, except on Linux
     /// with `CI` set, where it fails, because a runner that lacks them runs nothing. A variable whose
     /// installed handler does not start is skipped, since the planted handler then not running says
-    /// nothing. On Linux with `CI` set the test fails when no variable reached a handler, because it
-    /// would otherwise pass with the opener's deletion removed.
+    /// nothing. The stand-in test below is the one that fails on CI when the opener's names reach
+    /// a started `kde-open`, since this one needs a KDE session bus a headless runner lacks.
     #[cfg(unix)]
     #[test]
     fn a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde()
@@ -826,7 +845,6 @@ mod tests {
             "KDE_SESSION_VERSION",
             if kde_open5.is_some() { "5" } else { "6" },
         ));
-        let mut reached_a_handler = 0;
         for variable in [
             "BROWSER",
             "XDG_CONFIG_DIRS",
@@ -860,14 +878,9 @@ mod tests {
                 }
                 ran => {
                     assert_eq!(ran, (false, true), "{variable}");
-                    reached_a_handler += 1;
                 }
             }
         }
-        assert!(
-            reached_a_handler > 0 || !on_ci,
-            "CI is set and kde-open ran no handler for any of the four XDG_ names"
-        );
     }
 
     /// SANDBOX-30, `XDG_DATA_DIRS` with no desktop environment named (`XDG_CURRENT_DESKTOP` and the
@@ -1114,7 +1127,7 @@ mod tests {
     /// The stand-in shows what the opener hands on, not what `kde-open` reads: that is from the source
     /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). It prints `skipped` and passes
     /// where there is no `xdg-open`, as on macOS, and where the installed one does not start the
-    /// stand-in.
+    /// stand-in. On Linux with `CI` set it fails instead, since the runner has `xdg-open`.
     #[cfg(unix)]
     #[test]
     fn a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts() {
@@ -1122,12 +1135,20 @@ mod tests {
             return;
         }
         let Some(opener) = bravebot_sandbox::programs::find(OsStr::new("xdg-open")) else {
+            assert!(
+                !the_runner_must_run_the_handlers(),
+                "CI is set and xdg-open is not installed"
+            );
             println!("skipped: no xdg-open on this host");
             return;
         };
         let test = "opener::tests::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts";
         for (variable, names) in CODE_SELECTORS {
             let Some(installed) = kde_open_saw(test, variable, &opener, false) else {
+                assert!(
+                    !the_runner_must_run_the_handlers(),
+                    "{variable}: CI is set and the xdg-open here did not start the kde-open"
+                );
                 println!("skipped {variable}: the xdg-open here did not start the kde-open");
                 continue;
             };
