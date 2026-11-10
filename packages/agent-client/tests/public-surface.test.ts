@@ -8,8 +8,8 @@ import * as node from '@brave/agent-client/node'
 // so the lists below name every export and a new one has to be added on purpose.
 const COMMON = [
   'CapabilityError', 'ConnectionLostError', 'ProtocolError', 'ROW_KINDS', 'RpcAgentClient', 'RpcError', 'StaleActionError',
-  'SESSION_VIEW_START', 'SESSION_VIEW_VERSION', 'STATUSES', 'SUPPORTED_APPROVALS', 'UnsupportedError',
-  'decodeIncoming', 'decodeUpdate', 'readActionTargets', 'readSessionViewCapability',
+  'SESSION_VIEW_RESYNC', 'SESSION_VIEW_START', 'SESSION_VIEW_VERSION', 'STATUSES', 'SUPPORTED_APPROVALS', 'UnsupportedError',
+  'decodeIncoming', 'decodeSnapshot', 'decodeUpdate', 'readActionTargets', 'readSessionViewCapability',
 ]
 
 test('the package entry points export only the intended names', () => {

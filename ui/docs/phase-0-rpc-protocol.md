@@ -1802,8 +1802,7 @@ answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6): `{
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
-or saving succeeded. A gap or lost connection ends the view: version 1 has no reconnect or history
-recovery. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
 within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
@@ -1819,7 +1818,8 @@ block. The stdio TypeScript client for it is `packages/agent-client`, which answ
 | `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
 | `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
 | `session.close` | `session` | `{ "state": "closing" }` |
-| `session.attach` | `session` | `{ "version": 1, "sequence": number, "history": "omitted" }` |
+| `session.attach` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
+| `session.view.resync` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 
 `instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
 
@@ -1827,5 +1827,5 @@ A session has one controller, the connection that opened it or took it over, and
 
 A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
 
-`session.attach` sends the connection `session.view.snapshot`, then the answer. The event carries the `session.view.initial` shape with the session's current sequence, turn, target, status and pending question, no rows, and `"history": "omitted"`: the host keeps no transcript for a client that was not there. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+`session.attach` sends the connection `session.view.snapshot`, then the answer. The event is the snapshot `session.view.resync` sends, with the rows produced while no client was connected among the most recent. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
 

@@ -52,6 +52,11 @@ pub const OFFERED: &[Operation] = &[
         method: "session.view.start",
         fields: &["session", "version"],
     },
+    // A new snapshot of a session's view, for a client that missed an update.
+    Operation {
+        method: "session.view.resync",
+        fields: &["session"],
+    },
     Operation {
         method: "session.close",
         fields: &["session"],
