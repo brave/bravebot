@@ -789,9 +789,10 @@ mod tests {
     /// planted command then not running says nothing.
     ///
     /// Where there is no `xdg-open` or no `kde-open` it prints `skipped` and passes, except on Linux
-    /// with `CI` set, where it fails, because a runner that lacks them runs nothing. A run in which
-    /// the installed handler does not start is a skip everywhere, since `kde-open` needs a session
-    /// bus a headless runner may lack and the planted handler then not running says nothing.
+    /// with `CI` set, where it fails, because a runner that lacks them runs nothing. A variable whose
+    /// installed handler does not start is skipped, since the planted handler then not running says
+    /// nothing. On Linux with `CI` set the test fails when no variable reached a handler, because it
+    /// would otherwise pass with the opener's deletion removed.
     #[cfg(unix)]
     #[test]
     fn a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde()
@@ -822,6 +823,7 @@ mod tests {
             "KDE_SESSION_VERSION",
             if kde_open5.is_some() { "5" } else { "6" },
         ));
+        let mut reached_a_handler = 0;
         for variable in [
             "BROWSER",
             "XDG_CONFIG_DIRS",
@@ -847,16 +849,22 @@ mod tests {
             }
             match ran {
                 (_, false) => {
-                    // `kde-open` hands the address to a KDE service over the session bus, which a
-                    // headless runner may not have, so a handler that does not start is a skip
-                    // here even on CI: the planted handler then not running says nothing.
+                    // `kde-open` may need a session bus that a headless runner lacks, and the
+                    // planted handler then not running says nothing.
                     println!(
                         "skipped {variable}: kde-open here does not run a handler chosen by it"
                     );
                 }
-                ran => assert_eq!(ran, (false, true), "{variable}"),
+                ran => {
+                    assert_eq!(ran, (false, true), "{variable}");
+                    reached_a_handler += 1;
+                }
             }
         }
+        assert!(
+            reached_a_handler > 0 || !on_ci,
+            "CI is set and kde-open ran no handler for any of the four XDG_ names"
+        );
     }
 
     /// SANDBOX-30, `XDG_DATA_DIRS` with no desktop environment named (`XDG_CURRENT_DESKTOP` and the

@@ -12,8 +12,8 @@
 // Electron run. `showItemInFolder` asks the file manager over D-Bus and may run `xdg-open` on the
 // folder that holds the file when that fails, and how many starts that makes is Electron's choice.
 // The run points `DBUS_SESSION_BUS_ADDRESS` at a socket that does not exist. The folder test
-// asserts about whichever starts happen, and when the control run makes none it says so and asserts
-// nothing about them.
+// asserts that each run starts `xdg-open` at least once, and about every start that happens. How
+// many starts Electron makes is its choice, so no count is asserted.
 //
 // Needs Linux, `xvfb-run` and the Electron binary `pnpm install` fetches. Anywhere else it prints
 // `skipped` and passes, and under `CI` on Linux a missing `xvfb-run` or Electron fails it.
@@ -145,17 +145,17 @@ test('electron on linux starts xdg-open without the fifteen names for openExtern
 })
 
 // How many times Electron starts `xdg-open` for `showItemInFolder` is Electron's choice, so no count
-// is asserted. Every start that happens through `external-open.ts` must carry none of the names,
+// is asserted, but each run must start it at least once: a run with no start would pass the checks
+// below with nothing in them. Every start through `external-open.ts` must carry none of the names,
 // and every start of the control must carry all fifteen.
 test('electron on linux starts any xdg-open for showItemInFolder without the fifteen names through external-open.ts and with them without it', { timeout: 240000 }, (context) => {
   inElectronRoot(context, (root) => {
-    const through = started(root, 'through', 'folder')
-    for (const record of through) assert.deepEqual(record.names, [], `${record.call} was started with ${record.names}`)
-
     const control = started(root, 'direct', 'folder')
+    assert.notEqual(control.length, 0, 'showItemInFolder started no xdg-open on Electron\'s own shell, so the run says nothing about the deletion')
     for (const record of control) assert.deepEqual(record.names.sort(), [...NAMES].sort(), `${record.call} was started with ${record.names}`)
-    if (control.length === 0) {
-      console.log('showItemInFolder started no xdg-open in the control run, so nothing was asserted about it')
-    }
+
+    const through = started(root, 'through', 'folder')
+    assert.notEqual(through.length, 0, 'showItemInFolder through external-open.ts started no xdg-open')
+    for (const record of through) assert.deepEqual(record.names, [], `${record.call} was started with ${record.names}`)
   })
 })

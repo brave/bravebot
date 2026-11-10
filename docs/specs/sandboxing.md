@@ -4471,8 +4471,9 @@ shown by running the program, or not entirely:
   `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
-  the installed handler does not start. The KDE test skips when the installed handler does not
-  start, since `kde-open` may need a session bus that a headless runner lacks. The
+  the installed handler does not start. The KDE test skips a name whose installed handler does not
+  start, since `kde-open` may need a session bus that a headless runner lacks, and on Linux with
+  `CI` set it fails when none of the four `XDG_*` names reached a handler. The
   generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
   those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
   The first CI run failed the generic-mode and KDE tests: with no `DISPLAY` or `WAYLAND_DISPLAY`,
@@ -4508,10 +4509,10 @@ shown by running the program, or not entirely:
   needed `--no-sandbox` and `--disable-dev-shm-usage` on the host that ran it. The case `electron
   on linux starts any xdg-open for showItemInFolder without the fifteen names through
   external-open.ts and with them without it` asserts no start count, since how many times Electron
-  starts `xdg-open` is Electron's choice. Each start through `external-open.ts` must carry none of
-  the names and each control start all fifteen, and the case prints a line when the control starts
-  none. It sets `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to
-  `xdg-open`, which rests on a recollection of Electron's source. Both cases print `skipped` where
+  starts `xdg-open` is Electron's choice, and fails when either run starts none. Each start through
+  `external-open.ts` must carry none of the names and each control start all fifteen. It sets
+  `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`, which
+  rests on a recollection of Electron's source. Both cases print `skipped` where
   there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
   or Electron fails them. Neither has been run on Linux since the test was changed. The
   `showItemInFolder` case has never been run on Linux.
