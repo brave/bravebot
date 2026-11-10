@@ -139,6 +139,13 @@ fact: which of a fixed few variations of the typed name is there. The spelling c
 label of the typed argument. The hint that a space may differ in kind is added by `read_file` from
 the typed name only, and is not added for a read through a reference.
 
+The session view's byte bound (RPCVIEW-9) and the host's queue bound (HOST-8) in `bravebot-ui-bridge`
+are measurements of the same kind, outside the driver. Each takes only the serialized length of a row
+or a line, adds it to a running total, and compares the total with a fixed budget. No content is read
+or altered, and the result is one bounded fact: how many of the oldest rows to drop, or whether the
+connection is too far behind. A label, a kind or any part of a payload in that comparison would be a
+violation of shape 1 or 3 and is not covered by this paragraph.
+
 `load_skill` also names the directory a project skill's link lands on inside the workspace. That
 path is file-name content, so the rules and the trust map are asked about it first, and only a path
 they let the planner read is examined further: it is dropped when it equals the name the skill is
