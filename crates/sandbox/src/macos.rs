@@ -116,13 +116,22 @@ fn protected_name_rules(policy: &SandboxPolicy) -> String {
     );
     let rows: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
     let mut seen: Vec<PathBuf> = Vec::new();
+    let refused = with_their_resolved_spelling(&policy.unwritable);
     for row in with_their_resolved_spelling(&rows) {
-        if !seen.contains(&row) && is_inside_a_protected_name(&row) {
+        // A row at a refused path is withdrawn and not lifted, and a refusal beneath a row wins
+        // over the grant, so both are said again after it.
+        if !seen.contains(&row) && is_inside_a_protected_name(&row) && !refused.contains(&row) {
             out.push_str(&format!(
                 "(allow file-write* (subpath {}))\n",
                 quote(&row.to_string_lossy())
             ));
             out.push_str(&protected_names_write(&row));
+            for path in refused.iter().filter(|path| path.starts_with(&row)) {
+                out.push_str(&format!(
+                    "(deny file-write* (subpath {}))\n",
+                    quote(&path.to_string_lossy())
+                ));
+            }
             seen.push(row);
         }
     }
@@ -2679,10 +2688,19 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".git").join("hooks"))
             .expect("the scratch directory is creatable");
-        std::fs::create_dir_all(dir.join(".husky")).expect("the scratch directory is creatable");
-        std::fs::create_dir_all(dir.join(".bravebot")).expect("the scratch directory is creatable");
-        std::fs::create_dir_all(dir.join("sub").join(".husky"))
-            .expect("the scratch directory is creatable");
+        // Each directory a refused path below is written in exists, so a refusal is the
+        // sandbox's and not a missing parent.
+        for parent in [
+            dir.join(".husky"),
+            dir.join(".bravebot"),
+            dir.join("sub").join(".husky"),
+            dir.join("sub").join(".bravebot"),
+            dir.join(".HUSKY"),
+            dir.join(".hu\u{17f}ky"),
+            dir.join(".hus\u{212a}y"),
+        ] {
+            std::fs::create_dir_all(&parent).expect("the scratch directory is creatable");
+        }
 
         let policy = SandboxPolicy::strict()
             .allow_read("/usr")
@@ -2787,6 +2805,52 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&parent);
     }
 
+    /// A path a person refused beneath a write row that is inside a protected directory stays
+    /// refused, and so does a row at the refused path itself: the re-grant that keeps the row
+    /// writable must not lift the person's refusal.
+    #[test]
+    fn a_refused_path_under_a_row_inside_a_protected_directory_stays_refused() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let parent = crate::testutil::scratch_dir("bravebot-sandbox-protected-row-refused");
+        let _ = std::fs::remove_dir_all(&parent);
+        let dir = parent.join(".bravebot").join("mcp-home");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).expect("the scratch directory is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir)
+            .allow_write(&locked)
+            .deny_write(&locked);
+        let touch = |target: &Path| {
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+
+        assert_eq!(touch(&dir.join("state")), Some(0), "the row was refused");
+        assert_eq!(
+            touch(&locked.join("file")),
+            Some(TOUCH_FAILED),
+            "a path the person refused was written"
+        );
+        assert!(!locked.join("file").exists());
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
     /// The profile refuses the same names `bravebot_core::protected::is_protected` accepts is
     /// pinned in `bravebot-agent`, which sees both crates. This pins that the profile is built
     /// from the shared list: a name added to the list reaches the profile.
@@ -2806,9 +2870,10 @@ int main(int argc, char **argv) {
     }
 
     /// A caller running a program a person asked to run against a repository may lift the
-    /// withholding, and the lifting reaches the `.git` and nothing else: the control that gives
-    /// the refusal above its meaning, since a profile dropping every write refusal passes the
-    /// writes below just as readily.
+    /// withholding, and the lifting reaches every protected name a write row covers (a `.git` and
+    /// a `.husky` here) and no path outside the rows: the control that gives the refusals above
+    /// their meaning, since a profile dropping every write refusal passes the writes below just
+    /// as readily.
     #[test]
     fn a_policy_allowing_git_directory_writes_reaches_a_git_directory() {
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
@@ -2816,6 +2881,7 @@ int main(int argc, char **argv) {
         let dir = crate::testutil::scratch_dir("bravebot-sandbox-git-directory-allowed");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".git")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(dir.join(".husky")).expect("the scratch directory is creatable");
 
         let policy = SandboxPolicy::strict()
             .allow_read("/usr")
@@ -2838,6 +2904,20 @@ int main(int argc, char **argv) {
 
         assert!(status.success(), "a write under .git was refused");
         assert!(target.exists(), "the write created nothing");
+        let hook = dir.join(".husky").join("pre-commit");
+        let hooked = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/touch"),
+                &[hook.display().to_string().into()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert!(hooked.success(), "a write under .husky was refused");
+        assert!(hook.exists(), "the write created nothing");
         let outside = dir.parent().expect("a parent").join("bravebot-not-granted");
         let refused = sandbox
             .spawn(
