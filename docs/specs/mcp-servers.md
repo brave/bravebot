@@ -719,11 +719,10 @@ declaration says every call is asked about is the exception: its calls ask whate
 standing answer says ([SERVERS-21](#SERVERS-21)).
 
 A call a manifest plan fixed puts no question where nothing else decides it: approving the plan,
-whose line showed the call with every argument, answers it
-([manifest.md](manifest.md#MANIFEST-15)). A rule, a declaration asking every call and private
-arguments decide first, as they do here. The calls of an `apply` step are put as one list, or, for a
-step whose tools the person marked unattended, answered by the plan
-([manifest.md](manifest.md#MANIFEST-17)).
+whose line showed the call with every argument, answers it ([manifest.md](manifest.md#MANIFEST-15)).
+A rule, a declaration asking every call and private arguments decide first, as they do here. The
+calls of an `apply` step are put as one list, or, for a step whose tools the person marked
+plan-covered, answered by the plan ([manifest.md](manifest.md#MANIFEST-17)).
 
 **The routing field of a call is the alias and the tool, and never the arguments.**
 [PERM-1](permissions.md#PERM-1) matches a specifier against a routing field and nothing else, for the
@@ -2567,11 +2566,11 @@ the server wrote. A change of one of them to `Stream::Inherited` is found by a r
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
 
 <a id="SERVERS-26"></a>
-### SERVERS-26: a declaration may name what a row of an `apply` step may fill, and mark a tool unattended
+### SERVERS-26: a declaration may name what a row of an `apply` step may fill, and mark a tool plan-covered
 
 `--apply tool:argument=kind` names an argument a row of a manifest's `apply` step may fill and the
 one or more kinds it may take: `entry`, `entries`, `new` or `row`
-([manifest.md](manifest.md#MANIFEST-16)). `--unattended tool` marks a tool with such an argument
+([manifest.md](manifest.md#MANIFEST-16)). `--plan-covers tool` marks a tool with such an argument
 whose calls may run on a person's approval of the plan ([manifest.md](manifest.md#MANIFEST-17)).
 Only a local stdio server that does not ask every call may hold either, both are part of what the
 person approves for the server, and `mcp get`, `mcp list` and the approval question show them.
@@ -2582,6 +2581,6 @@ A server asking every call has said each of its calls is put on its own, which n
 
 `verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
 `verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
-`verified-by: bravebot_config::mcp::unattended_marks_only_a_tool_with_an_apply_declaration_on_a_local_server`
-`verified-by: bravebot_cli::mcp::add_writes_the_unattended_marks_and_the_question_and_get_say_them`
+`verified-by: bravebot_config::mcp::plan_covers_marks_only_a_tool_with_an_apply_declaration_on_a_local_server`
+`verified-by: bravebot_cli::mcp::add_writes_the_plan_covers_marks_and_the_question_and_get_say_them`
 `verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`

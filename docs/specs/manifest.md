@@ -721,9 +721,9 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_choice::rows::rows_point_into_several_lists_and_take_arrays_of_entries`
 
 <a id="MANIFEST-17"></a>
-### MANIFEST-17: a step whose tools are all marked unattended runs on a person's approval of the plan
+### MANIFEST-17: a step whose tools are all plan-covered runs on a person's approval of the plan
 
-Where every tool of an `apply` step is marked unattended in the person's declaration of its server
+Where every tool of an `apply` step is marked plan-covered in the person's declaration of its server
 ([mcp-servers.md](mcp-servers.md#SERVERS-26)), and a person answered the plan's question, the step's
 resolved calls are made with no question at the step, within the caps the plan line stated, and what
 became of each is drawn as for any `apply` step. The plan's line for such a step says it runs

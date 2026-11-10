@@ -116,8 +116,8 @@ pub struct Reached {
     choice_arguments: ChoiceArguments,
     /// The arguments of its tools the declaration says a row of an `apply` step may fill.
     apply_arguments: bravebot_config::mcp::ApplyArguments,
-    /// The tools the declaration marks as running unattended in an `apply` step (SERVERS-26).
-    unattended_tools: bravebot_config::mcp::UnattendedTools,
+    /// The tools the declaration marks plan-covered in an `apply` step (SERVERS-26).
+    covered_tools: bravebot_config::mcp::CoveredTools,
     /// The headers and bearer token the declaration names, as the environment gave them when the
     /// server was started, which a server moved during a turn is reached with (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -147,7 +147,7 @@ impl Reached {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
             headers: Vec::new(),
             sandboxed: None,
             sandbox: None,
@@ -195,9 +195,9 @@ impl Reached {
         self
     }
 
-    /// The same server, with the tools its declaration marks as running unattended.
-    pub fn unattended(mut self, tools: bravebot_config::mcp::UnattendedTools) -> Self {
-        self.unattended_tools = tools;
+    /// The same server, with the tools its declaration marks plan-covered.
+    pub fn covered(mut self, tools: bravebot_config::mcp::CoveredTools) -> Self {
+        self.covered_tools = tools;
         self
     }
 
@@ -383,8 +383,8 @@ struct Server {
     choice_arguments: ChoiceArguments,
     /// The arguments of its tools the declaration says a row of an `apply` step may fill.
     apply_arguments: bravebot_config::mcp::ApplyArguments,
-    /// The tools the declaration marks as running unattended in an `apply` step (SERVERS-26).
-    unattended_tools: bravebot_config::mcp::UnattendedTools,
+    /// The tools the declaration marks plan-covered in an `apply` step (SERVERS-26).
+    covered_tools: bravebot_config::mcp::CoveredTools,
     /// The headers and bearer token its first connection sent, which a move sends to the new
     /// destination as well (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -507,7 +507,7 @@ impl Session {
                     ask_every_call: reached.ask_every_call,
                     choice_arguments: reached.choice_arguments,
                     apply_arguments: reached.apply_arguments,
-                    unattended_tools: reached.unattended_tools,
+                    covered_tools: reached.covered_tools,
                     headers: reached.headers,
                     _home: reached.home,
                     sandboxed: reached.sandboxed,
@@ -1078,14 +1078,14 @@ impl Session {
         server.apply_arguments.get(tool)
     }
 
-    /// Whether the declaration of the server reached as `alias` marks `tool` as running
-    /// unattended in an `apply` step (SERVERS-26).
-    fn unattended(&self, alias: &str, tool: &str) -> bool {
+    /// Whether the declaration of the server reached as `alias` marks `tool` plan-covered in an
+    /// `apply` step (SERVERS-26).
+    fn covered(&self, alias: &str, tool: &str) -> bool {
         self.0
             .servers
             .iter()
             .find(|server| server.alias == alias)
-            .is_some_and(|server| server.unattended_tools.contains(tool))
+            .is_some_and(|server| server.covered_tools.contains(tool))
     }
 
     /// Whether answer 2 was given about this tool in this project.
@@ -2026,9 +2026,9 @@ impl Offer {
         self.session.apply_arguments(alias, tool)
     }
 
-    /// Whether the declaration of the server `alias` marks `tool` as running unattended.
-    pub fn unattended(&self, alias: &str, tool: &str) -> bool {
-        self.session.unattended(alias, tool)
+    /// Whether the declaration of the server `alias` marks `tool` plan-covered.
+    pub fn covered(&self, alias: &str, tool: &str) -> bool {
+        self.session.covered(alias, tool)
     }
 
     /// The arguments of the tool `tool` of the server `alias` that are offered as a choice: those

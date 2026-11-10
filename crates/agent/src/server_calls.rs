@@ -314,11 +314,11 @@ impl Servers {
     }
 
     /// The `apply` steps of `plan` that run on a person's approval of it: each whose tools the
-    /// declaration of its server all marks unattended, where no `ask` rule names one of them and
+    /// declaration of its server all marks plan-covered, where no `ask` rule names one of them and
     /// `mode` is neither plan mode, which asks at the step, nor bypassing, which approves the plan
     /// in place of a person (MANIFEST-17). Decided once, before the plan's line is written, so the
     /// line and the step agree.
-    pub(crate) fn unattended_steps(
+    pub(crate) fn covered_steps(
         &self,
         plan: &Manifest,
         permissions: &bravebot_core::permissions::Permissions,
@@ -347,7 +347,7 @@ impl Servers {
                                 if hides_a_character(value))
                             });
                     !literals_hide
-                        && self.all_unattended(alias, &shape)
+                        && self.all_covered(alias, &shape)
                         // A rule about a tool decides it: an ask asks, and a deny would stop the
                         // step part-way, so a step either names runs only with its list put.
                         && !shape.tools.iter().any(|tool| {
@@ -365,14 +365,14 @@ impl Servers {
             .collect()
     }
 
-    /// Whether the declaration of `alias` marks every tool of the step `shape` as running
-    /// unattended (SERVERS-26).
-    fn all_unattended(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
+    /// Whether the declaration of `alias` marks every tool of the step `shape` plan-covered
+    /// (SERVERS-26).
+    fn all_covered(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
         self.offer.as_ref().is_some_and(|offer| {
             shape
                 .tools
                 .iter()
-                .all(|tool| offer.unattended(alias, &tool.name))
+                .all(|tool| offer.covered(alias, &tool.name))
         })
     }
 
@@ -382,7 +382,7 @@ impl Servers {
     pub(crate) fn notes(
         &self,
         plan: &Manifest,
-        unattended: &std::collections::BTreeSet<usize>,
+        covered: &std::collections::BTreeSet<usize>,
     ) -> BTreeMap<usize, String> {
         plan.steps()
             .iter()
@@ -390,7 +390,7 @@ impl Servers {
             .filter_map(|(index, step)| match step.tool() {
                 manifest::APPLY => shape_of(step).ok().map(|shape| {
                     let alias = step.text("server");
-                    let unattended = unattended.contains(&index);
+                    let covered = covered.contains(&index);
                     let tools: Vec<String> = shape
                         .tools
                         .iter()
@@ -407,7 +407,7 @@ impl Servers {
                         .collect();
                     // A step that runs unasked says so, and says where its lists' private entries
                     // were read from and go, since approving the plan is what releases them there.
-                    let asked = match unattended {
+                    let asked = match covered {
                         true => {
                             let read: Vec<String> = shape
                                 .lists
@@ -677,7 +677,7 @@ impl Servers {
         index: usize,
         alias: &str,
         step: &Step,
-        unattended: bool,
+        covered: bool,
     ) -> Result<(String, bravebot_aichat::protocol::Usage), String> {
         let Some(offer) = &self.offer else {
             return Err(format!("{alias} is not offered to this run"));
@@ -800,13 +800,13 @@ impl Servers {
         // the plan (MANIFEST-17); which steps those are was decided once, before the line.
         // A value holding a character the line would draw as nothing is put on the list, where the
         // question writes each one out, as a fixed call holding one is asked at its step.
-        let unattended = unattended
+        let covered = covered
             && !shown.calls.iter().any(|call| {
                 call.arguments
                     .iter()
                     .any(|(_, value, _)| hides_a_character(value))
             });
-        let decision = match unattended {
+        let decision = match covered {
             true => crate::confirm::ApplyDecision::keep((0..shown.calls.len()).collect()),
             false => confirmer.confirm_apply(&request),
         };
@@ -826,7 +826,7 @@ impl Servers {
             );
             // The plan's approval is recorded for a call it covered that was sent, and for none a
             // rule refused or the run did not reach.
-            if unattended && !matches!(called, crate::mcp::Called::Problem(_)) {
+            if covered && !matches!(called, crate::mcp::Called::Problem(_)) {
                 policy.record_plan_covered_call(alias, &shown.calls[at].name);
             }
             match called {

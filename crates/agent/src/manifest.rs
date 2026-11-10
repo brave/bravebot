@@ -116,7 +116,7 @@ const SERVER_APPLY_SHAPE: &str = "\n\
 A tool listed with apply can be called once for each item of a list that was read: an isolated \
 processor reads the list and proposes the calls, such as which folder each bookmark goes in and \
 what the new folders are called; the person approves the whole list before any call is made, \
-unless the person's declaration marks every tool of the step unattended, when approving the plan \
+unless the person's declaration marks every tool of the step plan-covered, when approving the plan \
 covers it. The step's own processor decides its calls, and what became of each is shown after, \
 so a step that drafts or shows a grouping beforehand describes calls that will not be made. \
 So a task that reorganises many items is one read, then one apply, and no process or answer step \
@@ -902,7 +902,7 @@ struct Planned {
     plan: Manifest,
     /// The `apply` steps whose plan line says they run without asking, decided once from the
     /// declarations, the mode and the rules before the line was written (MANIFEST-17).
-    unattended: std::collections::BTreeSet<usize>,
+    covered: std::collections::BTreeSet<usize>,
     /// The label the plan carries, which every field lifted out of it carries too.
     label: Label,
     model: String,
@@ -1121,7 +1121,7 @@ fn plan<S: Sink, R: Reporter>(
         catalogue(connectors, servers)
     );
     let mut round = "fit";
-    let (plan, label, unattended) = loop {
+    let (plan, label, covered) = loop {
         let proposal_wire = ask(
             config,
             egress,
@@ -1164,9 +1164,8 @@ fn plan<S: Sink, R: Reporter>(
         // in from the item it lands on, so the plan a person reads says both.
         let mut notes = connectors.notes(&plan);
         // And the arguments of each server call, in full, since a person approves the call by them.
-        let unattended =
-            servers.unattended_steps(&plan, &task.permissions, task.permission_mode.get());
-        notes.extend(servers.notes(&plan, &unattended));
+        let covered = servers.covered_steps(&plan, &task.permissions, task.permission_mode.get());
+        notes.extend(servers.notes(&plan, &covered));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
@@ -1180,7 +1179,7 @@ fn plan<S: Sink, R: Reporter>(
         // the task and the driver's words alone. A plan with no connector step passes the check,
         // so this never asks again in a run that uses no connector and calls no server.
         match connectors.check(&plan).and_then(|()| servers.check(&plan)) {
-            Ok(()) => break (plan, label, unattended),
+            Ok(()) => break (plan, label, covered),
             Err(why) if round == "fit" => {
                 reporter.narration(format!(
                     "The plan failed a connector check, so it was asked for once more: {why}"
@@ -1249,7 +1248,7 @@ fn plan<S: Sink, R: Reporter>(
 
     Ok(Planned {
         plan,
-        unattended,
+        covered,
         label,
         model,
         clean: policy.finish(),
@@ -1364,7 +1363,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 ) -> Result<Outcome, TurnError> {
     let Planned {
         plan,
-        unattended,
+        covered,
         label,
         model,
         clean: planning_was_clean,
@@ -1455,8 +1454,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let a_person_answered = answered_by.is_none();
     // The steps the line said run without asking do so only where a person answered it outside
     // plan mode; otherwise each puts its list, which asks more than the line promised, never less.
-    let unattended = match a_person_answered && !permission_mode.get().refuses_writes() {
-        true => unattended,
+    let covered = match a_person_answered && !permission_mode.get().refuses_writes() {
+        true => covered,
         false => std::collections::BTreeSet::new(),
     };
     accounting.elapsed.stalled += waiting.waited();
@@ -1528,7 +1527,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut asking,
                 permission_mode,
                 a_person_answered,
-                unattended.contains(&index),
+                covered.contains(&index),
                 index,
                 shown_only(&plan, index),
                 step,
@@ -1737,7 +1736,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
     a_person_answered: bool,
-    unattended: bool,
+    covered: bool,
     index: usize,
     shown_only: bool,
     step: &Step,
@@ -1987,9 +1986,9 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             locked(policy, index, "tools")?;
             let began = std::time::Instant::now();
             // A change of mode since the plan was answered can add the list, never take it away.
-            let unattended = unattended && !permission_mode.get().refuses_writes();
+            let covered = covered && !permission_mode.get().refuses_writes();
             let applied = servers.apply(
-                policy, chat, egress, confirmer, reporter, slots, index, &alias, step, unattended,
+                policy, chat, egress, confirmer, reporter, slots, index, &alias, step, covered,
             );
             accounting.elapsed.inference += began.elapsed();
             let (note, usage) = applied?;

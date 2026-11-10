@@ -1320,7 +1320,7 @@ mcp-exclude-tools-needs-a-list = --exclude-tools a besoin d'un nom d'outil ou d'
 mcp-allowed-hosts-needs-a-list = --allowed-hosts a besoin d'un nom d'hôte ou d'une liste de noms d'hôtes séparés par des virgules
 mcp-choice-needs-a-pair = --choice a besoin d'un outil et d'un argument, écrits <OUTIL>:<ARGUMENT>
 mcp-apply-needs-a-kind = --apply a besoin d'un outil, d'un argument et d'un type, écrits <OUTIL>:<ARGUMENT>=<entry|entries|new|row>, plusieurs types séparés par des virgules
-mcp-unattended-needs-a-tool = --unattended a besoin de l'outil dont les appels peuvent s'exécuter sur l'approbation d'un plan
+mcp-plan-covers-needs-a-tool = --plan-covers a besoin de l'outil dont les appels peuvent s'exécuter sur l'approbation d'un plan
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
@@ -1363,7 +1363,7 @@ mcp-problem-choice-without-asking = choice_arguments a besoin que ask_every_call
 mcp-problem-apply =
     apply_arguments doit être un objet de noms d'outils, chacun avec un objet de noms d'arguments et un ou plusieurs de entry, entries, new ou row séparés par des virgules
 mcp-problem-apply-while-asking = apply_arguments a besoin que ask_every_call soit false
-mcp-problem-unattended = unattended_tools doit lister des outils qui ont des apply_arguments
+mcp-problem-plan-covers = covered_tools doit lister des outils qui ont des apply_arguments
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
@@ -1392,7 +1392,7 @@ mcp-declaration-exclude-tools = outils exclus : { $names }
 mcp-declaration-asks-every-call = chaque appel est demandé, et aucune réponse n'est conservée
 mcp-declaration-choice-arguments = arguments qui acceptent un choix : { $pairs }
 mcp-declaration-apply-arguments = arguments qu'une étape apply d'un plan peut remplir : { $named }
-mcp-declaration-unattended-tools = outils qu'une étape apply exécute sur l'approbation d'un plan, sans demander : { $named }
+mcp-declaration-covered-tools = outils qu'une étape apply exécute sur l'approbation d'un plan, sans demander : { $named }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?

@@ -661,7 +661,7 @@ puts a reference in the context, not the bytes, and a slot id with a line count 
 instruction. A paste does not lower it either, and resuming cannot raise it.
 
 One exception is named, and it is narrow: within a manifest plan a person approved, the calls of an
-`apply` step whose tools the person marked unattended are selected by a processor that read
+`apply` step whose tools the person marked plan-covered are selected by a processor that read
 untrusted content, among calls of the plan's tools, arguments and lists, each acceptable on its own,
 within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
 
