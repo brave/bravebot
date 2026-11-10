@@ -898,6 +898,43 @@ CASES = [
         {"guard-spelling-unseen"},
     ),
     (
+        "a type alias of the guarded type inside an async function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    pub async fn build(&self) -> Gate {\n        type G = Gate;\n"
+            '        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type inside a const unsafe extern function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    pub const unsafe extern \"C\" fn build() -> Gate {\n"
+            '        type G = Gate;\n        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a trait-qualified path naming the guarded type",
+        open_the_gate_by_another_spelling(
+            "fn build() -> Gate {\n    <Gate as From<u8>>::from(1)\n}"
+        ),
+        None,
+    ),
+    (
+        "a guarded constructor called through an alias inside a use group",
+        open_the_gate_by_another_spelling(
+            'use crate::{Gate as G, Other};\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded method called through a qualified generic path wrapped over lines",
+        open_the_gate_by_another_spelling(
+            "fn reach(g: &Gate) {\n    <Gate<u8>>::\n        open(g);\n}"
+        ),
+        {"guard-site-count"},
+    ),
+    (
         "another type's constructor through its own turbofish",
         open_the_gate_by_another_spelling(
             "fn build() -> Vec<Gate> {\n    Vec::<Gate>::new()\n}\n\n"

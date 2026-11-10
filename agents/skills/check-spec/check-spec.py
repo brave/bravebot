@@ -890,8 +890,13 @@ def qualifier_spellings(code, qualifier, tail):
     return found
 
 
-# What a `type` line can sit directly inside, for telling an alias from an associated type.
-TYPE_HOLDER = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?(?:impl|trait|mod|fn)\b")
+# What a `type` line can sit directly inside, for telling an alias from an associated type. The
+# qualifiers of a `fn` come in any order: `pub const unsafe extern "C" fn`, `pub async fn`.
+TYPE_HOLDER = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?"
+    r'(?:(?:const|async|unsafe|extern(?:\s+"[^"]*")?)\s+)*'
+    r"(?P<kind>impl|trait|mod|fn)\b"
+)
 
 
 def associated_type_lines(code):
@@ -913,8 +918,7 @@ def associated_type_lines(code):
             inside.add(number)
         hold = TYPE_HOLDER.match(body)
         if hold:
-            kind = re.search(r"impl|trait|mod|fn", hold.group(0)).group(0)
-            blocks.append((indent, kind))
+            blocks.append((indent, hold.group("kind")))
     return inside
 
 
@@ -923,20 +927,25 @@ def qualifier_aliases(code, qualifier):
 
     `use Type as L` and `type L = Type` make `L::name(` a call of the guarded symbol that no count
     can read, because the qualifier it names is spelled nowhere. The qualifier is distinctive, so
-    unlike the bare name of a guard it is not written for other reasons."""
+    unlike the bare name of a guard it is not written for other reasons.
+
+    `as` renames only in a `use` item, including inside its `{}` group. In `<Type as Trait>::name`
+    it names the trait of a qualified path, which is a spelling and not an alias."""
     text = "\n".join(code)
     named = re.escape(qualifier)
     alias = re.compile(
-        rf"\b{named}\s+as\s+(\w+)"
+        rf"\buse\b[^;]*?\b{named}\s+as\s+(\w+)"
         rf"|\btype\s+(\w+)\s*(?:{GENERICS})?\s*=\s*(?:\w+\s*::\s*)*{named}\b(?!\s*::)"
     )
     associated = associated_type_lines(code)
     found = []
     for match in alias.finditer(text):
-        number = text.count("\n", 0, match.start()) + 1
-        if match.group(2) and number in associated:
+        # The line of the new name, which in a multi-line `use` group is not the line of `use`.
+        group = 1 if match.group(1) else 2
+        number = text.count("\n", 0, match.start(group)) + 1
+        if group == 2 and number in associated:
             continue
-        found.append((number, match.group(1) or match.group(2)))
+        found.append((number, match.group(group)))
     return found
 
 
@@ -1067,7 +1076,9 @@ def unseen_spellings(symbol, sources):
                     before.endswith(".") and raw.startswith("(", match.end())
                 ):
                     continue
-                elif qualified.search(before):
+                elif qualified.search("\n".join(code[max(0, number - 5) : number - 1]) + "\n" + before):
+                    # A path rustfmt wrapped after its `::` has the qualifier on an earlier line,
+                    # and `guard_sites` counts it as one use, so it is not unseen here.
                     continue
                 else:
                     why = f"spelled in a form the count does not read; write `.{bare}(` or `{qualifier}::{bare}`"
