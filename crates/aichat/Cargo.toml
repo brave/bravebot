@@ -10,6 +10,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The network-free `embeddings::FakeEmbedder`, for other crates' tests.
+fake-embeddings = []
+
 [dependencies]
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }

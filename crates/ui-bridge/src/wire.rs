@@ -359,6 +359,34 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
         .collect()
 }
 
+/// Where a message a retrieval drew on was said, as a window finds it in its own transcript: the
+/// exchange, as the `prompt` [`recounted`] numbers its user rows by, what it was there, and its
+/// place in the record's numbering, which a window asks for its excerpts by (RETRIEVE-32). No
+/// word of the message (RETRIEVE-27).
+pub fn place(place: &bravebot_agent::report::Place) -> Value {
+    use bravebot_agent::report::Spoken;
+    let (said, nth) = match place.said {
+        Spoken::Prompt => ("prompt", None),
+        Spoken::Reply { nth } => ("reply", Some(nth)),
+        Spoken::Tool { nth } => ("tool", nth),
+        Spoken::Other => ("other", None),
+    };
+    json!({ "ordinal": place.ordinal, "prompt": place.prompt, "said": said, "nth": nth })
+}
+
+/// What each exchange's retrievals drew on, keyed by its prompt as [`recounted`] numbers it, for
+/// a window drawing a transcript it did not watch (RETRIEVE-27).
+pub fn recalled(by_prompt: &[(u32, Vec<bravebot_agent::report::Place>)]) -> Value {
+    Value::Array(
+        by_prompt
+            .iter()
+            .map(|(prompt, used)| {
+                json!({ "prompt": prompt, "used": used.iter().map(place).collect::<Vec<_>>() })
+            })
+            .collect(),
+    )
+}
+
 /// The rows of one exchange of a recounted conversation: its `prompt`th user row and what was said
 /// after it up to the next, in the shape [`recounted`] gives them
 /// ([SESSION-39](../../../docs/specs/sessions.md#SESSION-39)).
@@ -468,6 +496,7 @@ fn said(said: &Said) -> Value {
                 | Composed::Notice
                 | Composed::ModeNotice { .. }
                 | Composed::MessageSent { .. }
+                | Composed::Retrieved { .. }
                 | Composed::Written,
             text,
         } => json!({ "kind": "user", "text": text }),

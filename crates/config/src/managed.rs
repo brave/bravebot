@@ -112,6 +112,9 @@ const RUN_NETWORK: &str = "run.network";
 /// Where it turns crash reports off, and the name `doctor` reports the pin by (CRASH-4).
 const CRASH_REPORTS_KEY: &str = "crashReports";
 
+/// Where it turns retrieval off, and the name `doctor` reports the pin by (RETRIEVE-23).
+const RETRIEVAL_KEY: &str = "retrieval.enabled";
+
 /// Where the rules it refuses are listed, and the name `doctor` reports each list by (PERM-19).
 const RULES_DENY: &str = "permissions.deny";
 
@@ -336,14 +339,16 @@ pub struct Managed {
     hosts: crate::sandbox_network::Hosts,
     /// The host keys it gave a value they cannot read, which pin nothing.
     hosts_unreadable: Vec<&'static str>,
-    /// Whether it wrote `crashReports` as `false` (CRASH-4).
+    /// Which of `crashReports` (CRASH-4) and `retrieval.enabled` (RETRIEVE-23) it wrote as
+    /// `false`, in that order.
     ///
     /// Read from this layer for the reason the keys above are: a key that can only turn a report
     /// off takes nothing from the person at the machine, so an administrator asking for it is not
-    /// choosing for them. Only `false` is a pin. `true` is not read, since this layer cannot turn
-    /// on what the person turned off, and a value that is not a boolean is absence, as it is in
-    /// the person's own file.
-    crash_reports_off: bool,
+    /// choosing for them, and turning retrieval off sends nothing anywhere. Only `false` is a pin.
+    /// `true` is not read, since this layer cannot turn on what the person turned off, and
+    /// retrieval on would send a person's conversation to another service on a choice that is not
+    /// theirs. A value that is not a boolean is absence, as it is in the person's own file.
+    turned_off: Vec<&'static str>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -404,7 +409,17 @@ impl Managed {
         Self {
             narrowing,
             narrowing_unreadable,
-            crash_reports_off: root.get(CRASH_REPORTS_KEY) == Some(&serde_json::Value::Bool(false)),
+            turned_off: [
+                (CRASH_REPORTS_KEY, root.get(CRASH_REPORTS_KEY)),
+                (
+                    RETRIEVAL_KEY,
+                    root.get("retrieval").and_then(|block| block.get("enabled")),
+                ),
+            ]
+            .into_iter()
+            .filter(|(_, value)| *value == Some(&serde_json::Value::Bool(false)))
+            .map(|(key, _)| key)
+            .collect(),
             rules: crate::settings::managed_rules(&root),
             hosts,
             hosts_unreadable,
@@ -534,7 +549,13 @@ impl Managed {
     /// Whether this layer turned crash reports off, which the person's own file cannot undo
     /// (CRASH-4).
     pub fn crash_reports_off(&self) -> bool {
-        self.crash_reports_off
+        self.turned_off.contains(&CRASH_REPORTS_KEY)
+    }
+
+    /// Whether this layer turned retrieval off, which the person's own file cannot undo
+    /// (RETRIEVE-23).
+    pub fn retrieval_off(&self) -> bool {
+        self.turned_off.contains(&RETRIEVAL_KEY)
     }
 
     /// The keys it named as something other than a boolean, which are absence.
@@ -593,7 +614,7 @@ impl Managed {
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
-            .chain(self.crash_reports_off.then_some(CRASH_REPORTS_KEY))
+            .chain(self.turned_off.iter().copied())
             .chain((!self.rules.deny.is_empty()).then_some(RULES_DENY))
             .chain((!self.rules.ask.is_empty()).then_some(RULES_ASK))
             .chain(self.network.is_some().then_some(RUN_NETWORK))
@@ -1009,6 +1030,28 @@ mod tests {
         ] {
             let managed = scratch(&format!("managed-crash-{name}"), text);
             assert!(!managed.crash_reports_off(), "{text}");
+            assert!(managed.is_empty(), "{text}");
+        }
+    }
+
+    /// RETRIEVE-23: `retrieval.enabled: false` is a pin and is named among them. `true` and a value
+    /// that is not a boolean pin nothing, so the layer can only turn retrieval off.
+    #[test]
+    fn a_managed_retrieval_false_is_a_pin_and_nothing_else_is() {
+        let off = scratch(
+            "managed-retrieval-off",
+            r#"{"retrieval": {"enabled": false}}"#,
+        );
+        assert!(off.retrieval_off());
+        assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["retrieval.enabled"]);
+        for (name, text) in [
+            ("on", r#"{"retrieval": {"enabled": true}}"#),
+            ("quoted", r#"{"retrieval": {"enabled": "false"}}"#),
+            ("bare", r#"{"retrieval": false}"#),
+            ("absent", "{}"),
+        ] {
+            let managed = scratch(&format!("managed-retrieval-{name}"), text);
+            assert!(!managed.retrieval_off(), "{text}");
             assert!(managed.is_empty(), "{text}");
         }
     }

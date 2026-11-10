@@ -3029,27 +3029,22 @@ impl Handle {
     /// ordinary tools. What goes in it is gate names, labels and paths: the audit says what was
     /// allowed and why, never what the content was.
     pub fn append_audit(&self, turn: usize, events: &[crate::audit::Stamped]) {
-        let Some(directory) = self.directory() else {
-            return;
-        };
-
-        let mut body = String::new();
-        for stamped in events {
-            // The event's own time, not this moment. A turn is written down once, at the end, so
-            // stamping here made every event in it share a second and left the trail unable to
-            // say which came first or how long anything took.
-            let line = serde_json::json!({
-                "at": stamped.at,
-                "turn": turn,
-                "event": crate::audit::as_json(&stamped.event, stamped.from),
-            });
-            body.push_str(&line.to_string());
-            body.push('\n');
+        if let Some(directory) = self.directory() {
+            append_audit_in(&directory, &self.id, turn, events);
         }
+    }
 
-        let path = directory.join(format!("{}.audit.jsonl", self.id));
-        let _ = bravebot_agent::home::append_to_file(&path)
-            .and_then(|mut file| file.write_all(body.as_bytes()));
+    /// What keeping this session's vectors caught up with `snapshot`, its record as turn `turn`
+    /// saved it, takes. Nothing in an incognito session.
+    pub fn index_job(
+        &self,
+        snapshot: bravebot_agent::conversation::Snapshot,
+        turn: usize,
+    ) -> Option<crate::indexer::Job> {
+        let directory = self.directory()?;
+        Some(crate::indexer::Job::new(
+            &directory, &self.id, snapshot, turn,
+        ))
     }
 
     /// Drop what the turns from `from_turn` on decided.
@@ -3080,6 +3075,20 @@ impl Handle {
         let _ = bravebot_agent::home::write_file(&path, kept.as_bytes());
     }
 
+    /// Cut from this session's vectors the rows naming messages a rewind took out of the record,
+    /// which now has `record_length` ordinals ([`crate::vectors::record_length`]).
+    ///
+    /// Without it, the messages the session goes on to add would take the ordinals of the ones
+    /// that went, and the rows written for those would name the wrong words.
+    pub fn truncate_vectors(&self, record_length: u32) {
+        if let Some(directory) = self.directory() {
+            let path = crate::vectors::path_of(&directory, &self.id);
+            if crate::vectors::truncate(&path, record_length).is_err() {
+                crate::vectors::remove(&path).ok();
+            }
+        }
+    }
+
     /// Remove what this session wrote, for a rewind that went back past its first turn.
     ///
     /// A record of a session with no turns in it is a session nobody can resume into anything,
@@ -3095,6 +3104,7 @@ impl Handle {
                 self.id,
                 crate::search::INDEX_EXTENSION
             )));
+            crate::vectors::remove(&crate::vectors::path_of(&directory, &self.id)).ok();
         }
         self.wrote = false;
         self.title = before.to_string();
@@ -3104,6 +3114,33 @@ impl Handle {
     fn directory(&self) -> Option<PathBuf> {
         writable_project_directory(&self.project)
     }
+}
+
+/// [`Handle::append_audit`] for session `id` in `directory`, the directory its record is in.
+pub(crate) fn append_audit_in(
+    directory: &Path,
+    id: &str,
+    turn: usize,
+    events: &[crate::audit::Stamped],
+) {
+    let mut body = String::new();
+    for stamped in events {
+        // The event's own time, not this moment. A turn is written down once, at the end, so
+        // stamping here made every event in it share a second and left the trail unable to
+        // say which came first or how long anything took.
+        let line = serde_json::json!({
+            "at": stamped.at,
+            "turn": turn,
+            "event": crate::audit::as_json(&stamped.event, stamped.from),
+        });
+        body.push_str(&line.to_string());
+        body.push('\n');
+    }
+
+    let path = directory.join(format!("{id}.audit.jsonl"));
+    bravebot_agent::home::append_to_file(&path)
+        .and_then(|mut file| file.write_all(body.as_bytes()))
+        .ok();
 }
 
 /// Sessions for this project, newest first.
@@ -3417,12 +3454,19 @@ pub(crate) fn delete_in(directory: &Path, id: &str) -> Result<(), Deletion> {
     if std::fs::symlink_metadata(&record).is_err() {
         return Err(Deletion::NotFound);
     }
+    let vectors = crate::vectors::path_of(directory, id);
     for beside in [
         directory.join(format!("{id}.audit.jsonl")),
         directory.join(format!("{id}.{}", crate::search::INDEX_EXTENSION)),
+        vectors.clone(),
         directory.join(format!("{id}.tmp")),
     ] {
-        match std::fs::remove_file(&beside) {
+        let removed = if beside == vectors {
+            crate::vectors::remove(&beside)
+        } else {
+            std::fs::remove_file(&beside)
+        };
+        match removed {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(Deletion::Failed(error)),
@@ -3518,6 +3562,7 @@ fn remove_project_records_unwritten_since(
         } else if let Some(id) = name
             .strip_suffix(".audit.jsonl")
             .or_else(|| name.strip_suffix(".tmp"))
+            .or_else(|| name.strip_suffix(&format!(".{}", crate::vectors::EXTENSION)))
         {
             let no_record = std::fs::symlink_metadata(directory.join(format!("{id}.json")))
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
@@ -7420,6 +7465,9 @@ mod tests {
                 asked_to_write: false,
                 plan_mode_told: false,
                 holds: "public".to_string(),
+                retrieval_cut: 0,
+                left_out: 0,
+                pinned: Vec::new(),
             },
             manifest: None,
             rewind: Vec::new(),
@@ -8099,6 +8147,39 @@ mod tests {
         std::fs::remove_file(&directory).expect("unblock the directory");
     }
 
+    /// RETRIEVE-6: a session whose records can be written keeps its vectors beside its record,
+    /// and one whose records cannot, as in an incognito session, has no pass to run at all, so
+    /// the endpoint is never asked.
+    #[test]
+    fn only_a_session_that_writes_records_has_vectors_to_keep() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-index-job");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let mut conversation = bravebot_agent::conversation::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("keep this"));
+        let embedders: crate::indexer::Embedders =
+            Box::new(|_| Some(Box::new(bravebot_aichat::embeddings::FakeEmbedder::new(2))));
+
+        let job = handle
+            .index_job(conversation.snapshot(), 1)
+            .expect("a pass to run");
+        assert_eq!(
+            crate::indexer::run(&embedders, &|| true, &job),
+            crate::indexer::Pass::CaughtUp { written: 1 }
+        );
+        let path = crate::vectors::path_in(&root, handle.id()).expect("a writable directory");
+        assert!(path.exists(), "the vectors are not beside the record");
+
+        let directory = project_directory(&root).expect("dir");
+        std::fs::remove_dir_all(&directory).expect("remove the records");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+        assert!(handle.index_job(conversation.snapshot(), 2).is_none());
+        std::fs::remove_file(&directory).expect("unblock the directory");
+    }
+
     /// SESSION-31: a manifest run is refused as `--fork` refuses it, and writes no copy.
     #[test]
     fn branching_a_manifest_run_is_refused() {
@@ -8435,6 +8516,77 @@ mod tests {
 
         assert!(!entry(&gone).exists(), "what the session said outlived it");
         assert!(entry(&kept).exists());
+    }
+
+    /// RETRIEVE-6: the vectors beside a record go with it, and another session's stay.
+    #[test]
+    fn deleting_a_session_removes_its_vectors() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-vectors");
+        let (gone, kept) = two_sessions_with_trails(&root);
+        let model = crate::vectors::Model {
+            endpoint: "https://embed.example/v1/embeddings".to_string(),
+            id: "embed-small-v1".to_string(),
+            dimensions: 2,
+        };
+        let entry = |id: &str| crate::vectors::path_in(&root, id).expect("a writable directory");
+        for id in [&gone, &kept] {
+            crate::vectors::Writer::create(&entry(id), &model).expect("create");
+        }
+
+        delete(&root, &gone).expect("the session was not deleted");
+
+        assert!(!entry(&gone).exists(), "the vectors outlived their record");
+        assert!(entry(&kept).exists());
+    }
+
+    /// RETRIEVE-6: a rewind cuts the rows naming the messages it took out of the record, through
+    /// the session it is made in.
+    #[test]
+    fn a_rewound_session_cuts_its_vectors_to_the_record() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-rewind-vectors");
+        let (id, _) = two_sessions_with_trails(&root);
+        let handle = Handle::resuming(
+            &root,
+            &load(&root, &id).expect("the record"),
+            Front::Terminal,
+            A_BUILD,
+        )
+        .expect("the record is free");
+        let model = crate::vectors::Model {
+            endpoint: "https://embed.example/v1/embeddings".to_string(),
+            id: "embed-small-v1".to_string(),
+            dimensions: 2,
+        };
+        let path = crate::vectors::path_in(&root, &id).expect("a writable directory");
+        let mut writer = crate::vectors::Writer::create(&path, &model).expect("create");
+        for ordinal in 0..4 {
+            writer
+                .append(&crate::vectors::Row {
+                    ordinal,
+                    chunk: 0,
+                    speaker: crate::vectors::Speaker::Person,
+                    range: 0..4,
+                    digest: 0,
+                    vector: vec![1.0, 0.0],
+                })
+                .expect("append");
+        }
+
+        handle.truncate_vectors(2);
+
+        let crate::vectors::Opened::Current(index) = crate::vectors::open(&path, &model, 2) else {
+            panic!("the vectors were not cut to the record");
+        };
+        assert_eq!(
+            index.rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
     }
 
     /// Two projects can hold a session each, and a delete is made in one of them.

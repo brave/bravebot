@@ -38,14 +38,18 @@ pub struct Unreadable;
 
 /// The key stored in a state directory. No file is no key.
 pub fn read(directory: &Path) -> Result<Option<Secret>, Unreadable> {
-    let path = file(directory);
-    match std::fs::metadata(&path) {
+    read_file(&file(directory))
+}
+
+/// The key in a file of this shape at `path`, which another one-key file shares.
+pub(crate) fn read_file(path: &Path) -> Result<Option<Secret>, Unreadable> {
+    match std::fs::metadata(path) {
         Ok(found) if found.len() > MAX_BYTES => return Err(Unreadable),
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(Unreadable),
     }
-    let mut text = std::fs::read_to_string(&path).map_err(|_| Unreadable)?;
+    let mut text = std::fs::read_to_string(path).map_err(|_| Unreadable)?;
     let parsed = parse(&text);
     crate::scrub(&mut text);
     parsed.map(Some)

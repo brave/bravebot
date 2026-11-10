@@ -77,6 +77,7 @@ pub mod replace;
 pub mod repo_map;
 pub mod report;
 pub mod request_view;
+pub mod retrieval;
 pub mod rewind;
 pub mod roster;
 mod rule_approval;
