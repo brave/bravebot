@@ -1297,7 +1297,7 @@ in the temporary directory itself, so the name cannot be used to refuse a sessio
 to point it elsewhere. The account's directory serves the
 session, server and checkout directories alike, and is not removed with any of them. Windows has no
 account's directory, since its temporary path is the account's own already. Where the session has a
-directory of its own, a stage on Windows is given a `temp` directory inside it as `TEMP` and `TMP`
+directory of its own, a stage on Windows is handed a `temp` directory inside it as `TEMP` and `TMP`
 and is granted that and not the account's temporary directory
 ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
 
@@ -1516,8 +1516,10 @@ temporary directory at all is a question for the base profile [sandboxing.md](sa
 describes.
 
 On Windows `TEMP` and `TMP` for a stage are the exception, where the session has a directory of its
-own: they name a `temp` directory inside it, made as the session opens, and the stage is granted that
-directory in place of the account's temporary directory. A grant there is an entry written onto every
+own: they are handed over naming a `temp` directory inside it, made as the session opens, and the stage is granted that
+directory in place of the account's temporary directory. On the Windows runner the stage's `set TEMP`
+showed the container's own `AC\Temp` instead, so whether a container's `TEMP` follows the one handed
+over is not settled; the test only shows that it is not the account's. A grant there is an entry written onto every
 file beneath the directory as the stage starts, and the account's temporary directory holds the
 files of every program the account runs, so granting it costs time proportional to what other
 programs left and writes entries onto files that are not the session's. A `TEMP` or `TMP` the line
