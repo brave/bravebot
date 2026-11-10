@@ -1181,6 +1181,9 @@ otherwise. It is [PERM-4](#PERM-4)'s asymmetry: a rule that restricts covers mor
 grants covers what it names, and [RUN-20](tools/run.md#RUN-20) declines the same widening for a
 vouch for the same reason. The decision reads the argv and nothing else.
 
+[CRED-5](credential-protection.md#CRED-5) reads the same table to name the ambient authority of the
+program under a wrapper, so there is one list of wrappers.
+
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_however_it_is_cased_or_suffixed`
 `verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`

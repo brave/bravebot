@@ -1389,7 +1389,7 @@ fn places<S: AsRef<str>>(argv: &[S]) -> Vec<Place> {
 
 /// `program` with a trailing `.exe` or `.com` taken off, in either case, or `None` where it has
 /// neither or nothing else. A host that starts programs by those names runs `git.exe` as `git`.
-fn without_extension(program: &str) -> Option<&str> {
+pub(crate) fn without_extension(program: &str) -> Option<&str> {
     let at = program.len().checked_sub(4).filter(|at| *at > 0)?;
     let (stem, extension) = program.split_at_checked(at)?;
     (extension.eq_ignore_ascii_case(".exe") || extension.eq_ignore_ascii_case(".com"))
@@ -1540,7 +1540,10 @@ fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
 
 /// The argv left after each leading wrapper in turn, outermost first. `timeout 5 nice git push`
 /// gives `nice git push` and then `git push`.
-fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
+///
+/// The one reader of the wrapper table: a deny or ask rule is matched through it (PERM-20), and
+/// [`crate::ambient::spent_by`] names the authority of the program it finds (CRED-5).
+pub fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
     let mut found = Vec::new();
     let mut current = argv.to_vec();
     while let Some(inner) = without_wrapper(&current) {

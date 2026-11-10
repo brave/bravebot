@@ -1801,6 +1801,18 @@ mod tests {
         assert!(drawn.contains("not sandboxed"), "{drawn}");
         assert!(drawn.contains("container daemon"), "{drawn}");
         assert!(drawn.contains("as root on this machine"), "{drawn}");
+
+        // The same line under a wrapper is the same grant, and the wrapper's own words are not
+        // the program's.
+        let pipeline = bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+            "timeout",
+            vec!["30".into(), "docker".into(), "ps".into()],
+        )]);
+        let request =
+            RunRequest::from_pipeline(&pipeline, &["/usr/bin/timeout".into()], "/home/someone");
+        let drawn = rendered_run(&request);
+        assert!(drawn.contains("container daemon"), "{drawn}");
+        assert!(drawn.contains("as root on this machine"), "{drawn}");
     }
 
     /// Most lines reach nothing of the sort, and the row is not drawn for them. A sentence that
