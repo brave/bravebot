@@ -14688,6 +14688,25 @@ fn a_clone_holds_a_reach_of_its_own() {
     );
 }
 
+/// The checkout is the delegate's root, so the person's own working tree is outside it and a
+/// program resolving there would be proven like the system's unless the set names it (CHECKOUT-7,
+/// CMDLINE-8). The control is the person's own workspace, which holds its root.
+#[test]
+fn a_delegate_in_a_checkout_may_not_resolve_a_program_into_the_working_directory() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("unproven-checkout", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let root = scratch.path.canonicalize().unwrap();
+    assert!(workspace.unproven_directories().contains(&root));
+    let held = made.unproven_directories();
+    assert!(held.contains(&root), "{held:?}");
+}
+
 /// CHECKOUT-7: a delegate in a checkout is given no reach to the working directory or to another
 /// checkout, whatever the mode gives, and the directories to leave out are what the workspace
 /// itself says they are. The control is a directory beside, which the same reach reads; a delegate

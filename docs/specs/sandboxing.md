@@ -35,6 +35,7 @@ guards:
   - symbol: find_in
     sites:
       - crates/agent/src/confine.rs: 1
+      - crates/agent/src/programs.rs: 6
       - crates/agent/src/servers.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1

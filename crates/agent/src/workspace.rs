@@ -270,6 +270,12 @@ pub struct Workspace {
     /// stage is given a row for only while its name still leads there (SANDBOX-18). None where it
     /// could not be read as a directory then.
     root_made: Option<ScratchDirectory>,
+    /// The working directories and closed added directories the session has left, oldest first.
+    ///
+    /// A directory left with `/cd` can still have its `bin` on `$PATH`, so a file there is as much
+    /// the project's as one under the root. A plain copy and not a shared handle: only the session
+    /// moves the root, and a turn's clone is taken after the move.
+    left: Vec<PathBuf>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
@@ -524,6 +530,7 @@ impl Workspace {
             while_backing_up: Arc::new(Mutex::new(None)),
             root_made: ScratchDirectory::observed(canonical.clone()),
             root: canonical,
+            left: Vec::new(),
             added: Arc::default(),
             scratch: None,
             memories: None,
@@ -4714,6 +4721,81 @@ mod tests {
         assert!(
             found_in(&elsewhere, "bravebot-checkout-elsewhere", &recorded()),
             "a bin outside every checkout was left out"
+        );
+    }
+
+    /// CMDLINE-8: the directories a program resolving into may not be taken for the system's are the
+    /// working directory and its checkout, each directory added and its checkout, and each directory
+    /// the session has left (`/cd`) or closed, since its `bin` stays on `$PATH`. Rejects a set of
+    /// the working directory alone, which is the defect; one that forgets a directory once it is left
+    /// or closed; and one that holds the directory above the checkout, which would put every
+    /// installed `bin` in the set.
+    #[test]
+    fn the_directories_a_program_may_not_resolve_into_follow_the_session() {
+        let parent = crate::testutil::scratch_dir("unproven-directories");
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).expect("scratch");
+        let parent = parent.canonicalize().expect("canonical");
+        let repository = |name: &str| {
+            let repository = parent.join(name);
+            for directory in [".git", "bin", "sub"] {
+                std::fs::create_dir_all(repository.join(directory)).expect("repository");
+            }
+            repository
+        };
+        let opened = repository("opened");
+        let added = repository("added");
+        let moved = repository("moved");
+
+        let mut workspace = Workspace::new(opened.join("sub")).expect("workspace");
+        assert_eq!(
+            workspace.unproven_directories(),
+            [opened.join("sub"), opened.clone()],
+            "a session begun in a subdirectory did not hold its checkout"
+        );
+
+        workspace
+            .add_directory(&added.join("sub").display().to_string())
+            .expect("added");
+        assert_eq!(
+            workspace.unproven_directories(),
+            [
+                opened.join("sub"),
+                opened.clone(),
+                added.join("sub"),
+                added.clone()
+            ],
+            "a directory added with /add-dir did not bring its checkout"
+        );
+
+        workspace
+            .close_added_directory(&added.join("sub").display().to_string())
+            .expect("closed");
+        let after_closing = workspace.unproven_directories();
+        assert!(
+            after_closing.contains(&added.join("sub")) && after_closing.contains(&added),
+            "a directory closed since was forgotten while its bin may still be on PATH"
+        );
+
+        workspace
+            .change_root(&moved.join("sub").display().to_string())
+            .expect("moved");
+        let after_moving = workspace.unproven_directories();
+        for held in [
+            moved.join("sub"),
+            moved.clone(),
+            opened.join("sub"),
+            opened.clone(),
+        ] {
+            assert!(
+                after_moving.contains(&held),
+                "{} was not held after /cd",
+                held.display()
+            );
+        }
+        assert!(
+            !after_moving.contains(&parent),
+            "the directory above the checkouts was held, which refuses every program under it"
         );
     }
 

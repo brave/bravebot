@@ -456,6 +456,45 @@ impl Workspace {
         &self.reference_problems
     }
 
+    /// The directories a file that a bare program name resolves to may not lie in if it is to be
+    /// taken for one the system provides (CMDLINE-8): the working directory, every directory added
+    /// by name and every directory the session has left or closed, each with the checkout that
+    /// holds it ([`bravebot_sandbox::programs::with_checkout`]).
+    ///
+    /// A session begun in a subdirectory has the `bin` of the checkout above it on `$PATH` as readily
+    /// as one begun at the root, and a directory left with `/cd` or closed keeps its `bin` there.
+    /// Decided from the directories the person opened and from which of their ancestors hold a
+    /// `.git`, never from a file's contents. Read when a line is about to run and not when the turn
+    /// begins, since a directory can be added in the middle of one (PATHREQ-7).
+    pub fn unproven_directories(&self) -> Vec<PathBuf> {
+        let mut directories: Vec<PathBuf> = Vec::new();
+        // A delegate in a checkout has the checkout as its root, so the working directory the
+        // checkout was made from, which is the person's own tree, is among the directories it is
+        // not in (CHECKOUT-7).
+        let made_from = self
+            .checkout()
+            .map(|info| info.working_directory().to_path_buf());
+        let open = std::iter::once(self.root.clone())
+            .chain(self.added_directories())
+            .chain(self.left.iter().cloned())
+            .chain(made_from);
+        for directory in open {
+            for held in bravebot_sandbox::programs::with_checkout(&directory) {
+                if !directories.contains(&held) {
+                    directories.push(held);
+                }
+            }
+        }
+        // A directory a stage was allowed to write is one a program can be put in, whether or not
+        // it is on `$PATH`, such as the `bin` of a virtualenv outside the project.
+        for reach in self.path_reach() {
+            if reach.write && !directories.contains(&reach.path) {
+                directories.push(reach.path);
+            }
+        }
+        directories
+    }
+
     /// The directories added by name, in the order they were added.
     pub fn added_directories(&self) -> Vec<PathBuf> {
         locked(&self.added)
@@ -617,6 +656,7 @@ impl Workspace {
         }
         // Whatever the new root is now reachable as itself, so it did not close.
         closed.retain(|open| *open != canonical);
+        self.left.extend(closed.iter().cloned());
 
         Ok(Moved {
             root: canonical,
@@ -641,7 +681,11 @@ impl Workspace {
     /// grants do. Leaving them open while the trust map that vouched for them was discarded would
     /// leave a tree reachable that nobody had vouched for.
     pub fn close_added_directories(&mut self) {
-        locked(&self.added).clear();
+        let closed: Vec<PathBuf> = std::mem::take(&mut *locked(&self.added))
+            .iter()
+            .map(|open| open.path().to_path_buf())
+            .collect();
+        self.left.extend(closed);
     }
 
     /// Close one directory added by name, and return the name it was open under (TRUST-9).
@@ -675,6 +719,8 @@ impl Workspace {
                 path: directory.to_string(),
                 reason: "is not a directory opened beside the working directory",
             })?;
-        Ok(added.remove(open).path().to_path_buf())
+        let closed = added.remove(open).path().to_path_buf();
+        self.left.push(closed.clone());
+        Ok(closed)
     }
 }

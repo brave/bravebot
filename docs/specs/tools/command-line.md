@@ -563,21 +563,28 @@ claim as the other entries. `sort` spills to scratch files under `TMPDIR` holdin
 given, named by the program rather than by the call. BSD `cat` connects to a Unix socket named as an
 operand, which the table cannot see because it has no file types to look at.
 
-A stage whose program resolves to a file inside the workspace is not read-proven, and neither is one
-whose line named a path rather than a program, one carrying an environment assignment, or one opening
+A stage whose program resolves to a file inside the workspace, or inside any directory that is not
+the system's, is not read-proven, and neither is one whose line named a path rather than a program, one carrying an environment assignment, or one opening
 a file for a stream. The table's entries are claims about the programs a system provides under those
 names and are matched on the name a program resolved to, which identifies no file: so a file called
 `wc` in the tree being inspected would answer as the audited one, and it reaches that answer whether
 the line pointed at it or a name did. `$PATH` decides what a name means, so a project directory on it
 is enough for a file a contributor added to be what an audited name runs, and `PATH_add bin` in a
-project's own `.envrc` puts one there. The workspace test is therefore made against the path the
-driver resolved and will execute rather than against the spelling that reached it: those are two
-values, and only the first says where the file is. An assignment decides what a program loads and
+project's own `.envrc` puts one there. The directories that are not the system's are the working
+directory, the checkout holding it (a session begun in a subdirectory has the `bin` above it on
+`$PATH`), every directory added by name or left with `/cd`, a directory a stage was granted to write,
+and, for a delegate working in a checkout, the working directory the checkout was made from
+(see [checkouts](../checkouts.md)). The checkout is the nearest of the directory and its ancestors
+that holds a `.git`, found as [SANDBOX-30](../sandboxing.md#SANDBOX-30) finds the one it leaves out
+of the search for programs. The agent computes the set from the directories the person opened and
+hands it to the policy as it hands the root. The test is made against the path the driver resolved
+and will execute rather than against the spelling that reached it: those are two values, and only
+the first says where the file is. An assignment decides what a program loads and
 reads before its own arguments are looked at, and a redirection opens a file the argv does not name,
 so neither is covered by an audit of an option surface. Joining standard error to standard output
 renames a descriptor and opens nothing, so it is not a redirection for this purpose.
 
-A `$PATH` directory outside the workspace is honoured whatever the trust map holds about it, since
+A `$PATH` directory outside that set is honoured whatever the trust map holds about it, since
 the audited utilities live in one: Homebrew installs to its own prefix and Nix to a store path, and
 neither is a directory anybody wrote a rule about.
 
@@ -677,6 +684,17 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
 `verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_in_the_checkout_above_the_working_directory_is_not_proven`
+`verified-by: bravebot_core::policy::a_delegate_in_a_checkout_is_refused_programs_from_the_directory_it_was_made_from`
+`verified-by: bravebot_core::policy::a_program_in_a_directory_the_session_left_is_not_proven`
+`verified-by: bravebot_core::policy::the_set_leaves_the_results_for_the_directory_alone_as_they_were`
+`verified-by: bravebot_agent::workspace::the_directories_a_program_may_not_resolve_into_follow_the_session`
+`verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_may_not_resolve_a_program_into_the_working_directory`
+`verified-by: bravebot_agent::tools::a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set`
+`verified-by: bravebot_agent::proof_road_checkout::a_program_reached_through_a_link_into_the_checkout_above_the_directory_is_asked_about`
+`verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_directory_a_remembered_grant_lets_a_stage_write_is_asked_about`
+`verified-by: bravebot_agent::programs::a_relative_path_entry_is_read_under_the_working_directory`
 `verified-by: bravebot_core::policy::a_plan_with_no_steps_proves_nothing`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
 `verified-by: bravebot_core::policy::a_line_reading_a_directory_holding_the_project_answers_for_the_project`
@@ -704,7 +722,8 @@ from being asked, and if the table is wrong somewhere then something ran that no
 mitigations are that the table is small, hand-audited per program against its full option list, and
 fails closed on any argv it does not fully recognise. A file name match is not one of them and is not
 sufficient on its own: a name is not a program, so the file the name resolved to has to lie outside
-the workspace as well, and only where the line named a program rather than a path.
+the workspace and the rest of the set [CMDLINE-8](#CMDLINE-8) lists as well, and only where the line
+named a program rather than a path.
 [CMDLINE-8](#CMDLINE-8) stands on its own without this clause and still removes the second round
 trip; what this clause adds is the first prompt, not the readable output.
 
@@ -726,6 +745,8 @@ trip; what this clause adds is the first prompt, not the readable output.
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
 `verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_in_the_checkout_above_the_working_directory_is_not_proven`
+`verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 
 <a id="CMDLINE-10"></a>
 ### CMDLINE-10: output comes back as text whenever the planner may read it
@@ -1204,16 +1225,24 @@ nothing until you have opened that file.
   run a program in GNU, busybox or uutils. An option that one of them gives a meaning its BSD
   namesake does not have is unchecked there, because the table is run against the BSD tools only.
   `ls -l` and `ls -n` also read the user and group databases, which no answer names.
-- **A name is refused where it lands in the workspace, and no name is ever positively identified.**
+- **A name is refused where it lands in the workspace or the rest of that set, and no name is ever positively identified.**
   The audited utilities are supplied by the operating system and differ by platform, distribution and
   package manager, so no hash or signature can be pinned for one: an entry is a claim about a program
   under a name, checked against one implementation's option surface, and what runs is whatever
-  `$PATH` reached. Refusing a resolution inside the workspace closes the route a file in the tree
-  takes to an entry. It leaves the case with no attacker in it: where `grep` means `ugrep`, an
+  `$PATH` reached. Refusing a resolution inside the workspace or the rest of that set closes the
+  route a file in the tree takes to an entry. It leaves the case with no attacker in it: where `grep` means `ugrep`, an
   implementation with a far larger option surface, the entry describes a different program than the
   one that runs and an option the two read differently is proven against the wrong audit. Refusing
   every `$PATH` directory the trust map is silent about would cover more of the category and would
   also refuse the genuine utilities under the layouts above, which is a prompt on every audited call.
+- **A checkout at the account home or at `/` puts every program under it in the set.** Where the
+  home directory holds a `.git`, such as a dotfiles repository, a session opened below the home with
+  no nearer `.git` has the home as its checkout. An audited name that resolves to a file anywhere
+  under the home, such as a `~/.cargo/bin` or a `~/bin`, then asks, and its output is untrusted. A
+  checkout at `/` does the same for every program, and the system's `/usr/bin` is then under it.
+  Only the nearest checkout is taken, so an outer repository that contains the checkout adds
+  nothing. A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not in
+  the set. The cost is a prompt for a call that would have been fine, which is the right direction.
 - **A proof is about paths, and the trust map answers about names.** A symlink inside a vouched-for
   directory pointing at a file outside it is a name the map covers and bytes it never saw, so a
   read-proven line reading through one comes back trusted. The table refuses the recursion flag that

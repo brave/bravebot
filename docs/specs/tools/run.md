@@ -518,7 +518,7 @@ A function may read a step field by field for something that is not a key, and t
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
 the words a rule is matched against, which are the program and its arguments and deliberately not the
 whole step. `read_proven` first refuses a step that carries an assignment or
-a route, is started from inside the project, or is started by a name other than its file's. The
+a route, is started from inside the project or the other directories the audited table's proof refuses (see [command-line.md](command-line.md)), or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
 The four in `confine.rs` each answer a question about one step and build nothing that is stored,

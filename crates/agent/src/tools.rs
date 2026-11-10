@@ -9062,6 +9062,36 @@ fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
     ))
 }
 
+/// The directories a file that a bare program name resolves to may not lie in (CMDLINE-8): those
+/// the session opened ([`crate::workspace::Workspace::unproven_directories`]), the ones a stage
+/// was let write with `request_path` (in the same set), and the ones a remembered grant lets a
+/// stage write, such as the `bin` of a virtualenv outside the project.
+///
+/// The toolchain lists ([`bravebot_sandbox::toolchain::Toolchain`]) are not added. An install is
+/// read and never written, and a cache is not a directory a program is looked up in, so neither can
+/// hold a file that a name resolves to. Each listed directory is a path the driver computed from
+/// the record and the file system, and no byte a program printed is looked at.
+fn unproven_directories(tools: &Tools<'_>) -> Vec<std::path::PathBuf> {
+    let mut directories = tools.workspace.unproven_directories();
+    // Read where the confinement reads the same record, and for the same reason: a session with
+    // nobody to put a prompt to has no grant of its own.
+    if let (Some(home), Some(session), Some(profile)) =
+        (tools.home, tools.remembering, tools.profile)
+    {
+        for granted in crate::reach::Store::new(home).written_directories(
+            session,
+            tools.workspace.root(),
+            profile,
+            Some(home),
+        ) {
+            if !directories.contains(&granted) {
+                directories.push(granted);
+            }
+        }
+    }
+    directories
+}
+
 /// What a `deny` rule covering a command line says back to the planner.
 ///
 /// One wording for the two gates that raise it, the compiler's, which answers before the program
@@ -11065,6 +11095,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // the file and not only about the spelling the line used (TRUST-2, CMDLINE-8). Metadata of the
     // paths the line itself named, taken here because the policy crate reaches no file system.
     policy.learn_operand_names(operand_names_of(policy, tools.workspace, &plan));
+    // The directories a file that a bare program name resolves to may not lie in, said before the
+    // plan is judged by either road that reads them: whether the person is asked (inside
+    // `settle_the_confinement`) and the label the output carries (`measure_a_run`). Taken now and
+    // not when the turn began, because a directory can be added in the middle of one (CMDLINE-8).
+    policy.set_unproven_directories(&unproven_directories(tools));
 
     let Settled {
         mut confinement,
@@ -27864,6 +27899,74 @@ mod tests {
                 confinement.describe(&[&step]).sentences().len()
             });
             assert_eq!(carried_in_other, 0);
+        }
+
+        /// A directory a person let a stage write, kept past the prompt, can hold a program that a
+        /// bare name resolves to (an activated virtualenv outside the project), so a file there is
+        /// not taken for one the system provides (CMDLINE-8). The regressions it rejects: the set
+        /// built from the session's directories alone, which leaves such a file proven; a read
+        /// grant counted, which refuses every file in a directory a stage can only read; a grant
+        /// of another session counted; and a session with nobody to see the row reading the record.
+        #[cfg(unix)]
+        #[test]
+        fn a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set() {
+            use crate::reach::{Grant, Lifetime, Reached, Store};
+            let scratch = Scratch::new("unproven-grant-root");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let state = Scratch::new("unproven-grant-state");
+            let profile = Scratch::new("unproven-grant-profile");
+            let written = Scratch::new("unproven-grant-venv-bin");
+            let read = Scratch::new("unproven-grant-read-only");
+            let other = Scratch::new("unproven-grant-another-session");
+            let state_path: &'static std::path::Path =
+                Box::leak(state.path.clone().into_boxed_path());
+            let profile_path: &'static std::path::Path =
+                Box::leak(profile.path.clone().into_boxed_path());
+            let Some(here) = crate::reach::Workspace::of(workspace.root()) else {
+                // A filesystem that keeps no creation time binds nothing, so a bound row has no
+                // checkout to apply in.
+                return;
+            };
+            let grant = |directory: &Scratch, write: bool, session: &str| Grant {
+                binary: "/bin/ls".into(),
+                operation: None,
+                reached: Reached::Directory(directory.path.clone()),
+                write,
+                allowed: "2026-10-07".to_string(),
+                lifetime: Lifetime::Session(session.to_string()),
+                workspace: Some(here.clone()),
+            };
+            let store = Store::new(&state.path);
+            assert!(store.allow(&grant(&written, true, "mine")));
+            assert!(store.allow(&grant(&read, false, "mine")));
+            assert!(store.allow(&grant(&other, true, "another")));
+
+            let set = |home: Option<&'static std::path::Path>, session: Option<&'static str>| {
+                with_tools(&workspace, |tools| {
+                    tools.home = home;
+                    tools.profile = Some(profile_path);
+                    tools.remembering = session;
+                    super::unproven_directories(tools)
+                })
+            };
+            let named = |directory: &Scratch| directory.path.canonicalize().expect("canonical");
+
+            let held = set(Some(state_path), Some("mine"));
+            assert!(held.contains(&named(&written)), "{held:?}");
+            assert!(!held.contains(&named(&read)), "{held:?}");
+            assert!(!held.contains(&named(&other)), "{held:?}");
+            assert!(
+                held.contains(&workspace.root().to_path_buf()),
+                "the session's own directory left the set: {held:?}"
+            );
+            for (home, session) in [
+                (Some(state_path), None),
+                (Some(state_path), Some("a third")),
+                (None, Some("mine")),
+            ] {
+                let held = set(home, session);
+                assert!(!held.contains(&named(&written)), "{held:?}");
+            }
         }
 
         /// The statement lands on `run` and on no other tool, and only on a turn that confines.
