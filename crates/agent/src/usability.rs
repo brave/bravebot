@@ -696,6 +696,9 @@ fn stage_command(
     let withheld = bravebot_config::scrub::withheld();
     let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
     let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+    let holds_rustup_home = held
+        .iter()
+        .any(|(name, _)| name == OsStr::new("RUSTUP_HOME"));
     let target_programs: Vec<OsString> = held
         .iter()
         .map(|(name, _)| name.clone())
@@ -728,11 +731,12 @@ fn stage_command(
         .env("PAGER", "cat")
         .env("NO_COLOR", "1");
     // The rustup proxy finds its toolchains from the account's home, which is not this one. A
-    // value the check removed leaves the proxy the same need.
+    // value the check removed leaves the proxy the same need, and so does an environment that
+    // holds none.
     let rustup_home_removed = command
         .get_envs()
         .any(|(name, now)| name == OsStr::new("RUSTUP_HOME") && now.is_none());
-    if (rustup_home_removed || std::env::var_os("RUSTUP_HOME").is_none())
+    if (rustup_home_removed || !holds_rustup_home)
         && let Some(real) = std::env::var_os("HOME")
     {
         command.env("RUSTUP_HOME", Path::new(&real).join(".rustup"));
@@ -1623,11 +1627,17 @@ mod tests {
             assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
         if let Some(real) = std::env::var_os("HOME") {
+            let account = Path::new(&real).join(".rustup").into_os_string();
+            // A removed value is replaced.
             let command = stage_with(OsStr::new("RUSTUP_HOME"), planted.as_os_str(), &session);
-            assert_eq!(
-                set_to(&command, "RUSTUP_HOME"),
-                Some(Path::new(&real).join(".rustup").into_os_string())
-            );
+            assert_eq!(set_to(&command, "RUSTUP_HOME"), Some(account.clone()));
+            // An environment that holds none is given the account's.
+            let command = stage_with(OsStr::new("NODE_PATH"), genuine.as_os_str(), &session);
+            assert_eq!(set_to(&command, "RUSTUP_HOME"), Some(account));
+            // A value that is kept is the one held, whatever this process's environment has.
+            let command = stage_with(OsStr::new("RUSTUP_HOME"), genuine.as_os_str(), &session);
+            assert_eq!(set_to(&command, "RUSTUP_HOME"), None);
+            assert!(!removed(&command, OsStr::new("RUSTUP_HOME")));
         }
     }
 
