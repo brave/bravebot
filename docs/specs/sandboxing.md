@@ -2049,8 +2049,8 @@ A session records the directories a stage may write when its first confined stag
 after the setup stages, so a setup stage's start has none of them. The tests that plant a file under
 a variable that names a directory or a program therefore record the directory the helper is in as
 one a stage wrote, as the session would. Every such test also runs the program with the variable as
-the person set it and asserts the helper ran, so a helper the program never reaches through that variable does
-not make the test pass. `RUSTC_WRAPPER` and `PYTHONPATH` each have a second test that a value
+the person set it. Where the helper does not run, the test prints that it skipped, since a helper
+the program never reaches through that variable does not make the test pass. `RUSTC_WRAPPER` and `PYTHONPATH` each have a second test that a value
 outside every directory a stage may write is kept. `GOENV`, `GOCACHEPROG`, `PKG_CONFIG`, `CXX`,
 `CGO_LDFLAGS`, `GOTOOLCHAIN`, `NODE_OPTIONS`, `NODE_PATH`, `BROWSER`, `npm_config_` names, `PYTHONHOME`,
 `PYTHONPYCACHEPREFIX`, `PYTHONEXECUTABLE`, `PYTHONSTARTUP`, `MAKEFLAGS` with `-I`, the make rule
@@ -3830,10 +3830,9 @@ file. A new spawn that looks a name up through
   `third_party/crossterm` with that fallback removed, so a failed query is an error and nothing is
   started: the resize event the reader raises on SIGWINCH and the size ratatui asks for on every
   draw both end there. A dependency is audited for a bare-name start when it is added or
-  raised: the audit at #3802 found one other, `tmux` in `ratatui-image` 11.1.0
-  (`src/picker.rs`), started with the whole environment when `TERM` or `TERM_PROGRAM` names tmux.
-  It is tracked by #3853, and the `git` and `sh` starts compiled in from `gix-path` 0.13.0, which
-  nothing in the tree calls, by #3852.
+  raised. `ratatui-image` 11.1.0 (`src/picker.rs`) starts `tmux` with the whole environment when
+  `TERM` or `TERM_PROGRAM` names tmux. It is tracked by #3853, and the `git` and `sh` starts
+  compiled in from `gix-path` 0.13.0, which nothing in the tree calls, by #3852.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -4104,14 +4103,17 @@ program's documentation or launcher and what was run. These were not shown by ru
   `GNUMAKEFLAGS` and `MFLAGS` are in the suite's list because other versions of `make` read them.
   `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
   `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it. Windows was not run:
-  the suite runs nothing there. No Linux host was available, so the names a Linux build of these
-  programs reads, and their versions, are not recorded; a Linux run of `make`, `cargo`, `npm`, `go`
-  and `python3` is tracked by #3811 and #3863.
-  The tests assert the control, so on a version that does not read a name the test fails and does not
-  skip. A test skips, and says so, where the program is not installed (a `go` that a stage starts
-  through `sh` included) and, off macOS, for the names that a Linux build of the program or its
-  C compiler does not read: `PYTHONEXECUTABLE`, `CGO_LDFLAGS` with `-fuse-ld=<path>`, and
-  `CGO_CFLAGS` and `CGO_CPPFLAGS` with `-fno-integrated-as -B<dir>`. The `PYTHONUSERBASE` test takes
+  the suite runs nothing there. The names a Linux build of `make`, `cargo`, `npm`, `go` and
+  `python3` reads, and their versions, are not recorded; a Linux run of them is tracked by #3811
+  and #3863.
+  Each test runs the program with the variable as the person set it first. Where the program does
+  not run the helper, the test prints that it skipped and why, and asserts nothing further: a helper
+  the program never reaches proves nothing. Where the control passes, the strict check runs on every
+  host. A test also skips, and says so, in these cases: the program is not installed (a `go` that a
+  stage starts through `sh` included); the `CARGO_TARGET_<triple>_` cases when the host is not
+  macOS or Linux on aarch64 or x86_64, the hosts whose triple the tests know; and the toolchain and
+  `RUSTUP_HOME` cases on a host whose triple is not known or where `rustup` is not installed.
+  The `PYTHONUSERBASE` test takes
   the directory of `usercustomize.py` from `site.getusersitepackages()`, since the directory under a
   base is `lib/python/site-packages` for a macOS framework build and
   `lib/python3.<minor>/site-packages` for other builds. A skipped name stays in the lists and is

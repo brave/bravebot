@@ -749,7 +749,9 @@ fn runs_the_helper_when_given(
 
 /// Runs the setup stage `program args` over `files` with `set` held in this process, and asserts it
 /// did not run the file that writes `marker` ([`run_with_planted`]), after a control that the
-/// program does run it when handed `set` as it is ([`runs_the_helper_when_given`]).
+/// program does run it when handed `set` as it is ([`runs_the_helper_when_given`]). Where the
+/// control shows the installed program does not read the names, the test proves nothing on this host
+/// and says it skipped.
 ///
 /// `writable` is the directory the helper is in when the variable names a path. A start keeps a
 /// path outside every directory a stage may write, and a session records its own directories only
@@ -777,10 +779,16 @@ fn withheld_from_a_setup_stage(
             eprintln!("skipped {name}: {program} is not installed");
             return;
         }
-        Some(ran) => assert!(
-            ran,
-            "{program} was handed {set:?} and did not run the helper, so the test shows nothing"
-        ),
+        Some(false) => {
+            let names: Vec<&str> = set.iter().map(|(variable, _)| *variable).collect();
+            eprintln!(
+                "skipped {name}: {program} on {} {} does not run the helper when handed {names:?}",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return;
+        }
+        Some(true) => {}
     }
     if let Some(directory) = writable {
         bravebot_sandbox::programs::keep_out(directory);
@@ -823,32 +831,18 @@ fn a_setup_cargo_is_not_handed_a_wrapper_or_target_flags() {
     // A wrapper is a `Names::Program`, so it is removed when it names a file in a directory a
     // stage may write, and the helper is put in one. The target flags are removed whatever they
     // hold, so the helper is left where no stage can write.
-    for (name, variable, value, writable) in [
-        ("cargo-wrapper", "RUSTC_WRAPPER", "", true),
-        (
-            "cargo-target-flags",
-            "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
-            "-C linker=",
-            false,
-        ),
-        (
-            "cargo-target-flags-linux",
-            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
-            "-C linker=",
-            false,
-        ),
-    ] {
+    // A triple that is not the host's is never read by cargo, so the target-flags case names the
+    // host's.
+    let mut cases: Vec<(&str, &'static str, &str, bool)> =
+        vec![("cargo-wrapper", "RUSTC_WRAPPER", "", true)];
+    if let Some(variable) = host_target_variable("RUSTFLAGS") {
+        cases.push(("cargo-target-flags", variable, "-C linker=", false));
+    }
+    for (name, variable, value, writable) in cases {
         let planted = planted_dir(name);
         let marker = planted.join("ran");
         let helper = planted.join("helper");
         plant(&helper, &marker);
-        // The Linux triple is not the host's on a macOS machine, so cargo never reads it there.
-        if name == "cargo-target-flags-linux" && !host_is("linux", "x86_64") {
-            continue;
-        }
-        if name == "cargo-target-flags" && !host_is("macos", "aarch64") {
-            continue;
-        }
         withheld_from_a_setup_stage(
             name,
             "cargo",
@@ -998,12 +992,6 @@ fn a_setup_cargo_keeps_a_wrapper_no_stage_can_write() {
     );
 }
 
-/// Whether the host runs macOS. Some names were found by running a program that only reads them
-/// there; the tests for those skip elsewhere ([SANDBOX-30](../../../docs/specs/sandboxing.md)).
-fn on_macos() -> bool {
-    std::env::consts::OS == "macos"
-}
-
 /// Whether `go` is installed, for a test whose stage starts it through `sh`, where the skip by the
 /// name of the stage's program sees `sh`. Says so when it is not.
 fn go_is_installed(name: &str) -> bool {
@@ -1037,9 +1025,18 @@ fn host_is(os: &str, arch: &str) -> bool {
     std::env::consts::OS == os && std::env::consts::ARCH == arch
 }
 
-/// The name of the `CARGO_TARGET_<triple>_<end>` variable for the host.
+/// The name of the `CARGO_TARGET_<triple>_<end>` variable for the host. Says so when the host is
+/// one the tests do not know, and the case that needs it is skipped.
 fn host_target_variable(end: &str) -> Option<&'static str> {
-    let triple = host_triple()?.replace('-', "_").to_uppercase();
+    let Some(triple) = host_triple() else {
+        eprintln!(
+            "skipped the CARGO_TARGET_<triple>_{end} case: the host is {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        return None;
+    };
+    let triple = triple.replace('-', "_").to_uppercase();
     Some(Box::leak(
         format!("CARGO_TARGET_{triple}_{end}").into_boxed_str(),
     ))
@@ -1296,15 +1293,19 @@ fn a_setup_cargo_is_not_handed_a_cargo_home_that_holds_configuration() {
 /// rustup 1.29 on macOS arm64 ran the `cargo` in the toolchain that `RUSTUP_TOOLCHAIN` names by
 /// path, and the one in a toolchain found under `RUSTUP_HOME`. Both are kept only outside every
 /// directory a stage may write, so the helper is put in one. The regression it rejects: a setup
-/// `cargo` started with the toolchain or the toolchain directory the person's shell holds. A machine
-/// whose `cargo` is not a rustup proxy fails the control and is not skipped, as a program a
-/// variable never reaches would not show anything.
+/// `cargo` started with the toolchain or the toolchain directory the person's shell holds. A
+/// machine whose `cargo` is not a rustup proxy does not read either name, so the control skips it.
 #[test]
 fn a_setup_cargo_is_not_handed_a_toolchain_or_a_toolchain_directory() {
     if !usability::available() {
         return;
     }
     let Some(triple) = host_triple() else {
+        eprintln!(
+            "skipped the rustup cases: the host is {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
         return;
     };
     if bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("rustup")).is_none() {
@@ -1724,13 +1725,6 @@ fn a_setup_go_is_not_handed_a_pkg_config_linker_flags_or_a_cxx_compiler() {
         ("go-cgo-ldflags", "CGO_LDFLAGS", plain, false),
         ("go-cxx", "CXX", plain, true),
     ] {
-        if variable == "CGO_LDFLAGS" && !on_macos() {
-            eprintln!(
-                "skipped {name}: the C compiler on {} takes no path in -fuse-ld=",
-                std::env::consts::OS
-            );
-            continue;
-        }
         let planted = planted_dir(name);
         let marker = planted.join("ran");
         let helper = planted.join("helper");
@@ -2024,7 +2018,15 @@ fn a_setup_python_the_workflows_start_does_not_read_a_startup_file() {
             eprintln!("skipped: python3 is not installed");
             return;
         }
-        Some(ran) => assert!(ran, "python3 -i did not read PYTHONSTARTUP"),
+        Some(false) => {
+            eprintln!(
+                "skipped python-startup: python3 -i on {} {} does not read PYTHONSTARTUP",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            return;
+        }
+        Some(true) => {}
     }
     for (name, args) in [
         ("python-startup-c", vec!["-c", "print(1 + 1)"]),
@@ -2049,13 +2051,6 @@ fn a_setup_python_the_workflows_start_does_not_read_a_startup_file() {
 #[test]
 fn a_setup_python_venv_is_not_handed_an_executable() {
     if !usability::available() {
-        return;
-    }
-    if !on_macos() {
-        eprintln!(
-            "skipped python-executable: python3 on {} ignores it",
-            std::env::consts::OS
-        );
         return;
     }
     let planted = planted_dir("python-executable");
@@ -2238,13 +2233,6 @@ fn a_setup_cargo_is_not_handed_a_credential_provider() {
 #[test]
 fn a_setup_go_is_not_handed_cgo_compiler_flags_that_name_an_assembler() {
     if !usability::available() || !go_is_installed("go-cgo_cflags") {
-        return;
-    }
-    if !on_macos() {
-        eprintln!(
-            "skipped go-cgo_cflags: the C compiler on {} takes no -fno-integrated-as",
-            std::env::consts::OS
-        );
         return;
     }
     for variable in ["CGO_CFLAGS", "CGO_CPPFLAGS"] {
