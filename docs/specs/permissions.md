@@ -426,7 +426,11 @@ it reaches the search cap or cannot list a directory while a `Read` or `Edit` de
 the call is refused. A file under an open directory that is the same directory as another open one
 (a macOS firmlink or a Linux bind mount, once a person has opened it with `/add-dir`) is also judged
 under its name beneath each of them, found by device and inode of the directory. This is on Unix
-only. The second name can add a refusal or a question and never removes one. On Windows a name
+only. The second name can add a refusal or a question and never removes one: a write to a file with
+several links whose other names the walk could not all find asks, since a name it missed may be the
+one a rule is about. The trust map asks
+the same lookup for the other names of a file ([TRUST-4](trust-map.md#TRUST-4)), so the rules and
+the map cannot disagree about which names a file has. On Windows a name
 that reads as something other than the file it spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's. A `run` redirection's
 target, read or written, is held to the same refusal as a file tool's path. A short name is
@@ -532,6 +536,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::a_hard_link_is_found_by_device_and_inode_and_the_walk_gives_up_at_its_cap`
 `verified-by: bravebot_agent::tools::a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule`
+`verified-by: bravebot_agent::tools::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`
 `verified-by: bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_second_path_to_the_tree`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it`
@@ -621,7 +626,8 @@ whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2))
 `.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and
 `.pre-commit-config.yaml`, compared as a volume that folds case and normalizes opens them (`.GIT`,
 `.huſky`) and with a trailing dot or space dropped. The destination is read as named, as it lands after links are followed, and under each other
-name of a file with a hard link (PERM-7).
+name of a file with a hard link (PERM-7). A file with several links whose other names could not all
+be found is protected, since one of them may be a protected path.
 
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
@@ -646,6 +652,7 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::tools::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
 `verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`

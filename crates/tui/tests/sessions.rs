@@ -1085,6 +1085,78 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
     );
 }
 
+/// A resume reopens each directory the record names through the one door every other opening uses
+/// (TRUST-9), so a record that names two paths to one tree reopens the first and says the second
+/// was not reopened, rather than opening both and giving every file in it two names. The identity
+/// is injected so the pair exists on any host. Rejects a replay that opens a directory without the
+/// check (both open), and one that drops the second without saying so.
+#[cfg(unix)]
+#[test]
+fn a_second_path_to_a_tree_is_reported_on_resume_and_not_reopened() {
+    let scratch = Scratch::new("added-directory-second-path");
+    let base = scratch
+        .project
+        .parent()
+        .expect("a root")
+        .join("second-paths");
+    let (a, b) = (base.join("twin-a"), base.join("twin-b"));
+    for directory in [&a, &b] {
+        std::fs::create_dir_all(directory).expect("create the directory to add");
+    }
+    let (a, b) = (
+        a.canonicalize().expect("canonical"),
+        b.canonicalize().expect("canonical"),
+    );
+
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "read my notes",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 10,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &TrustStore::new("/work"),
+            programs: &TrustedPrograms::new(),
+            directories: &[a.clone(), b.clone()],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let mut resumed = Workspace::new(&scratch.project)
+        .expect("workspace")
+        .with_directory_identity(Some(|directory| {
+            use std::os::unix::fs::MetadataExt;
+            match directory.file_name().and_then(|name| name.to_str()) {
+                Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+                _ => std::fs::metadata(directory)
+                    .ok()
+                    .map(|found| (found.dev(), found.ino())),
+            }
+        }));
+    let said = record.reopen_added_directories(&mut resumed);
+    let _ = std::fs::remove_dir_all(&base);
+
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains(&b.display().to_string()) && said[0].contains("another path"),
+        "the line does not say which directory or why: {said:?}"
+    );
+    assert_eq!(resumed.added_directories(), [a]);
+}
+
 /// A manifest run is written down so it can be read, and marked so it cannot be continued. The
 /// conversation is empty on purpose: filling it would make the picker offer a session that has
 /// nothing to resume.

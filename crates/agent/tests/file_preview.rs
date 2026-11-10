@@ -85,16 +85,20 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
         if !aliases::prepare(&scratch.path, row) {
             continue;
         }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .expect("the second path opens");
+        let spelled = aliases::spelling(workspace.root(), row);
         let rule = denying_reads_of(row.name, &workspace);
 
-        let shown = preview(&workspace, &Permissions::new(), row.alias);
+        let shown = preview(&workspace, &Permissions::new(), &spelled);
         assert_eq!(
             shown.map(|shown| shown.lines).ok(),
             Some(vec![format!("1  {}", aliases::CONTENT)]),
             "{}: {:?} does not show without a rule, so a refusal would show nothing",
             row.kind,
-            row.alias
+            spelled
         );
         assert!(
             preview(&workspace, &rule, aliases::CONTROL).is_ok(),
@@ -107,7 +111,7 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
             "{}: a rule did not refuse the name it spells",
             row.kind
         );
-        let covered = preview(&workspace, &rule, row.alias) == Err(Refused::Denied);
+        let covered = preview(&workspace, &rule, &spelled) == Err(Refused::Denied);
         aliases::expect(row, aliases::Consumer::DenyRule, covered);
     }
 }

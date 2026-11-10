@@ -5075,13 +5075,15 @@ fn a_denied_file_is_not_read_through_a_second_path_to_the_tree() {
     std::fs::create_dir(scratch.path.join("src")).unwrap();
     std::fs::write(scratch.path.join("src/a.md"), "SECRET_TOKEN=hunter2").unwrap();
     std::fs::write(scratch.path.join("src/b.md"), "PUBLIC_NOTE=daylight").unwrap();
-    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let second = format!(
         "/System/Volumes/Data{}",
         workspace.root().to_str().expect("utf-8 root")
     );
-    workspace
-        .add_directory(&second)
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
         .expect("the second path opens");
     let call = format!(r#"{{"path":"{second}/src/a.md"}}"#);
     let control = format!(r#"{{"path":"{second}/src/b.md"}}"#);
@@ -5113,13 +5115,15 @@ fn a_denied_file_is_not_written_or_edited_through_a_second_path_to_the_tree() {
     let scratch = Scratch::new("permissions-write-denied-through-a-firmlink");
     std::fs::create_dir(scratch.path.join("src")).unwrap();
     std::fs::write(scratch.path.join("src/a.md"), "SECRET_TOKEN=hunter2").unwrap();
-    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let second = format!(
         "/System/Volumes/Data{}",
         workspace.root().to_str().expect("utf-8 root")
     );
-    workspace
-        .add_directory(&second)
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
         .expect("the second path opens");
     let write = format!(r#"{{"path":"{second}/src/a.md","contents":"overwritten"}}"#);
     let edit =
@@ -5162,7 +5166,11 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
         if !aliases::prepare(&scratch.path, row) {
             continue;
         }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .expect("the second path opens");
+        let spelled = aliases::spelling(workspace.root(), row);
         let folds_case = bravebot_agent::workspace::trust_store(workspace.root()).folds_case();
         let denying = |verb: &str| {
             let (permissions, rejected) = Permissions::parse(
@@ -5201,10 +5209,10 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
         };
 
         assert!(
-            reads(rules(&[], &[], &[]), row.alias),
+            reads(rules(&[], &[], &[]), &spelled),
             "{}: {:?} does not open without a rule, so a refusal shows nothing",
             row.kind,
-            row.alias
+            spelled
         );
         assert!(
             reads(denying("Read"), aliases::CONTROL)
@@ -5218,7 +5226,7 @@ fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap()
             row.kind
         );
         let covered =
-            !reads(denying("Read"), row.alias) && !replaces(denying("Edit"), row.alias, row.alias);
+            !reads(denying("Read"), &spelled) && !replaces(denying("Edit"), &spelled, row.alias);
         aliases::expect(row, aliases::Consumer::DenyRule, covered);
     }
 }
@@ -42895,6 +42903,170 @@ fn a_trusted_file_is_not_offered_for_vouching() {
         offered.lock().unwrap().is_empty(),
         "a file nobody needed to vouch for was put to the user anyway"
     );
+}
+
+/// R33 (d). A yes to a vouch writes a rule about the name asked, which changes nothing for a file
+/// the map distrusts under another of its names (TRUST-2), so the question is not put. The
+/// regression it rejects: deciding the offer under the typed name alone, which asks the person a
+/// question whose answer is thrown away. The controls are a file with one name and a hard link
+/// pair that no rule is about, which are offered.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_to_a_distrusted_file_is_not_offered_for_vouching() {
+    let scratch = Scratch::new("vouch-hard-link");
+    for directory in ["linked", "plain", "pair"] {
+        std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    }
+    std::fs::write(scratch.path.join("fetched.txt"), "one\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("fetched.txt"),
+        scratch.path.join("linked/copy.txt"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("plain/single.txt"), "two\n").unwrap();
+    std::fs::write(scratch.path.join("pair/a.txt"), "three\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("pair/a.txt"),
+        scratch.path.join("pair/b.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"linked/copy.txt"}"#),
+        tool_request("read_file", r#"{"path":"plain/single.txt"}"#),
+        tool_request("read_file", r#"{"path":"pair/a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = VouchesForFiles::new(false);
+    let offered = confirmer.offered.clone();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.distrust("fetched.txt");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let asked: Vec<String> = offered
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert_eq!(
+        asked,
+        ["plain/single.txt", "pair/a.txt"],
+        "the offers made were not exactly the files a yes could vouch for"
+    );
+}
+
+/// R33 (e), CMDLINE-8, TRUST-2. An audited line that reads a file by a name the map has no rule
+/// about, whose hard link or symbolic link the map distrusts, is not read-proven trusted: the
+/// operand is asked about under every name the file has. Rejects labelling the operand by its
+/// spelling alone, which let `wc -l linked/copy.txt` run unasked and print as trusted text. The
+/// controls are a file with one name and a hard link pair no rule is about, which stay unasked.
+#[cfg(unix)]
+#[test]
+fn an_audited_line_reading_another_name_of_a_distrusted_file_is_asked_about() {
+    let scratch = Scratch::new("run-operand-other-names");
+    for directory in ["linked", "plain", "pair"] {
+        std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    }
+    std::fs::write(scratch.path.join("fetched.txt"), "one\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("fetched.txt"),
+        scratch.path.join("linked/hard.txt"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../fetched.txt", scratch.path.join("linked/soft.txt")).unwrap();
+    std::fs::write(scratch.path.join("plain/single.txt"), "two\n").unwrap();
+    std::fs::write(scratch.path.join("pair/a.txt"), "three\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("pair/a.txt"),
+        scratch.path.join("pair/b.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let lines = [
+        "wc -l linked/hard.txt",
+        "wc -l linked/soft.txt",
+        "wc -l plain/single.txt",
+        "wc -l pair/b.txt",
+    ];
+    let mut replies: Vec<String> = lines
+        .iter()
+        .map(|command| {
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": command }).to_string(),
+            )
+        })
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = confirmer.seen.clone();
+    let mut trust = trusting_the_workspace();
+    trust.distrust("fetched.txt");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("count them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = format!("{:?}", seen.lock().unwrap());
+    for distrusted in ["linked/hard.txt", "linked/soft.txt"] {
+        assert!(
+            asked.contains(distrusted),
+            "a line reading another name of a distrusted file ran unasked: {distrusted}"
+        );
+    }
+    for control in ["plain/single.txt", "pair/b.txt"] {
+        assert!(
+            !asked.contains(control),
+            "a file no rule distrusts was put to a person: {control}"
+        );
+    }
+    let bodies = every_request(&received);
+    let last = bodies.last().expect("requests were made");
+    for control in ["1 plain/single.txt", "1 pair/b.txt"] {
+        assert!(
+            last.contains(control),
+            "the control line did not print as text: {control}"
+        );
+    }
 }
 
 /// Asked once per path per turn. A planner retrying a read it was refused must not put the same
