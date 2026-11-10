@@ -4344,8 +4344,8 @@ shown by running the program, or not entirely:
   `LD_AUDIT`, `LD_LIBRARY_PATH` and `GCONV_PATH` (a converter module named by a `gconv-modules`
   file) it starts a program through a kept start and a checked start, and asserts only whether a
   marker is present, since the count of constructor runs depends on the loader. The converter
-  module exports no converter, so on the first CI run glibc aborted the `GCONV_PATH` program after
-  the module's constructor had run, and the test does not assert that program's exit status. The second,
+  module exports no converter, so glibc aborts the `GCONV_PATH` program after
+  the module's constructor has run, and the test does not assert that program's exit status. The second,
   `locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
   starts a program that reports its environment. It shows what the start hands the process and
   runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
@@ -4476,9 +4476,9 @@ shown by running the program, or not entirely:
   `CI` set it fails when none of the four `XDG_*` names reached a handler. The
   generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
   those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
-  The first CI run failed the generic-mode and KDE tests: with no `DISPLAY` or `WAYLAND_DISPLAY`,
-  `xdg-open` 1.2.1 does not look up a scheme handler in generic mode, so the generic test now
-  sets `DISPLAY`, and `kde-open` did not run the installed handler on the runner.
+  With no `DISPLAY` or `WAYLAND_DISPLAY`, `xdg-open` 1.2.1 does not look up a scheme handler in
+  generic mode, so the generic test sets `WAYLAND_DISPLAY` to a name no socket has. `kde-open` did
+  not run the installed handler on the CI runner.
   What is covered, per name and per desktop mode:
 
   | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |
