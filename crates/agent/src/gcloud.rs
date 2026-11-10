@@ -445,6 +445,9 @@ mod tests {
 
     /// A file or directory a stage can plant, under a row it holds, and a genuine one beside it that
     /// is outside every row.
+    ///
+    /// Each test passes a `name` no other test uses: the directories are at fixed paths, each call
+    /// removes them first, and tests run in parallel.
     fn planted_and_genuine(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let session = scratch_dir(&format!("{name}-session"));
         let safe = scratch_dir(&format!("{name}-safe"));
@@ -871,7 +874,7 @@ mod tests {
     /// `gcloud auth login` opens a page with a program a stage wrote.
     #[test]
     fn a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens() {
-        let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-browser");
+        let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-sign-in-browser");
 
         assert!(withheld("BROWSER", &planted, &session));
         assert!(withheld("BROWSER", Path::new("./opener"), &session));
