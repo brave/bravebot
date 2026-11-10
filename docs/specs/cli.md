@@ -444,11 +444,15 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop
 
-`turn` observes and decides step by step, which is what an unqualified `bravebot "task"` has
-always been. `manifest` plans the whole run first, then executes it. An unknown name is refused
-rather than guessed. Both modes carry an empty trust map, and every prompt a step raises is refused
-unless the flag in CLI-1 says otherwise: those are due partway through a run, over a path or a
-program nobody undertook to watch for, and typing a command is no undertaking to still be there.
+`turn` observes and decides step by step, which is what an unqualified `bravebot "task"` has always
+been. `manifest` plans the whole run first, then executes it. An unknown name is refused rather than
+guessed. Both modes carry an empty trust map, and every prompt a step raises is refused unless the
+flag in CLI-1 says otherwise: those are due partway through a run, over a path or a program nobody
+undertook to watch for, and typing a command is no undertaking to still be there. A call or `apply`
+step the plan's approval covers puts no prompt at its step ([manifest.md](manifest.md#MANIFEST-15),
+[manifest.md](manifest.md#MANIFEST-17)), so it runs on that answer. An `apply` step that would put
+its list is refused with the plan, before anything runs, since a one-shot cannot put one
+([manifest.md](manifest.md#MANIFEST-16)).
 
 A plan is the one question a one-shot answers, because it is asked at a moment the others are not:
 once, before the first step, while nothing has been printed but this run's own progress. It is put

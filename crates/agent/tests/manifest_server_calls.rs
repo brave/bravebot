@@ -373,6 +373,8 @@ struct Calls {
     apply_keeps: Option<Vec<usize>>,
     /// Whether the list is answered as by a client that cannot put it.
     apply_unasked: bool,
+    /// Whether this client can put an apply step's list, which a desktop or one-shot client cannot.
+    puts_lists: bool,
 }
 
 impl Calls {
@@ -391,6 +393,7 @@ impl Calls {
             then_mode: None,
             apply_keeps: None,
             apply_unasked: false,
+            puts_lists: true,
         }
     }
 
@@ -462,6 +465,10 @@ impl Confirmer for Calls {
             stop.cancel();
         }
         self.list_answer
+    }
+
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.puts_lists
     }
 
     fn confirm_apply(&mut self, request: &ApplyRequest) -> ApplyDecision {
@@ -2712,6 +2719,86 @@ fn an_apply_of_literals_alone_is_refused_before_anybody_is_asked() {
     );
     assert!(ran.asked.plans.is_empty());
     assert!(ran.called.is_empty());
+}
+
+/// Where an apply step's list sits in its read's reply is checked with the rest of the plan, so a
+/// pointer without its leading slash, or one naming a list the step does not read, is refused
+/// before the plan is put to anybody rather than ending the step with nothing to do.
+#[test]
+fn an_apply_whose_entries_point_at_nothing_is_refused_before_anybody_is_asked() {
+    for (entries, says) in [
+        (json!("items"), "is not a JSON pointer"),
+        (json!({"other": "/items"}), "name no list other"),
+    ] {
+        let scratch = Scratch::new("apply-pointer");
+        let (url, mcp) = serve_marks();
+        let mut steps = organise();
+        steps[1]["args"]["entries"] = entries;
+        let ran = walk(Walk {
+            session: marks_session(&url, &scratch, MARKS_DECLARED),
+            mode: PermissionMode::Ask,
+            task: Task::new("organise my bookmarks into folders"),
+            replies: vec![shape(), plan(steps.clone()), plan(steps)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        let failure = ran.outcome.expect_err("refused").to_string();
+        assert!(failure.contains(says), "{failure}");
+        assert!(ran.asked.plans.is_empty());
+        assert!(ran.called.is_empty());
+    }
+}
+
+/// A client that cannot put an apply step's list, as the desktop and a one-shot cannot, has a plan
+/// whose step would put one refused before it is put to anybody, so nothing is read for a step that
+/// would then fail. A step whose tools the plan covers needs no list, and runs there.
+///
+/// Rejects an implementation that approves the plan, runs the reads and fails at the step, and one
+/// that refuses a covered step for want of a list it never puts.
+#[test]
+fn a_client_that_cannot_put_the_list_refuses_its_step_before_anybody_is_asked() {
+    let scratch = Scratch::new("no-list");
+    let (url, mcp) = serve_marks();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.puts_lists = false;
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), plan(organise())],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(
+        failure.contains("cannot put an APPLY step's calls"),
+        "{failure}"
+    );
+    assert!(ran.asked.plans.is_empty());
+    assert!(ran.called.is_empty());
+
+    let scratch = Scratch::new("no-list-covered");
+    let (url, mcp) = serve_marks();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.puts_lists = false;
+    let ran = walk(Walk {
+        session: marked_session(
+            &url,
+            &scratch,
+            MARKS_DECLARED,
+            &["make_folder", "move_mark"],
+        ),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert!(ran.called.iter().any(|(tool, _)| tool == "move_mark"));
 }
 
 /// A list an apply step points into is what a read returned. A plan that points it at what a

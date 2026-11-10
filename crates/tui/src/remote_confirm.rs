@@ -301,6 +301,11 @@ impl Confirmer for RemoteConfirmer {
         }
     }
 
+    /// The terminal draws an apply step's list and takes the person's ticks.
+    fn can_put_apply_lists(&mut self) -> bool {
+        true
+    }
+
     fn confirm_path(&mut self, request: &PathRequest) -> Decision {
         match self.exchange(ToMain::Path(request.clone())) {
             Some(Reply::Path(decision)) => decision,

@@ -365,6 +365,20 @@ impl Servers {
             .collect()
     }
 
+    /// The number of the first `apply` step of `plan` that would put its list to the person,
+    /// being none of `covered`, or nothing where every one runs on the plan's approval.
+    pub(crate) fn puts_a_list(
+        &self,
+        plan: &Manifest,
+        covered: &std::collections::BTreeSet<usize>,
+    ) -> Option<usize> {
+        plan.steps()
+            .iter()
+            .enumerate()
+            .find(|(index, step)| step.tool() == manifest::APPLY && !covered.contains(index))
+            .map(|(index, _)| index + 1)
+    }
+
     /// Whether the declaration of `alias` marks every tool of the step `shape` plan-covered
     /// (SERVERS-26).
     fn all_covered(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
@@ -608,6 +622,20 @@ impl Servers {
                      cannot point into it"
                 ));
             }
+        }
+        // Where each list sits in its read's reply is checked here rather than at the step, after
+        // the person answered: a pointer without its leading slash points at nothing, and the step
+        // would end with nothing to do and no word that the plan was wrong.
+        let pointers = pointers_of(step.text("entries"), &shape.lists)
+            .map_err(|why| format!("step {number}: {why}"))?;
+        if let Some(pointer) = pointers
+            .iter()
+            .find(|pointer| !pointer.is_empty() && !pointer.starts_with('/'))
+        {
+            return Err(format!(
+                "step {number}: the entries {pointer} of an APPLY step is not a JSON pointer, \
+                 which starts with /"
+            ));
         }
         let offered = offer.callable();
         for tool in &shape.tools {

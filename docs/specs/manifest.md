@@ -654,10 +654,11 @@ argument of each tool, the one way a value may reach it: the plan's own literal,
 of a list copied from what a read returned, that field of several entries as an array, short new
 text the processor writes, or the new text an earlier row of the step gave. The server and the tools
 are routing, locked as every routing field is ([MANIFEST-6](#MANIFEST-6)). Every list is the slot of
-an earlier read. A kind other than literal is allowed only where the person's declaration of the
-server names that tool and argument with it ([mcp-servers.md](mcp-servers.md#SERVERS-26)), and a
-plan that gives one the declaration does not name is refused before it is put to anybody. So is a
-step that gives no argument such a kind, since its calls would take nothing from the list.
+an earlier read, and where it sits in that read's reply is a JSON pointer checked with the plan. A
+kind other than literal is allowed only where the person's declaration of the server names that tool
+and argument with it ([mcp-servers.md](mcp-servers.md#SERVERS-26)), and a plan that gives one the
+declaration does not name is refused before it is put to anybody. So is a step that gives no
+argument such a kind, since its calls would take nothing from the list.
 
 An isolated processor reads the lists, each numbered from 1, and answers with rows. Only the entries
 holding a field an argument takes from that list are numbered, the first 999 of them. A row names a
@@ -676,12 +677,13 @@ space. A call depends on at most one earlier call, the one whose new text it use
 
 The resolved calls are put to the person as one question, each value drawn with where it came from
 and as untrusted content is drawn, and no rule, standing answer or mode answers it, bypassing
-included. Only the terminal interface puts the list; in any other client, and where nobody can be
-asked, the step is refused. The calls the person keeps are made in row order, each through a grant
-bound to its server, tool and place in the list, and a `deny` rule is read before each. A call whose
-tool reports a failure skips the calls that depend on it and ends nothing. A call refused or not
-made ends the run. What each call that was made returned is drawn behind the untrusted margin, and
-what became of every call is drawn after them; neither reaches a model.
+included. Only the terminal interface puts the list. Where nobody can be asked the step is refused,
+and any other client refuses a plan whose step would put one before it is put to anybody, so nothing
+is read for a step that could not be answered. The calls the person keeps are made in row order,
+each through a grant bound to its server, tool and place in the list, and a `deny` rule is read
+before each. A call whose tool reports a failure skips the calls that depend on it and ends nothing.
+A call refused or not made ends the run. What each call that was made returned is drawn behind the
+untrusted margin, and what became of every call is drawn after them; neither reaches a model.
 
 **Why.** The planner cannot know which items a task touches without reading them, and must never
 read them. Numbers leave nothing to imitate, so every target a call acts on is copied from a list a
@@ -703,6 +705,8 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_core::policy::an_applied_call_is_carried_once_and_only_where_the_person_kept_it`
 `verified-by: bravebot_choice::lib::a_processor_that_was_not_asked_for_rows_has_none_read_from_its_answer`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_into_a_list_a_model_wrote_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_entries_point_at_nothing_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest_server_calls::a_client_that_cannot_put_the_list_refuses_its_step_before_anybody_is_asked`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_whose_call_could_depend_on_two_rows_is_refused`
 `verified-by: bravebot_agent::manifest_server_calls::a_move_may_land_in_a_folder_the_step_made_or_one_the_list_holds`
 `verified-by: bravebot_agent::manifest_server_calls::an_apply_step_asks_its_processor_again_after_an_empty_reply`
