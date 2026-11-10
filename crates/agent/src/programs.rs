@@ -166,7 +166,8 @@ mod tests {
 
     /// A relative `$PATH` entry means the same directory to the policy and to the stage: the one
     /// the stage runs in. Joined to this process's directory it meant a different one after `/cd`
-    /// (#3894). The control is an absolute entry, which finds `pwd` whatever the working directory.
+    /// (#3894). The control is an absolute entry, which finds its program whatever the working
+    /// directory.
     #[cfg(unix)]
     #[test]
     fn a_relative_path_entry_is_read_under_the_working_directory() {
@@ -175,9 +176,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(scratch.join("project/bin")).unwrap();
         std::fs::create_dir_all(scratch.join("elsewhere")).unwrap();
+        std::fs::create_dir_all(scratch.join("absolute")).unwrap();
         let tool = scratch.join("project/bin/tool");
-        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let control = scratch.join("absolute/control");
+        for file in [&tool, &control] {
+            std::fs::write(file, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
 
         let path = std::ffi::OsStr::new("bin");
         let found = find_in("tool", &scratch.join("project"), path)
@@ -188,10 +193,10 @@ mod tests {
             "a relative entry was read under some other directory"
         );
 
-        let absolute = std::ffi::OsStr::new("/bin");
-        let pwd = find_in("pwd", &scratch.join("elsewhere"), absolute)
+        let absolute = scratch.join("absolute");
+        let found = find_in("control", &scratch.join("elsewhere"), absolute.as_os_str())
             .expect("the control: an absolute entry does not depend on the working directory");
-        assert!(pwd.resolved.is_absolute());
+        assert_eq!(found.resolved, control.canonicalize().unwrap());
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
