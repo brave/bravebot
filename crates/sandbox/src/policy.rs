@@ -4,6 +4,17 @@ use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+/// Directories whose every entry a write row does not reach on macOS, matched on any component of
+/// a path beneath the row ([SANDBOX-14]). `bravebot_core::protected` holds the same names for the
+/// file tools (PERM-9), and a test in `bravebot-agent` pins the two lists equal.
+///
+/// [SANDBOX-14]: ../../../docs/specs/sandboxing.md
+pub const PROTECTED_DIRECTORIES: [&str; 3] = [".git", ".bravebot", ".husky"];
+
+/// Files a write row does not reach on macOS wherever they are beneath it. See
+/// [`PROTECTED_DIRECTORIES`].
+pub const PROTECTED_FILES: [&str; 3] = [".gitmodules", ".gitconfig", ".pre-commit-config.yaml"];
+
 /// The confinement a process should run under.
 ///
 /// Deny-by-default: [`SandboxPolicy::strict`] permits nothing, and each allowance is
@@ -58,8 +69,9 @@ pub struct SandboxPolicy {
     /// Not a grant: a process started in a directory it may not read is refused its first
     /// read of it, so a caller that means the process to work there grants it too.
     pub starting_in: Option<PathBuf>,
-    /// Whether a write row reaches a `.git` beneath it on macOS, where the default is that it
-    /// does not ([SANDBOX-14]). Linux holds nothing back either way.
+    /// Whether a write row reaches the names in [`PROTECTED_DIRECTORIES`] and [`PROTECTED_FILES`]
+    /// beneath it on macOS, where the default is that it does not ([SANDBOX-14]). Linux holds
+    /// nothing back either way.
     ///
     /// [SANDBOX-14]: ../../../docs/specs/sandboxing.md
     pub git_directories_writable: bool,
@@ -243,12 +255,13 @@ impl SandboxPolicy {
         self
     }
 
-    /// Let a write row reach a `.git` beneath it.
+    /// Let a write row reach a `.git`, a `.husky`, a `.bravebot` or one of the other protected
+    /// names beneath it.
     ///
-    /// Named to be conspicuous in review: a confined process that may write a `.git` may run
-    /// code outside its confinement the next time anybody runs git there, which is what the
-    /// default withholds. For a caller whose program is one a person asked to run against the
-    /// repository, where a commit or a clone is the request.
+    /// Named to be conspicuous in review: a confined process that may write one of these may run
+    /// code outside its confinement the next time anybody runs git or a hook there, which is
+    /// what the default withholds. For a caller whose program is one a person asked to run
+    /// against the repository, where a commit or a clone is the request.
     pub fn allow_git_directory_writes(mut self) -> Self {
         self.git_directories_writable = true;
         self

@@ -2678,9 +2678,10 @@ pub struct EffectivePolicy {
     /// Every path that was wanted and is not in `rows` because this platform names no path that is
     /// not on disk, and this one was not (SANDBOX-9).
     pub left_out: Vec<PathBuf>,
-    /// Whether a write row stops short of a `.git` beneath it, which macOS does for a policy that
-    /// grants any write and does not lift it (SANDBOX-14). A row says `write` and a write there is
-    /// still refused, so this is part of what the rows mean.
+    /// Whether a write row stops short of the protected names beneath it, which macOS does for a
+    /// policy that grants any write and does not lift it (SANDBOX-14). A row says `write` and a
+    /// write to a `.git`, `.bravebot`, `.husky`, `.gitmodules`, `.gitconfig` or
+    /// `.pre-commit-config.yaml` there is still refused, so this is part of what the rows mean.
     pub git_held_back: bool,
 }
 

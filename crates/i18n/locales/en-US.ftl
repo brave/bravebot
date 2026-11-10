@@ -2760,8 +2760,8 @@ status-server-policy-subprocesses = subprocesses
 status-server-policy-subprocesses-allowed = allowed
 status-server-policy-subprocesses-refused = refused
 status-server-policy-starts-in = starts in
-# macOS refuses a write to a .git beneath a write row, so a row labelled write does not reach one.
-status-server-policy-git = .git
+# macOS refuses a write to a protected name beneath a write row (.git, .bravebot, .husky, .gitmodules, .gitconfig, .pre-commit-config.yaml), so a row labelled write does not reach one.
+status-server-policy-git = protected names
 status-server-policy-git-held-back = not written under a write row
 status-server-policy-read = read
 status-server-policy-write = write
