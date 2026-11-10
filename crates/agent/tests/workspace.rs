@@ -2269,6 +2269,7 @@ fn an_endorsed_write_is_refused_when_the_file_changed() {
     });
 
     // Someone else writes to the file after it was read and approved.
+    let read_at = policy.file_authority().stamp_of("a.txt");
     std::fs::write(&file, "changed underneath\n").unwrap();
 
     let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
@@ -2276,7 +2277,7 @@ fn an_endorsed_write_is_refused_when_the_file_changed() {
     policy.issue_grant("file_write", "path", "a.txt".to_string());
 
     let error = workspace
-        .write_endorsed_if_unchanged(&mut policy, &path, &body, "as read\n")
+        .write_endorsed_if_unchanged(&mut policy, &path, &body, "as read\n", read_at)
         .expect_err("a stale edit must be refused");
 
     assert!(
@@ -2316,9 +2317,10 @@ fn an_endorsed_write_proceeds_when_the_file_is_unchanged() {
     let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
     let body = Labelled::new("edited\n".to_string(), Label::untrusted_public());
     policy.issue_grant("file_write", "path", "a.txt".to_string());
+    let read_at = policy.file_authority().stamp_of("a.txt");
 
     workspace
-        .write_endorsed_if_unchanged(&mut policy, &path, &body, "as read\n")
+        .write_endorsed_if_unchanged(&mut policy, &path, &body, "as read\n", read_at)
         .expect("an unchanged file may be edited");
 
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited\n");
@@ -2351,16 +2353,132 @@ fn a_stale_write_does_not_consume_the_endorsement() {
     let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
     let body = Labelled::new("edited\n".to_string(), Label::untrusted_public());
     policy.issue_grant("file_write", "path", "a.txt".to_string());
+    let read_at = policy.file_authority().stamp_of("a.txt");
 
     std::fs::write(&file, "changed\n").unwrap();
     workspace
-        .write_endorsed_if_unchanged(&mut policy, &path, &body, "as read\n")
+        .write_endorsed_if_unchanged(&mut policy, &path, &body, "as read\n", read_at)
         .expect_err("stale");
 
     // The same endorsement still authorises a write against what is now on disk.
     workspace
-        .write_endorsed_if_unchanged(&mut policy, &path, &body, "changed\n")
+        .write_endorsed_if_unchanged(&mut policy, &path, &body, "changed\n", read_at)
         .expect("the endorsement survived a staleness refusal");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited\n");
+}
+
+/// Reads `a.txt` with its stamp, then runs `between` before the endorsed write, as a question to a
+/// person sits between the two. Returns the file's bytes afterwards and the outcome of the first
+/// write, then of a second write made after a fresh stamped read.
+fn write_after_a_stamped_read(
+    name: &str,
+    between: impl FnOnce(&FileAuthority),
+) -> (
+    Result<std::path::PathBuf, WorkspaceError>,
+    String,
+    Result<std::path::PathBuf, WorkspaceError>,
+) {
+    let scratch = Scratch::new(name);
+    let file = scratch.path.join("a.txt");
+    std::fs::write(&file, "as read\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust("a.txt");
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let named = Labelled::trusted("a.txt".to_string());
+    let (read, read_at) = workspace
+        .read_stamped(&mut policy, &named)
+        .expect("a trusted file reads");
+    let read = read.declassify(&policy.authorise_display_release("test"));
+
+    between(&policy.file_authority());
+
+    let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
+    let body = Labelled::new("edited\n".to_string(), Label::untrusted_public());
+    policy.issue_grant("file_write", "path", "a.txt".to_string());
+    let first = workspace.write_endorsed_if_unchanged(&mut policy, &path, &body, &read, read_at);
+    let kept = std::fs::read_to_string(&file).unwrap();
+
+    // A refused approval is not spent: the stamp is compared before the gates, as the bytes are, so
+    // the grant issued above still authorises a write drawn on a fresh read. The grant is not
+    // issued again here.
+    let (_, fresh) = workspace
+        .read_stamped(&mut policy, &named)
+        .expect("a trusted file reads");
+    let second = workspace.write_endorsed_if_unchanged(&mut policy, &path, &body, &read, fresh);
+    (first, kept, second)
+}
+
+/// TRUST-4: a `run` line that started between the read and the write voids the approval even when
+/// it left the file as it was. A comparison of the revision alone passes this write.
+#[test]
+fn an_endorsed_write_is_refused_when_a_program_started_after_the_read() {
+    let (first, kept, second) =
+        write_after_a_stamped_read("stale-program", FileAuthority::note_program_started);
+
+    assert!(
+        matches!(first, Err(WorkspaceError::Stale { .. })),
+        "expected staleness, got {first:?}"
+    );
+    assert_eq!(kept, "as read\n", "a stale approval overwrote the file");
+    second.expect("the refusal did not consume the endorsement, so a fresh read can use it");
+}
+
+/// The control for the test above: with no program started, the same approval is spent, so the
+/// test above cannot pass by a write that never happens.
+#[test]
+fn an_endorsed_write_proceeds_when_no_program_started_after_the_read() {
+    let (first, kept, _) = write_after_a_stamped_read("fresh-program", |_| {});
+
+    first.expect("an unchanged stamp may be written on");
+    assert_eq!(kept, "edited\n");
+}
+
+/// A program started before the read is part of the stamp the read returned, so it does not void
+/// an approval drawn afterwards. A comparison against a count taken when the session began fails
+/// this.
+#[test]
+fn a_program_started_before_the_read_does_not_void_the_write() {
+    let scratch = Scratch::new("program-before-read");
+    let file = scratch.path.join("a.txt");
+    std::fs::write(&file, "as read\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust("a.txt");
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+    policy.file_authority().note_program_started();
+
+    let (read, read_at) = workspace
+        .read_stamped(&mut policy, &Labelled::trusted("a.txt".to_string()))
+        .expect("a trusted file reads");
+    assert_eq!(read_at, policy.file_authority().stamp_of("a.txt"));
+    let read = read.declassify(&policy.authorise_display_release("test"));
+
+    let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
+    let body = Labelled::new("edited\n".to_string(), Label::untrusted_public());
+    policy.issue_grant("file_write", "path", "a.txt".to_string());
+    workspace
+        .write_endorsed_if_unchanged(&mut policy, &path, &body, &read, read_at)
+        .expect("the program started before the stamp was taken");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited\n");
 }
 
@@ -3800,7 +3918,9 @@ fn a_displayed_failure_still_names_the_path_it_happened_on() {
 
     assert_eq!(
         told,
-        "'src/main.rs' changed after it was read; read it again before editing"
+        "'src/main.rs' may have changed while the user was being asked about it, because the file \
+         was written or a command started, so nothing was written; read it again if its contents \
+         matter, then repeat the call"
     );
 }
 

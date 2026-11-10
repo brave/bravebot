@@ -15,14 +15,14 @@ guards:
       - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
-      - crates/agent/src/manifest.rs: 3
+      - crates/agent/src/manifest.rs: 4
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 17
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 39
+      - crates/agent/tests/workspace.rs: 43
       - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
@@ -55,7 +55,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 65
+      - crates/agent/tests/workspace.rs: 67
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -73,7 +73,7 @@ guards:
       - crates/agent/src/connectors.rs: 1
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/tools/link.rs: 1
-      - crates/agent/src/manifest.rs: 12
+      - crates/agent/src/manifest.rs: 13
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
@@ -83,7 +83,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 287
+      - crates/agent/tests/workspace.rs: 289
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2

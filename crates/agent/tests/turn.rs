@@ -10312,12 +10312,281 @@ fn a_stale_edit_is_refused() {
 
     let _first = received.recv().unwrap();
     let second = received.recv().unwrap();
-    assert!(second.contains("changed after it was read; read it again before editing"));
+    assert!(second.contains("may have changed while the user was being asked about it"));
 
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
         "stale\n"
     );
+}
+
+/// TRUST-4: a `run` line that starts while the person is asked about overwriting a file voids the
+/// yes, whether or not the line touched the file. Nothing tells the file authority which files a
+/// program rewrote, so the count of lines started is the only sign, and a yes drawn before it is
+/// not the yes for the file as it now is. The file keeps its bytes and the planner is told to
+/// repeat the call. With `starts` false the same yes is spent, so a write that never happens
+/// cannot pass the test.
+///
+/// Returns what the file held afterwards and what the planner was told.
+fn write_file_while_a_program_starts(starts: bool) -> (String, String) {
+    let scratch = Scratch::new(&format!("write-program-{starts}"));
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"a.txt","contents":"replaced\n"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        }),
+    };
+    let task = Task::new("replace a.txt").with_file_authority(authority);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        told,
+    )
+}
+
+/// Rejects a write approval that ignores the count of `run` lines started, which is how the
+/// approval was compared before TRUST-4 named the count for every approval of a write.
+#[test]
+fn a_run_that_started_while_a_write_was_being_asked_voids_the_yes() {
+    let (kept, told) = write_file_while_a_program_starts(true);
+    assert_eq!(kept, "original\n", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+}
+
+/// The control for the test above: with no line started, the same yes is spent and the file is
+/// written, so a test that never wrote could not pass.
+#[test]
+fn a_write_is_made_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told) = write_file_while_a_program_starts(false);
+    assert_eq!(kept, "replaced\n", "the approved write did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// As [`write_file_while_a_program_starts`], for a picture written by reference (WRITE-9).
+fn picture_write_while_a_program_starts(starts: bool) -> (Vec<u8>, String) {
+    let scratch = Scratch::new(&format!("picture-program-{starts}"));
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("copy.png"), b"original").unwrap();
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        }),
+    };
+    let task = Task::new("keep a copy of the screenshot").with_file_authority(authority);
+
+    let (bodies, _sink) = a_turn_that_reads_a_picture_for(
+        &scratch,
+        &task,
+        bravebot_core::trust::TrustStore::new("/work"),
+        "shot.png",
+        vec![tool_request(
+            "write_file",
+            r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+        )],
+        &mut confirmer,
+    );
+    (
+        std::fs::read(scratch.path.join("copy.png")).unwrap(),
+        bodies.last().expect("the planner was told").clone(),
+    )
+}
+
+/// Rejects a picture write that compares the path's revision alone, so a line that started while
+/// the person was asked does not void the yes.
+#[test]
+fn a_run_that_started_while_a_picture_write_was_being_asked_voids_the_yes() {
+    let (kept, told) = picture_write_while_a_program_starts(true);
+    assert_eq!(kept, b"original", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+}
+
+/// The control for the test above: the same yes is spent when no line started.
+#[test]
+fn a_picture_is_written_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told) = picture_write_while_a_program_starts(false);
+    assert_eq!(kept, a_png(), "the approved picture did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// As [`write_file_while_a_program_starts`], for a download (DOWNLOAD-2). Returns the file's
+/// bytes, what the planner was told and the names left in the directory.
+fn download_while_a_program_starts(starts: bool) -> (Vec<u8>, String, Vec<String>) {
+    let scratch = Scratch::new(&format!("download-program-{starts}"));
+    std::fs::write(scratch.path.join("data.bin"), b"original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, _count) = serve_raw(raw_reply("application/octet-stream", b"new"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(trusting_the_workspace());
+    let started = authority.clone();
+    let mut confirmer = ApprovesFetchesAndWrites {
+        on_write: Some(Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        })),
+        ..Default::default()
+    };
+    let task = Task::new("refresh the data").with_file_authority(authority);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read(scratch.path.join("data.bin")).unwrap(),
+        told,
+        names_in(&scratch.path),
+    )
+}
+
+/// Rejects a download approval that compares the path's revision alone, so a line that started
+/// while the person was asked does not void the yes. No staging file is left behind.
+#[test]
+fn a_run_that_started_while_a_download_was_being_asked_voids_the_yes() {
+    let (kept, told, names) = download_while_a_program_starts(true);
+    assert_eq!(kept, b"original", "a voided yes overwrote the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+    assert_eq!(names, ["data.bin"], "a staging file was left behind");
+}
+
+/// The control for the test above: the same yes is spent when no line started.
+#[test]
+fn a_download_is_saved_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told, _) = download_while_a_program_starts(false);
+    assert_eq!(kept, b"new", "the approved download did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// As [`write_file_while_a_program_starts`], for an edit. The file is not touched while the person
+/// is asked, so the bytes the edit was drawn on are the bytes on disk and only the count of lines
+/// started says the yes may be about something else.
+fn edit_while_a_program_starts(starts: bool) -> (String, String) {
+    let scratch = Scratch::new(&format!("edit-program-{starts}"));
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"original","new_text":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(trusting_the_workspace());
+    let started = authority.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if starts {
+                started.note_program_started();
+            }
+        }),
+    };
+    let task = Task::new("edit a.txt")
+        .with_permissions(rules(&[], &["Edit(a.txt)"], &[]))
+        .with_file_authority(authority);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        told,
+    )
+}
+
+/// TRUST-4: a `run` line that started while the person was asked about an edit voids the yes even
+/// when the file still holds the bytes the diff was drawn on. Rejects an edit that compares the
+/// file's bytes and its revision but not the count of lines started, and one that takes the stamp
+/// after the answer.
+#[test]
+fn a_run_that_started_while_an_edit_was_being_asked_voids_the_yes() {
+    let (kept, told) = edit_while_a_program_starts(true);
+    assert_eq!(kept, "original\n", "a voided yes edited the file");
+    assert!(
+        told.contains("may have changed while the user was being asked about it"),
+        "the planner was not told the yes was voided: {told}"
+    );
+}
+
+/// The control for the test above: with no line started, the same yes is spent and the edit lands,
+/// so a test that never edited could not pass.
+#[test]
+fn an_edit_is_made_when_no_run_started_while_it_was_being_asked() {
+    let (kept, told) = edit_while_a_program_starts(false);
+    assert_eq!(kept, "replaced\n", "the approved edit did not land");
+    assert!(!told.contains("may have changed"), "{told}");
 }
 
 /// An edit whose file is replaced by a link out of the workspace while the person is asked about it
@@ -60608,6 +60877,9 @@ struct ApprovesFetchesAndWrites {
     hop_urls: Vec<String>,
     /// Words sent with each answer to a write.
     note: Option<&'static str>,
+    /// Run when a write is put to it, as something else on the machine can act while a person
+    /// reads the prompt.
+    on_write: Option<Box<dyn FnMut() + Send>>,
     /// Every question about letting vetted content through, which it refuses. A test of a release
     /// nobody is asked about reads this to say no question was put.
     vets: Vec<bravebot_agent::confirm::VetRequest>,
@@ -60628,6 +60900,9 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
         self.writes.push(request.clone());
+        if let Some(on_write) = &mut self.on_write {
+            on_write();
+        }
         let decision = if self.declines_writes {
             bravebot_agent::WriteDecision::reject()
         } else {
@@ -65826,6 +66101,26 @@ fn a_turn_that_reads_a_picture_in(
     then: Vec<String>,
     confirmer: &mut RecordingConfirmer,
 ) -> (Vec<String>, RecordingSink) {
+    a_turn_that_reads_a_picture_for(
+        scratch,
+        &Task::new("keep a copy of the screenshot"),
+        trust,
+        source,
+        then,
+        confirmer,
+    )
+}
+
+/// As [`a_turn_that_reads_a_picture_in`], running `task`, for a test that gives the task a file
+/// authority its confirmer also holds.
+fn a_turn_that_reads_a_picture_for<C: bravebot_agent::Confirmer + Send>(
+    scratch: &Scratch,
+    task: &Task,
+    trust: bravebot_core::trust::TrustStore,
+    source: &str,
+    then: Vec<String>,
+    confirmer: &mut C,
+) -> (Vec<String>, RecordingSink) {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let mut replies = vec![tool_request(
         "read_file",
@@ -65842,7 +66137,7 @@ fn a_turn_that_reads_a_picture_in(
         &config,
         &egress,
         &workspace,
-        &Task::new("keep a copy of the screenshot"),
+        task,
         &mut bravebot_agent::Conversation::new(),
         confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),

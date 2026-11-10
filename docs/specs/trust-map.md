@@ -433,19 +433,28 @@ finish, including on failure or cancellation, and save its current file decision
 substituting the map from before the turn. Manifest runs also retain current file decisions on
 every returned error or cancellation, as [manifest.md](manifest.md) requires.
 
-Approvals based on a preview are checked before effect entry against the path's revision taken
-when the preview was drawn, so a changed path cannot spend the old approval. A vouch is checked
-against the path's stamp, which is that revision and the number of `run` lines started, both
-taken when the preview was drawn and compared as numbers. A `run` line that starts while the
-person is asked voids a vouch, because a program opens files its line does not name and moves no
-revision. A vouch answered after that is thrown away and the read says so. A path whose answer was
-thrown away is offered again by the next read of it, about the file as it is then, so the read's
-own advice to read again is true. An answer that was spent, and a no, keep the path asked about for
-the rest of the turn. A change to another
-path invalidates neither an approval nor a vouch, but any `run` line that started voids a vouch.
-The count is compared only for a vouch and for the write-back exception in
-[WRITE-4](tools/write-file.md#WRITE-4), which compares it separately. A backup records the trust
-of its bytes at capture, taken under the boundary with the entry of the write that replaces them.
+Approvals based on a preview are checked before effect entry against the path's stamp, which is
+its revision and the number of `run` lines started, both taken in the same capture that drew the
+preview and compared as numbers, so a changed path cannot spend the old approval. One comparison
+makes that check for every approval of a write, so none can compare the revision alone: a vouch,
+the approval of a `write_file` (text or a picture), of a `download_url` destination, of an
+`edit_file` and of a write step of a manifest run. An `edit_file` takes its stamp when it reads the
+file for the edit, in the same capture as the bytes it will compare, and not when it writes. A
+`run` line that starts while the person is asked voids the answer, because a program opens files
+its line does not name and moves no revision. A vouch answered after that is thrown away and the
+read says so. A write or an edit answered after that writes nothing, leaves the file as it was and
+tells the planner that the path may have changed while the user was being asked, so it reads the
+file again if its contents matter and repeats the call. An edit is refused before its endorsement
+is used. A path whose vouch was thrown away is offered again by the next read of it, about the file
+as it is then, so the read's own advice to read again is true. An answer that was spent, and a no,
+keep the path asked about for the rest of the turn. A change to another path invalidates no
+approval and no vouch, but any `run` line that started since the preview was drawn voids a vouch,
+a write approval and an edit approval of every path. The price is one more question, or one refused
+write, after a `run` line that started while the question was open, even a line that wrote nothing.
+The count moves no revision, so the output of other running commands keeps its label. The
+write-back exception in [WRITE-4](tools/write-file.md#WRITE-4) compares the same count against the
+count taken when its slot was read. A backup records the trust of its bytes at capture, taken under
+the boundary with the entry of the write that replaces them.
 On a volume that folds case (TRUST-2), every spelling of a path is that path, both for the writer
 an active path refuses and for the revision an approval is checked against, so a run line
 redirecting to one file under two such spellings is refused as a second writer to it. Canonically
@@ -489,6 +498,20 @@ name may be refused, and on one that does not, no second writer to the one file 
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open`
 `verified-by: bravebot_agent::tools::a_yes_is_not_spent_when_a_program_started_while_the_person_was_asked`
 `verified-by: bravebot_agent::tools::a_read_after_a_thrown_away_answer_asks_the_person_again`
+`verified-by: bravebot_agent::workspace::an_endorsed_write_is_refused_when_a_program_started_after_the_read`
+`verified-by: bravebot_agent::workspace::an_endorsed_write_proceeds_when_no_program_started_after_the_read`
+`verified-by: bravebot_agent::workspace::a_program_started_before_the_read_does_not_void_the_write`
+`verified-by: bravebot_agent::workspace::a_stale_write_does_not_consume_the_endorsement`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_picture_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_picture_is_written_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_download_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_download_is_saved_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_an_edit_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::an_edit_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::manifest::a_run_that_started_while_a_planned_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_made_when_no_run_started_while_it_was_being_asked`
 `verified-by: bravebot_core::policy::a_path_is_offered_again_only_after_an_answer_was_thrown_away`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,

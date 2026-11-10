@@ -19,6 +19,7 @@ use base64::Engine;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
+use bravebot_core::file_authority::Stamp;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{PathObserved, Policy};
 use bravebot_core::spelling::to_key;
@@ -803,14 +804,40 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        self.read_text_stamped(policy, path, reach)
+            .map(|(read, _)| read)
+    }
+
+    /// [`Workspace::read`] with the path's stamp, taken inside the boundary the bytes were read
+    /// in, so the stamp and the text describe one state of the map (TRUST-4).
+    ///
+    /// For a caller that puts the text to a person and later writes on their answer: the write is
+    /// refused unless the path still has this stamp.
+    pub fn read_stamped<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+    ) -> Result<(Labelled<String>, Stamp), WorkspaceError> {
+        self.read_text_stamped(policy, path, Reach::Confined)
+    }
+
+    fn read_text_stamped<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        reach: Reach,
+    ) -> Result<(Labelled<String>, Stamp), WorkspaceError> {
         // The gates read no file and decide nothing about one, so they run before the boundary is
         // taken. Inside it go the path lookup, the label lookup and the read, which have to agree.
         let relative = Self::gate_text_read(policy, path)?;
-        let (measured, read) = policy
-            .capture_files_shared(|policy| self.read_text_measured(policy, &relative, reach))?;
+        let (measured, read, stamp) = policy.capture_files_shared(|policy| {
+            let (measured, read) = self.read_text_measured(policy, &relative, reach)?;
+            let stamp = policy.file_authority().stamp_of(&self.trust_key(&relative));
+            Ok::<_, WorkspaceError>((measured, read, stamp))
+        })?;
         // After the boundary: the event reaches the sink while no writer waits for it.
         policy.record_path(Capability::FileRead, measured);
-        read
+        read.map(|text| (text, stamp))
     }
 
     fn read_text_captured<S: Sink>(
@@ -1619,26 +1646,36 @@ impl Workspace {
     /// changed in between, whether by another process or the user's editor, the approved diff no
     /// longer describes what would happen, so the write is refused rather than applied to
     /// text nobody reviewed.
+    ///
+    /// `read_at` is the stamp [`Workspace::read_stamped`] returned with `expected`. The write is
+    /// refused unless the path's stamp is still that one, so a `run` line that started while the
+    /// person was asked voids the approval even when it left the bytes as they were (TRUST-4).
     pub fn write_endorsed_if_unchanged<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
         expected: &str,
+        read_at: Stamp,
     ) -> Result<PathBuf, WorkspaceError> {
         // Checked before the write gates so a stale edit is reported as staleness rather than
-        // consuming the single-use endorsement. Reading the path is itself gated, below.
+        // consuming the single-use endorsement. Reading the path is itself gated, below. The stamp
+        // is compared here for the same reason, and again in the write, where it is atomic with
+        // entry.
         let relative = self.peek_relative(policy, path)?;
-        let revision = policy.capture_files(|policy, capture| {
+        policy.capture_files(|policy, capture| {
+            if read_at != capture.stamp_of(&self.trust_key(&relative)) {
+                return Err(WorkspaceError::Stale { path: relative });
+            }
             let promoted = policy.promote_confined_read("edit_file", "path", path)?;
             let captured = self.read_text_captured(policy, &promoted, Reach::Confined)?;
             let current = policy.read_trusted_content("edit_file", &captured)?;
             if current != expected {
                 return Err(WorkspaceError::Stale { path: relative });
             }
-            Ok(capture.revision_of(&self.trust_key(&relative)))
+            Ok(())
         })?;
-        self.write_endorsed_at_revision(policy, path, contents, Some(revision))
+        self.write_endorsed_at_revision(policy, path, contents, Some(read_at))
     }
 
     /// The path as a plain string, for a check made on the user's behalf.
@@ -1682,7 +1719,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
     ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
 
@@ -1692,7 +1729,7 @@ impl Workspace {
         let relative = policy.before_endorsed_destination("file_write", "path", path)?;
         policy.before_action("file_write", "contents", Role::Content, contents)?;
 
-        self.write_after_gates(policy, relative, contents, expected_revision)
+        self.write_after_gates(policy, relative, contents, expected)
     }
 
     /// Write a file. The path is routing; the contents are content.
@@ -1726,13 +1763,13 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         relative: String,
         contents: &Labelled<String>,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
     ) -> Result<PathBuf, WorkspaceError> {
         self.write_released(
             policy,
             relative,
             contents.label(),
-            expected_revision,
+            expected,
             |resolved, proof| std::fs::write(resolved, contents.clone().declassify(proof)),
         )
     }
@@ -1750,7 +1787,7 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         label: bravebot_core::label::Label,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
         fill: impl FnOnce(
             &mut std::fs::File,
             &bravebot_core::policy::Declassification,
@@ -1766,20 +1803,14 @@ impl Workspace {
             &Labelled::new(String::new(), label),
         )?;
 
-        self.write_released(
-            policy,
-            relative,
-            label,
-            expected_revision,
-            |resolved, proof| {
-                let parent = resolved
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."));
-                let mut staged = Staged::create_in(parent)?;
-                fill(staged.file(), proof)?;
-                staged.keep_as(resolved)
-            },
-        )
+        self.write_released(policy, relative, label, expected, |resolved, proof| {
+            let parent = resolved
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let mut staged = Staged::create_in(parent)?;
+            fill(staged.file(), proof)?;
+            staged.keep_as(resolved)
+        })
     }
 
     /// The part of a write every body shares: reserve the path, capture what was there, release
@@ -1787,12 +1818,16 @@ impl Workspace {
     ///
     /// `label` is the body's, which is what the file's recorded trust follows. The bytes are
     /// `put`'s to carry, behind the proof it is handed.
+    ///
+    /// `expected` is the stamp the person's approval was drawn on. It is compared whole, the one
+    /// place any approval of a write is checked: the revision alone would miss a `run` line that
+    /// started while the question was open (TRUST-4).
     fn write_released<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         relative: String,
         label: bravebot_core::label::Label,
-        expected_revision: Option<u64>,
+        expected: Option<Stamp>,
         put: impl FnOnce(&Path, &bravebot_core::policy::Declassification) -> std::io::Result<()>,
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
@@ -1815,7 +1850,7 @@ impl Workspace {
         // long read of a large file keeps no other capture waiting.
         let (effect, captured_trust) = policy.capture_files(|policy, capture| {
             let key = self.trust_key(&relative);
-            if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
+            if expected.is_some_and(|stamp| stamp != capture.stamp_of(&key)) {
                 return Err(WorkspaceError::Stale {
                     path: relative.clone(),
                 });
