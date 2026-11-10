@@ -195,6 +195,23 @@ that exist; it does not make them the project's.
 
 `verified-by: bravebot_agent::lsp::a_composed_location_is_not_labelled_by_the_rule_of_an_ancestor`
 
+**A file is labelled under every name it has.** The trust map holds a rule about one spelling, and a
+file can be reached by others ([TRUST-2](../trust-map.md#TRUST-2), [TRUST-4](../trust-map.md#TRUST-4)):
+a symbolic link, a hard link, and its spelling under another open directory that is the same
+directory. A location is asked about under the name the server reported and under each other name
+the file system gives the file, the way a read of the file is. A link in a vouched directory to a
+file in a distrusted one is therefore untrusted, and so is a hard link to it; a link to a vouched
+file stays trusted. The other names are the file system's answer about the reported path and never a
+file's bytes. They can lower the label and never raise it. Where the lookup of the other names could
+not finish, because the walk reached the search cap, a directory could not be listed, or a name is
+not UTF-8, the location is untrusted, since the name that was not found may carry a rule that says
+so.
+
+`verified-by: bravebot_agent::lsp::a_location_reported_through_a_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::lsp::a_location_reported_through_a_hard_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::lsp::a_location_whose_other_names_could_not_be_found_is_untrusted`
+`verified-by: bravebot_agent::lsp::a_respelled_location_of_a_distrusted_file_is_still_untrusted`
+
 **The label is not a function of the answer's text, and nothing here decides from a name.** The
 paths go to the kernel and a label comes back. Which wording the answer uses ("outside the
 workspace", the 200-location notice) is chosen from the same bytes, but it is written into a string

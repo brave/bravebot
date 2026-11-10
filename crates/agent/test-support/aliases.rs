@@ -28,6 +28,11 @@ pub enum Made {
     SymbolicLink,
     /// The first segment of `alias` is a symbolic link to the first segment of `name`.
     LinkedDirectory,
+    /// `alias` is `name` beneath a second absolute path to the working directory, which macOS
+    /// gives every directory under `/System/Volumes/Data`. The file is made under `name`, the
+    /// workspace holds the second path open beside the working directory, and [`spelling`] gives
+    /// the alias a test asks about. Skipped where the volume has no second path.
+    SecondPathToTheTree,
 }
 
 /// Something that decides what to do with a file by its name.
@@ -65,18 +70,6 @@ pub struct Alias {
     /// Consumers that do not treat the alias as the name, each with the issue that tracks it.
     pub unhandled: &'static [(Consumer, &'static str)],
 }
-
-const LINK: &[(Consumer, &str)] = &[
-    (Consumer::TrustRead, "#2328"),
-    (Consumer::TrustWrite, "#2328"),
-    (Consumer::WriterReservation, "#2328"),
-];
-
-const HARD_LINK: &[(Consumer, &str)] = &[
-    (Consumer::TrustRead, "#2328"),
-    (Consumer::TrustWrite, "#2328"),
-    (Consumer::WriterReservation, "#2328"),
-];
 
 pub const ALIASES: &[Alias] = &[
     Alias {
@@ -165,7 +158,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "src/linked.json",
         made: Made::SymbolicLink,
         skippable: false,
-        unhandled: LINK,
+        unhandled: &[],
     },
     Alias {
         kind: "symbolic link on the way",
@@ -173,7 +166,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "linked/fetched.json",
         made: Made::LinkedDirectory,
         skippable: false,
-        unhandled: LINK,
+        unhandled: &[],
     },
     Alias {
         kind: "hard link",
@@ -181,9 +174,41 @@ pub const ALIASES: &[Alias] = &[
         alias: "src/linked.json",
         made: Made::HardLink,
         skippable: false,
-        unhandled: HARD_LINK,
+        unhandled: &[],
+    },
+    // The alias is the part below the second path; `spelling` puts the path in front of it.
+    Alias {
+        kind: "another path to the same tree",
+        name: "src/fetched.json",
+        alias: "src/fetched.json",
+        made: Made::SecondPathToTheTree,
+        skippable: true,
+        unhandled: &[],
     },
 ];
+
+/// The second absolute path to the working directory `root`, for a row that is made of one, and
+/// `None` for every other row and for a host whose volume has no second path.
+///
+/// The directory the workspace is built over is the canonical one, so the path is made from
+/// `root` canonicalized.
+pub fn second_path(root: &Path, row: &Alias) -> Option<String> {
+    if !matches!(row.made, Made::SecondPathToTheTree) || !cfg!(target_os = "macos") {
+        return None;
+    }
+    let canonical = root.canonicalize().ok()?;
+    let second = Path::new("/System/Volumes/Data").join(canonical.strip_prefix("/").ok()?);
+    second.to_str().map(str::to_string)
+}
+
+/// The second name a test asks about, as a string it can type: `alias` for a row made under the
+/// working directory, and `alias` beneath [`second_path`] for a second path to the tree.
+pub fn spelling(root: &Path, row: &Alias) -> String {
+    match second_path(root, row) {
+        Some(second) => format!("{second}/{}", row.alias),
+        None => row.alias.to_string(),
+    }
+}
 
 /// Make the file under `root` and its second name, and say whether the volume opens that name.
 ///
@@ -199,8 +224,20 @@ pub fn prepare(root: &Path, row: &Alias) -> bool {
         .expect("directory");
     std::fs::write(&stored_path, CONTENT).expect("file");
     std::fs::write(root.join(CONTROL), CONTENT).expect("control file");
+    if matches!(row.made, Made::SecondPathToTheTree) {
+        // The second name is the same file beneath another absolute path, so it opens where the
+        // volume has one and not otherwise. The row is skippable for that reason.
+        let opens = second_path(root, row)
+            .is_some_and(|second| Path::new(&second).join(row.alias).exists());
+        assert!(
+            opens || row.skippable,
+            "{}: the volume has no second path to the tree, and the row may not be skipped",
+            row.kind
+        );
+        return opens;
+    }
     match row.made {
-        Made::ByTheVolume | Made::StoredAsTheAlias => {}
+        Made::ByTheVolume | Made::StoredAsTheAlias | Made::SecondPathToTheTree => {}
         #[cfg(unix)]
         Made::HardLink => {
             std::fs::hard_link(&stored_path, root.join(other)).expect("hard link");

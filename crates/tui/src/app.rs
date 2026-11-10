@@ -36797,6 +36797,56 @@ mod tests {
         (workspace, trust, session)
     }
 
+    /// TRUST-9: `/add-dir` goes through the workspace's one opening, so a directory that is another
+    /// path to the working directory is refused with a note that names it and says why, nothing is
+    /// vouched for, and a directory that is not is added. The identity is injected so the pair exists
+    /// on any host. Rejects a UI door that opens the directory itself and skips the check, which
+    /// adds it and vouches for it.
+    #[cfg(unix)]
+    #[test]
+    fn add_dir_refuses_another_path_to_the_working_directory() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-second-path-test");
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["twin-a", "twin-b", "other"] {
+            std::fs::create_dir_all(root.join(name)).expect("scratch");
+        }
+        let root = root.canonicalize().expect("canonical");
+        let mut workspace = Workspace::new(root.join("twin-a"))
+            .expect("workspace")
+            .with_directory_identity(Some(|directory| {
+                use std::os::unix::fs::MetadataExt;
+                match directory.file_name().and_then(|name| name.to_str()) {
+                    Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+                    _ => std::fs::metadata(directory)
+                        .ok()
+                        .map(|found| (found.dev(), found.ino())),
+                }
+            }));
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+
+        let twin = root.join("twin-b").display().to_string();
+        add_directory(&mut session, &mut workspace, &mut trust, &twin);
+        let said = last_note(&session);
+        assert!(
+            said.starts_with(&format!("could not add {twin}")) && said.contains("another path"),
+            "{said}"
+        );
+        assert!(workspace.added_directories().is_empty());
+        assert!(trust.is_empty(), "a refused directory was vouched for");
+
+        let other = root.join("other").display().to_string();
+        add_directory(&mut session, &mut workspace, &mut trust, &other);
+        assert_eq!(
+            workspace.added_directories(),
+            [root.join("other")],
+            "{}",
+            last_note(&session)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// TRUST-9: `/add-dir` takes a path relative to the working directory, and opens, trusts and
     /// names the directory the absolute spelling of it opens, trusts and names.
     ///

@@ -2057,8 +2057,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   process's memory while it does.
 - **A Windows server's grants are changes to the filesystem.** A grant for the server's home, its
   directory and the directories its program is found in changes the access list of each, so a run
-  that ends without cleanup leaves the entries behind. A server there may also start a
-  subprocess, since the container has no mechanism to deny one ([SANDBOX-5](sandboxing.md#SANDBOX-5)).
+  that ends without cleanup leaves the entries behind.
 - **Only the directories above a server's directory are searched for a repository.** A directory
   holding checkouts is not refused, so the server may write their work trees, a hook a relative
   `core.hooksPath` points at among them, on every platform.

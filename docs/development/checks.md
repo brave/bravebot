@@ -382,7 +382,10 @@ with no comment at the call or whose file has no row in the table of empty-list 
 the sandbox usability suite's in `crates/agent/src/usability.rs`, to
 a test that keeps a safe value and a test that removes one a stage may write. It fails when the
 opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read
-as an empty one. An options variable needs only the second. `make check` runs it and so does CI. It
+as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
+`ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
+does, except `HOME`, which the desktop application leaves set because it and the agent it starts
+read it (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only the second. `make check` runs it and so does CI. It
 cannot tell that a list is complete, which
 [PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
 `LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in

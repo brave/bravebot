@@ -564,6 +564,14 @@ pub struct Policy<'sink, S: Sink> {
     ///
     /// [RUN-5]: ../../../docs/specs/tools/run.md
     answered_by_directory_trust: bool,
+    /// The other names the caller found for each operand of the line now being judged, by the
+    /// operand as the line spelled it: the keys the map is asked under besides the operand's own,
+    /// and whether the lookup finished (TRUST-2, CMDLINE-8). Replaced whole by
+    /// [`Policy::learn_operand_names`] for each line, so an answer for one line is never read for
+    /// another. `None` where no caller has looked, and then an operand is judged by its spelling
+    /// alone; `Some` and an operand missing from it reads as untrusted, so a lookup that did not
+    /// cover every operand fails closed.
+    operand_names: Option<std::collections::HashMap<String, (Vec<String>, bool)>>,
     /// Which paths the user vouched for.
     trust: crate::file_authority::FileAuthority,
     /// The working directory this turn runs in.
@@ -799,6 +807,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
+            operand_names: None,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
@@ -1707,6 +1716,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
+            operand_names: None,
             trust: self.trust.clone(),
             root: self.root.clone(),
             scratch: self.scratch.clone(),
@@ -2258,6 +2268,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// question up twice. A yes thrown away by [`Policy::vouch_if_unchanged`] does not count as the
     /// asking, so the path is offered again.
     ///
+    /// A yes writes a rule about `path`, so it changes nothing for a file the map distrusts under
+    /// another of its names, or whose other names could not all be found (TRUST-2): the read stays
+    /// quarantined whatever was answered. Such a file is not offered, so nobody is asked a question
+    /// whose answer is thrown away. `other_names` and `names_complete` are those of
+    /// [`Policy::measure_path_under_names`].
+    ///
     /// This offers the trust map's own decision at the moment it bites. It is not a second route
     /// to trusting content: what a yes writes is a rule in the map, the same rule `@` and the
     /// startup question write, so the answer stays consistent for every later read of that path.
@@ -2265,8 +2281,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Writes nothing to the trail itself. The caller writes the line for a person with
     /// [`Policy::note_vouch_offered`], and for a mode that answered with
     /// [`Policy::record_vouch_answered_by_mode`] (TRACE-7).
-    pub fn should_offer_vouch(&mut self, path: &str) -> bool {
-        if !self.read_is_quarantined(path) || self.vouch_asked.contains(path) {
+    pub fn should_offer_vouch(
+        &mut self,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> bool {
+        if !self.read_is_quarantined(path)
+            || !names_complete
+            || self.a_name_is_distrusted(other_names)
+            || self.vouch_asked.contains(path)
+        {
             return false;
         }
         self.vouch_asked.insert(path.to_string());
@@ -2522,6 +2547,51 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         })
     }
 
+    /// [`Policy::measure_path`] for a file that has other names than `path` (TRUST-2): the map is
+    /// asked under each of `other_names` as well, and the file reads as untrusted where the map
+    /// holds a distrust for any of them. A name the map has no rule for says nothing, so a vouch
+    /// recorded under the name typed is not taken back by a name that landed outside every rule
+    /// (TRUST-18). The answer under another name can lower the integrity and never raise it.
+    ///
+    /// `names_complete` is false where the lookup of the file's other names could not finish. The
+    /// file then reads as untrusted, since a name that was not found may carry a rule that says so.
+    /// The names are the file system's answer about a path the planner typed, and no file's
+    /// contents reach this; the trail names `path`.
+    pub fn measure_path_under_names(
+        &self,
+        capability: &Capability,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> Gated<PathObserved> {
+        let mut observed = self.measure_path(capability, path)?;
+        let mut integrity = observed.label.integrity;
+        if !names_complete || self.a_name_is_distrusted(other_names) {
+            integrity = Integrity::Untrusted;
+        }
+        observed.label = Label::new(integrity, observed.label.confidentiality);
+        Ok(observed)
+    }
+
+    /// Whether the map holds a distrust for any of `names`. A name with no rule says nothing.
+    fn a_name_is_distrusted(&self, names: &[String]) -> bool {
+        names
+            .iter()
+            .any(|name| self.integrity_in_force(name) == Some(Integrity::Untrusted))
+    }
+
+    /// Whether a read of `path` would be quarantined under `path`, or the map holds a distrust for
+    /// any of `other_names`, or `names_complete` is false (see
+    /// [`Policy::measure_path_under_names`]).
+    pub fn read_is_quarantined_under_names(
+        &self,
+        path: &str,
+        other_names: &[String],
+        names_complete: bool,
+    ) -> bool {
+        !names_complete || self.read_is_quarantined(path) || self.a_name_is_distrusted(other_names)
+    }
+
     /// Emit the observation [`Policy::measure_path`] took, and return its label.
     ///
     /// Emits the same two lines [`Policy::observe_path`] does.
@@ -2609,6 +2679,51 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         label
+    }
+
+    /// [`Policy::measure_paths`] for files that have other names than the one each was reported
+    /// under (TRUST-2): each item is a path, the other names the file has, and whether the lookup
+    /// of those names finished, and is measured by [`Policy::measure_path_under_names`]. The
+    /// integrity of the result is the meet of the items, so one file that reads as untrusted
+    /// under any of its names takes the whole result with it. An empty `items` is the driver's own
+    /// empty answer and carries no taint.
+    pub fn measure_paths_under_names<'p>(
+        &self,
+        capability: &Capability,
+        items: impl IntoIterator<Item = (&'p str, &'p [String], bool)>,
+    ) -> Gated<PathsObserved> {
+        let base = capability.output_label().ok_or_else(|| Denial {
+            principle: Principle::Capability,
+            message: format!("'{capability}' produces no observation to label"),
+        })?;
+
+        let mut integrity = Integrity::Trusted;
+        let mut visited = 0usize;
+        for (path, other_names, names_complete) in items {
+            visited += 1;
+            let one =
+                self.measure_path_under_names(capability, path, other_names, names_complete)?;
+            integrity = integrity.meet(one.label.integrity);
+        }
+        if visited == 0 {
+            integrity = Integrity::Trusted;
+        }
+
+        Ok(PathsObserved {
+            label: Label::new(integrity, base.confidentiality),
+            visited,
+        })
+    }
+
+    /// Record an observation spanning several files that may have other names, taking the meet of
+    /// their integrity ([`Policy::measure_paths_under_names`]).
+    pub fn observe_paths_under_names<'p>(
+        &mut self,
+        capability: Capability,
+        items: impl IntoIterator<Item = (&'p str, &'p [String], bool)>,
+    ) -> Gated<Label> {
+        let measured = self.measure_paths_under_names(&capability, items)?;
+        Ok(self.record_paths(capability, measured))
     }
 
     /// Whether the map trusts `path` and every path beneath it.
@@ -7465,6 +7580,28 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Some(paths)
     }
 
+    /// The paths a read-proven plan reads, as the line spelled them, or `None` where the plan is
+    /// not read-proven. What a caller with a file system looks up the other names of
+    /// ([`Policy::learn_operand_names`]).
+    pub fn operands_read_by(&self, plan: &crate::command::Plan) -> Option<Vec<String>> {
+        self.read_proven(plan)
+    }
+
+    /// Record the other names of each operand of the line about to be judged (TRUST-2, CMDLINE-8):
+    /// for an operand as the line spelled it, the keys the map is asked under besides its own, and
+    /// whether the lookup finished. Replaces what an earlier line left. Metadata of paths the
+    /// line's own words named, never a file's bytes; the names can only be added to the ones the
+    /// operand is asked under, so they can only lower the label.
+    ///
+    /// Until this is called the operands are judged by their spelling alone. Once it is, an
+    /// operand left out of `found`, or whose lookup did not finish, reads as untrusted.
+    pub fn learn_operand_names(
+        &mut self,
+        found: std::collections::HashMap<String, (Vec<String>, bool)>,
+    ) {
+        self.operand_names = Some(found);
+    }
+
     /// The label a read-proven plan's output carries, or `None` where the plan is not read-proven.
     ///
     /// The meet over the paths the plan reads and over its standard input, which is the ordinary
@@ -7494,19 +7631,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // before the names are worked out, since a `..` survives being re-spelled.
             let answer = match climbs_out(path) {
                 true => Integrity::Untrusted,
-                false => keys_for_the_map(&plan.directory, path)
-                    .iter()
-                    // A key nothing answers is the answer "nobody has said", which is the weakest
-                    // of them and not an absence to skip over. Dropping it would let one name's
-                    // rule decide for a name it was never written about: an operand holding the
-                    // workspace is asked about the project as well, and the project's rule alone
-                    // would hand back a tree nobody vouched for as trusted.
-                    .map(|key| {
-                        self.integrity_beneath_in_force(key)
-                            .unwrap_or(Integrity::Untrusted)
-                    })
-                    .reduce(Integrity::meet)
-                    .unwrap_or(Integrity::Untrusted),
+                false => {
+                    let mut keys = keys_for_the_map(&plan.directory, path);
+                    // The other names the file has (TRUST-2), found by the caller from the file
+                    // system, which this crate does not reach. A line whose operands the caller
+                    // did not look up is judged by spelling, and one it looked up for and left an
+                    // operand out of, or could not finish for, is untrusted: a name that was not
+                    // found may carry a rule that says so.
+                    match &self.operand_names {
+                        None => {}
+                        Some(found) => match found.get(path.as_str()) {
+                            Some((others, true)) => keys.extend(others.iter().cloned()),
+                            _ => keys.clear(),
+                        },
+                    }
+                    keys.iter()
+                        // A key nothing answers is the answer "nobody has said", which is the weakest
+                        // of them and not an absence to skip over. Dropping it would let one name's
+                        // rule decide for a name it was never written about: an operand holding the
+                        // workspace is asked about the project as well, and the project's rule alone
+                        // would hand back a tree nobody vouched for as trusted. No keys at all is
+                        // the same answer.
+                        .map(|key| {
+                            self.integrity_beneath_in_force(key)
+                                .unwrap_or(Integrity::Untrusted)
+                        })
+                        .reduce(Integrity::meet)
+                        .unwrap_or(Integrity::Untrusted)
+                }
             };
             integrity = integrity.meet(answer);
         }
@@ -12023,6 +12175,56 @@ five
                 "pwd started as {started_as} came back as the audited program's output"
             );
         }
+    }
+
+    /// TRUST-2, CMDLINE-8. The caller found other names for an operand; the label is the weakest
+    /// over all of them, and a lookup that did not finish (or left an operand out) is untrusted.
+    /// Controls: no lookup at all judges by spelling, and a finished lookup with no other names
+    /// stays trusted, so a proof that had stopped working for everyone would fail the control.
+    #[test]
+    fn an_operand_is_labelled_by_every_name_the_caller_found_and_fails_closed() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["vendor"]);
+        let line = plan_of(vec![step_named("wc", &["-l", "lib.js"])]);
+        let found = |others: Vec<&str>, complete: bool| {
+            let mut found = std::collections::HashMap::new();
+            found.insert(
+                "lib.js".to_string(),
+                (others.into_iter().map(String::from).collect(), complete),
+            );
+            found
+        };
+        let trusted = |policy: &Policy<'_, RecordingSink>| {
+            policy
+                .read_proven_label(&line)
+                .is_some_and(|label| label.is_trusted())
+        };
+
+        assert!(trusted(&policy), "the control: no lookup, spelling alone");
+
+        policy.learn_operand_names(found(Vec::new(), true));
+        assert!(
+            trusted(&policy),
+            "the control: a finished lookup found none"
+        );
+
+        policy.learn_operand_names(found(vec!["vendor/lib.js"], true));
+        assert!(
+            !trusted(&policy),
+            "another name under a distrusted rule did not lower the label"
+        );
+
+        policy.learn_operand_names(found(Vec::new(), false));
+        assert!(
+            !trusted(&policy),
+            "a lookup that did not finish was read as finding nothing"
+        );
+
+        policy.learn_operand_names(std::collections::HashMap::new());
+        assert!(
+            !trusted(&policy),
+            "an operand the lookup left out was judged by its spelling"
+        );
     }
 
     /// An assignment in front of a program decides what that program loads and reads before its own
@@ -18070,6 +18272,118 @@ five
         );
     }
 
+    /// TRUST-2: where the lookup of a file's other names did not finish, the read is untrusted
+    /// whatever the map says of the name typed, and the same file with a finished lookup stays
+    /// trusted. Covers the three questions asked under other names: one path's label, the quarantine
+    /// check, and several paths together. Rejects reading an unfinished lookup as "no other name".
+    #[test]
+    fn a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+        let none: &[String] = &[];
+
+        let finished = policy
+            .measure_path_under_names(&Capability::FileRead, "src/a.rs", none, true)
+            .expect("measured");
+        assert!(finished.label().is_trusted(), "control: a finished lookup");
+        let unfinished = policy
+            .measure_path_under_names(&Capability::FileRead, "src/a.rs", none, false)
+            .expect("measured");
+        assert!(
+            !unfinished.label().is_trusted(),
+            "an unfinished lookup was read as no other name"
+        );
+
+        assert!(!policy.read_is_quarantined_under_names("src/a.rs", none, true));
+        assert!(
+            policy.read_is_quarantined_under_names("src/a.rs", none, false),
+            "an unfinished lookup was not quarantined"
+        );
+
+        let mut together = |second_complete: bool| {
+            policy
+                .observe_paths_under_names(
+                    Capability::FileRead,
+                    [
+                        ("src/a.rs", none, true),
+                        ("src/b.rs", none, second_complete),
+                    ],
+                )
+                .expect("observed")
+        };
+        assert!(together(true).is_trusted(), "control: both finished");
+        assert!(
+            !together(false).is_trusted(),
+            "one unfinished lookup among several was lost in the meet"
+        );
+    }
+
+    /// TRUST-4: a trusted write through the name that was typed does not lift a person's distrust
+    /// of another name of the file. The entry distrusts every name, so the exact rule on
+    /// `docs/link` is replaced and has to be put back, and a read measured under all the names
+    /// stays untrusted. Rejects a completion that gives the other name what its directory says
+    /// (here the trust of the whole project), which is how the distrust was lifted.
+    #[test]
+    fn a_trusted_write_leaves_an_exact_distrust_on_another_name_of_the_file() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("docs/link");
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store);
+        let others = ["docs/link".to_string()];
+
+        let before = policy
+            .measure_path_under_names(&Capability::FileRead, "a.txt", &others, true)
+            .expect("measured");
+        assert!(
+            !before.label().is_trusted(),
+            "control: the distrusted name did not lower the read before the write"
+        );
+
+        policy
+            .capture_files(|_, capture| capture.begin_all(&["a.txt", "docs/link"]))
+            .expect("both names are free")
+            .complete(Integrity::Trusted);
+
+        assert!(policy.trust().is_trusted("a.txt"));
+        assert_eq!(
+            policy.trust().integrity_of("docs/link"),
+            Some(Integrity::Untrusted),
+            "a trusted write through a.txt lifted the distrust of docs/link"
+        );
+        let after = policy
+            .measure_path_under_names(&Capability::FileRead, "a.txt", &others, true)
+            .expect("measured");
+        assert!(
+            !after.label().is_trusted(),
+            "the file read as trusted under all its names after a write through one"
+        );
+
+        // The control: with no rule against the other name, the same write leaves the file
+        // trusted under both.
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+        policy
+            .capture_files(|_, capture| capture.begin_all(&["a.txt", "docs/link"]))
+            .expect("both names are free")
+            .complete(Integrity::Trusted);
+        assert!(
+            policy
+                .measure_path_under_names(&Capability::FileRead, "a.txt", &others, true)
+                .expect("measured")
+                .label()
+                .is_trusted(),
+            "control: a name nobody distrusted lowered the read"
+        );
+    }
+
     /// Reading out of a trusted directory yields trusted data. This is what lets row 1 of
     /// the table ever apply.
     #[test]
@@ -22668,36 +22982,36 @@ five
             // Thrown away: a program started while the question was open.
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
             policy.file_authority().note_program_started();
             assert!(!policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
             assert!(
-                policy.should_offer_vouch("vendor/lib.js"),
+                policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a thrown-away answer left the path unasked about"
             );
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "the offer made after a thrown-away answer was made twice"
             );
 
             // A no: the confirmer is never asked to vouch, so nothing frees the path.
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a path the person said no to was offered again"
             );
 
             // A yes that was spent: the path is trusted, so there is nothing left to offer.
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
             assert!(policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a path the person vouched for was offered again"
             );
         }
@@ -22726,7 +23040,7 @@ five
                 let mut sink = RecordingSink::new();
                 let mut policy = open_policy(&mut sink);
                 let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
-                assert!(policy.should_offer_vouch("vendor/lib.js"));
+                assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
                 match answered_by {
                     None => policy.note_vouch_offered("vendor/lib.js"),
                     Some(mode) => policy.record_vouch_answered_by_mode("vendor/lib.js", mode),
@@ -22767,15 +23081,40 @@ five
             }
         }
 
+        /// R33 (d). A vouch writes a rule about one name, so a file the map distrusts under another
+        /// name, or whose other names could not all be found, is not offered, and the refused
+        /// asking is not recorded: the same path with nothing wrong is offered after it.
+        #[test]
+        fn a_vouch_is_not_offered_for_a_file_distrusted_under_another_name() {
+            let mut sink = RecordingSink::new();
+            let mut store = TrustStore::new("/work");
+            store.distrust("vendor/other.js");
+            let mut policy = open_policy(&mut sink).with_trust(store);
+            let other = vec!["vendor/other.js".to_string()];
+            let unruled = vec!["vendor/unruled.js".to_string()];
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js", &other, true),
+                "offered for a file distrusted under another of its names"
+            );
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js", &[], false),
+                "offered for a file whose other names could not be found"
+            );
+            assert!(
+                policy.should_offer_vouch("vendor/lib.js", &unruled, true),
+                "control: a refused offer was recorded as asked, or a name with no rule blocked it"
+            );
+        }
+
         /// Deciding to put the question writes no entry, and asks about a path once. A trail line
         /// written here would be there for a mode that never put the question to anybody.
         #[test]
         fn deciding_to_offer_a_vouch_writes_nothing_and_asks_once() {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(policy.should_offer_vouch("vendor/lib.js", &[], true));
             assert!(
-                !policy.should_offer_vouch("vendor/lib.js"),
+                !policy.should_offer_vouch("vendor/lib.js", &[], true),
                 "a path was offered twice in one turn"
             );
             drop(policy);

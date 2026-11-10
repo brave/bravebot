@@ -368,7 +368,16 @@ pub(crate) fn standing<S: Sink>(
     workspace: &Workspace,
     name: &str,
 ) -> Standing {
-    if policy.read_is_quarantined(&workspace.trust_key(&relative(name))) {
+    // Under every name the file has, as a read of it is (TRUST-4): a hard link to it that the map
+    // distrusts makes a read of it untrusted, so it is withheld here too. Names from the file
+    // system's metadata, never from the file's bytes.
+    let typed = relative(name);
+    let others = workspace.other_trust_keys(&typed);
+    if policy.read_is_quarantined_under_names(
+        &workspace.trust_key(&typed),
+        &others.keys,
+        others.complete,
+    ) {
         return Standing::Withheld;
     }
     let file = format!("{name}.md");
@@ -1022,6 +1031,37 @@ mod tests {
                 "a linked directory"
             );
         }
+    }
+
+    /// MEMORY-4, TRUST-4: a memory that is a hard link to a file the map distrusts is withheld, as
+    /// a read of it is, and a hard link to a file nobody distrusts is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_memory_that_is_another_name_of_a_distrusted_file_is_withheld() {
+        let scratch = Scratch::new("memory-standing-hard-link");
+        let root = scratch.path.join("work");
+        let memory = root.join(".bravebot/memory");
+        std::fs::create_dir_all(&memory).unwrap();
+        std::fs::write(root.join("secret.txt"), "from elsewhere").unwrap();
+        std::fs::write(root.join("plain.txt"), "plain").unwrap();
+        std::fs::hard_link(root.join("secret.txt"), memory.join("notes.md")).unwrap();
+        let distrusted = |trust: &mut bravebot_core::trust::TrustStore| {
+            trust.trust(".");
+            trust.distrust("secret.txt");
+        };
+        assert_eq!(
+            standing_in(&root, distrusted),
+            Standing::Withheld,
+            "a hard link to a distrusted file was read as trusted"
+        );
+
+        std::fs::remove_file(memory.join("notes.md")).unwrap();
+        std::fs::hard_link(root.join("plain.txt"), memory.join("notes.md")).unwrap();
+        assert_eq!(
+            standing_in(&root, distrusted),
+            Standing::Kept,
+            "a hard link to a file no rule is about was withheld"
+        );
     }
 
     /// MEMORY-4: a run that is told its memory is a link, or a directory, is told so and not that

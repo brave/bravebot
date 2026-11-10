@@ -311,7 +311,11 @@ fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_l
         if !aliases::prepare(&scratch.path, row) {
             continue;
         }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .expect("the second path opens");
+        let spelled = aliases::spelling(workspace.root(), row);
         let mut sink = RecordingSink::new();
         let mut policy = alias_policy(&workspace, &mut sink, Some(row.name));
 
@@ -336,8 +340,8 @@ fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_l
             row.name
         );
         let through = workspace
-            .read(&mut policy, &trusted_text(row.alias))
-            .unwrap_or_else(|error| panic!("{}: {:?} did not open: {error}", row.kind, row.alias));
+            .read(&mut policy, &trusted_text(&spelled))
+            .unwrap_or_else(|error| panic!("{}: {:?} did not open: {error}", row.kind, spelled));
         aliases::expect(
             row,
             aliases::Consumer::TrustRead,
@@ -717,7 +721,11 @@ fn each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_
         if !aliases::prepare(&scratch.path, row) {
             continue;
         }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .expect("the second path opens");
+        let spelled = aliases::spelling(workspace.root(), row);
         let mut sink = RecordingSink::new();
         let mut policy = alias_policy(&workspace, &mut sink, None);
 
@@ -727,10 +735,10 @@ fn each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_
         workspace
             .write(
                 &mut policy,
-                &trusted_text(row.alias),
+                &trusted_text(&spelled),
                 &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
             )
-            .unwrap_or_else(|error| panic!("{}: {:?} did not write: {error}", row.kind, row.alias));
+            .unwrap_or_else(|error| panic!("{}: {:?} did not write: {error}", row.kind, spelled));
 
         let mut read = |spelling: &str| {
             workspace
@@ -739,7 +747,7 @@ fn each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_
                 .label()
                 .integrity
         };
-        let (under_the_alias, under_the_name) = (read(row.alias), read(row.name));
+        let (under_the_alias, under_the_name) = (read(&spelled), read(row.name));
         assert_eq!(
             read(aliases::CONTROL),
             Integrity::Trusted,
@@ -772,7 +780,11 @@ fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_g
         if !aliases::prepare(&scratch.path, row) {
             continue;
         }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_second_path_open(aliases::second_path(&scratch.path, row).as_deref())
+            .expect("the second path opens");
+        let spelled = aliases::spelling(workspace.root(), row);
         let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
         trust.trust(".");
         let authority = FileAuthority::new(trust);
@@ -802,7 +814,7 @@ fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_g
             });
         let second = workspace.write(
             &mut policy,
-            &trusted_text(row.alias),
+            &trusted_text(&spelled),
             &trusted_text("a second writer"),
         );
         let refused = match second {
@@ -810,11 +822,291 @@ fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_g
             Ok(_) => false,
             Err(error) => panic!(
                 "{}: {:?} was refused for another reason: {error}",
-                row.kind, row.alias
+                row.kind, spelled
             ),
         };
         aliases::expect(row, aliases::Consumer::WriterReservation, refused);
         first.complete(Integrity::Trusted);
+    }
+}
+
+/// A working directory, and the macOS firmlink spelling of it opened beside it, so one file has two
+/// absolute names the volume opens as one (TRUST-2, "another path to the same tree").
+#[cfg(target_os = "macos")]
+fn through_a_firmlink(name: &str) -> (Scratch, Workspace, String) {
+    let scratch = Scratch::new(name);
+    std::fs::create_dir(scratch.path.join("src")).expect("directory");
+    std::fs::write(scratch.path.join("src/a.json"), aliases::CONTENT).expect("file");
+    std::fs::write(scratch.path.join(aliases::CONTROL), aliases::CONTENT).expect("control");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = std::path::Path::new("/System/Volumes/Data")
+        .join(workspace.root().strip_prefix("/").expect("absolute root"));
+    let second = second.to_str().expect("utf-8 path").to_string();
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
+        .expect("the firmlink path opens");
+    (scratch, workspace, second)
+}
+
+/// A file written through the firmlink spelling of the working directory and read through the other
+/// spelling is the one file (TRUST-2, TRUST-4), in each direction: the read of a file distrusted
+/// under one spelling, and the read after an untrusted write over a trusted one. Rejects a map that
+/// keys the second spelling under the open directory's own name and never asks the first, which
+/// reads the fetched page back as trusted, and a fix that distrusts the control file as well.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_file_written_through_the_firmlink_spelling_reads_back_untrusted_through_the_other() {
+    let (_scratch, workspace, second) = through_a_firmlink("firmlink-trust");
+    a_write_through_one_name_reads_back_untrusted_through_the_other(&workspace, &second);
+}
+
+/// The assertions of the test above, for any pair of open directories `workspace` holds as one tree.
+#[cfg(unix)]
+fn a_write_through_one_name_reads_back_untrusted_through_the_other(
+    workspace: &Workspace,
+    second: &str,
+) {
+    let own = "src/a.json".to_string();
+    let other = format!("{second}/src/a.json");
+    for (index, (written, read_back)) in [(&own, &other), (&other, &own)].into_iter().enumerate() {
+        let mut sink = RecordingSink::new();
+        let mut policy = alias_policy(workspace, &mut sink, None);
+        workspace
+            .write(&mut policy, &trusted_text(&own), &trusted_text("ours"))
+            .expect("trusted bytes are written");
+        workspace
+            .write(
+                &mut policy,
+                &trusted_text(written),
+                &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+            )
+            .unwrap_or_else(|error| panic!("{written}: did not write: {error}"));
+
+        let mut read = |spelling: &str| {
+            workspace
+                .read(&mut policy, &trusted_text(spelling))
+                .expect("the file is read")
+                .label()
+                .integrity
+        };
+        let (under_the_read_back, under_the_written) = (read(read_back), read(written));
+        assert_eq!(
+            read(aliases::CONTROL),
+            Integrity::Trusted,
+            "round {index}: a write to one file distrusted another"
+        );
+        assert_eq!(
+            under_the_written,
+            Integrity::Untrusted,
+            "round {index}: {written} was not recorded under the name it was written through"
+        );
+        assert_eq!(
+            under_the_read_back,
+            Integrity::Untrusted,
+            "round {index}: {read_back} reads as trusted after an untrusted write through {written}"
+        );
+    }
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(workspace, &mut sink, Some("src/a.json"));
+    assert_eq!(
+        workspace
+            .read(&mut policy, &trusted_text(&other))
+            .expect("the file is read")
+            .label()
+            .integrity,
+        Integrity::Untrusted,
+        "a file the person distrusted by its relative name reads as trusted through {other}"
+    );
+}
+
+/// A second writer to a file is refused while the first is open, whichever of the two spellings of
+/// the working directory it uses (TRUST-4). Rejects a reservation made under the typed key only,
+/// where the second spelling is a different key and both writers proceed.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_second_writer_through_the_other_firmlink_spelling_is_refused() {
+    let (_scratch, workspace, second) = through_a_firmlink("firmlink-writer");
+    a_second_writer_through_the_other_name_is_refused(&workspace, &second);
+}
+
+/// The assertions of the test above, for any pair of open directories `workspace` holds as one tree.
+#[cfg(unix)]
+fn a_second_writer_through_the_other_name_is_refused(workspace: &Workspace, second: &str) {
+    let own = "src/a.json".to_string();
+    let other = format!("{second}/src/a.json");
+    for (held, written) in [(&own, &other), (&other, &own)] {
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_file_authority(authority.clone())
+        .with_root(workspace.root());
+
+        let first = authority
+            .capture()
+            .begin(held)
+            .expect("the first writer is admitted");
+        workspace
+            .write(
+                &mut policy,
+                &trusted_text(aliases::CONTROL),
+                &trusted_text("another file"),
+            )
+            .expect("a file nobody holds is written");
+        let refused = workspace.write(
+            &mut policy,
+            &trusted_text(written),
+            &trusted_text("a second writer"),
+        );
+        assert!(
+            matches!(refused, Err(WorkspaceError::Contended { .. })),
+            "{held} is held and {written} was not refused: {refused:?}"
+        );
+        first.complete(Integrity::Trusted);
+    }
+}
+
+/// Two real directories that the injected identity calls one tree, the way a macOS firmlink or a
+/// Linux bind mount makes two paths one directory, so the rule is run on a host that has no second
+/// path to a tree. Any other directory is itself.
+#[cfg(unix)]
+fn twin_identity(directory: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    match directory.file_name().and_then(|name| name.to_str()) {
+        Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+        _ => std::fs::metadata(directory)
+            .ok()
+            .filter(|found| found.is_dir())
+            .map(|found| (found.dev(), found.ino())),
+    }
+}
+
+/// A workspace on `twin-a` with `twin-b` opened beside it under the injected identity, each holding
+/// `src/a.json` and the control file, and the name of `twin-b`.
+#[cfg(unix)]
+fn through_twin_directories(name: &str) -> (Scratch, Workspace, String) {
+    let scratch = Scratch::new(name);
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    for twin in ["twin-a", "twin-b"] {
+        std::fs::create_dir_all(base.join(twin).join("src")).expect("directory");
+        std::fs::write(base.join(twin).join("src/a.json"), aliases::CONTENT).expect("file");
+        std::fs::write(base.join(twin).join(aliases::CONTROL), aliases::CONTENT).expect("control");
+    }
+    let second = base
+        .join("twin-b")
+        .to_str()
+        .expect("utf-8 path")
+        .to_string();
+    let workspace = Workspace::new(base.join("twin-a"))
+        .expect("workspace")
+        .with_directory_identity(Some(twin_identity))
+        .with_second_path_open(Some(&second))
+        .expect("the second path opens")
+        .with_directory_identity(Some(twin_identity));
+    (scratch, workspace, second)
+}
+
+/// The macOS test above on a host with no second path to a tree (TRUST-2, TRUST-4): the injected
+/// identity makes two directories one tree. Rejects a map that keys the name under the second
+/// directory as its own file and never asks the first, which reads the fetched page back as trusted,
+/// and a fix that distrusts the control file as well. The lookup is the same one a firmlink or a
+/// bind mount is found by, so this stands in for the Linux bind mount.
+#[cfg(unix)]
+#[test]
+fn a_file_written_through_a_second_path_to_the_tree_reads_back_untrusted_through_the_other() {
+    let (_scratch, workspace, second) = through_twin_directories("twin-trust");
+    a_write_through_one_name_reads_back_untrusted_through_the_other(&workspace, &second);
+}
+
+/// The macOS test above on a host with no second path to a tree (TRUST-4). Rejects a reservation
+/// made under the typed key only, where the second path is a different key and both writers proceed.
+#[cfg(unix)]
+#[test]
+fn a_second_writer_through_a_second_path_to_the_tree_is_refused() {
+    let (_scratch, workspace, second) = through_twin_directories("twin-writer");
+    a_second_writer_through_the_other_name_is_refused(&workspace, &second);
+}
+
+/// A trusted write through one name of a file gives no other name of it more trust than the rules
+/// over that name's directory give (TRUST-4), so a link inside a directory the person distrusted
+/// does not stand out of it. Both ways round. A file in a trusted directory written through its own
+/// name stays trusted under that name, and the link to it in a distrusted directory reads as
+/// untrusted (a file cannot be asked for the links that point at it, so the link's own directory
+/// is what decides it). A file in a distrusted directory written through a link in a trusted one
+/// reads as untrusted under both names, since the file is where the distrusted directory is.
+/// Rejects a write that records a trust under every name it entered, where the exact rule on the
+/// other name outranks the directory's distrust and that name reads as trusted, and one that
+/// distrusts the name the write was made through.
+#[cfg(unix)]
+#[test]
+fn a_trusted_write_does_not_read_back_as_trusted_through_a_name_in_a_distrusted_directory() {
+    for (index, (name, link, typed, file_reads, link_reads)) in [
+        (
+            "src/real.json",
+            "vendor/link.json",
+            "src/real.json",
+            Integrity::Trusted,
+            Integrity::Untrusted,
+        ),
+        (
+            "vendor/real.json",
+            "src/link.json",
+            "src/link.json",
+            Integrity::Untrusted,
+            Integrity::Untrusted,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let scratch = Scratch::new(&format!("trusted-write-link-{index}"));
+        for directory in ["src", "vendor"] {
+            std::fs::create_dir_all(scratch.path.join(directory)).expect("directory");
+        }
+        std::fs::write(scratch.path.join(name), aliases::CONTENT).expect("file");
+        std::fs::write(scratch.path.join(aliases::CONTROL), aliases::CONTENT).expect("control");
+        std::os::unix::fs::symlink(scratch.path.join(name), scratch.path.join(link))
+            .expect("symbolic link");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let mut policy = alias_policy(&workspace, &mut sink, Some("vendor"));
+
+        workspace
+            .write(&mut policy, &trusted_text(typed), &trusted_text("ours"))
+            .unwrap_or_else(|error| panic!("{typed}: the write was refused: {error}"));
+
+        let mut read = |spelling: &str| {
+            workspace
+                .read(&mut policy, &trusted_text(spelling))
+                .expect("the file is read")
+                .label()
+                .integrity
+        };
+        let (under_the_file, under_the_link) = (read(name), read(link));
+        assert_eq!(
+            read(aliases::CONTROL),
+            Integrity::Trusted,
+            "{name} {link}: the workspace is not trusted, so an untrusted read shows nothing"
+        );
+        assert_eq!(
+            under_the_link, link_reads,
+            "{name} {link} (written as {typed}): wrong integrity reading {link}"
+        );
+        assert_eq!(
+            under_the_file, file_reads,
+            "{name} {link} (written as {typed}): wrong integrity reading {name}"
+        );
     }
 }
 
@@ -8106,13 +8398,15 @@ fn a_listing_of_a_second_path_to_the_tree_does_not_name_a_directory_a_deny_rule_
     std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
     std::fs::write(scratch.path.join("secrets/key.pem"), "private").unwrap();
     std::fs::write(scratch.path.join("keep.txt"), "public").unwrap();
-    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let second = std::path::Path::new("/System/Volumes/Data")
         .join(workspace.root().strip_prefix("/").unwrap())
         .to_string_lossy()
         .into_owned();
-    workspace
-        .add_directory(&second)
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
         .expect("the second path opens");
 
     let listing = listing_under_a_directory_rule(&workspace, &second);
@@ -8357,13 +8651,15 @@ fn a_search_of_a_second_path_to_the_tree_does_not_open_a_file_a_deny_rule_covers
     let scratch = Scratch::new("grep-denied-second-path");
     std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
     std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
-    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let second = std::path::Path::new("/System/Volumes/Data")
         .join(workspace.root().strip_prefix("/").unwrap())
         .to_string_lossy()
         .into_owned();
-    workspace
-        .add_directory(&second)
+    // `/add-dir` refuses the second path (TRUST-9), so the pair is opened while every path is a
+    // directory of its own, and the real identity is back for what the test asks.
+    let workspace = workspace
+        .with_second_path_open(Some(&second))
         .expect("the second path opens");
 
     let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], &second);
@@ -14732,5 +15028,296 @@ fn a_repo_map_of_a_vouched_directory_reached_through_a_link_holds_its_files() {
         map.body.contains("top_function") && map.body.contains("low_function"),
         "{}",
         map.body
+    );
+}
+
+/// Where the lookup of a file's other names cannot finish, a read of the file is untrusted, whatever
+/// the map says of the name typed (TRUST-2). Two ways the
+/// lookup fails are run: the walk reaches its cap, and a directory in the tree cannot be listed.
+/// The control in each is a file with one name, for which no walk is asked, which stays trusted;
+/// and a finished lookup of the same hard-linked file reads as trusted, so the file is not refused
+/// for having two names. The regression it rejects: reading a lookup that gave up as "no other
+/// name", which trusts a name that may be distrusted. A name that is not UTF-8 is the third way and
+/// cannot be made on this host's file system, so it is reasoned only.
+#[cfg(unix)]
+#[test]
+fn a_read_whose_other_names_could_not_be_found_is_untrusted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new("other-names-unfinished");
+    std::fs::create_dir_all(scratch.path.join("sealed")).unwrap();
+    std::fs::write(scratch.path.join("a.txt"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("single.txt"), "needle\n").unwrap();
+    std::fs::hard_link(scratch.path.join("a.txt"), scratch.path.join("b.txt")).unwrap();
+    let open = Workspace::new(&scratch.path).expect("workspace");
+    let capped = open.clone().with_search_caps(Some(1), None);
+
+    let mut trust = TrustStore::new(open.root());
+    trust.trust(".");
+
+    assert_eq!(
+        read_integrity(&open, &trust, "a.txt"),
+        Integrity::Trusted,
+        "control: a finished lookup of a hard-linked file"
+    );
+    assert_eq!(
+        read_integrity(&capped, &trust, "single.txt"),
+        Integrity::Trusted,
+        "control: a file with one name needs no walk"
+    );
+    assert_eq!(
+        read_integrity(&capped, &trust, "a.txt"),
+        Integrity::Untrusted,
+        "a walk that reached its cap was read as no other name"
+    );
+    // The same file searched: a lookup of its other name that could not finish is as untrusted
+    // as the read of it.
+    assert_eq!(
+        search_integrity(&capped, &trust, "a.txt"),
+        (Integrity::Untrusted, 1),
+        "a search whose lookup of other names reached its cap was read as no other name"
+    );
+    assert_eq!(
+        search_integrity(&capped, &trust, "single.txt"),
+        (Integrity::Trusted, 1),
+        "control: a search of a file with one name needs no walk"
+    );
+
+    std::fs::set_permissions(
+        scratch.path.join("sealed"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let unlistable = std::fs::read_dir(scratch.path.join("sealed")).is_err();
+    let read = read_integrity(&open, &trust, "a.txt");
+    let single = read_integrity(&open, &trust, "single.txt");
+    std::fs::set_permissions(
+        scratch.path.join("sealed"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    // A process allowed to list it anyway (root) cannot show this half.
+    if unlistable {
+        assert_eq!(
+            single,
+            Integrity::Trusted,
+            "control: a file with one name needs no walk"
+        );
+        assert_eq!(
+            read,
+            Integrity::Untrusted,
+            "a directory that could not be listed was read as holding no other name"
+        );
+    }
+}
+
+/// A project holding `fetched.<extension>` (distrusted), a hard link to it in a directory of its
+/// own and a file with one name in another, with the project trusted as a whole. The link is
+/// trusted under its own name and untrusted under the other.
+#[cfg(unix)]
+fn a_distrusted_file_with_a_hard_link(
+    tag: &str,
+    extension: &str,
+    body: &str,
+) -> (Scratch, Workspace, TrustStore) {
+    let scratch = Scratch::new(tag);
+    std::fs::create_dir_all(scratch.path.join("linked")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("plain")).unwrap();
+    let distrusted = format!("fetched.{extension}");
+    std::fs::write(scratch.path.join(&distrusted), body).unwrap();
+    std::fs::write(scratch.path.join(format!("plain/single.{extension}")), body).unwrap();
+    std::fs::hard_link(
+        scratch.path.join(&distrusted),
+        scratch.path.join(format!("linked/copy.{extension}")),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[&distrusted]);
+    (scratch, workspace, trust)
+}
+
+/// R33 (a). A search labels what it read by the weakest answer over every name of each file, as a
+/// read of it does (TRUST-2). The regression it rejects: asking the map under the one name the walk
+/// reached the file by, so a search of a hard link to a distrusted file is trusted while a read of
+/// the same file is not. The controls are a file with one name and a link whose other name is
+/// trusted, which stay trusted, so the search is not simply untrusted whenever a file has two
+/// names.
+#[cfg(unix)]
+#[test]
+fn a_search_of_a_hard_link_to_a_distrusted_file_is_untrusted() {
+    let (scratch, workspace, trust) =
+        a_distrusted_file_with_a_hard_link("search-labels-hard-link", "txt", "needle\n");
+    std::fs::write(scratch.path.join("both.txt"), "needle\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("both.txt"),
+        scratch.path.join("plain/both-too.txt"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        read_integrity(&workspace, &trust, "linked/copy.txt"),
+        Integrity::Untrusted,
+        "a read of the link is trusted, so the fixture proves nothing"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "linked/copy.txt"),
+        (Integrity::Untrusted, 1),
+        "a search of one file named by a hard link to a distrusted file was trusted"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "linked"),
+        (Integrity::Untrusted, 1),
+        "a search of a directory holding a hard link to a distrusted file was trusted"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "plain/single.txt"),
+        (Integrity::Trusted, 1),
+        "control: a file with one name"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "plain/both-too.txt"),
+        (Integrity::Trusted, 1),
+        "control: a hard link whose other name is trusted"
+    );
+}
+
+/// R33 (a), the symbolic link half: a file named by a symbolic link is the file it opens, so a
+/// search of it is as untrusted as a read of it when the file it opens is distrusted.
+#[cfg(unix)]
+#[test]
+fn a_search_of_a_symbolic_link_to_a_distrusted_file_is_untrusted() {
+    let (scratch, workspace, trust) =
+        a_distrusted_file_with_a_hard_link("search-labels-symlink", "txt", "needle\n");
+    std::os::unix::fs::symlink("fetched.txt", scratch.path.join("via.txt")).unwrap();
+    std::os::unix::fs::symlink("plain/single.txt", scratch.path.join("via-control.txt")).unwrap();
+
+    assert_eq!(
+        read_integrity(&workspace, &trust, "via.txt"),
+        Integrity::Untrusted,
+        "a read through the link is trusted, so the fixture proves nothing"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "via.txt"),
+        (Integrity::Untrusted, 1),
+        "a search of a symbolic link to a distrusted file was trusted"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "via-control.txt"),
+        (Integrity::Trusted, 1),
+        "control: a symbolic link to a trusted file"
+    );
+}
+
+/// R33 (b). A listing is no more trusted than a read of any file in it. The regression it rejects:
+/// asking the map under the name the walk met each file by, so a listing of a directory holding a
+/// hard link to a distrusted file is trusted. A directory of files with one name stays trusted.
+#[cfg(unix)]
+#[test]
+fn a_listing_of_a_hard_link_to_a_distrusted_file_is_untrusted() {
+    let (_scratch, workspace, trust) =
+        a_distrusted_file_with_a_hard_link("list-labels-hard-link", "txt", "needle\n");
+
+    assert_eq!(
+        read_integrity(&workspace, &trust, "linked/copy.txt"),
+        Integrity::Untrusted,
+        "a read of the link is trusted, so the fixture proves nothing"
+    );
+    assert_eq!(
+        listing_integrity(&workspace, &trust, "linked"),
+        (Integrity::Untrusted, 1),
+        "a listing of a directory holding a hard link to a distrusted file was trusted"
+    );
+    assert_eq!(
+        listing_integrity(&workspace, &trust, "plain"),
+        (Integrity::Trusted, 1),
+        "control: a directory of files with one name"
+    );
+}
+
+/// R33 (c). A repository map does not open a file one of whose names is distrusted, and counts it
+/// as unvouched, as a read of it is quarantined. The regression it rejects: asking under the name
+/// the walk met the file by, so the declarations of a distrusted file reach the planner through a
+/// hard link to it.
+#[cfg(unix)]
+#[test]
+fn a_repo_map_does_not_open_a_hard_link_to_a_distrusted_file() {
+    let (_scratch, workspace, trust) = a_distrusted_file_with_a_hard_link(
+        "map-labels-hard-link",
+        "rs",
+        "pub fn only_in_the_distrusted_file() {}\n",
+    );
+
+    assert_eq!(
+        read_integrity(&workspace, &trust, "linked/copy.rs"),
+        Integrity::Untrusted,
+        "a read of the link is trusted, so the fixture proves nothing"
+    );
+    let (map, _) = map_of(&workspace, trust.clone(), None, "linked")
+        .expect("the map of the directory holding the link");
+    assert_eq!(
+        (map.files, map.unvouched),
+        (0, 1),
+        "the map opened a hard link to a distrusted file: {map:?}"
+    );
+    assert!(
+        !map.body.contains("only_in_the_distrusted_file"),
+        "the declarations of a distrusted file reached the map through a hard link: {}",
+        map.body
+    );
+    let (control, _) = map_of(&workspace, trust, None, "plain").expect("the control map");
+    assert_eq!(
+        (control.files, control.unvouched),
+        (1, 0),
+        "control: {control:?}"
+    );
+}
+
+/// R33 (a), (b), (c). A lookup of other names that did not finish reads as untrusted in a walk too
+/// (TRUST-2), as in a read of one file: here the cap on files a walk visits is one, so the index of
+/// hard links cannot be built. The control is a tree with no file of more than one name, which
+/// needs no lookup and stays trusted. The regression it rejects: reading a lookup that gave up as
+/// no other name.
+#[cfg(unix)]
+#[test]
+fn a_walk_whose_other_names_could_not_be_found_is_untrusted() {
+    let scratch = Scratch::new("walk-labels-unfinished");
+    std::fs::create_dir_all(scratch.path.join("linked")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("plain")).unwrap();
+    std::fs::write(scratch.path.join("linked/a.rs"), "pub fn a() {}\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("linked/a.rs"),
+        scratch.path.join("linked/b.rs"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("plain/c.rs"), "pub fn c() {}\n").unwrap();
+    let open = Workspace::new(&scratch.path).expect("workspace");
+    let capped = open.clone().with_search_caps(Some(1), None);
+    let trust = trusting_all_but(&open, &[]);
+
+    assert_eq!(
+        search_integrity(&open, &trust, "linked"),
+        (Integrity::Trusted, 2),
+        "control: a finished lookup of hard links nobody distrusts"
+    );
+    assert_eq!(
+        search_integrity(&capped, &trust, "linked/a.rs"),
+        (Integrity::Untrusted, 1),
+        "a search whose lookup of other names gave up was read as no other name"
+    );
+    assert_eq!(
+        listing_integrity(&capped, &trust, "linked").0,
+        Integrity::Untrusted,
+        "a listing whose lookup of other names gave up was read as no other name"
+    );
+    assert_eq!(
+        search_integrity(&capped, &trust, "plain"),
+        (Integrity::Trusted, 1),
+        "control: files with one name need no lookup"
+    );
+    let (map, _) = map_of(&capped, trust, None, "linked").expect("the map");
+    assert_eq!(
+        (map.files, map.unvouched),
+        (0, 2),
+        "a map whose lookup of other names gave up opened the files: {map:?}"
     );
 }

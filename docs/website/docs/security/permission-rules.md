@@ -31,7 +31,8 @@ name can add a refusal or a question and never removes one. A listing, a search 
 their entries to the same rules: an entry is left out when a rule covers any name its file has, so a hard
 link to a denied file is not reported, and neither is an entry whose name beneath a second path to an
 open tree a rule covers. Where the search for the other names cannot finish while a `Read` deny rule is
-in force, an entry with more than one name is left out. A `deny` or `ask` rule written through a
+in force, an entry with more than one name is left out. The trust map is asked under the same names
+([Trust](trust.md)). A `deny` or `ask` rule written through a
 link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
 `real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
 project also covers the file under the relative name the file tools ask by, so in a session opened in
