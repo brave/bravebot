@@ -9136,6 +9136,41 @@ fn told_destination(
     }
 }
 
+/// A failed run as the planner is told it. A file exec could not open is named by the path it
+/// joined onto where the directory landed, so it is respelled under the directory as typed. That
+/// holds for a file the line opens and for one a `$(...)` in its assignments opens, which exec
+/// keeps inside the substitution's error. A name the closures that make a
+/// [`crate::exec::ExecError::Redirection`] already spelled that way, or an absolute one the
+/// planner wrote, is not under the landing and is left as it is. The decision is made on the
+/// `PathBuf` exec held and the string is built from the directory the planner typed, so nothing is
+/// read from a file (PATH-001, LABEL-3, TOOL-4).
+fn told_failure(
+    workspace: &Workspace,
+    error: crate::exec::ExecError,
+    landing: &std::path::Path,
+    typed: Option<&str>,
+) -> crate::exec::ExecError {
+    use crate::exec::{ExecError, SubstitutionFailure};
+    match error {
+        ExecError::Unopened { path, detail } if path.strip_prefix(landing).is_ok() => {
+            ExecError::Redirection {
+                path: told_destination(workspace, &path, landing, typed),
+                detail,
+            }
+        }
+        ExecError::Substitution {
+            source,
+            failure: SubstitutionFailure::Inside(inner),
+        } => ExecError::Substitution {
+            source,
+            failure: SubstitutionFailure::Inside(Box::new(told_failure(
+                workspace, *inner, landing, typed,
+            ))),
+        },
+        other => other,
+    }
+}
+
 /// What a line left at the destinations it opened.
 struct Left<'a> {
     /// Every finding across every destination, so one note names them all and one test of it
@@ -11557,26 +11592,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // got to (GROUND-1).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
-            // A file exec could not open is named by the path it joined onto where the directory
-            // landed. Respelled under the directory as typed; a name the closures above already
-            // spelled that way, or an absolute one the planner wrote, is not under the landing and
-            // is left as it is. Both are paths the driver holds, and nothing is read from a file.
-            let error = match error {
-                crate::exec::ExecError::Unopened { path, detail }
-                    if path.strip_prefix(&plan.directory).is_ok() =>
-                {
-                    crate::exec::ExecError::Redirection {
-                        path: told_destination(
-                            tools.workspace,
-                            &path,
-                            &plan.directory,
-                            (!at_the_root).then_some(told_directory.as_str()),
-                        ),
-                        detail,
-                    }
-                }
-                other => other,
-            };
+            let error = told_failure(
+                tools.workspace,
+                error,
+                &plan.directory,
+                (!at_the_root).then_some(told_directory.as_str()),
+            );
             let text = failed_line_text(&said, &error);
             let mut produced = Produced::problem(text);
             produced.changed_a_file = changed_a_file;
@@ -15020,6 +15041,83 @@ mod tests {
             gone.contains("no longer exists") && !gone.contains("may have run in part"),
             "{gone}"
         );
+    }
+
+    /// CMDLINE-17, PATH-001: a file a substitution could not open is told under the directory as
+    /// typed, one level or two down, and an error that is not an open failure comes back as it
+    /// was. The regression it rejects is respelling only the top-level error, which leaves the
+    /// landing in the text of the nested one.
+    #[test]
+    fn a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed() {
+        use crate::exec::{ExecError, SubstitutionFailure};
+        let root =
+            std::env::temp_dir().join(format!("bravebot-told-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("landed")).expect("scratch");
+        let root = root.canonicalize().expect("canonical");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let landing = root.join("landed");
+        let nested = |inner: ExecError| ExecError::Substitution {
+            source: "outer".into(),
+            failure: SubstitutionFailure::Inside(Box::new(ExecError::Substitution {
+                source: "inner".into(),
+                failure: SubstitutionFailure::Inside(Box::new(inner)),
+            })),
+        };
+
+        let opened = told_failure(
+            &workspace,
+            nested(ExecError::Unopened {
+                path: landing.join("nofile"),
+                detail: "no such file".into(),
+            }),
+            &landing,
+            Some("docs"),
+        )
+        .to_string();
+        assert!(
+            opened.contains("'docs/nofile' could not be opened") && !opened.contains("landed"),
+            "{opened}"
+        );
+
+        let other = told_failure(
+            &workspace,
+            nested(ExecError::Io("broken pipe".into())),
+            &landing,
+            Some("docs"),
+        )
+        .to_string();
+        assert!(other.contains("broken pipe"), "{other}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CMDLINE-4: a `Redirection` an open-time hook made is already spelled under the directory as
+    /// typed, so it passes through a substitution unchanged and is not spelled a second time. The
+    /// regression it rejects is a helper that respells every nested open failure, which would turn
+    /// `docs/out` into `docs/docs/out`.
+    #[test]
+    fn a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again() {
+        use crate::exec::{ExecError, SubstitutionFailure};
+        let root = std::env::temp_dir().join(format!("bravebot-told-hook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("landed")).expect("scratch");
+        let root = root.canonicalize().expect("canonical");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let landing = root.join("landed");
+        let made = ExecError::Substitution {
+            source: "inner".into(),
+            failure: SubstitutionFailure::Inside(Box::new(ExecError::Redirection {
+                path: "docs/out".into(),
+                detail: "refused".into(),
+            })),
+        };
+        let before = made.to_string();
+
+        let told = told_failure(&workspace, made, &landing, Some("docs")).to_string();
+
+        assert_eq!(told, before);
+        assert!(told.contains("'docs/out' could not be opened"), "{told}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     use crate::exec::Deadlines;

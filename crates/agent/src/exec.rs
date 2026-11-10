@@ -386,7 +386,32 @@ pub enum ExecError {
     /// A `$(source)` in an assignment did not produce a value. Carries the source the planner
     /// typed and how it ended, and never a byte of what it printed: that is the value, or part of
     /// it, and may be a secret.
-    Substitution { source: String, detail: String },
+    Substitution {
+        source: String,
+        failure: SubstitutionFailure,
+    },
+}
+
+/// How a `$(source)` ended without a value.
+#[derive(Debug)]
+pub enum SubstitutionFailure {
+    /// It ran and ended: the exit status, a signal, the clock. The words are the driver's own.
+    Ended(String),
+    /// The run of the substitution's own line failed, and the error is kept whole instead of as
+    /// text, so that a caller can decide on the paths it holds before the planner is told
+    /// ([PATH-001]).
+    ///
+    /// [PATH-001]: ../../../docs/best-practices/paths.md
+    Inside(Box<ExecError>),
+}
+
+impl fmt::Display for SubstitutionFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ended(words) => f.write_str(words),
+            Self::Inside(error) => error.fmt(f),
+        }
+    }
 }
 
 /// Why a variable named in an assignment was not expanded.
@@ -429,10 +454,10 @@ impl fmt::Display for ExecError {
                 };
                 write!(f, "the variable '{name}' cannot be expanded: {problem}")
             }
-            Self::Substitution { source, detail } => {
+            Self::Substitution { source, failure } => {
                 write!(
                     f,
-                    "the command substitution '$({source})' did not produce a value: {detail}"
+                    "the command substitution '$({source})' did not produce a value: {failure}"
                 )
             }
         }
@@ -712,10 +737,11 @@ impl<'a> Running<'a> {
     /// status, the clock, the cancellation or an error of the run itself, never by what was
     /// printed: the value is untrusted output, and its length and its encoding decide nothing.
     fn substitute(&mut self, source: &str, steps: &Steps) -> Result<Secret, ExecError> {
-        let failed = |detail: &str| ExecError::Substitution {
+        let failed = |failure: SubstitutionFailure| ExecError::Substitution {
             source: source.to_string(),
-            detail: detail.to_string(),
+            failure,
         };
+        let ended_in = |words: &str| failed(SubstitutionFailure::Ended(words.to_string()));
         let remaining = self.limit.saturating_sub(self.started.elapsed());
         let mut inner = Running::new(self.directory, self.cancel, remaining, self.scratch, None);
         inner.raw_stdout = Some(Vec::new());
@@ -728,10 +754,10 @@ impl<'a> Running<'a> {
         let well = match ended {
             Ok(well) => well,
             Err(ExecError::Cancelled) => return Err(ExecError::Cancelled),
-            Err(other) => return Err(failed(&other.to_string())),
+            Err(other) => return Err(failed(SubstitutionFailure::Inside(Box::new(other)))),
         };
         if inner.stopped.is_some() {
-            return Err(failed("it ran out of time"));
+            return Err(ended_in("it ran out of time"));
         }
         if !well {
             let detail = match inner.codes.iter().rev().find(|code| **code != Some(0)) {
@@ -739,7 +765,7 @@ impl<'a> Running<'a> {
                 Some(None) => "it was ended by a signal".to_string(),
                 None => "it failed".to_string(),
             };
-            return Err(failed(&detail));
+            return Err(ended_in(&detail));
         }
         // The bytes the pipe delivered, not the text `Drain::text` makes of them: that is lossy, so
         // a program printing `\xff` would otherwise hand the next program U+FFFD and the line would

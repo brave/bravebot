@@ -280,7 +280,9 @@ as `\u{..}`, so a name holding one does not draw as another name.
 The directory the line ran in and the file each redirection names are told in the words the planner
 wrote, with a `..` that lands in an added directory told as the workspace spells it for the file
 tools. Where a link in that tree led is a name whoever wrote the tree chose, so it is drawn for the
-person and never spelled into a sentence for the planner.
+person and never spelled into a sentence for the planner. That holds for a file a substitution's own
+line could not open as well ([CMDLINE-17](#CMDLINE-17)): it is named once, under the directory as
+typed.
 
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
@@ -327,6 +329,12 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_credential_refusal_names_the_redirection_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::a_refused_redirection_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::turn::an_unopened_redirection_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
+`verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
+`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
@@ -1011,6 +1019,10 @@ reaches the program unchanged.
 **A failure says what ran and how it ended, not what it printed.** A substitution that fails to
 start, is stopped or exits non-zero fails the line before the stage that uses it, naming the source
 text and the exit status. Neither its standard output nor its standard error is in the message.
+A substitution whose own line fails to open a file, a redirection's source or destination, says so
+with the file named once, under the directory the line was run in as the planner wrote it. The
+message never carries the place a link in that tree led, which whoever wrote the tree chose
+([CMDLINE-4](#CMDLINE-4)).
 
 **The output is the value, and the driver decides nothing from it.** `cmd` may be a program nobody
 vouched for, so what it printed is untrusted ([RUN-4](run.md#RUN-4)). Its length and its encoding
@@ -1047,6 +1059,12 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::an_unset_variable_is_refused_naming_the_variable_and_nothing_runs`
 `verified-by: bravebot_agent::exec::a_failing_substitution_is_refused_naming_its_source_and_status_but_not_its_output`
 `verified-by: bravebot_agent::exec::a_substitution_printing_a_nul_byte_fails_the_start_naming_the_program_and_not_the_value`
+`verified-by: bravebot_agent::exec::a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path`
+`verified-by: bravebot_agent::tools::a_failure_inside_a_substitution_is_respelled_under_the_directory_as_typed`
+`verified-by: bravebot_agent::tools::a_redirection_a_hook_made_inside_a_substitution_is_not_respelled_again`
+`verified-by: bravebot_agent::turn::an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed`
+`verified-by: bravebot_agent::confine::neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in`
 `verified-by: bravebot_agent::exec::a_variable_that_is_not_unicode_is_refused_and_one_holding_the_replacement_character_is_not`
 `verified-by: bravebot_agent::exec::a_substitution_printing_bytes_that_are_not_text_reaches_the_program_byte_for_byte`
 `verified-by: bravebot_agent::exec::the_trailing_line_ends_of_a_substitution_are_cut_from_its_bytes_and_nothing_else`

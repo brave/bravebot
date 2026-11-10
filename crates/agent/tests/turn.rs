@@ -89201,6 +89201,106 @@ fn an_unopened_redirection_is_named_under_the_directory_as_typed() {
     );
 }
 
+/// The same for a file a `$(...)` in the line's assignments could not open. Exec keeps that error
+/// inside the substitution's, and the path in it was joined onto where the link led. The
+/// substitution is accepted in the bypass mode only (CMDLINE-17).
+#[cfg(unix)]
+#[test]
+fn an_unopened_file_inside_a_substitution_is_named_under_the_directory_as_typed() {
+    let scratch =
+        a_workspace_nobody_vouched_for_with_a_linked_directory("linked-directory-sub-open");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "run",
+            r#"{"command":"BRAVEBOT_TEST_X=\"$(/bin/cat < nofile)\" /bin/echo x","directory":"docs"}"#,
+        ),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_bypass_turn(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the failure");
+    assert!(
+        last.contains("did not produce a value: 'docs/nofile' could not be opened"),
+        "the failure did not name the file under the directory as typed: {last}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains(LINKED_TARGET)),
+        "where a link led reached the planner through a substitution's failed open: {bodies:?}"
+    );
+}
+
+/// A redirection inside a substitution that the open-time check refuses is named under the
+/// directory as typed once, by the hook that refuses it, and the helper that respells an open
+/// failure leaves it alone. The destination was linked out of the workspace by an earlier part of
+/// the line, so the open-time check is what refuses it.
+#[cfg(unix)]
+#[test]
+fn a_redirection_refused_inside_a_substitution_is_named_once_under_the_directory_as_typed() {
+    let scratch =
+        a_workspace_nobody_vouched_for_with_a_linked_directory("linked-directory-sub-hook");
+    let elsewhere = Scratch::new("linked-directory-sub-hook-elsewhere");
+    let victim = elsewhere.path.join("victim");
+    std::fs::write(&victim, "kept\n").unwrap();
+    let away = victim.to_str().expect("a UTF-8 scratch path");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let command = format!(
+        r#"{{"command":"/bin/ln -s {away} out && BRAVEBOT_TEST_X=\"$(/bin/echo hi > out)\" /bin/echo x","directory":"docs"}}"#
+    );
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request_2("run", &command), reply_with("done")]);
+
+    let bodies = bodies_of_a_bypass_turn(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the failure");
+    assert!(
+        last.contains("'docs/out' could not be opened") && !last.contains("docs/docs/out"),
+        "the refusal did not name the file once under the directory as typed: {last}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "kept\n",
+        "the driver opened a file outside the workspace through a link"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains(LINKED_TARGET)),
+        "where a link led reached the planner: {bodies:?}"
+    );
+}
+
+/// One turn in `workspace` under the mode that answers every question yes, which is where a
+/// substitution in an assignment is accepted. Returns the body of every request the planner was
+/// sent.
+#[cfg(unix)]
+fn bodies_of_a_bypass_turn(
+    workspace: &Workspace,
+    endpoint: &str,
+    received: &MockRequests,
+) -> Vec<String> {
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut asked, bravebot_agent::PermissionMode::Bypass, false);
+    turn::resume(
+        &config_for(endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("run it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    std::iter::from_fn(|| received.try_recv().ok()).collect()
+}
+
 /// The same when the link leads to a directory whose name is not UTF-8: the decision is made on
 /// the path, so the landing name still does not reach the planner (PATH-001). Linux only: a macOS
 /// file system cannot hold the name.

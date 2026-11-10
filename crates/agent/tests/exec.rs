@@ -3674,6 +3674,43 @@ fn a_background_start_holds_its_substitution_to_the_calls_deadline() {
     assert!(!scratch.path.join("ran").exists(), "the step started");
 }
 
+/// CMDLINE-17: a substitution whose own line could not open a file keeps that error whole, with
+/// the path the run held, so the tool can respell it under the directory as typed. Flattened to
+/// text, the landing would reach the planner (CMDLINE-4, PATH-001).
+#[cfg(unix)]
+#[test]
+fn a_substitution_that_cannot_open_a_file_keeps_the_error_and_its_path() {
+    let scratch = Scratch::new("expand-unopened-inside");
+    let touch = script(&scratch.path, "touch.sh", "#!/bin/sh\ntouch ran\n");
+    let cat = script(&scratch.path, "inner.sh", "#!/bin/sh\nexit 0\n");
+    let missing = scratch.path.join("nofile");
+    let mut inner = expanding(&cat, &[], Vec::new());
+    inner.routes = vec![bravebot_core::command::Route::Stdin {
+        path: missing.clone(),
+    }];
+    let plan = plan_of(
+        &scratch.path,
+        vec![printing(&touch, vec![substitution("inner", inner)])],
+    );
+
+    let outcome = run_expanding(&plan);
+
+    match outcome {
+        Err(ExecError::Substitution {
+            source,
+            failure: exec::SubstitutionFailure::Inside(inside),
+        }) => {
+            assert_eq!(source, "inner");
+            assert!(
+                matches!(&*inside, ExecError::Unopened { path, .. } if *path == missing),
+                "the inner error did not keep the path the run held: {inside:?}"
+            );
+        }
+        other => panic!("the open failure was not kept inside the substitution: {other:?}"),
+    }
+    assert!(!scratch.path.join("ran").exists(), "the step started");
+}
+
 /// The variables the subprocess scrub withholds hold credentials. Letting `NAME=$TOKEN` copy one
 /// into a child's environment would undo the scrub, so the line is refused; and the refusal names
 /// the variable but never its value, since the error reaches the planner and the trail.

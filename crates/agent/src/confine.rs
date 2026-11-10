@@ -5058,6 +5058,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(&aside);
     }
 
+    /// CMDLINE-17: nothing a confinement writes into a policy row, or into the reason it refuses a
+    /// stage, depends on the directory the stage starts in. That directory is where a link in a
+    /// tree nobody vouched for led, so a row or a refusal built from it would tell the planner the
+    /// landing. The regression it rejects: a row or a refusal that names `directory`, which the
+    /// planner would then read as the spelling of a directory it did not type.
+    #[cfg(unix)]
+    #[test]
+    fn neither_a_policy_row_nor_a_refusal_depends_on_the_directory_a_stage_starts_in() {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the directory as made");
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            Some(&made),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let first = Path::new("/people/person/project/landing-one");
+        let second = Path::new("/people/person/project/landing-two");
+
+        let rows = |directory: &Path| {
+            let policy = confinement.policy(&step("/bin/cat", &["f"]), directory, &[]);
+            let writable: Vec<PathBuf> =
+                policy.writable.iter().map(|row| row.path.clone()).collect();
+            (
+                policy.readable,
+                policy.unreadable,
+                policy.unwritable,
+                writable,
+                policy.starting_in,
+            )
+        };
+        let (readable, unreadable, unwritable, writable, starts_in) = rows(first);
+        let other = rows(second);
+        assert_eq!(starts_in.as_deref(), Some(first));
+        assert_eq!(
+            (&readable, &unreadable, &unwritable, &writable),
+            (&other.0, &other.1, &other.2, &other.3),
+            "a row follows the directory the stage starts in"
+        );
+        assert_eq!(other.4.as_deref(), Some(second));
+        for row in readable
+            .iter()
+            .chain(&unreadable)
+            .chain(&unwritable)
+            .chain(&writable)
+        {
+            assert!(
+                !row.starts_with(first),
+                "{} is the landing or beneath it",
+                row.display()
+            );
+        }
+
+        // A refusal for the scratch directory having become a link is built with the
+        // directory the stage would start in at hand, and says the same for either.
+        let target = somewhere_to_link_to("confine-refusal-landing")
+            .join("elsewhere")
+            .canonicalize()
+            .expect("a canonical target");
+        let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+            std::os::unix::fs::symlink(&target, name).expect("link")
+        });
+        let refused = |directory: &Path| match confinement.prepared(
+            &Command::new("/bin/cat"),
+            &step("/bin/cat", &[]),
+            directory,
+        ) {
+            Err(ExecError::NotConfined { detail, .. }) => detail,
+            Err(other) => panic!("refused as {other}, not as a confinement"),
+            Ok(_) => panic!("a link where the scratch directory was is not refused"),
+        };
+        let told = refused(first);
+        assert_eq!(told, refused(second));
+        assert!(
+            !told.contains("landing-"),
+            "the refusal names the landing: {told}"
+        );
+        let _ = std::fs::remove_file(session.path());
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
     /// What `confinement` refuses a stage for when it is about a session directory, and nothing
     /// otherwise.
     #[cfg(unix)]
