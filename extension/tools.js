@@ -2680,7 +2680,8 @@ export const TOOLS = {
     const pinned = flag(params, "pinned");
     const { url, tab } = await tabNamed(chrome, params);
     const changed = await chrome.tabs.update(tab.id, { pinned });
-    return { url, pinned: changed.pinned === true };
+    // What the tab was before, so a call a plan's approval covered can be undone by hand.
+    return { url, was: tab.pinned === true, pinned: changed.pinned === true };
   },
 
   async mute_tab(chrome, params) {

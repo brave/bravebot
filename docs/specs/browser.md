@@ -1482,17 +1482,17 @@ so a session is never told a page is empty because the setting kept the extensio
 
 `focus_tab`, `pin_tab`, `mute_tab` and `move_tab` each take `url`, which names the open tab whose
 URL is that one, character for character, and act on that tab alone. `focus_tab` makes it the active
-tab of its window and brings the window forward. `pin_tab` takes an optional `pinned` and
-`mute_tab` an optional `muted`, each true where the call leaves it out, and a value that is not
-`true` or `false` fails without a tab being looked for. `move_tab` takes `index`, a whole number
-from -1 up, and moves the tab to that position in the window it is in, -1 being last, never to
-another window; any other value fails the same way. A URL at a listed site fails as
-[BROWSER-17](#BROWSER-17) says, and where no tab is at the URL the call fails and no tab is
-changed. The reply holds the URL asked for and, for the last three, the state the browser reports
-after the change: whether the tab is pinned, whether it is muted, or the position it was put at,
-which differs from the one asked for where the browser keeps pinned tabs ahead of the others. The
-tab is changed by its id once it is found, so a tab that navigates in between receives the change at
-its new page.
+tab of its window and brings the window forward. `pin_tab` takes an optional `pinned` and `mute_tab`
+an optional `muted`, each true where the call leaves it out, and a value that is not `true` or
+`false` fails without a tab being looked for. `pin_tab` answers whether the tab was pinned before
+the call and whether it is after. `move_tab` takes `index`, a whole number from -1 up, and moves the
+tab to that position in the window it is in, -1 being last, never to another window; any other value
+fails the same way. A URL at a listed site fails as [BROWSER-17](#BROWSER-17) says, and where no tab
+is at the URL the call fails and no tab is changed. The reply holds the URL asked for and, for the
+last three, the state the browser reports after the change: whether the tab is pinned, whether it is
+muted, or the position it was put at, which differs from the one asked for where the browser keeps
+pinned tabs ahead of the others. The tab is changed by its id once it is found, so a tab that
+navigates in between receives the change at its new page.
 
 `group_tabs` and `ungroup_tabs` take `urls`, a list of one or more URLs that each name an open tab as
 above, a URL given twice naming its tab once. `group_tabs` puts those tabs into a new tab group in
