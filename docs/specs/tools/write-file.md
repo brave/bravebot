@@ -119,6 +119,29 @@ every slot read earlier, including a line that wrote nothing. The cost is one qu
 write-back that would have changed nothing, after a `run` line, and the count moves no revision,
 so the output of other running commands keeps its label.
 
+**The approval of a write that is asked about.** The approval is bound to the path's stamp (its
+revision and the number of `run` lines started), taken in the same capture that drew the preview
+and compared whole when the write enters, as [TRUST-4](../trust-map.md#TRUST-4) says. It applies
+to a write of `contents`, to a write through a reference, to a picture or a PDF
+([WRITE-9](#WRITE-9)), and to the write steps of a manifest run; `edit_file`
+([EDIT-1](edit-file.md#EDIT-1)) and `download_url` ([DOWNLOAD-2](download-url.md#DOWNLOAD-2)) do
+the same through the same comparison. If the file was written, or a `run` line started, after the
+preview was drawn, a yes writes nothing and leaves the file as it was. The planner is told that the
+path may have changed while the user was being asked, so nothing was written, and to read it again
+if its contents matter and repeat the call. The cost is one more question or one refused write after
+any `run` line that started while the question was open, even one that wrote nothing, as for the
+exception above. No byte of the file is read for the comparison.
+
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_picture_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_picture_is_written_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::manifest::a_run_that_started_while_a_planned_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::workspace::an_endorsed_write_is_refused_when_a_program_started_after_the_read`
+`verified-by: bravebot_agent::workspace::an_endorsed_write_proceeds_when_no_program_started_after_the_read`
+`verified-by: bravebot_agent::workspace::a_program_started_before_the_read_does_not_void_the_write`
+
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing`
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it`
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_about_and_restores_it`

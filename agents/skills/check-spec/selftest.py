@@ -187,6 +187,7 @@ def run_checks():
         findings.extend(check.check_clause_numbering(one))
         findings.extend(check.check_clause_history(one, declared))
         findings.extend(check.check_coverage(one, index))
+        findings.extend(check.check_construction_paths(one))
         findings.extend(check.check_anchors(one))
         findings.extend(check.check_governs(one))
         findings.extend(check.check_guards(one, sources))
@@ -582,6 +583,23 @@ def cite_another_spec(root):
     edit_spec(root, "the gate opens only once", "the same rule `OTHER-1` states")
 
 
+def bracket_names(*paths, create=()):
+    """The `break_it` that makes DEMO-2's by-construction bracket name `paths`, with the files in
+    `create` written under the fixture so that a bracket can name one that exists."""
+
+    def break_it(root):
+        for made in create:
+            (root / made).parent.mkdir(parents=True, exist_ok=True)
+            (root / made).write_text("", encoding="utf-8")
+        edit_spec(
+            root,
+            "by-construction (the field is private)",
+            f"by-construction (the field is private, and {' and '.join(paths)} pin it)",
+        )
+
+    return break_it
+
+
 CASES = [
     ("a clean spec tree reports nothing", lambda root: None, None),
     (
@@ -721,6 +739,38 @@ CASES = [
             root / "crates" / "demo" / "src" / "gate.rs"
         ),
         "governs-missing",
+    ),
+    (
+        "a by-construction bracket naming a test file that does not exist",
+        bracket_names("ui/scripts/missing.test.mjs"),
+        {"by-construction-path-missing"},
+    ),
+    (
+        "a by-construction bracket naming a test file that exists",
+        bracket_names("ui/scripts/present.test.mjs", create=["ui/scripts/present.test.mjs"]),
+        None,
+    ),
+    (
+        "a by-construction bracket naming one file that exists and one that does not",
+        bracket_names(
+            "crates/demo/src/lib.rs", "crates/demo/src/gone.rs"
+        ),
+        {"by-construction-path-missing"},
+    ),
+    (
+        "a by-construction bracket naming a path relative to a package rather than the root",
+        bracket_names("scripts/local-client.ts"),
+        None,
+    ),
+    (
+        "a by-construction bracket naming a directory, a glob and an elided path",
+        bracket_names("ui/scripts/", "ui/scripts/*.test.mjs", "ui/scripts/...", "ui/scripts/shown.test.*"),
+        None,
+    ),
+    (
+        "a by-construction bracket naming a path with a longer extension than a file that exists",
+        bracket_names("ui/scripts/present.test.mjsx", create=["ui/scripts/present.test.mjs"]),
+        {"by-construction-path-missing"},
     ),
     (
         "a guarded symbol that was renamed away",
@@ -2063,6 +2113,45 @@ def record_checks():
     return checks
 
 
+def exit_status_checks():
+    """What the script itself exits with when a by-construction bracket names a file, run through
+    the scripts as a person runs them, since the status is what `make check-spec` reads."""
+    checks = []
+    for name, paths, create, wanted in (
+        ("a bracket naming a missing test file fails the run", ("ui/scripts/missing.test.mjs",), (), 1),
+        (
+            "a bracket naming a test file that exists leaves the run passing",
+            ("ui/scripts/present.test.mjs",),
+            ("ui/scripts/present.test.mjs",),
+            0,
+        ),
+    ):
+
+        def broken(root, paths=paths, create=create):
+            build_incremental(root)
+            bracket_names(*paths, create=create)(root)
+
+        def ask(wanted=wanted):
+            done = run_script("check-spec.py", "--mechanical-only", "--json")
+            found = [
+                f
+                for f in json.loads(done.stdout)["findings"]
+                if f["kind"] == "by-construction-path-missing"
+            ]
+            if wanted == 0:
+                return done.returncode == 0 and not found
+            return (
+                done.returncode == 1
+                and len(found) == 1
+                and found[0]["severity"] == "error"
+                and found[0]["clause"] == "DEMO-2"
+                and "ui/scripts/missing.test.mjs" in found[0]["summary"]
+            )
+
+        checks.append((name, bool(in_fixture(broken, ask))))
+    return checks
+
+
 def collect_checks():
     """Which answers a reviewer of a change may give, and what each one keeps."""
     earlier = {
@@ -2425,6 +2514,7 @@ def main():
         + [(c, "a hash moved, or did not") for c in in_fixture(build_incremental, hash_checks)]
         + [(c, "the plan was not the one the record calls for") for c in in_fixture(build_incremental, incremental_checks)]
         + [(c, "the scripts did not do what a run needs") for c in in_fixture(build_incremental, record_checks)]
+        + [(c, "the run did not exit as a bracket naming a file requires") for c in exit_status_checks()]
     )
     for (name, held), why in repeated:
         note(name, held, why)

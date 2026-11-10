@@ -20,6 +20,8 @@ governs:
   - ui/src/renderer/components/Approval.tsx
   - ui/src/renderer/components/TrustPrompt.tsx
   - ui/src/renderer/components/Diff.tsx
+  - ui/scripts/shown-name.test.mjs
+  - ui/scripts/shown.test.mjs
 documented-by:
   - docs/website/docs/security/permissions.md
   - docs/website/docs/security/permission-modes.md

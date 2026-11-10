@@ -60,8 +60,10 @@ preference of its own, since [FETCH-7](fetch-url.md#FETCH-7) is for a page a pro
 
 The destination goes through the write gate of [WRITE-3](write-file.md#WRITE-3): the path must be
 endorsed by a person and the endorsement is single-use and bound to that path. The question is
-put whatever the trust map says about the path, and shows the pair `url -> path`. An existing file
-is shown as an overwrite. Nothing is sent before it is answered, and a decline sends nothing. A
+put whatever the trust map says about the path, and shows the pair `url -> path`. The answer is
+bound to the path's stamp taken when the question was drawn, and a yes given after the file was
+written or after a `run` line started saves nothing ([TRUST-4](../trust-map.md#TRUST-4)). An
+existing file is shown as an overwrite. Nothing is sent before it is answered, and a decline sends nothing. A
 destination the workspace does not reach is refused first, before the host is asked about, since no
 answer to either question makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
 
@@ -74,6 +76,8 @@ answer to either question makes it reachable ([TRUST-10](../trust-map.md#TRUST-1
 `verified-by: bravebot_agent::turn::a_download_sends_no_accept_preference_of_its_own`
 `verified-by: bravebot_agent::turn::an_allow_rule_answers_a_downloads_host_and_the_destination_is_still_asked`
 `verified-by: bravebot_agent::turn::a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_download_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_download_is_saved_when_no_run_started_while_it_was_being_asked`
 
 <a id="DOWNLOAD-3"></a>
 ### DOWNLOAD-3: the file is recorded as not vouched for, and the server's words go to the person only

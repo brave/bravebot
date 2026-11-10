@@ -5808,9 +5808,11 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     //
     // Taken shared: the capture reads a file, which can be large, and enters no effect, so it
     // runs beside other readers and still waits for an effect (TRUST-4). The revision is read
-    // inside the same boundary, so it and the bytes are of one state of the map.
-    let (existing, pre_image, other_encoding, replaces, approved_revision) = policy
-        .capture_files_shared(|policy| {
+    // inside the same boundary, so it and the bytes are of one state of the map. The stamp is the
+    // revision and the count of `run` lines started, so a program that started while the question
+    // was open voids the yes even if it touched no path the authority was told of (TRUST-4).
+    let (existing, pre_image, other_encoding, replaces, approved_at) =
+        policy.capture_files_shared(|policy| {
             let key = workspace.trust_key(&proposed_path);
             let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
@@ -5818,7 +5820,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 peeks.1,
                 peeks.2,
                 workspace.names_a_file(&proposed_path),
-                policy.file_authority().revision_of(&key),
+                policy.file_authority().stamp_of(&key),
             )
         });
     // A file the trust map vouches for that is text in an encoding other than UTF-8 is not replaced
@@ -6035,7 +6037,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // this exact value. Issued for the path the question named, which an edit does not change.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
-    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
+    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_at)) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -6139,10 +6141,10 @@ fn write_a_picture<S: Sink, C: Confirmer>(
     let label = body.label();
 
     // What the file holds now is not read: it is replaced whole, and the person is told so.
-    let (replaces, approved_revision) = policy.capture_files(|_, capture| {
+    let (replaces, approved_at) = policy.capture_files(|_, capture| {
         (
             workspace.names_a_file(&proposed_path),
-            capture.revision_of(&workspace.trust_key(&proposed_path)),
+            capture.stamp_of(&workspace.trust_key(&proposed_path)),
         )
     });
     let intent = Intent::of_a_write(replaces);
@@ -6202,7 +6204,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         policy,
         &path,
         label,
-        Some(approved_revision),
+        Some(approved_at),
         |file, proof| {
             use std::io::Write;
             // No detail of why it did not decode: the error would name a byte of the URI.
@@ -6936,8 +6938,10 @@ fn edit_file<S: Sink, C: Confirmer>(
     // produces is trusted text, so interpolating the error's own path would hand the planner
     // exactly what the reference exists to withhold, in the driver's own voice. The deny-rule
     // road in `path_argument` already swaps the same name in, through `denied_by_rule`.
-    let source = match workspace.read(policy, &path) {
-        Ok(contents) => contents,
+    // The stamp is taken in the boundary the read is, so it and the text are of one state of the
+    // map. The approval below is spent only on that stamp (TRUST-4).
+    let (source, read_at) = match workspace.read_stamped(policy, &path) {
+        Ok(read) => read,
         Err(e) => {
             return file_tool_problem(
                 policy,
@@ -7104,7 +7108,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     let occurrences = replaced.occurrences;
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
-    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
+    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current, read_at) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -11962,10 +11966,10 @@ fn download_url<S: Sink, C: Confirmer>(
     }
 
     // What the file holds now is not read: it is replaced whole, and the person is told so.
-    let (replaces, approved_revision) = policy.capture_files(|_, capture| {
+    let (replaces, approved_at) = policy.capture_files(|_, capture| {
         (
             workspace.names_a_file(&proposed_path),
-            capture.revision_of(&workspace.trust_key(&proposed_path)),
+            capture.stamp_of(&workspace.trust_key(&proposed_path)),
         )
     });
     let intent = Intent::of_a_write(replaces);
@@ -12043,7 +12047,7 @@ fn download_url<S: Sink, C: Confirmer>(
         policy,
         &path,
         label,
-        Some(approved_revision),
+        Some(approved_at),
         |file, proof| {
             use std::io::Write;
             loop {

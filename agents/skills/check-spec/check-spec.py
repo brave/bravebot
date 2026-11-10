@@ -457,6 +457,63 @@ def check_coverage(spec, index):
                 )
 
 
+# The top-level directories of this repository. A bracket names a file by its path from the root,
+# so a token beginning with one of these is a path to hold. A token that begins anywhere else, such
+# as `scripts/local-client.ts` (relative to a package), is not read as one.
+CONSTRUCTION_ROOTS = (
+    "ui",
+    "crates",
+    "packages",
+    "mobile",
+    "extension-trusted",
+    "extension",
+    "agents",
+    "docs",
+    "contrib",
+    "fuzz",
+    "npm",
+    ".github",
+)
+CONSTRUCTION_PATH = re.compile(
+    r"(?<![\w./@-])(?:" + "|".join(re.escape(root) for root in CONSTRUCTION_ROOTS) + r")/[\w./-]+"
+)
+
+
+def construction_paths(bracket):
+    """The files a by-construction bracket names: a token from a repository-root directory that
+    ends in a name with an extension. A directory, a glob, a placeholder and an elided path
+    (`...`) name no one file, so they are left out."""
+    for found in CONSTRUCTION_PATH.finditer(bracket):
+        path = found.group(0).rstrip(".,-")
+        after = bracket[found.end() : found.end() + 1]
+        if after in ("*", "?", "<", "{", "[") or ".." in path:
+            continue
+        if re.search(r"\.\w+$", path.rsplit("/", 1)[-1]):
+            yield path
+
+
+def check_construction_paths(spec):
+    """A file a by-construction bracket names exists, since the bracket is the clause's pin and
+    a test or script renamed away leaves nothing else to say so."""
+    for clause in spec.clauses:
+        if clause.withdrawn:
+            continue
+        for reference in clause.verified_by:
+            if not reference.startswith("by-construction"):
+                continue
+            for path in dict.fromkeys(construction_paths(reference)):
+                if not Path(path).exists():
+                    yield finding(
+                        spec.rel,
+                        ERROR,
+                        "by-construction-path-missing",
+                        f"`{clause.id}` says by-construction and names `{path}`, which does not exist",
+                        clause=clause.id,
+                        evidence=f"{spec.rel}:{clause.line}",
+                        fix="a rename that leaves the bracket behind quietly stops it pinning anything",
+                    )
+
+
 def unverified_clauses(specs, index):
     """The clauses the coverage check calls uncovered, in the form the committed file lists.
 
@@ -2047,6 +2104,7 @@ def main():
         findings.extend(check_clause_numbering(spec))
         findings.extend(check_clause_history(spec, declared))
         findings.extend(check_coverage(spec, index))
+        findings.extend(check_construction_paths(spec))
         findings.extend(check_anchors(spec))
         findings.extend(check_governs(spec))
         findings.extend(check_guards(spec, sources))

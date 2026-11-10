@@ -17,6 +17,7 @@ governs:
   - crates/tui/src/render/beneath.rs
   - ui/src/shared/mentions.ts
   - ui/src/renderer/components/MentionList.tsx
+  - ui/scripts/mentions.test.mjs
 documented-by: docs/website/docs/using/context.md
 ---
 
