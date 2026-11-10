@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fakeBots } from './fake-bots.mjs'
@@ -82,16 +82,17 @@ test('a bot works in its home, a folder the picker handed over, and nowhere else
   try {
     const main = load(userData, async () => ({ canceled: false, filePaths: [chosen] }))
     const made = await main.saveForm(form())
+    mkdirSync(made.home, { recursive: true })
     // Both are absolute and hold no NUL, so `isProjectPath` cannot tell them apart. Nothing has
     // been opened yet, so neither is a folder anybody pointed at.
-    assert.equal(main.worksIn(made, made.home), true)
-    assert.equal(main.worksIn(made, chosen), false)
-    assert.equal(main.worksIn(made, elsewhere), false)
-    assert.equal(main.worksIn(made, undefined), false, 'a session whose folder nobody confirmed')
+    assert.equal(await main.worksIn(made, made.home), true)
+    assert.equal(await main.worksIn(made, chosen), false)
+    assert.equal(await main.worksIn(made, elsewhere), false)
+    assert.equal(await main.worksIn(made, undefined), false, 'a session whose folder nobody confirmed')
 
     assert.equal(await main.chooseDirectory({}), chosen)
-    assert.equal(main.worksIn(made, chosen), true)
-    assert.equal(main.worksIn(made, elsewhere), false, 'opening one folder says nothing about the folder beside it')
+    assert.equal(await main.worksIn(made, chosen), true)
+    assert.equal(await main.worksIn(made, elsewhere), false, 'opening one folder says nothing about the folder beside it')
   } finally { for (const at of [userData, chosen, elsewhere]) rmSync(at, { recursive: true, force: true }) }
 })
 
@@ -106,7 +107,7 @@ test('a folder a bot has worked in stays one it may work in after a restart', as
     await first.noteBotSession(made.slug, 'a1b2c3d4-0000-4000-8000-000000000001', chosen)
     // A fresh load has an empty picker record, so only the recorded conversation can answer.
     const second = load(userData, async () => ({ canceled: true, filePaths: [] }), file)
-    assert.equal(second.worksIn(await second.bot(made.slug), chosen), true)
+    assert.equal(await second.worksIn(await second.bot(made.slug), chosen), true)
   } finally { for (const at of [userData, chosen]) rmSync(at, { recursive: true, force: true }) }
 })
 
@@ -118,7 +119,7 @@ test('a cancelled picker leaves nothing a window may name', async () => {
     // the answer afterwards is the answer from before.
     const main = load(userData, async () => ({ canceled: true, filePaths: [offered] }))
     assert.equal(await main.chooseDirectory({}), null)
-    assert.equal(main.worksIn(await main.saveForm(form()), offered), false)
+    assert.equal(await main.worksIn(await main.saveForm(form()), offered), false)
   } finally { for (const at of [userData, offered]) rmSync(at, { recursive: true, force: true }) }
 })
 
@@ -138,4 +139,35 @@ test('editing a bot cannot move its home', async () => {
     assert.equal(edited.name, 'Keeper')
     assert.equal(edited.home, made.home, 'a rename is not a move')
   } finally { for (const at of [userData, elsewhere]) rmSync(at, { recursive: true, force: true }) }
+})
+
+test('a folder the window may open is not a folder a turn may run in, and a different spelling is refused', async () => {
+  const userData = scratch('bot-offered-app')
+  const offered = scratch('bot-offered-project')
+  const chosen = scratch('bot-offered-chosen')
+  try {
+    const store = fakeBots()
+    const main = load(userData, async () => ({ canceled: false, filePaths: [chosen] }), store)
+    const made = await main.saveForm(form())
+    mkdirSync(made.home, { recursive: true })
+    main.offerDirectories([offered])
+    assert.equal(main.mayOpenSessionIn(offered), true)
+    assert.equal(await main.worksIn(made, offered), false, 'a folder offered for a session is not one of the three')
+    const sent = store.calls.filter(([method]) => method === 'bot.works_in').at(-1)
+    assert.equal(sent[1].dataFolder, userData)
+    assert.equal(sent[1].directory, offered)
+    assert.equal(sent[1].opened.includes(offered), false)
+
+    assert.equal(await main.worksIn(made, `${made.home}/`), false)
+    const dotted = made.home.replace(/\/([^/]+)$/, '/./$1')
+    assert.notEqual(dotted, made.home)
+    assert.equal(await main.worksIn(made, dotted), false)
+
+    rmSync(made.home, { recursive: true, force: true })
+    mkdirSync(made.home.replace(/\/[^/]+$/, ''), { recursive: true })
+    writeFileSync(made.home, 'not a directory')
+    assert.equal(await main.worksIn(made, made.home), false, 'the home is refused when it is not a directory')
+    assert.equal(await main.chooseDirectory({}), chosen)
+    assert.equal(await main.worksIn(made, chosen), true, 'another folder is not refused because the home is not a directory')
+  } finally { for (const at of [userData, offered, chosen]) rmSync(at, { recursive: true, force: true }) }
 })

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { botRow, fakeBots, loadMain } from './fake-bots.mjs'
@@ -165,6 +165,14 @@ test('a window cannot name the definition a turn is addressed to', () => {
   const sender = main.slice(main.indexOf('async function sendBotTurn('), main.indexOf('async function consolidate('))
   assert.match(sender, /params\.definition = held\.definition/, 'the definition is not the bot row’s')
   assert.match(sender, /if \(held\.definition !== null\) \{[\s\S]*?\} else if \(grounded\)/, 'a bot with a definition is also sent a briefing')
+  const refusal = sender.indexOf('not_this_bots_folder')
+  const send = sender.indexOf("bridge.request('turn.send'")
+  assert.ok(refusal !== -1 && send !== -1 && refusal < send, 'a folder outside the three is refused before the turn is sent')
+  assert.match(sender, /carryStillOwed\(held\.slug, folder\)/)
+  assert.match(sender, /if \(held\.definition === null\) \{[\s\S]*?definitionForTurn\(held\.slug\)/, 'a bot that already has a definition is not migrated on the way into the turn')
+  for (const name of ['migrateBot', 'owesCarryOver', 'oldMemoryFolder']) {
+    assert.equal(sender.includes(name), false, name)
+  }
 })
 
 test('a bot with a definition keeps its memory where the agent keeps that definition’s', async () => {
@@ -191,27 +199,39 @@ test('a bot with a definition keeps its memory where the agent keeps that defini
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
-test('a bot made before definitions is migrated once, and the briefing never names its old memory after', async () => {
+test('a bot made before definitions is migrated through the bridge, and a failure leaves the row', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-migrate-'))
-  const storage = load(profile)
+  const file = fakeBots()
+  const storage = load(profile, file)
   const old = botRow({ model: 'provider/model-a', definition: null })
   try {
     await storage.saveBot(old)
-    await assert.rejects(storage.migrateBot(old, null), /not running/)
-    for (const answer of [null, {}, { name: '../x' }, { name: 42 }]) {
-      await assert.rejects(storage.migrateBot(old, async () => answer), /did not name/)
-    }
-    await assert.rejects(storage.migrateBot(old, async () => { throw new Error('refused') }), /refused/)
+    storage.useBotsBridge(null)
+    await assert.rejects(storage.definitionForTurn(old.slug), /not running/)
+    storage.useBotsBridge(file.request)
+    file.refuse = 'refused'
+    await assert.rejects(storage.definitionForTurn(old.slug), /refused/)
+    file.refuse = null
+    file.migrateName = '../x'
+    await assert.rejects(storage.definitionForTurn(old.slug), /not a slug/)
+    file.migrateName = undefined
     assert.equal((await storage.bot(old.slug)).definition, null, 'a failed migration leaves the bot as it was')
+    assert.equal(file.calls.filter(([method]) => method === 'bot.replace').length, 1, 'the failed migrations did not write the row again')
 
-    const calls = []
-    const migrated = await storage.migrateBot(old, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
-    assert.equal(migrated.definition, 'web-dev-2')
+    file.calls.length = 0
+    file.migrateName = 'web-dev-2'
+    const migrated = await storage.definitionForTurn(old.slug)
+    assert.equal(migrated.definition, 'web-dev-2', 'the name stored is the one the agent answered with')
     assert.equal((await storage.bot(old.slug)).definition, 'web-dev-2')
-    assert.deepEqual(calls, [['bot.migrate', { slug: 'web-dev', purpose: 'Build websites', directory: '/tmp/bot-homes/web-dev', model: 'provider/model-a' }]])
+    const sent = file.calls.filter(([method]) => method === 'bot.migrate')
+    assert.equal(sent.length, 1)
+    assert.deepEqual(Object.keys(sent[0][1]).sort(), ['dataFolder', 'slug'])
+    assert.equal(sent[0][1].dataFolder, profile)
+    assert.equal(sent[0][1].slug, 'web-dev')
 
-    const again = await storage.migrateBot(migrated, async () => { throw new Error('a bot with a definition is not migrated again') })
-    assert.equal(again.definition, 'web-dev-2')
+    file.migrateName = '../x'
+    const again = await storage.definitionForTurn(old.slug)
+    assert.equal(again.definition, 'web-dev-2', 'a bot that already has a definition is not migrated again')
 
     const prompt = storage.consolidationPrompt(migrated, 'why')
     assert.ok(prompt.includes('.bravebot/memory/web-dev-2.md'), prompt)
@@ -219,30 +239,45 @@ test('a bot made before definitions is migrated once, and the briefing never nam
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
-test('a migrated bot is asked to carry its old notes over only in the folder they were recorded in', () => {
+test('whether a carry-over is owed is the bridge’s answer, and the prompt names both files', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-carry-over-'))
-  const { owesCarryOver, carryOverPrompt } = load(profile)
-  const first = 'a1b2c3d4-0000-4000-8000-000000000001'
-  const second = 'a1b2c3d4-0000-4000-8000-000000000002'
+  const file = fakeBots()
+  const { carryStillOwed, carryOverPrompt } = load(profile, file)
   try {
-    const fresh = botRow({ definition: null, conversations: [] })
-    const worked = { ...fresh, conversations: [{ id: first, directory: '/work/site' }, { id: second, directory: '/work/other' }] }
-    // The record holds the home folder for a bot that has never worked anywhere else, and the folder
-    // of its first conversation for one that has: a turn in any other folder names a file the
-    // record does not cover.
-    assert.equal(owesCarryOver(fresh, '/tmp/bot-homes/web-dev'), true)
-    assert.equal(owesCarryOver(fresh, '/work/site'), false)
-    assert.equal(owesCarryOver(worked, '/work/site'), true)
-    assert.equal(owesCarryOver(worked, '/work/other'), false)
-    assert.equal(owesCarryOver(worked, '/tmp/bot-homes/web-dev'), false)
-    // A bot that has a definition has already been migrated, or never needed it.
-    assert.equal(owesCarryOver({ ...worked, definition: 'web-dev-2' }, '/work/site'), false)
+    file.owesAnswer = true
+    assert.equal(await carryStillOwed('web-dev', '/work/site'), true)
+    file.owesAnswer = false
+    assert.equal(await carryStillOwed('web-dev', '/work/site'), false, 'the main process does not decide the folder itself')
+    assert.deepEqual(
+      file.calls.filter(([method]) => method === 'bot.owes_carry_over').map(([, params]) => params),
+      [
+        { dataFolder: profile, slug: 'web-dev', folder: '/work/site' },
+        { dataFolder: profile, slug: 'web-dev', folder: '/work/site' },
+      ],
+    )
+    file.owesAnswer = null
+    await assert.rejects(carryStillOwed('web-dev', '/work/site'), /carry-over/)
 
-    // The turn names the old file to read and the definition's memory to write, and they are two
-    // different files: a prompt built from one path would ask the bot to copy a file onto itself.
     const prompt = carryOverPrompt({ slug: 'web-dev', definition: 'web-dev-2' })
     assert.ok(prompt.includes('`.bravebot-ui/bots/web-dev.md`'), prompt)
     assert.ok(prompt.includes('`.bravebot/memory/web-dev-2.md`'), prompt)
     assert.ok(!prompt.includes('—'), 'no em-dash')
   } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
+test('ui/src no longer holds the copies of the migration and the old memory folder', () => {
+  const names = ['migrateBot', 'owesCarryOver', 'oldMemoryFolder']
+  const files = []
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory()) walk(path)
+      else files.push(path)
+    }
+  }
+  walk('src')
+  for (const path of files) {
+    const text = readFileSync(path, 'utf8')
+    for (const name of names) assert.equal(text.includes(name), false, `${path} names ${name}`)
+  }
 })

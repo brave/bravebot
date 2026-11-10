@@ -1,5 +1,6 @@
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const require = createRequire(import.meta.url)
@@ -74,7 +75,8 @@ const avatar = (value) => {
 /**
  * The agent's `bot.list`, `bot.replace`, `bot.make`, `bot.edit`, `bot.set_model`, `bot.ensure_home`,
  * `bot.archive`, `bot.restore`, `bot.delete`, `bot.record_conversation`, `bot.record_archived`,
- * `bot.release_session` and `bot.forget_conversation`, kept in memory.
+ * `bot.release_session`, `bot.forget_conversation`, `bot.migrate`, `bot.owes_carry_over` and
+ * `bot.works_in`, kept in memory.
  *
  * `rows` is what the bots file holds, `calls` every request made, `refuse` makes the next
  * replaces fail with that message (and the bridge code `refuseCode`, none when it is null, as when the agent is gone) and `repair` changes each row a replace writes, as the agent does
@@ -101,6 +103,8 @@ export function fakeBots(initial = []) {
     leaveOut: [],
     homes: [],
     homeRefused: false,
+    migrateName: undefined,
+    owesAnswer: undefined,
     stamp: 10_000,
     async request(method, params) {
       state.calls.push([method, params])
@@ -231,6 +235,37 @@ export function fakeBots(initial = []) {
         }
         if (held.session === null) return { bot: structuredClone(held), wrote: false }
         return { bot: stampRow({ ...held, session: null, archived: 0 }), wrote: true }
+      }
+      if (method === 'bot.migrate' || method === 'bot.owes_carry_over' || method === 'bot.works_in') {
+        const slug = typeof params.slug === 'string' ? params.slug : ''
+        const held = state.rows.find((each) => each.slug === slug)
+        if (method === 'bot.owes_carry_over') {
+          if (state.owesAnswer !== undefined) return { owes: state.owesAnswer }
+          if (!held || held.definition !== null) return { owes: false }
+          const old = held.conversations[0]?.directory ?? held.home
+          return { owes: params.folder === old }
+        }
+        if (method === 'bot.works_in') {
+          if (!held || typeof params.directory !== 'string' || !isAbsoluteDirectory(params.directory)) return { allowed: false }
+          if (params.directory === held.home) {
+            let directory = false
+            try { directory = statSync(params.directory).isDirectory() } catch { directory = false }
+            return { allowed: directory }
+          }
+          const recorded = held.conversations.some((each) => each.directory === params.directory && isAbsoluteDirectory(each.directory))
+          const opened = Array.isArray(params.opened) && params.opened.some((each) => each === params.directory && isAbsoluteDirectory(each))
+          return { allowed: recorded || opened }
+        }
+        if (!held) throw coded('bad_request', `there is no bot ${slug}`)
+        if (held.definition !== null) return { bot: structuredClone(held) }
+        refuseWrite()
+        const name = state.migrateName === undefined ? held.slug : state.migrateName
+        const slugName = typeof name === 'string' && name.length <= 64 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)
+        if (!slugName) throw coded('bad_request', 'the agent named a definition that is not a slug')
+        state.stamp += 1
+        const row = { ...held, definition: name, updated: state.stamp }
+        state.rows = [...state.rows.filter((each) => each.slug !== row.slug), state.repair ? state.repair(row) : row].sort(inByteOrder)
+        return { bot: structuredClone(state.rows.find((each) => each.slug === row.slug)) }
       }
       throw new Error(`a method the bots store does not call: ${method}`)
     },

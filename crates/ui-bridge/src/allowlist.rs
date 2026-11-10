@@ -172,6 +172,8 @@ pub const DENIED: &[&str] = &[
     "bot.define",
     "bot.list",
     "bot.migrate",
+    "bot.owes_carry_over",
+    "bot.works_in",
     "bot.redefine",
     "bot.servers.read",
     "bot.servers.write",

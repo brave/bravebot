@@ -150,6 +150,55 @@ pub fn release_session(request: &Request) -> Result<Value, Failure> {
     }
 }
 
+pub fn migrate(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    match bots::migrate(&data_folder, &slug) {
+        Ok(row) => Ok(json!({ "bot": row.to_value() })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn owes_carry_over(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    let folder = request.string("folder")?;
+    match bots::owes_carry_over(&data_folder, &slug, &folder) {
+        Ok(owes) => Ok(json!({ "owes": owes })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+pub fn works_in(request: &Request) -> Result<Value, Failure> {
+    let data_folder = data_folder(request)?;
+    let slug = request.string("slug")?;
+    let directory = request.string("directory")?;
+    let opened = opened_paths(request)?;
+    match bots::works_in(
+        &data_folder,
+        &slug,
+        std::path::Path::new(&directory),
+        &opened,
+    ) {
+        Ok(allowed) => Ok(json!({ "allowed": allowed })),
+        Err(refused) => Err(failure(&refused)),
+    }
+}
+
+fn opened_paths(request: &Request) -> Result<Vec<PathBuf>, Failure> {
+    let Some(values) = request.param("opened").as_array() else {
+        return Err(Failure::bad_request("`opened` must be an array"));
+    };
+    let mut paths = Vec::with_capacity(values.len());
+    for value in values {
+        let Some(text) = value.as_str() else {
+            return Err(Failure::bad_request("`opened` must be strings"));
+        };
+        paths.push(PathBuf::from(text));
+    }
+    Ok(paths)
+}
+
 pub fn forget_conversation(request: &Request) -> Result<Value, Failure> {
     let data_folder = data_folder(request)?;
     let id = request.string("id")?;

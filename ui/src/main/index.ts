@@ -46,8 +46,8 @@ import {
   readBotServers,
   saveBotServers,
   saveForm,
-  migrateBot,
-  owesCarryOver,
+  carryStillOwed,
+  definitionForTurn,
   carryOverPrompt,
   consolidationPrompt,
   AFTER_COMPACTION,
@@ -253,21 +253,35 @@ async function sendBotTurn(
   const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
-  // The folder the agent confirmed this session runs in, never one the window named. A bot only
-  // works where `worksIn` allows, because grounding seeds a file there.
+  // The folder the agent confirmed this session runs in, never one the window named.
   const folder = rootForSession(session)
-  if (!worksIn(held, folder)) {
+  let allowed = false
+  try {
+    allowed = await worksIn(held, folder)
+  } catch (error) {
+    return { error: { code: 'internal', message: String(error) } }
+  }
+  if (folder === undefined || !allowed) {
     return { error: { code: 'not_this_bots_folder', message: `${held.name} has not been given this folder` } }
   }
 
-  // A bot made before definitions is given one first, and its old memory is recorded as untrusted
-  // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
-  // of a bot whose notes are not yet recorded.
-  const owes = owesCarryOver(held, folder)
-  try {
-    held = await migrateBot(held, (method, params) => bridge!.request(method, params))
-  } catch (error) {
-    return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+  // A bot that already has a definition is sent as it is. Asking the module again would take the
+  // lock and, if that wait failed, refuse the turn as a migration that this bot does not need.
+  let owes = false
+  if (held.definition === null) {
+    // A bot made before definitions is given one first, and its old memory is recorded as untrusted
+    // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
+    // of a bot whose notes are not yet recorded. The carry-over is the answer from before that.
+    try {
+      owes = await carryStillOwed(held.slug, folder)
+    } catch (error) {
+      return { error: { code: 'internal', message: String(error) } }
+    }
+    try {
+      held = await definitionForTurn(held.slug)
+    } catch (error) {
+      return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+    }
   }
   botHandles.set(session, held.slug)
   if (owes) owedCarryOver.add(session)
@@ -344,14 +358,15 @@ function summonedTurn(
       folderOf: rootForSession,
       ownerOf: async (handle, folder) => botHandles.get(handle) ?? (await bots()).find((each) => each.home === folder)?.slug,
       adopt: (handle, slug) => { botHandles.set(handle, slug) },
-      migrate: migrateBot,
-      host: async (handle, slug, folder, request) => {
+      migrate: async (held) => (held.definition !== null ? held : definitionForTurn(held.slug)),
+      host: async (handle, slug, folder) => {
         const held = await bot(slug)
         if (!held) return null
+        if (held.definition !== null) return held
         // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
         // are asked about once the turn that gave the bot one has ended.
-        const owes = owesCarryOver(held, folder)
-        const migrated = await migrateBot(held, request)
+        const owes = await carryStillOwed(slug, folder)
+        const migrated = await definitionForTurn(slug)
         if (owes) owedCarryOver.add(handle)
         return migrated
       },
