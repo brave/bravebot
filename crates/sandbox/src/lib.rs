@@ -28,6 +28,11 @@
 
 pub mod address;
 pub mod agent;
+// Pins that what runs between the fork and the exec of a confined program calls no allocator. The
+// harness is built under test on any Unix and the tests of the work itself are the Linux
+// backend's.
+#[cfg(all(test, unix))]
+mod alloc_probe;
 pub mod base;
 pub mod crash;
 pub mod hosts;

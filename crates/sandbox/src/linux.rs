@@ -17,16 +17,17 @@
 //! requiring it is refused.
 
 use crate::netns::Namespace;
-use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use crate::policy::{Capabilities, ConfinementLevel, Enumeration, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use landlock::{
     ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, RulesetAttr,
-    RulesetCreated, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope,
+    RulesetCreated, RulesetCreatedAttr, RulesetError, Scope,
 };
-use std::ffi::{OsStr, OsString};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::{File, OpenOptions};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -78,6 +79,9 @@ const PATH_SOCKET_ABI_VERSION: libc::c_long = 9;
 
 /// `landlock_create_ruleset`, stable since Linux 5.13.
 const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
+
+/// `landlock_restrict_self`, stable since Linux 5.13.
+const SYS_LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
 
 /// Ask the kernel which Landlock ABI it supports.
 ///
@@ -186,14 +190,211 @@ fn refused_row(path: &Path, error: &std::io::Error) -> std::io::Error {
     std::io::Error::other(format!("{}: {error}", path.display()))
 }
 
+/// The device and inode a row's name led to when its descriptor was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Identity {
+    device: u64,
+    inode: u64,
+}
+
 /// The rule that grants `access` at the descriptor `file`, cut to the rights that apply to a
-/// file where it is not a directory, as `path_beneath_rules` does.
-fn rule_on(file: File, access: BitFlags<AccessFs>) -> std::io::Result<PathBeneath<OwnedFd>> {
-    let access = match file.metadata()?.is_dir() {
+/// file where it is not a directory, as `path_beneath_rules` does, and the [`Identity`] of what
+/// the descriptor names.
+fn rule_on(
+    file: File,
+    access: BitFlags<AccessFs>,
+) -> std::io::Result<(PathBeneath<OwnedFd>, Identity)> {
+    use std::os::unix::fs::MetadataExt;
+
+    let found = file.metadata()?;
+    let identity = Identity {
+        device: found.dev(),
+        inode: found.ino(),
+    };
+    let access = match found.is_dir() {
         true => access,
         false => access & AccessFs::from_file(HANDLED_ABI),
     };
-    Ok(PathBeneath::new(OwnedFd::from(file), access))
+    Ok((PathBeneath::new(OwnedFd::from(file), access), identity))
+}
+
+/// What the start of a program asks of a row once the ruleset is built.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Held {
+    /// A row the caller named, granted by the rule built on `Identity`. The name has to lead to
+    /// that inode still, since a rule on another inode grants the program less than the policy.
+    Named(Identity),
+    /// An entry a listing produced, or a row passed as listed. Its name being gone leaves it out,
+    /// as it is before the ruleset. A name that is there and cannot be looked up refuses.
+    Listed,
+    /// A row the caller named above a refusal, granted as its entries. It has to be a directory.
+    Directory,
+}
+
+/// A row to look at again between the fork and the exec, with its path as a C string built
+/// beforehand so that looking at it allocates nothing.
+#[derive(Debug)]
+pub(crate) struct Recheck {
+    path: CString,
+    not_through_a_link: bool,
+    held: Held,
+}
+
+impl Recheck {
+    pub(crate) fn new(path: &Path, not_through_a_link: bool, held: Held) -> std::io::Result<Self> {
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the path holds a NUL byte",
+            )
+        })?;
+        Ok(Self {
+            path,
+            not_through_a_link,
+            held,
+        })
+    }
+
+    /// Looks the row up by name and says whether it is what the ruleset was built for. Called
+    /// between the fork and the exec: it makes `stat` or `lstat` calls on memory that exists
+    /// already and returns an error as an OS error number, so it allocates nothing (SANDBOX-6,
+    /// SANDBOX-28).
+    fn hold(&self) -> std::io::Result<()> {
+        let found = match status_of(&self.path, self.not_through_a_link) {
+            Ok(found) => found,
+            Err(error) => {
+                return match self.held {
+                    Held::Listed if error.raw_os_error().is_some_and(errno_is_gone) => Ok(()),
+                    _ => Err(error),
+                };
+            }
+        };
+        let is_a_link = found.kind == libc::S_IFLNK;
+        match self.held {
+            Held::Directory if found.kind == libc::S_IFDIR => Ok(()),
+            Held::Directory => Err(std::io::Error::from_raw_os_error(libc::ENOTDIR)),
+            // A judged row that became a link is refused (SANDBOX-28).
+            Held::Listed | Held::Named(_) if self.not_through_a_link && is_a_link => {
+                Err(std::io::Error::from_raw_os_error(libc::ELOOP))
+            }
+            Held::Named(identity) if found.identity != identity => {
+                Err(std::io::Error::from_raw_os_error(libc::ESTALE))
+            }
+            Held::Listed | Held::Named(_) => Ok(()),
+        }
+    }
+}
+
+/// What `stat` or `lstat` found: the file type bits of the mode, and the identity.
+struct Status {
+    kind: libc::mode_t,
+    identity: Identity,
+}
+
+/// `lstat` where `not_through_a_link`, `stat` otherwise. Allocates nothing.
+#[allow(
+    unsafe_code,
+    reason = "`stat` and `lstat` are given a NUL-terminated path and a zeroed buffer of the type they fill"
+)]
+fn status_of(path: &CStr, not_through_a_link: bool) -> std::io::Result<Status> {
+    // SAFETY: `path` is NUL-terminated and outlives the call, and `found` is a zeroed `stat`,
+    // which is valid for every field, that the call fills.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe {
+        let mut found: libc::stat = std::mem::zeroed();
+        let result = match not_through_a_link {
+            true => libc::lstat(path.as_ptr(), &mut found),
+            false => libc::stat(path.as_ptr(), &mut found),
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Status {
+            kind: found.st_mode & libc::S_IFMT,
+            identity: Identity {
+                device: found.st_dev as u64,
+                inode: found.st_ino as u64,
+            },
+        })
+    }
+}
+
+/// Whether an OS error number says a name is gone: not found, under something that is no longer
+/// a directory, or a stale handle on a network file system. [`name_is_gone`] for the number.
+fn errno_is_gone(code: i32) -> bool {
+    matches!(code, libc::ENOENT | libc::ENOTDIR | libc::ESTALE)
+}
+
+/// Everything the child needs between the fork and the exec, built before the fork.
+///
+/// The child runs [`ChildWork::run`], which makes system calls on what is held here and nothing
+/// else: no allocation, so no lock the parent's other threads held at the fork can stop it.
+pub(crate) struct ChildWork {
+    pub(crate) namespace: Option<Namespace>,
+    /// The Landlock ruleset with every rule in it, close-on-exec. It is not consumed, since a
+    /// `Command` can be spawned more than once.
+    pub(crate) ruleset: OwnedFd,
+    pub(crate) rechecks: Vec<Recheck>,
+}
+
+impl ChildWork {
+    /// Leads a session, enters the namespace, looks at the rows again, and restricts the calling
+    /// thread with the ruleset. Any failure is the error, and the program is not started.
+    pub(crate) fn run(&self) -> std::io::Result<()> {
+        // The kernel refuses `TIOCSTI` to a process whose controlling terminal is not the one it
+        // names, and a session of its own has none. Landlock governs an ioctl on a device only
+        // from ABI 5 (kernel 6.10), so older kernels rely on this alone.
+        lead_a_session()?;
+
+        // Before the ruleset, so the forwarder it leaves behind is not confined by the stage's
+        // filesystem rules and the stage needs no grant to the proxy's socket.
+        if let Some(namespace) = &self.namespace {
+            namespace.enter()?;
+        }
+
+        // A path the caller named is granted at the exec, or the exec is refused (SANDBOX-6).
+        for check in &self.rechecks {
+            check.hold()?;
+        }
+
+        restrict_self(self.ruleset.as_raw_fd())
+    }
+}
+
+#[allow(unsafe_code, reason = "`setsid` takes no argument")]
+fn lead_a_session() -> std::io::Result<()> {
+    // SAFETY: `setsid` takes no pointers and is async-signal-safe.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    if unsafe { libc::setsid() } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Sets `no_new_privs` and restricts the calling thread with the ruleset at `ruleset`, which
+/// stays open. Fail closed: a kernel that refuses either is the error.
+#[allow(
+    unsafe_code,
+    reason = "`prctl` takes integers and `landlock_restrict_self` takes a descriptor and flags, with no pointer"
+)]
+fn restrict_self(ruleset: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: `prctl` takes integers. `landlock_restrict_self` takes the descriptor of a ruleset
+    // this process holds and a flags word, and reads no memory.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe {
+        if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1 as libc::c_ulong, 0, 0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::syscall(
+            SYS_LANDLOCK_RESTRICT_SELF,
+            libc::c_long::from(ruleset),
+            0 as libc::c_ulong,
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// A rule for every path in `paths`, or an error saying how many produced none.
@@ -203,18 +404,28 @@ fn rule_on(file: File, access: BitFlags<AccessFs>) -> std::io::Result<PathBeneat
 /// it. A ruleset built straight from that builder therefore confines the process to fewer
 /// paths than the policy listed while the policy reads as applied in full. A path in
 /// `not_through_a_link` is opened by [`open_row`] without following a link.
+///
+/// Each path that has a rule is added to `rechecks` as a row the start of the program looks at
+/// again.
 fn rules_for_every_path(
     paths: &[PathBuf],
     access: BitFlags<AccessFs>,
     not_through_a_link: &[PathBuf],
+    rechecks: &mut Vec<Recheck>,
 ) -> std::io::Result<Vec<Result<PathBeneath<OwnedFd>, RulesetError>>> {
     let mut rules = Vec::with_capacity(paths.len());
     let mut missing = Vec::new();
     for path in paths {
-        match open_row(path, not_through_a_link.contains(path))
+        let unfollowed = not_through_a_link.contains(path);
+        match open_row(path, unfollowed)
             .and_then(|file| rule_on(file, access))
-        {
-            Ok(rule) => rules.push(Ok(rule)),
+            .and_then(|(rule, identity)| {
+                Recheck::new(path, unfollowed, Held::Named(identity)).map(|check| (rule, check))
+            }) {
+            Ok((rule, check)) => {
+                rules.push(Ok(rule));
+                rechecks.push(check);
+            }
             Err(error) => missing.push(refused_row(path, &error).to_string()),
         }
     }
@@ -277,20 +488,23 @@ fn name_is_gone(error: &std::io::Error) -> bool {
 
 /// `ruleset` with a rule for each of `paths` whose name is still there.
 ///
-/// For the rows a listing produced, which are opened again here after the fork. One whose name is
-/// gone has nothing to grant and is left out, as [`opened_rows`] leaves out a listed row before
-/// it. One that is there and cannot be opened is a grant this backend cannot install, and is the
-/// error. A row in `not_through_a_link` is opened without following a link, as [`opened_rows`]
-/// opens it (SANDBOX-28). Each rule is added as it is built, so a large directory holds one
-/// descriptor at a time and not one for each entry.
+/// For the rows a listing produced, which are opened again here after [`opened_rows`]. One whose
+/// name is gone has nothing to grant and is left out, as [`opened_rows`] leaves out a listed row
+/// before it. One that is there and cannot be opened is a grant this backend cannot install, and
+/// is the error. A row in `not_through_a_link` is opened without following a link, as
+/// [`opened_rows`] opens it (SANDBOX-28). Each rule is added as it is built, so a large directory
+/// holds one descriptor at a time and not one for each entry. Each row that has a rule is added
+/// to `rechecks`, so one that is unopenable by the start of the program refuses it.
 fn with_the_listed_rules(
     mut ruleset: RulesetCreated,
     paths: &[PathBuf],
     access: BitFlags<AccessFs>,
     not_through_a_link: &[PathBuf],
+    rechecks: &mut Vec<Recheck>,
 ) -> std::io::Result<RulesetCreated> {
     for path in paths {
-        let file = match open_row(path, not_through_a_link.contains(path)) {
+        let unfollowed = not_through_a_link.contains(path);
+        let file = match open_row(path, unfollowed) {
             Ok(file) => file,
             Err(error) if name_is_gone(&error) => continue,
             Err(error) => {
@@ -300,9 +514,11 @@ fn with_the_listed_rules(
                 )));
             }
         };
+        let (rule, _) = rule_on(file, access)?;
         ruleset = ruleset
-            .add_rule(rule_on(file, access)?)
+            .add_rule(rule)
             .map_err(|e| std::io::Error::other(format!("landlock: {e}")))?;
+        rechecks.push(Recheck::new(path, unfollowed, Held::Listed)?);
     }
     Ok(ruleset)
 }
@@ -502,119 +718,126 @@ impl LandlockSandbox {
         };
         let readable = policy.readable_by_enumeration().map_err(unlistable)?;
         let writable = policy.writable_by_enumeration().map_err(unlistable)?;
-        // Owned, since the closure below outlives this call's borrow of the policy.
-        let not_through_a_link = policy.not_through_a_link.clone();
 
-        // Landlock applies to the calling thread and is inherited across exec, so the
-        // ruleset is installed in the child between fork and exec.
+        // Everything the child needs is built here, before the fork: the ruleset with its rules,
+        // the paths as C strings, and the namespace. What is left for the child is system calls
+        // on that (SANDBOX-6).
+        let refused = |e: std::io::Error| SandboxError::SetupFailed {
+            mechanism: "landlock",
+            detail: format!(
+                "the ruleset could not be built ({e}); refusing rather than confining to less \
+                 than the policy asked for"
+            ),
+        };
+        let mut rechecks = Vec::new();
+        // A row granted as its entries has no rule of its own, so what is asked of it at the exec
+        // is that it is still a directory, and for a judged row that its name is not a link now
+        // (SANDBOX-28): one that has gone, or become a file, leaves every entry with nothing to
+        // grant.
+        for path in readable
+            .above_a_refusal
+            .iter()
+            .chain(&writable.above_a_refusal)
+        {
+            let unfollowed = policy.not_through_a_link.contains(path);
+            rechecks.push(Recheck::new(path, unfollowed, Held::Directory).map_err(refused)?);
+        }
+        let ruleset = built_ruleset(
+            &readable,
+            &writable,
+            &policy.not_through_a_link,
+            &mut rechecks,
+        )
+        .map_err(refused)?;
+        let work = ChildWork {
+            namespace,
+            ruleset,
+            rechecks,
+        };
+
+        // Landlock applies to the calling thread and is inherited across exec, so the ruleset is
+        // applied in the child between fork and exec.
         #[allow(
             unsafe_code,
-            reason = "`pre_exec` is unsafe because its closure runs in the forked child, before exec"
+            reason = "`pre_exec` is unsafe because its closure runs in the forked child; this one makes only system calls on memory built before the fork and allocates nothing"
         )]
         // SAFETY: `pre_exec` requires the closure to be safe to run between fork and exec in a
-        // process that may have had other threads. The closure is `move` and owns its inputs, and
-        // it fails the spawn when any step fails. It is not restricted to async-signal-safe calls:
-        // `std::fs::metadata`, `format!`, `Error::other` and the `landlock` crate allocate in the
-        // child. If another thread of the parent held the allocator's lock at the fork, the child
-        // can block in the allocator and the spawn does not return. This is accepted for now;
-        // `namespace.enter()` and `setsid` allocate nothing.
+        // process that may have had other threads. This closure calls `ChildWork::run`, which makes
+        // `setsid`, `unshare`, `open`, `write`, `ioctl`, `socket`, `fork`, `stat`, `lstat`, `prctl`
+        // and `landlock_restrict_self` calls on values built before the fork and returns errors as
+        // OS error numbers. It takes no lock and allocates nothing, so a lock another thread of the
+        // parent held at the fork cannot stop it, and `alloc_probe` pins that. The closure only
+        // reads `work`, so a command spawned a second time runs it again. It fails the spawn when
+        // any step fails.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
-            command.pre_exec(move || {
-                use std::io::Error;
-
-                // The kernel refuses `TIOCSTI` to a process whose controlling terminal is not the
-                // one it names, and a session of its own has none. Landlock governs an ioctl on a
-                // device only from ABI 5 (kernel 6.10), so older kernels rely on this alone.
-                // SAFETY: `setsid` takes no pointers and is async-signal-safe.
-                if libc::setsid() == -1 {
-                    return Err(Error::last_os_error());
-                }
-
-                // Before the ruleset, so the forwarder it leaves behind is not confined by the
-                // stage's filesystem rules and the stage needs no grant to the proxy's socket.
-                if let Some(namespace) = &namespace {
-                    namespace.enter()?;
-                }
-
-                let mut ruleset = landlock::Ruleset::default()
-                    .set_compatibility(CompatLevel::BestEffort)
-                    .handle_access(AccessFs::from_all(HANDLED_ABI))
-                    // A connect to an abstract socket made outside this domain. The socket has
-                    // no path, so no filesystem right sees it, and `BestEffort` drops the scope
-                    // on a kernel below Landlock ABI 6.
-                    .and_then(|r| r.scope(Scope::AbstractUnixSocket))
-                    .and_then(|r| r.create())
-                    .map_err(|e| Error::other(format!("landlock: {e}")))?;
-
-                // A path the caller named is granted at the exec, or the exec is refused
-                // (SANDBOX-6). A row granted as its entries has no rule of its own, so what is
-                // asked of it is that it is still a directory, and for a judged row that its name
-                // is not a link now (SANDBOX-28): one that has gone, or become a file, leaves every
-                // entry with nothing to grant.
-                for path in readable
-                    .above_a_refusal
-                    .iter()
-                    .chain(&writable.above_a_refusal)
-                {
-                    let found = match not_through_a_link.contains(path) {
-                        true => std::fs::symlink_metadata(path),
-                        false => std::fs::metadata(path),
-                    };
-                    if !found.is_ok_and(|found| found.is_dir()) {
-                        return Err(Error::other(format!(
-                            "landlock: {} is no longer a directory",
-                            path.display()
-                        )));
-                    }
-                }
-
-                ruleset = ruleset
-                    .add_rules(rules_for_every_path(
-                        &readable.named,
-                        AccessFs::from_read(HANDLED_ABI),
-                        &not_through_a_link,
-                    )?)
-                    .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
-                ruleset = with_the_listed_rules(
-                    ruleset,
-                    &readable.listed,
-                    AccessFs::from_read(HANDLED_ABI),
-                    &not_through_a_link,
-                )?;
-
-                ruleset = ruleset
-                    .add_rules(rules_for_every_path(
-                        &writable.named,
-                        AccessFs::from_all(HANDLED_ABI),
-                        &not_through_a_link,
-                    )?)
-                    .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                ruleset = with_the_listed_rules(
-                    ruleset,
-                    &writable.listed,
-                    AccessFs::from_all(HANDLED_ABI),
-                    &not_through_a_link,
-                )?;
-
-                let status = ruleset
-                    .restrict_self()
-                    .map_err(|e| Error::other(format!("landlock: {e}")))?;
-
-                // Fail closed: if the kernel did not actually enforce the ruleset, do
-                // not continue to exec.
-                if status.ruleset == RulesetStatus::NotEnforced {
-                    return Err(Error::other(
-                        "landlock reported the ruleset was not enforced",
-                    ));
-                }
-
-                Ok(())
-            });
+            command.pre_exec(move || work.run());
         }
 
         Ok(command)
     }
+}
+
+/// The Landlock ruleset for `readable` and `writable`, with a rule for every row, and the
+/// descriptor of it. A row that has a rule is added to `rechecks`.
+///
+/// Built before the fork, so it may allocate. The descriptor is close-on-exec and is the only
+/// thing the child needs of it. A kernel that enforces nothing has no descriptor, which is an
+/// error here: the program is not started unconfined.
+pub(crate) fn built_ruleset(
+    readable: &Enumeration,
+    writable: &Enumeration,
+    not_through_a_link: &[PathBuf],
+    rechecks: &mut Vec<Recheck>,
+) -> std::io::Result<OwnedFd> {
+    use std::io::Error;
+
+    let mut ruleset = landlock::Ruleset::default()
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(AccessFs::from_all(HANDLED_ABI))
+        // A connect to an abstract socket made outside this domain. The socket has no path, so no
+        // filesystem right sees it, and `BestEffort` drops the scope on a kernel below Landlock
+        // ABI 6.
+        .and_then(|r| r.scope(Scope::AbstractUnixSocket))
+        .and_then(|r| r.create())
+        .map_err(|e| Error::other(format!("landlock: {e}")))?;
+
+    ruleset = ruleset
+        .add_rules(rules_for_every_path(
+            &readable.named,
+            AccessFs::from_read(HANDLED_ABI),
+            not_through_a_link,
+            rechecks,
+        )?)
+        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+    ruleset = with_the_listed_rules(
+        ruleset,
+        &readable.listed,
+        AccessFs::from_read(HANDLED_ABI),
+        not_through_a_link,
+        rechecks,
+    )?;
+
+    ruleset = ruleset
+        .add_rules(rules_for_every_path(
+            &writable.named,
+            AccessFs::from_all(HANDLED_ABI),
+            not_through_a_link,
+            rechecks,
+        )?)
+        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
+    ruleset = with_the_listed_rules(
+        ruleset,
+        &writable.listed,
+        AccessFs::from_all(HANDLED_ABI),
+        not_through_a_link,
+        rechecks,
+    )?;
+
+    // Fail closed: a kernel that did not make a ruleset enforces nothing, so the program is not
+    // started.
+    Option::<OwnedFd>::from(ruleset)
+        .ok_or_else(|| Error::other("landlock reported the ruleset was not enforced"))
 }
 
 #[cfg(test)]
@@ -1832,16 +2055,16 @@ mod tests {
     }
 
     /// The refusal before the spawn leaves a window: a path can go away between the check
-    /// and the exec, and the rules are built on the far side of a fork where no error can
-    /// reach the caller as anything but a failure to spawn. A dropped rule has to stop the
-    /// exec there too, or the window is a process running under a policy nobody applied in
-    /// full.
+    /// and the exec. The ruleset is built before the fork, where an error reaches the caller as
+    /// what it is, and a dropped rule has to stop the build there too, or the window is a process
+    /// running under a policy nobody applied in full.
     #[test]
     fn a_ruleset_is_not_built_with_a_path_missing_from_it() {
         let err = rules_for_every_path(
             &[PathBuf::from("/bravebot-no-such-path")],
             AccessFs::from_read(HANDLED_ABI),
             &[],
+            &mut Vec::new(),
         )
         .expect_err("must refuse to build a ruleset short of a path");
         assert!(
@@ -2198,9 +2421,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&top);
     }
 
-    /// The rows are opened before the fork and the rules are built after it, so a row can go away
-    /// in between. A row the caller named that is gone at the exec is a process running under less
-    /// than the policy with nothing saying so (SANDBOX-6), whether the row is granted whole or, above
+    /// The rows are opened before the fork and looked at again between the fork and the exec, so
+    /// a row can go away in between. A row the caller named that is gone at the exec is a process
+    /// running under less than the policy with nothing saying so (SANDBOX-6), whether the row is
+    /// granted whole or, above
     /// a refusal, as its entries. A row above a refusal that has become a file is as gone, since
     /// none of its entries can be granted. Each case starts while its row is there, so the refusal is the
     /// missing row's and not the program's or the policy's, and each names its row in one list
@@ -2289,6 +2513,53 @@ mod tests {
             if row.is_file() {
                 std::fs::remove_file(row).expect("the file is removable");
             }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A row the caller named is looked up again at the exec and has to lead to the file that was
+    /// opened for it. A directory made in its place, after the rule for the old one was built,
+    /// is not what the policy named when it was checked, so the exec is refused and no rule is
+    /// left on a directory the name no longer leads to (SANDBOX-6). The ruleset keeps a reference
+    /// to the old directory's inode until the exec, so its number is not reused by the new one
+    /// and the comparison cannot be satisfied by a coincidence.
+    ///
+    /// The regression it rejects: a look-up at the exec that checks only that the name exists,
+    /// which starts the program under a rule on a directory that is no longer at the name.
+    #[test]
+    fn a_named_row_replaced_by_another_directory_between_the_check_and_the_exec_refuses_the_exec() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-named-row-replaced");
+        let row = top.join("row");
+        let cases = [
+            ("a read row", loadable_policy().allow_read(&row)),
+            ("a write row", loadable_policy().allow_write(&row)),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy) in &cases {
+            std::fs::create_dir_all(&row).expect("the directory is creatable");
+            let mut command = sandbox
+                .command(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    &Environment::Inherited,
+                )
+                .expect("every row is there when the policy is opened");
+            std::fs::remove_dir(&row).expect("the row is removable");
+            std::fs::create_dir(&row).expect("the replacement is creatable");
+            let after = command.stdin(std::process::Stdio::null()).status();
+            if after.is_ok() {
+                wrong.push(format!(
+                    "{case}: started after the row was replaced: {after:?}"
+                ));
+            }
+            std::fs::remove_dir(&row).expect("the replacement is removable");
         }
 
         let _ = std::fs::remove_dir_all(&top);

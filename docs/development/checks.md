@@ -37,7 +37,10 @@ why it is sound. The lint is not in the workspace table because other crates and
 `crates/agent/src/preamble.rs` and the tests of `bravebot-agent`, `bravebot-tui`,
 `bravebot-ui-bridge`, `bravebot-cli` and `bravebot-session`. It is checked on the Linux, macOS and
 Windows clippy runs, which each compile different blocks. Place the comment directly above the
-`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item.
+`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item. Besides the
+`unsafe impl Send` and `Sync` in `swap.rs`, the sandbox crate has one more: the allocator of
+`crates/sandbox/src/alloc_probe.rs`, a test harness that ends a forked child on a call to the
+allocator ([SANDBOX-34](../specs/sandboxing.md#SANDBOX-34), [LAYER-4](../specs/layering.md#LAYER-4)).
 
 Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
 runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint

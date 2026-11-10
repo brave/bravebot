@@ -188,7 +188,10 @@ the compiler decides it, and what a reviewer reads is the sites that name themse
 every crate in the workspace. Four crates name sites: `bravebot-sandbox`, whose landlock
 syscalls and whose Win32 calls creating a process inside a container are its reason for existing,
 and which also makes the calls on this process's own limits and pages that a crate holding a
-credential forbids itself ([CRED-23](credential-protection.md#CRED-23)),
+credential forbids itself ([CRED-23](credential-protection.md#CRED-23)), and whose test harness
+for the work a confined program's child does between the fork and the exec
+(`crates/sandbox/src/alloc_probe.rs`) implements `GlobalAlloc` to end a forked child that calls
+the allocator ([SANDBOX-34](sandboxing.md#SANDBOX-34)),
 `bravebot-skus`, which asks Windows for the access-control list that
 keeps the ChatGPT and xAI sign-ins, the gateway keys `bravebot auth login gateway` stores and the
 premium key `bravebot auth login brave` stores to one account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6),

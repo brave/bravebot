@@ -349,8 +349,8 @@ A policy is granted as written, apart from the `.git` writes [SANDBOX-14](#SANDB
 on macOS. A backend that cannot install a grant for one of the paths refuses
 the policy and names that path, rather than confining the process to the rest of them. Where a
 backend can grant a path that does not exist yet, the profile carries that grant as named; where it
-cannot, the refusal arrives before the process starts, and again where a path goes away between
-that refusal and the exec. Which of the two a backend does is in its capabilities
+cannot, the refusal arrives before the process starts, and again where a path goes away, or is
+replaced by another file, between that refusal and the exec. Which of the two a backend does is in its capabilities
 ([SANDBOX-5](#SANDBOX-5)).
 
 A row that is an entry of a directory the caller listed is not a path the caller named, and
@@ -358,11 +358,15 @@ neither is an entry a backend lists to grant a row around a refusal beneath it. 
 that grants a directory except what is refused beneath it passes the entries the directory had
 when it was listed, marked as listed. A backend that opens each row before the process starts
 leaves out a listed row whose name is no longer there, or is under something that is no longer a
-directory, and refuses one that is there and cannot be opened. A backend that opens the rows again
-at the exec decides a listed row and an entry it listed the same way there. The same path named by
-the caller is refused as before, in a policy that lists as in one that does not, and when a listed
-row names it too. A row the caller named that a backend grants as its entries is refused when the
-backend cannot list it, and at the exec when it has gone.
+directory, and refuses one that is there and cannot be opened. A backend that opens each row once,
+before the process starts, and looks every name up again at the exec, decides a listed row and an
+entry it listed the same way there: a name that is gone is left out, and one that is there and
+cannot be looked up refuses. The same path named by the caller is refused as before, in a policy
+that lists as in one that does not, and when a listed row names it too. A row the caller named is
+refused at the exec when its name is gone or leads to another file than the one that was opened,
+so a rule is never attached to a file the policy did not name at the time it was checked. A row
+the caller named that a backend grants as its entries is refused when the backend cannot list it,
+and at the exec when it has gone or is no longer a directory.
 
 On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
 not what a junction beneath the directory leads to. That is shown for a junction made from outside a
@@ -388,6 +392,7 @@ depend on whatever else was changing that directory.
 `verified-by: bravebot_sandbox::linux::an_entry_listed_before_the_exec_and_gone_by_it_is_left_out`
 `verified-by: bravebot_sandbox::linux::an_entry_listed_before_the_exec_that_cannot_be_opened_by_it_refuses_the_exec`
 `verified-by: bravebot_sandbox::linux::a_named_row_above_a_refusal_that_cannot_be_listed_is_refused`
+`verified-by: bravebot_sandbox::linux::a_named_row_replaced_by_another_directory_between_the_check_and_the_exec_refuses_the_exec`
 `verified-by: bravebot_sandbox::policy::a_named_row_above_a_refusal_that_cannot_be_listed_is_an_error_naming_it`
 `verified-by: bravebot_sandbox::policy::an_enumeration_tells_the_rows_the_caller_named_from_the_entries_it_listed`
 `verified-by: bravebot_agent::confine::the_rows_a_bypass_stage_holds_without_a_request_are_marked_as_listed`
@@ -4654,6 +4659,45 @@ such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the bi
 `verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`
 `verified-by: bravebot_mcp::openshell::a_program_missing_from_the_image_is_refused_and_the_sandbox_removed`
 `verified-by: bravebot_mcp::openshell::a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply`
+
+<a id="SANDBOX-34"></a>
+### SANDBOX-34: on Linux the step between the fork and the exec of a confined program allocates nothing
+
+A program is confined on Linux by a closure that runs in the forked child before the exec: it leads
+a session, enters the network namespace ([SANDBOX-24](#SANDBOX-24)), looks the rows up again, and
+restricts the thread with the Landlock ruleset ([SANDBOX-5](#SANDBOX-5)). This process has other
+threads, and a child made by `fork` holds a copy of any allocator lock another thread held at that
+moment, with nothing in the child to release it, so the closure must not call the allocator or code
+that does. Everything it needs is built before the fork and held by the closure: the ruleset, as a
+descriptor with every rule in it, the id maps and the socket address of the namespace, and each
+row's path as a C string with what was opened for it. The closure makes system calls on those and
+returns an operating-system error number, which is not built into a string there.
+
+Descriptors the closure holds are close-on-exec, so the program does not inherit them, and the
+ruleset is not consumed, so one `Command` can be spawned again. Nothing about the confinement
+changes: a ruleset the kernel would not enforce, a row that cannot be opened, and a row that fails
+the look-up refuse the start before the process exists or in the child before the exec, and the
+program is never started unconfined. The look-up of a row the caller named compares the device and
+inode of what its name leads to with those of the file the rule was built on, which is the guarantee
+of [SANDBOX-6](#SANDBOX-6): the name is not re-opened in the child, since opening allocates, and a
+rule is never left on a file the name no longer leads to.
+
+**Why.** A child that blocks in the allocator never reaches the exec, so the program does not start
+and the caller waits for it. The block happens only when another thread was inside the allocator at
+the fork, so it passes a test run and appears under load.
+
+A test harness forks a child, arms the thread, runs the closure's work and reads the child's exit
+code. The harness installs an allocator that ends the process with a code of its own when an armed
+thread calls it, and it kills a child that has not ended at a deadline, so a regression fails the
+test in place of hanging the run. The tests of the harness run on every Unix. The tests of the work
+need Linux and a kernel with Landlock or user namespaces, and say so when the kernel has neither.
+
+`verified-by: bravebot_sandbox::alloc_probe::a_call_to_the_allocator_by_an_armed_thread_ends_the_child`
+`verified-by: bravebot_sandbox::alloc_probe::a_call_to_the_allocator_while_disarmed_is_allowed_and_work_without_one_reports_its_result`
+`verified-by: bravebot_sandbox::alloc_probe::a_child_that_blocks_is_killed_at_the_deadline`
+`verified-by: bravebot_sandbox::alloc_probe::the_work_between_the_fork_and_the_exec_allocates_nothing`
+`verified-by: bravebot_sandbox::alloc_probe::a_refusal_between_the_fork_and_the_exec_allocates_nothing`
+`verified-by: bravebot_sandbox::alloc_probe::entering_a_namespace_allocates_nothing`
 
 ## Programs a person asked for
 
