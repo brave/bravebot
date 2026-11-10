@@ -1212,6 +1212,50 @@ fn a_write_step_carries_its_counts_and_the_file_it_landed_on() {
     assert!(counted[0].landed.ends_with("in.md"), "{:?}", counted[0]);
 }
 
+/// MANIFEST-10, PROMPT-1: the line a step shows while it runs spells the file it names as the
+/// summary, the question and the record do, and is not marked as a file name a second time.
+#[test]
+fn a_running_step_reports_the_file_it_names_spelled() {
+    let scratch = Scratch::new("running-step-spelled");
+    std::fs::write(scratch.path.join("note.md "), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "note.md ", "out_slot": "raw"}},
+            {"capability": "ANSWER", "args": {"from_slot": "raw"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read note.md").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+            false,
+        ),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let reading = &reporter.started[0];
+    let spelled = bravebot_agent::confirm::shown_name("note.md ");
+    assert!(spelled.contains("\"note.md"), "{spelled}");
+    assert_eq!(reading.target, format!("read {spelled} into raw"));
+    assert!(!reading.names_a_file);
+    assert_eq!(reading.shown_target(), reading.target);
+}
+
 /// A step's finish carries the id its start did, and no two steps share one, so a window that
 /// pairs a finish with its start by that id closes the right row.
 #[test]

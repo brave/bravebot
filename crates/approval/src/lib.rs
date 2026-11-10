@@ -201,7 +201,9 @@ pub struct RunStep {
 pub struct Confinement {
     /// The sentence that introduces the directories.
     pub heading: String,
-    /// The directories every stage reads and writes. Drawn through `shown_name`, as the writes are.
+    /// The directories every stage reads and writes, each already spelled by the caller as the
+    /// writes are (`bravebot_agent::confirm::shown_path` for a path held as one, or the
+    /// `shownDirectories` the bridge sent). `run_lines` draws them as given.
     pub directories: Vec<String>,
     /// What else the turn confines, in the order the agent gave it.
     pub sentences: Vec<String>,
@@ -213,8 +215,11 @@ pub struct Run<'a> {
     pub summary: &'a str,
     /// Every step, in order.
     pub steps: &'a [RunStep],
-    /// The paths the plan says it writes. Each is drawn through `shown_name`, so a path that would
-    /// draw as nothing or as another is spelled.
+    /// The paths the plan says it writes, each already spelled by the caller: through
+    /// `bravebot_agent::confirm::shown_path` for a path held as one, so a path that would draw as
+    /// nothing or as another, or holds a byte that is not text, is spelled, or the `shownWrites`
+    /// the bridge sent. A `String` cannot carry such a byte, so the spelling is not done here;
+    /// `run_lines` draws each as given.
     pub writes: &'a [String],
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
@@ -249,7 +254,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     if !run.writes.is_empty() {
         lines.push(t!(run_writes).to_string());
         for path in run.writes {
-            lines.push(format!("  {}", bravebot_agent::confirm::shown_name(path)));
+            lines.push(format!("  {path}"));
         }
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
@@ -258,10 +263,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         Some(confined) => {
             lines.push(confined.heading.clone());
             for directory in &confined.directories {
-                lines.push(format!(
-                    "  {}",
-                    bravebot_agent::confirm::shown_name(directory)
-                ));
+                lines.push(format!("  {directory}"));
             }
             lines.extend(confined.sentences.iter().cloned());
         }
@@ -1127,13 +1129,13 @@ mod tests {
         let drawn = |write: &str, directory: &str| {
             let confinement = Confinement {
                 heading: "confined to".to_string(),
-                directories: vec![directory.to_string()],
+                directories: vec![bravebot_agent::confirm::shown_name(directory)],
                 sentences: Vec::new(),
             };
             run_lines(&Run {
                 summary: "write it",
                 steps: &steps,
-                writes: &[write.to_string()],
+                writes: &[bravebot_agent::confirm::shown_name(write)],
                 confinement: Some(&confinement),
                 ambient: &[],
                 releases_private: false,

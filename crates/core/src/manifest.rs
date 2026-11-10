@@ -210,15 +210,40 @@ impl Step {
     /// were not shown is one they did not endorse: a search names where it runs as much as it names
     /// what it looks for, and both are locked before the question is put.
     pub fn describe(&self) -> String {
+        self.describe_with(None)
+    }
+
+    /// [`Step::describe`] with every field the contract lists under `paths` drawn through `spell`.
+    ///
+    /// Which fields are spelled is the contract's, by field name: a value is never inspected to
+    /// decide whether it is a file. `spell` only changes how the name is drawn, as
+    /// `bravebot_agent::confirm::shown_name` does everywhere else a prompt names a file; this crate
+    /// cannot call it, so the caller passes it in.
+    ///
+    /// The words around a name read with their runs of white space joined, as in
+    /// [`Step::describe`]. A name `spell` drew is kept as it came back, so two names that differ
+    /// only in a run of spaces draw differently.
+    pub fn describe_spelled(&self, spell: &dyn Fn(&str) -> String) -> String {
+        self.describe_with(Some(spell))
+    }
+
+    fn describe_with(&self, spell: Option<&dyn Fn(&str) -> String>) -> String {
         let contract = contract_for(self.tool).expect("a validated step names a known tool");
+        let drawn = |field: &str, value: &str| match (contract.paths.contains(&field), spell) {
+            (true, Some(spell)) => Part::Name(spell(value)),
+            _ => Part::Words(value.to_string()),
+        };
         let headline = contract
             .headline
             .iter()
             .copied()
             .find(|field| self.args.get(*field).and_then(Arg::text).is_some());
         let subject = headline
-            .and_then(|field| self.args.get(field).and_then(Arg::text))
-            .unwrap_or("");
+            .and_then(|field| {
+                let value = self.args.get(field).and_then(Arg::text)?;
+                Some(drawn(field, value))
+            })
+            .unwrap_or(Part::Words(String::new()));
 
         // The item an act lands on reads as such, apart from what it reads its text from.
         let on = contract
@@ -256,25 +281,78 @@ impl Step {
                     .get(field)
                     .and_then(Arg::text)
                     .filter(|value| !value.is_empty())
-                    .map(|value| format!("{field} {value}"))
+                    .map(|value| (field, drawn(field, value)))
             })
             .collect::<Vec<_>>();
-        let routing = match elsewhere.is_empty() {
-            true => String::new(),
-            false => format!(" ({})", elsewhere.join(", ")),
-        };
+        let mut routing = Vec::new();
+        for (position, (field, value)) in elsewhere.into_iter().enumerate() {
+            let opening = match position {
+                0 => " (",
+                _ => ", ",
+            };
+            routing.push(Part::Words(format!("{opening}{field} ")));
+            routing.push(value);
+        }
+        if !routing.is_empty() {
+            routing.push(Part::Words(")".to_string()));
+        }
 
         // A call reads as a call is put to a person, `alias:tool` (SERVERS-7).
         let (subject, routing) = match self.tool {
-            MCP_CALL => (format!("{subject}:{}", self.text("tool")), String::new()),
-            _ => (subject.to_string(), routing),
+            MCP_CALL => (
+                vec![subject, Part::Words(format!(":{}", self.text("tool")))],
+                Vec::new(),
+            ),
+            _ => (vec![subject], routing),
         };
 
-        format!("{} {subject}{reads}{on}{writes}{routing}", contract.verb)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut parts = vec![Part::Words(format!("{} ", contract.verb))];
+        parts.extend(subject);
+        parts.push(Part::Words(format!("{reads}{on}{writes}")));
+        parts.extend(routing);
+        joined(&parts)
     }
+}
+
+/// A piece of a described step: words, or a file name already drawn by the caller's spelling.
+enum Part {
+    Words(String),
+    Name(String),
+}
+
+/// The pieces as one line. Runs of white space in the words, across the joins between pieces,
+/// read as one space and the line has none at its ends. A drawn name is copied as it is, and
+/// what it draws as nothing leaves no gap behind.
+fn joined(parts: &[Part]) -> String {
+    let mut line = String::new();
+    let mut gap = false;
+    for part in parts {
+        match part {
+            Part::Words(words) => {
+                for character in words.chars() {
+                    match character.is_whitespace() {
+                        true => gap = true,
+                        false => {
+                            if gap && !line.is_empty() {
+                                line.push(' ');
+                            }
+                            gap = false;
+                            line.push(character);
+                        }
+                    }
+                }
+            }
+            Part::Name(name) if !name.is_empty() => {
+                if gap && !line.is_empty() {
+                    line.push(' ');
+                }
+                gap = false;
+                line.push_str(name);
+            }
+            Part::Name(_) => {}
+        }
+    }
+    line
 }
 
 /// A validated plan, frozen.
@@ -1143,8 +1221,14 @@ impl Manifest {
     /// Here rather than on [`Step`] because a release is a fact about the whole plan: which
     /// places a slot's content came from depends on every step before it.
     pub fn describe_step(&self, index: usize) -> String {
+        self.describe_step_spelled(index, &|name| name.to_string())
+    }
+
+    /// [`Manifest::describe_step`] with the file names in the step drawn through `spell`
+    /// ([`Step::describe_spelled`]). The release and note text after the step is unchanged.
+    pub fn describe_step_spelled(&self, index: usize, spell: &dyn Fn(&str) -> String) -> String {
         let step = &self.steps[index];
-        let mut described = step.describe();
+        let mut described = step.describe_spelled(spell);
         let carried = step.args.get("from_slot").and_then(Arg::text);
         let origins = self.origins();
         if let Some(release) = self.release_at(index, &origins) {
@@ -1827,6 +1911,74 @@ mod tests {
             listing.steps()[0].describe(),
             "list docs into names (pattern *.md)"
         );
+    }
+
+    /// PROMPT-1: only the fields the contract lists under `paths` are drawn through the spelling a
+    /// caller passes, whatever their value holds: a search pattern that looks like a file is drawn
+    /// as written, and a directory is spelled.
+    #[test]
+    fn a_step_spells_the_fields_the_contract_names_as_paths_and_no_other() {
+        let searching = validate(&Draft::new(vec![
+            DraftStep::new("search")
+                .with_text("pattern", "a.md")
+                .with_text("directory", "docs")
+                .with_text("include", "*.rs")
+                .with_text("out_slot", "hits"),
+            answer("hits"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            searching.steps()[0].describe_spelled(&|name| format!("<{name}>")),
+            "search for a.md into hits (directory <docs>, include *.rs)"
+        );
+        assert_eq!(
+            searching.describe_step_spelled(0, &|name| format!("<{name}>")),
+            "search for a.md into hits (directory <docs>, include *.rs)"
+        );
+        let listing = validate(&Draft::new(vec![
+            DraftStep::new("list_files")
+                .with_text("directory", "docs")
+                .with_text("pattern", "*.md")
+                .with_text("out_slot", "names"),
+            answer("names"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            listing.steps()[0].describe_spelled(&|name| format!("<{name}>")),
+            "list <docs> into names (pattern *.md)"
+        );
+    }
+
+    /// PROMPT-1: joining the white space of the words around a name leaves the drawn name alone, so
+    /// a name with a doubled space draws differently from the same name with one, while the
+    /// unspelled line joins them as it always did.
+    #[test]
+    fn a_step_keeps_the_white_space_of_a_name_it_drew() {
+        let reading = |name: &str| {
+            validate(&Draft::new(vec![
+                DraftStep::new("read_file")
+                    .with_text("path", name)
+                    .with_text("out_slot", "text"),
+                answer("text"),
+            ]))
+            .unwrap()
+        };
+        let spell = |name: &str| format!("<{name}>");
+        let doubled = reading("a  b.md");
+        let single = reading("a b.md");
+        assert_eq!(
+            doubled.steps()[0].describe_spelled(&spell),
+            "read <a  b.md> into text"
+        );
+        assert_ne!(
+            doubled.steps()[0].describe_spelled(&spell),
+            single.steps()[0].describe_spelled(&spell)
+        );
+        assert_eq!(
+            doubled.describe_step_spelled(0, &spell),
+            "read <a  b.md> into text"
+        );
+        assert_eq!(doubled.steps()[0].describe(), "read a b.md into text");
     }
 
     fn call(server: &str, tool: &str) -> DraftStep {
