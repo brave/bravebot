@@ -5465,18 +5465,26 @@ test("focus_tab makes the tab at exactly that URL active and brings its window f
 // The reply says what the browser did, which is not always what was asked: a
 // tab the browser will not pin is not pinned.
 test("pin_tab and mute_tab pin or mute by default, undo it on false, and report what the browser did", async () => {
-  for (const [method, flag, field] of [
-    ["pin_tab", "pinned", "pinned"],
-    ["mute_tab", "muted", "muted"],
+  // pin_tab also says whether the tab was pinned before, so a covered call can be undone by hand.
+  const already = browser({ tabs: tabs.map((tab) => ({ ...tab, pinned: true })), stored: pageAndTabToolsOn });
+  assert.deepEqual(
+    (await call(already, "pin_tab", { url: "https://brave.com/search", pinned: false })).result,
+    { url: "https://brave.com/search", was: true, pinned: false },
+  );
+  for (const [method, flag, field, before] of [
+    ["pin_tab", "pinned", "pinned", { was: false }],
+    ["mute_tab", "muted", "muted", {}],
   ]) {
     const url = "https://brave.com/search";
     const chrome = browser({ tabs, stored: pageAndTabToolsOn });
     assert.deepEqual((await call(chrome, method, { url })).result, {
       url,
+      ...before,
       [field]: true,
     });
     assert.deepEqual((await call(chrome, method, { url, [flag]: false })).result, {
       url,
+      ...before,
       [field]: false,
     });
     assert.deepEqual(
@@ -5491,6 +5499,7 @@ test("pin_tab and mute_tab pin or mute by default, undo it on false, and report 
     const stubborn = browser({ tabs, stored: pageAndTabToolsOn, unchanged: true });
     assert.deepEqual((await call(stubborn, method, { url })).result, {
       url,
+      ...before,
       [field]: false,
     });
 
@@ -10777,7 +10786,7 @@ test("a tool that manages a tab still names a tab at an address that is not on t
     { id: 1, method: "pin_tab", params: { url: "chrome://settings/", pinned: true } },
     chrome,
   );
-  assert.deepEqual(reply.result, { url: "chrome://settings/", pinned: true });
+  assert.deepEqual(reply.result, { url: "chrome://settings/", was: false, pinned: true });
 });
 
 test("take_held is refused, and takes nothing, while its tool or group is off, its lifetime has ended or contextMenus is not held", async () => {
