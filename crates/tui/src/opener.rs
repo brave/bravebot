@@ -240,9 +240,11 @@ mod tests {
             return false;
         };
         bravebot_sandbox::programs::keep_out(Path::new(&session));
+        let address = std::env::var("BRAVEBOT_TEST_BROWSER_ADDRESS")
+            .unwrap_or_else(|_| "https://example.invalid/".to_string());
         let status = opening(
             &Resolved::found_earlier(std::path::PathBuf::from(opener)),
-            &["https://example.invalid/".to_string()],
+            &[address],
         )
         .status()
         .unwrap();
@@ -378,6 +380,12 @@ mod tests {
     /// `XDG_DATA_DIRS` names an installed directory that holds both handlers' entries, so a
     /// `mimeapps.list` read from `variable` is the only thing that chooses. `HOME` is a scratch
     /// directory, so the person's own defaults cannot start a browser.
+    ///
+    /// `XDG_DATA_DIRS` is the variable that cannot be run that way: with the planted value
+    /// removed, `gio open` reads the system's directories and starts the browser they name for
+    /// `https`. Its directories hold the entries and the `mimeapps.list` themselves, and the
+    /// address has the scheme `bravebot-test`, which no system handler opens, so a removed value
+    /// leaves `gio open` with no handler and starts nothing.
     #[cfg(unix)]
     fn gnome_handler_run_by(test: &str, variable: &str, opener: &Path) -> (bool, bool) {
         use std::os::unix::fs::PermissionsExt;
@@ -410,17 +418,22 @@ mod tests {
             )
             .unwrap();
         };
+        let scheme = if variable == "XDG_DATA_DIRS" {
+            "bravebot-test"
+        } else {
+            "https"
+        };
         let default = |file: &Path, marker: &str| {
             std::fs::write(
                 file,
-                format!("[Default Applications]\nx-scheme-handler/https={marker}.desktop\n"),
+                format!("[Default Applications]\nx-scheme-handler/{scheme}={marker}.desktop\n"),
             )
             .unwrap();
         };
         let planted = session.join("selected");
         let genuine = installed.join("selected");
         for (directory, marker) in [(&planted, "planted-ran"), (&genuine, "genuine-ran")] {
-            if variable == "XDG_DATA_HOME" {
+            if variable == "XDG_DATA_HOME" || variable == "XDG_DATA_DIRS" {
                 entry(&directory.join("applications"), marker);
                 default(&directory.join("applications/mimeapps.list"), marker);
             } else {
@@ -436,6 +449,10 @@ mod tests {
                     .args(["--exact", test, "--test-threads=1", "--nocapture"])
                     .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
                     .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
+                    .env(
+                        "BRAVEBOT_TEST_BROWSER_ADDRESS",
+                        format!("{scheme}://example.invalid/"),
+                    )
                     .env("HOME", &home)
                     .env_remove("BRAVEBOT_HOME")
                     .env("XDG_CURRENT_DESKTOP", "GNOME")
@@ -474,13 +491,14 @@ mod tests {
     }
 
     /// SANDBOX-30, through the installed `xdg-open` and `gio open` where this host has both. The
-    /// regression it rejects: the opener left `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME` or
-    /// `XDG_DATA_HOME` as the person set it, so a `mimeapps.list` a stage wrote in the directory it
+    /// regression it rejects: the opener left `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`
+    /// or `XDG_DATA_DIRS` as the person set it, so a `mimeapps.list` a stage wrote in the directory it
     /// names chooses the program `gio open` runs. The same directory in an installed place is read
     /// and its handler runs, which shows the variable does choose the handler here. `XDG_DATA_DIRS`
-    /// is not run: with the planted value removed, `gio open` falls back to the system's handlers
-    /// and would start a browser. It prints `skipped` and passes where either program is missing
-    /// or the handler in the installed directory does not run.
+    /// is run with an address whose scheme only the planted and the installed entries handle,
+    /// since with the planted value removed `gio open` falls back to the system's handlers and
+    /// would start a browser for `https`. It prints `skipped` and passes where either program is
+    /// missing or the handler in the installed directory does not run.
     #[cfg(unix)]
     #[test]
     fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome() {
@@ -494,7 +512,12 @@ mod tests {
             println!("skipped: no xdg-open and gio on this host");
             return;
         };
-        for variable in ["XDG_CONFIG_DIRS", "XDG_CONFIG_HOME", "XDG_DATA_HOME"] {
+        for variable in [
+            "XDG_CONFIG_DIRS",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_DATA_DIRS",
+        ] {
             let ran = gnome_handler_run_by(
                 "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome",
                 variable,
