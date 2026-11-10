@@ -429,7 +429,9 @@ impl Confinement {
         self
     }
 
-    /// Resolves the kept lists against the home, the state directory and the first directory.
+    /// The lists are kept so that they are resolved again when the state directory is set after
+    /// `with_filesystem`. Both setters go through this function, so the order of the builder calls
+    /// does not change what is refused.
     fn resolve_filesystem(&mut self) {
         let base = self
             .roots

@@ -413,14 +413,12 @@ age does not end them.
   thread is running, which leaves a record whose trail went first, and still opens, or an index whose
   directory is partly removed, which a server starts on and fills again. A client that loads a record
   as the sweep removes it reads it without its trail.
-- **The refusal of the state directory is passed the directory the agent resolved, and nothing in the
-  sandbox reads the environment.** [SANDBOX-12](sandboxing.md#SANDBOX-12) refuses `~/.bravebot` and
-  the directory `BRAVEBOT_HOME` puts anywhere else, in each platform's engine, in the rules that
-  judge a granted path and in the scopes that name a directory. The sandbox crate cannot resolve the
-  directory itself, so the agent hands it the one it resolved, and a caller that passes none refuses
-  the default only. A value that is the profile directory, a directory above it or a filesystem root
-  adds no refusal, since a row over any of those would refuse the account's files and not the state
-  directory ([#2917](https://github.com/brave/bravebot/issues/2917)).
+- **A `BRAVEBOT_HOME` that is the profile directory, a directory above it or a filesystem root adds
+  no refusal, and a caller that passes no directory refuses only the default `~/.bravebot`.** A row
+  over any of those values would refuse the account's files and not the state directory, and the
+  sandbox crate cannot resolve the directory itself, so a caller has to hand it the one the agent
+  resolved ([SANDBOX-12](sandboxing.md#SANDBOX-12),
+  [#2917](https://github.com/brave/bravebot/issues/2917)).
 - **A directory `BRAVEBOT_HOME` names is narrowed whatever else is kept in it.** STATE-1 gives the
   state directory mode 0700 and the installer does the same, and the variable can name a directory
   somebody already uses: their home directory, a shared directory or a project. The program then
