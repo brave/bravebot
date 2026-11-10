@@ -4745,6 +4745,7 @@ mod tests {
 
     /// What `confinement` refuses a stage for when it is about a session directory, and nothing
     /// otherwise.
+    #[cfg(unix)]
     fn refused_for_a_session_directory(confinement: &Confinement) -> Option<String> {
         match prepared_in(confinement) {
             Err(ExecError::NotConfined { detail, .. }) if detail.contains("session directory") => {
