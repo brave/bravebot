@@ -35,6 +35,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,6 +51,8 @@ pub const MAX_LINE: usize = 8 * 1024 * 1024;
 struct Attached {
     connection: u64,
     lines: mpsc::SyncSender<String>,
+    /// The bytes of the lines in `lines` that the writer has not yet taken.
+    waiting: Arc<AtomicUsize>,
     /// The channel itself, shut when the host gives up on the client.
     channel: UnixStream,
 }
@@ -66,11 +69,14 @@ impl Attached {
         let mut writer = channel.try_clone()?;
         writer.set_write_timeout(Some(patience))?;
         let (lines, queued) = mpsc::sync_channel::<String>(QUEUED_LINES);
-        let output = Arc::clone(output);
+        let waiting = Arc::new(AtomicUsize::new(0));
+        let (output, taken) = (Arc::clone(output), Arc::clone(&waiting));
         std::thread::spawn(move || {
             // Ends when the queue's sender is dropped, which is when the host stops serving the
             // connection, once what was queued before then has been written.
             for line in queued {
+                // The line being written no longer waits, so a long one does not refuse the next.
+                taken.fetch_sub(line.len(), Ordering::SeqCst);
                 if writeln!(writer, "{line}")
                     .and_then(|()| writer.flush())
                     .is_err()
@@ -87,6 +93,7 @@ impl Attached {
         Ok(Self {
             connection,
             lines,
+            waiting,
             channel: channel.try_clone()?,
         })
     }
@@ -147,6 +154,9 @@ const WRITE_PATIENCE: Duration = Duration::from_secs(5);
 /// for output, as one whose write waited too long is. It takes the session over again to be told
 /// where it stands (HOST-11).
 pub const QUEUED_LINES: usize = 1024;
+
+/// How many bytes of lines may wait to be written to a client, beside [`QUEUED_LINES`].
+pub const QUEUED_BYTES: usize = 16 << 20;
 
 /// A bridge, the workspaces it may open sessions in, and the sessions it holds for clients.
 pub struct Host {
@@ -501,12 +511,21 @@ fn write_line(output: &Sink, connection: u64, value: &Value) {
     }
 }
 
-/// Queue `line` for the client attached. A queue that is full ends the connection's output: the
-/// client is gone or reads too slowly, and the host must not wait on it.
+/// Queue `line` for the client attached. A queue that is full, in lines or in bytes, ends the
+/// connection's output: the client is gone or reads too slowly, and the host must not wait on it.
+/// A line is queued whatever its length while what waits is within the budget, so a long event
+/// and its view update, written back to back, are queued together. Only the length is taken.
 fn queue(output: &mut Option<Attached>, line: String) {
     let Some(attached) = output.as_ref() else {
         return;
     };
+    let (bytes, waiting) = (line.len(), attached.waiting.load(Ordering::SeqCst));
+    if waiting > QUEUED_BYTES {
+        give_up_on(output);
+        return;
+    }
+    // Counted before it is sent, so the writer never takes away more than was added.
+    attached.waiting.fetch_add(bytes, Ordering::SeqCst);
     if attached.lines.try_send(line).is_err() {
         give_up_on(output);
     }
@@ -763,6 +782,86 @@ mod tests {
             "a client whose queue is full stayed attached"
         );
         assert!(shut(&host_end), "the channel was left open for reading");
+    }
+
+    /// A queue is bounded in bytes as well as lines. A line longer than the budget is queued while
+    /// what waits is within it, so one long reply does not end a connection that is keeping up. Lines
+    /// waiting past the budget end it, long before the queue holds its count of lines.
+    #[test]
+    fn a_queue_past_its_byte_budget_ends_the_connection_and_one_long_line_alone_does_not() {
+        let (host_end, _client_end, sink) = a_client_that_reads_nothing(PATIENCE_LONGER_THAN_TEST);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+        let line = |bytes: usize| Event::global("agent.ready", json!({"text": "x".repeat(bytes)}));
+
+        write_event(&sink, &owners, &line(QUEUED_BYTES + 1));
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "one long line alone ended the connection"
+        );
+        let mut written = 0;
+        while written < 20 && sink.lock().unwrap().is_some() {
+            write_event(&sink, &owners, &line(QUEUED_BYTES / 8));
+            written += 1;
+        }
+        assert!(
+            sink.lock().unwrap().is_none(),
+            "a client with {written} lines past its byte budget waiting stayed attached"
+        );
+        assert!(shut(&host_end), "the channel was left open for reading");
+    }
+
+    /// An event on a session with a view is written twice, as its view update and as itself, back
+    /// to back. A pair of long lines is queued even before the writer takes the first.
+    #[test]
+    fn a_long_event_and_its_view_update_are_queued_together() {
+        let (_host_end, _client_end, sink) = a_client_that_reads_nothing(PATIENCE_LONGER_THAN_TEST);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+        let line = Event::global(
+            "agent.ready",
+            json!({"text": "x".repeat(QUEUED_BYTES * 3 / 5)}),
+        );
+        // The writer is held on this one, which the client never reads.
+        let held = Event::global("agent.ready", json!({"text": "x".repeat(2 << 20)}));
+        write_event(&sink, &owners, &held);
+        write_event(&sink, &owners, &line);
+        write_event(&sink, &owners, &line);
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "a long event and its view update ended the connection"
+        );
+    }
+
+    /// A line the writer has taken no longer counts toward the budget, so a client that keeps
+    /// up is sent any number of bytes.
+    #[test]
+    fn a_client_that_keeps_up_is_sent_more_than_the_byte_budget() {
+        let (host_end, client_end) = UnixStream::pair().unwrap();
+        let sink: Sink = Arc::new(Mutex::new(None));
+        let attached = Attached::start(&sink, 1, &host_end, PATIENCE_LONGER_THAN_TEST).unwrap();
+        *sink.lock().unwrap() = Some(attached);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+        client_end
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reading = BufReader::new(client_end);
+        for _ in 0..4 {
+            let text = "x".repeat(QUEUED_BYTES / 2);
+            write_event(
+                &sink,
+                &owners,
+                &Event::global("agent.ready", json!({"text": text})),
+            );
+            let mut line = String::new();
+            reading.read_line(&mut line).expect("the line arrives");
+            assert!(
+                line.len() > QUEUED_BYTES / 2,
+                "the channel was shut on a client that read every line"
+            );
+        }
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "a client that read every line was given up on"
+        );
     }
 
     /// Longer than any test waits, so a write that waits this long is one the test sees waiting.
