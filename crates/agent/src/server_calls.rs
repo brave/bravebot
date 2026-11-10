@@ -572,7 +572,8 @@ impl Servers {
 /// What the planner is told an apply step is, where an offered tool lets a row fill an argument.
 const APPLY_CATALOGUE: &str = " A tool listed with apply may be called by an APPLY step for each \
 item of a list a SERVER_READ step read: an isolated processor proposes the calls, row by row, and \
-the person approves the whole list before any is made. Its arguments give each argument of each \
+the person approves the whole list before any is made, or, where every tool of the step is marked \
+plan-covered, approving the plan covers them. Its arguments give each argument of each \
 tool a kind: a fixed value {\"literal\": \"text\"}, a field of an entry {\"entry\": \"field\"} \
 (of the first list, or {\"entry\": \"list.field\"} of another), that field of several entries as \
 one array {\"entries\": \"field\"} for an argument the tool takes as a list, new text for a value \
