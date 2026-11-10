@@ -24,8 +24,10 @@ opens it refuses the whole run when an issue is assigned to anybody but the acco
 assigns that account to each issue, and adds `bot/in-progress`, which it removes when the session
 ends. The session is told what was written and when, so it does not take the assignee or the label
 for another session's work. `FORCE=1` works the issues that have another assignee as well, leaves
-those assignees, and tells the session which issues they are. Fixing is a separate step from finding,
-and a run never does both.
+those assignees, and tells the session which issues they are. `BYPASS=1` opens the session with
+`--dangerously-bypass-approvals-and-sandbox`, so the whole session runs without asking before a command
+and without the sandbox. The session reads issue and comment text that other people wrote, so use it
+for issues whose text you trust. Fixing is a separate step from finding, and a run never does both.
 
 `ISSUES` is split on commas and newlines, and every piece that is not an issue number or a link is
 run as a search, so a sentence in it becomes a search for its words. Put instructions for the run in

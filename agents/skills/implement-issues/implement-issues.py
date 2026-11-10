@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Open the implement-issues skill in the terminal client, after the steps that need no model.
 
-    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] [--force] -- <argument>
+    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] [--force] [--bypass] -- <argument>
 
-`make implement-issues ISSUES=<argument> [NOTES=<notes>] [FORCE=1]` runs it. <argument> is what the skill takes:
+`make implement-issues ISSUES=<argument> [NOTES=<notes>] [FORCE=1] [BYPASS=1]` runs it. <argument> is what the skill takes:
 issue numbers, links and search queries separated by commas. The skill receives it unchanged, since the
 session is `bravebot -i "/implement-issues <argument>"` and opens on that line as its first turn.
+With `--bypass` it is `bravebot --dangerously-bypass-approvals-and-sandbox -i "..."`, which answers every
+permission question and turns the sandbox off for the whole session.
 
 The notes are the person's instructions for the run, such as how to group the issues. They begin at a
 line of <argument> that starts with `Notes:`, and `--notes` adds such a line after <argument>. The skill
@@ -52,6 +54,8 @@ from urllib.parse import quote
 
 LABEL = "bot/in-progress"
 SKILL = "implement-issues"
+# The client's flag for no permission prompts and no sandbox, which `--bypass` puts ahead of `-i`.
+BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 NAME = re.compile(r"[A-Za-z0-9-]+")
 NUMBER = re.compile(r"#?(\d+)")
 LINK = re.compile(r"https?://\S+")
@@ -376,6 +380,7 @@ def main(argv=None):
     parser.add_argument("--bravebot", default="bravebot", help="the terminal client to open, by name or path")
     parser.add_argument("--notes", default="", help="notes for the skill, which reads them; no issue is taken from them")
     parser.add_argument("--force", action="store_true", help="work an issue that is assigned to somebody else as well")
+    parser.add_argument("--bypass", action="store_true", help=f"open the client with {BYPASS_FLAG}")
     parser.add_argument("argument", help="what the skill takes, which it receives unchanged")
     args = parser.parse_args(argv)
     named_in, _ = split_list(args.argument)
@@ -411,9 +416,12 @@ def main(argv=None):
     print(f"assigned {me}: {listed(assigned) or 'none, already theirs'}", flush=True)
     print(f"labelled {LABEL}: {listed(labelled) or 'none, already labelled'}", flush=True)
 
+    command = [client, *([BYPASS_FLAG] if args.bypass else []), "-i", prompt]
+    if args.bypass:
+        print(f"bypass: the session runs with {BYPASS_FLAG}, so nothing asks before a command and no sandbox confines it", flush=True)
     status = 1
     try:
-        status = session([client, "-i", prompt])
+        status = session(command)
     finally:
         stuck = release(labelled)
         if labelled and not stuck:
