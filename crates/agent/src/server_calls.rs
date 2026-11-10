@@ -172,7 +172,8 @@ impl Servers {
     }
 
     /// The tools a plan may call, one per line: `alias:tool`, then each argument by name, `*` after
-    /// a required one, and its type where the list gave one.
+    /// a required one, and its type where the list gave one, then whether it is read-only, what a
+    /// row of an `apply` step may fill and whether a plan's approval covers it.
     pub(crate) fn listing(&self) -> String {
         let Some(offer) = &self.offer else {
             return String::new();
@@ -200,8 +201,14 @@ impl Servers {
                     format!(" apply ({})", kinds.join(", "))
                 })
                 .unwrap_or_default();
+            // Which tools a plan's approval covers, so a planner can tell a step that runs on it
+            // from one that puts its list (SERVERS-26).
+            let covered = match offer.covered(&tool.alias, &tool.tool) {
+                true => " plan-covered",
+                false => "",
+            };
             lines.push_str(&format!(
-                "  {}:{} ({}){}{applies}\n",
+                "  {}:{} ({}){}{applies}{covered}\n",
                 tool.alias,
                 tool.tool,
                 arguments.join(", "),
