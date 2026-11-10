@@ -2265,12 +2265,12 @@ fn marks_session(url: &str, scratch: &Scratch, applies: &[(&str, &str, &str)]) -
     session_of(reach(url, false).applying(declared), scratch, true)
 }
 
-/// [`marks_session`], with `unattended` marked as running unattended.
+/// [`marks_session`], with `covered` marked plan-covered.
 fn marked_session(
     url: &str,
     scratch: &Scratch,
     applies: &[(&str, &str, &str)],
-    unattended: &[&str],
+    covered: &[&str],
 ) -> Session {
     let mut declared = bravebot_config::mcp::ApplyArguments::new();
     for (tool, argument, kind) in applies {
@@ -2279,9 +2279,9 @@ fn marked_session(
             .or_default()
             .insert((*argument).to_string(), (*kind).to_string());
     }
-    let marked = unattended.iter().map(|tool| (*tool).to_string()).collect();
+    let marked = covered.iter().map(|tool| (*tool).to_string()).collect();
     session_of(
-        reach(url, false).applying(declared).unattended(marked),
+        reach(url, false).applying(declared).covered(marked),
         scratch,
         true,
     )
@@ -2774,15 +2774,15 @@ fn an_apply_whose_call_could_depend_on_two_rows_is_refused() {
     assert!(ran.called.is_empty());
 }
 
-/// A step whose tools are all marked unattended makes its calls on the person's approval of the plan,
-/// with no list put. The plan line says the step runs without asking and names the server its list
-/// was read from, and the trail credits the plan's approval for each call.
+/// A step whose tools are all marked plan-covered makes its calls on the person's approval of the
+/// plan, with no list put. The plan line says the step runs without asking and names the server its
+/// list was read from, and the trail credits the plan's approval for each call.
 ///
 /// Rejects an implementation that still puts the list, that runs it without saying so on the line
 /// the person approved, and that leaves the trail silent about what answered the calls.
 #[test]
 fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
-    let scratch = Scratch::new("unattended");
+    let scratch = Scratch::new("covered");
     let (url, mcp) = serve_marks();
     let ran = walk(Walk {
         session: marked_session(
@@ -2850,12 +2850,12 @@ fn a_step_whose_tools_are_all_marked_runs_on_the_plans_approval() {
 /// mode and not a person approved the plan, where an `ask` rule names one of its tools, and in plan
 /// mode, and its plan line does not say it runs without asking.
 ///
-/// Rejects an implementation that runs a step unattended on a mark it does not wholly have, on a
-/// plan nobody read, past a rule somebody wrote, or in a mode that asks at the step, and one whose
-/// plan line promises what the step does not do.
+/// Rejects an implementation that runs a step without asking on a mark it does not wholly have, on
+/// a plan nobody read, past a rule somebody wrote, or in a mode that asks at the step, and one
+/// whose plan line promises what the step does not do.
 #[test]
 fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rule_asks() {
-    let scratch = Scratch::new("unattended-asks");
+    let scratch = Scratch::new("covered-asks");
     let (url, mcp) = serve_marks();
     let all = ["make_folder", "move_mark"];
     let (asking, _) = bravebot_core::permissions::Permissions::parse(
@@ -2917,11 +2917,11 @@ fn a_marked_step_puts_its_list_where_a_tool_is_unmarked_a_mode_answered_or_a_rul
 /// so its plan line does not promise a run that the rule would stop part-way, and the trail credits
 /// the plan's approval for no call.
 ///
-/// Rejects an implementation that promises an unattended run of a tool a rule refuses, and one that
-/// records approvals for calls that were never made.
+/// Rejects an implementation that promises to run without asking a tool a rule refuses, and one
+/// that records approvals for calls that were never made.
 #[test]
 fn a_deny_rule_about_a_marked_tool_puts_the_steps_list() {
-    let scratch = Scratch::new("unattended-deny");
+    let scratch = Scratch::new("covered-deny");
     let (url, mcp) = serve_marks();
     let (denying, rejected) = bravebot_core::permissions::Permissions::parse(
         &["Mcp(brave:move_mark)".to_string()],
@@ -2961,7 +2961,7 @@ fn a_deny_rule_about_a_marked_tool_puts_the_steps_list() {
 /// step unasked in a mode that asks at each step.
 #[test]
 fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
-    let scratch = Scratch::new("unattended-switch");
+    let scratch = Scratch::new("covered-switch");
     let (url, mcp) = serve_marks();
     let task = Task::new("organise my bookmarks into folders");
     let live = task.permission_mode.clone();
@@ -2995,7 +2995,7 @@ fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
 /// unchecked.
 #[test]
 fn a_marked_step_sending_an_entry_holding_a_hidden_character_puts_its_list() {
-    let scratch = Scratch::new("unattended-hidden-entry");
+    let scratch = Scratch::new("covered-hidden-entry");
     let (url, mcp) = serve_marks();
     let rows =
         "new 1 = \"Work\"\nrow 1: tool 1 title=new:1\nrow 2: tool 2 url=entry:4 folder=row:1\n";
@@ -3023,7 +3023,7 @@ fn a_marked_step_sending_an_entry_holding_a_hidden_character_puts_its_list() {
 /// Rejects an implementation that runs unasked on a line the person could not read in full.
 #[test]
 fn a_marked_step_holding_a_hidden_character_puts_its_list() {
-    let scratch = Scratch::new("unattended-hidden");
+    let scratch = Scratch::new("covered-hidden");
     let (url, mcp) = serve_marks();
     let mut steps = organise();
     steps[1]["args"]["arguments"]["make_folder"]["parent"] =

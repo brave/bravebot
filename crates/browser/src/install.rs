@@ -256,13 +256,13 @@ const APPLIES: &[(&str, &str, &str, &str)] = &[
     ("tabs-manage", "group_tabs", "title", "new"),
 ];
 
-/// The tools of [`APPLIES`] `install` marks with `--unattended`, whose calls an `apply` step makes on
-/// a person's approval of the plan: each acts only in this browser, deletes nothing, overwrites
+/// The tools of [`APPLIES`] `install` marks with `--plan-covers`, whose calls an `apply` step makes
+/// on a person's approval of the plan: each acts only in this browser, deletes nothing, overwrites
 /// nothing its reply does not record, and adds no address. `move_bookmark` says the folder a
 /// bookmark left and `rename_bookmark` the title it replaced, so each can be undone by hand.
 /// `add_reading_list_entry` adds an address, and `group_tabs` can empty a group, which the browser
 /// then removes, so neither is marked (`docs/design/manifest-apply.md`).
-const UNATTENDED: &[(&str, &str)] = &[
+const COVERED: &[(&str, &str)] = &[
     ("bookmarks-write", "create_bookmark_folder"),
     ("bookmarks-write", "move_bookmark"),
     ("bookmarks-write", "rename_bookmark"),
@@ -278,9 +278,9 @@ impl Installed {
     /// with the bound of [`relay::IN_BROWSER_TOOL_TIMEOUT`], which is above the wait of its server.
     /// The declaration of a group with tools in [`CHOICES`] also has a `--choice <tool>:<argument>`
     /// for each, after those, and one with tools in [`APPLIES`] an `--apply
-    /// <tool>:<argument>=<kind>` for each, then an `--unattended <tool>` for each of its tools in
-    /// [`UNATTENDED`]. The directory and the program are quoted as [`quoted`] says, and the
-    /// line is bytes, since either may be a name that is not UTF-8.
+    /// <tool>:<argument>=<kind>` for each, then a `--plan-covers <tool>` for each of its tools in
+    /// [`COVERED`]. The directory and the program are quoted as [`quoted`] says, and the line is
+    /// bytes, since either may be a name that is not UTF-8.
     pub fn declaration(&self, group: Option<&str>) -> OsString {
         let choices: String = CHOICES
             .iter()
@@ -293,10 +293,10 @@ impl Installed {
                     .map(|(_, tool, argument, kind)| format!(" --apply {tool}:{argument}={kind}")),
             )
             .chain(
-                UNATTENDED
+                COVERED
                     .iter()
                     .filter(|(id, _)| Some(*id) == group)
-                    .map(|(_, tool)| format!(" --unattended {tool}")),
+                    .map(|(_, tool)| format!(" --plan-covers {tool}")),
             )
             .collect();
         let (alias, asked, bound, group) = match group {
@@ -711,15 +711,15 @@ mod tests {
              --apply create_bookmark_folder:title=new --apply move_bookmark:url=entry \
              --apply move_bookmark:folder=row,entry --apply rename_bookmark:url=entry \
              --apply rename_bookmark:title=new --apply add_reading_list_entry:url=entry \
-             --apply add_reading_list_entry:title=entry,new --unattended create_bookmark_folder \
-             --unattended move_bookmark --unattended rename_bookmark --dir /d -- \
+             --apply add_reading_list_entry:title=entry,new --plan-covers create_bookmark_folder \
+             --plan-covers move_bookmark --plan-covers rename_bookmark --dir /d -- \
              /p/bravebot-browser mcp --group \
              bookmarks-write"
         );
         assert_eq!(
             installed.declaration(Some("tabs-manage")),
             "bravebot mcp add brave-tabs-manage -s user --apply pin_tab:url=entry \
-             --apply group_tabs:urls=entries --apply group_tabs:title=new --unattended pin_tab \
+             --apply group_tabs:urls=entries --apply group_tabs:title=new --plan-covers pin_tab \
              --dir /d -- \
              /p/bravebot-browser mcp --group tabs-manage"
         );

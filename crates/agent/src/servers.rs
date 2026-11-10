@@ -520,8 +520,8 @@ enum Plan {
         choice_arguments: ChoiceArguments,
         /// The arguments its declaration says a row of an `apply` step may fill.
         apply_arguments: bravebot_config::mcp::ApplyArguments,
-        /// The tools its declaration marks as running unattended in an `apply` step.
-        unattended_tools: bravebot_config::mcp::UnattendedTools,
+        /// The tools its declaration marks plan-covered in an `apply` step.
+        covered_tools: bravebot_config::mcp::CoveredTools,
     },
     /// A local server that runs in an NVIDIA OpenShell sandbox, offered to manifest runs only.
     OpenShell {
@@ -1094,7 +1094,7 @@ fn planned(
         ask_every_call: declaration.asks_every_call(),
         choice_arguments: declaration.choice_arguments().clone(),
         apply_arguments: declaration.apply_arguments().clone(),
-        unattended_tools: declaration.unattended_tools().clone(),
+        covered_tools: declaration.covered_tools().clone(),
     })
 }
 
@@ -1730,7 +1730,7 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
     }
     lines.extend(choices_line(declaration).map(|line| format!("{indent}{line}")));
     lines.extend(applies_line(declaration).map(|line| format!("{indent}{line}")));
-    lines.extend(unattended_line(declaration).map(|line| format!("{indent}{line}")));
+    lines.extend(covered_line(declaration).map(|line| format!("{indent}{line}")));
     lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
     lines
 }
@@ -1767,13 +1767,13 @@ pub fn applies_line(declaration: &Declaration) -> Option<String> {
 
 /// The tools a declaration marks as running on a person's approval of a plan, or nothing where it
 /// marks none.
-pub fn unattended_line(declaration: &Declaration) -> Option<String> {
+pub fn covered_line(declaration: &Declaration) -> Option<String> {
     let named: Vec<String> = declaration
-        .unattended_tools()
+        .covered_tools()
         .iter()
         .map(|tool| shown(tool))
         .collect();
-    (!named.is_empty()).then(|| t!(mcp_declaration_unattended_tools, named = named.join(", ")))
+    (!named.is_empty()).then(|| t!(mcp_declaration_covered_tools, named = named.join(", ")))
 }
 
 /// The margin the lines under a declaration's first one start at.
@@ -1815,7 +1815,7 @@ pub fn problem(found: &Problem) -> String {
         Problem::Backend(_) => t!(mcp_problem_backend).to_string(),
         Problem::Apply => t!(mcp_problem_apply).to_string(),
         Problem::ApplyWhileAsking => t!(mcp_problem_apply_while_asking).to_string(),
-        Problem::Unattended => t!(mcp_problem_unattended).to_string(),
+        Problem::PlanCovers => t!(mcp_problem_plan_covers).to_string(),
     }
 }
 
@@ -2662,7 +2662,7 @@ fn start_under(
                 ask_every_call,
                 choice_arguments,
                 apply_arguments,
-                unattended_tools,
+                covered_tools,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let Some(program_text) = program.to_str() else {
@@ -2785,7 +2785,7 @@ fn start_under(
                             .asking_every_call(ask_every_call)
                             .choosing(choice_arguments)
                             .applying(apply_arguments)
-                            .unattended(unattended_tools)
+                            .covered(covered_tools)
                     });
                     let _ = sender.send((alias, outcome, None));
                 });
@@ -3674,7 +3674,7 @@ mod tests {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -5794,7 +5794,7 @@ mod tests {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let granting = Capabilities {
             network_denial_enforced: true,
@@ -6483,7 +6483,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -6648,7 +6648,7 @@ while {answering}"#
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7372,7 +7372,7 @@ while {answering}"#
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7468,7 +7468,7 @@ while {answering}"#
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
@@ -7556,7 +7556,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let home = Home {
             directory: Some(state),
@@ -7805,7 +7805,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -8221,7 +8221,7 @@ for line in sys.stdin:
                 ask_every_call: asking,
                 choice_arguments: ChoiceArguments::new(),
                 apply_arguments: Default::default(),
-                unattended_tools: Default::default(),
+                covered_tools: Default::default(),
             };
             let mut notes = Vec::new();
             let started = start(
@@ -8366,7 +8366,7 @@ for line in sys.stdin:
                 ask_every_call: true,
                 choice_arguments: choices,
                 apply_arguments: Default::default(),
-                unattended_tools: Default::default(),
+                covered_tools: Default::default(),
             };
             let mut notes = Vec::new();
             let started = start(
@@ -8751,7 +8751,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -9022,7 +9022,7 @@ done
                     ask_every_call: false,
                     choice_arguments: ChoiceArguments::new(),
                     apply_arguments: Default::default(),
-                    unattended_tools: Default::default(),
+                    covered_tools: Default::default(),
                 },
             )]
         };
@@ -9092,7 +9092,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let hosts = listing(Some(&["mine.example"]), &[]);
         let mut notes = Vec::new();
@@ -9160,7 +9160,7 @@ done
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             apply_arguments: Default::default(),
-            unattended_tools: Default::default(),
+            covered_tools: Default::default(),
         };
         let mut notes = Vec::new();
 
