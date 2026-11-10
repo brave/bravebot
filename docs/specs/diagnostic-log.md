@@ -163,6 +163,9 @@ status that is the failure.
 `verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
 `verified-by: bravebot_aichat::responses::protocol::the_kind_of_event_that_carried_a_failure_is_set_by_the_arm_that_read_it`
 `verified-by: bravebot_bedrock::lib::a_retry_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_bedrock::lib::a_streams_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped`
+`verified-by: bravebot_agent::turn::a_fetch_urls_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped`
+`verified-by: bravebot_agent::turn::a_downloads_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped`
 `verified-by: bravebot_mcp::stdio::a_launch_that_failed_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::stdio::a_handshake_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::http_log::a_handshake_is_written_to_the_diagnostic_log_when_it_works`
