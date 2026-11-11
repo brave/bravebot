@@ -1404,14 +1404,14 @@ mod tests {
         std::fs::write(&genuine, "").unwrap();
         std::os::unix::fs::symlink(&planted, &linked).unwrap();
 
+        let writable = vec![session.clone()];
         let removed = |name: &str, value: String| {
             opening_against(
                 &Resolved::found_earlier("/usr/bin/open"),
                 &[],
                 [(OsString::from(name), OsString::from(value))],
                 &|path: &Path| {
-                    path.canonicalize()
-                        .is_ok_and(|resolved| !resolved.starts_with(&session))
+                    bravebot_sandbox::programs::outside_stage_writable_with(path, &writable, &[])
                 },
             )
             .get_envs()

@@ -80,7 +80,8 @@ which is stricter than the terminal client's check of the value, and a bridge st
 started without them. It does not delete `HOME`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, which the application and the agent it starts
 read and Electron uses to reach the session bus, so on Linux under a GNOME session the opener Electron starts can still read a `HOME`, a runtime directory or a bus address the
 sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30);
-[#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME`, and no issue tracks the other
+[#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME`, and
+[#3940](https://github.com/brave/bravebot/issues/3940) tracks the other
 two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
 "What a checked start does not cover" in SANDBOX-30 records).
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and

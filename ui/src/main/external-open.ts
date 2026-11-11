@@ -15,7 +15,7 @@
  * Those three are not deleted here: this process and the agent it starts read them, and Electron
  * finds the session bus through the last two, so under a GNOME session on Linux the opener still
  * reads a `HOME`, a runtime directory or a bus address the sandbox let a program write
- * (brave/bravebot#3904 tracks `HOME`; no issue tracks the other two, which the bullet "The starts
+ * (brave/bravebot#3904 tracks `HOME` and brave/bravebot#3940 tracks the other two, which the bullet "The starts
  * that keep XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS" under "What a checked start does not
  * cover" in SANDBOX-30 records). `external-open.test.mjs` asserts that all three are left set.
  *
