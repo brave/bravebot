@@ -337,6 +337,13 @@ fn access_list_of(path: &Path) -> String {
 /// this process, outside any container; this one makes it from a stage that had write access to
 /// the directory, which is what an attacker's program would do.
 ///
+/// A stage on the Windows runner is refused `mklink /J` through `cmd.exe` ("Access is denied"), so
+/// two routes are tried in turn: `mklink /J` in a stage, then a probe in a stage that sets the
+/// mount point reparse point itself with `FSCTL_SET_REPARSE_POINT`. When both are refused, the test
+/// prints `junction not made by a stage by either route: ...` to stderr and returns, since with no
+/// junction a stage made there is no grant to cross it. The route that made the junction is printed
+/// as `junction made by a stage with mklink` or `junction made by a stage with a probe`.
+///
 /// A grant is taken off when its stage ends, so a list read after the second stage has run shows
 /// nothing whichever way the grant went. The target's access list is therefore read while a second
 /// stage is still running with the directory granted, and compared whole with the list before, so
@@ -358,13 +365,31 @@ fn a_grant_does_not_reach_through_a_junction_a_stage_made() {
         let policy = the_base("stage-junction-making").allow_write(&granted);
         let line = format!("mklink /J {} {}", link.display(), withheld.display());
         let (code, printed) = cmd(&making, &line, &policy).expect("the first stage starts");
-        if code != Some(0) {
+        if code == Some(0) {
+            eprintln!("junction made by a stage with mklink");
+        } else {
             // Observed on the Windows runner: a container with write access to the directory is
-            // refused `mklink /J` ("Access is denied"). With no junction made by a stage there is
-            // no grant to cross it, which settles nothing about a junction a stage could make
-            // some other way.
-            eprintln!("junction not made by a stage: {printed}");
-            return;
+            // refused `mklink /J` ("Access is denied"). The second route sets the reparse point
+            // from a program in the stage, which does not go through `cmd.exe`. An empty directory
+            // `mklink` left behind would make the probe's `create_dir` fail, so it is removed.
+            let _ = std::fs::remove_dir(&link);
+            let probed = probe_in_a_stage(
+                &making,
+                "stage-junction-making",
+                policy.clone(),
+                "probe_make_a_junction_in_this_stage",
+                &[&link.display().to_string(), &withheld.display().to_string()],
+            );
+            let found = what_the_probe_printed(&probed, JUNCTION_PROBED);
+            if found != "junction made" {
+                // With no junction made by a stage there is no grant to cross it, which settles
+                // nothing about a junction a stage could make some other way.
+                eprintln!(
+                    "junction not made by a stage by either route: mklink: {printed}; probe: {found}"
+                );
+                return;
+            }
+            eprintln!("junction made by a stage with a probe");
         }
     }
     assert_eq!(
@@ -724,8 +749,9 @@ const HOLDING_A_STAGE: &str = "BRAVEBOT_TEST_HOLDING_A_STAGE";
 ///
 /// Its programs hold this process's output, so the test that started this one sees that output end
 /// only when every one of them is gone. Killed, this process leaves its container profile
-/// registered, as a crash does. Bounded, so a copy whose test died first lets go of the stage and
-/// the profile.
+/// registered, as a crash does. The scratch directory is named for this process, so two holders
+/// started by different tests do not share one. Bounded, so a copy whose test died first lets go of
+/// the stage and the profile.
 fn hold_a_stage() -> ! {
     let sandbox = sandbox();
     let streams = Streams {
@@ -737,7 +763,7 @@ fn hold_a_stage() -> ! {
         .spawn(
             cmd_exe().as_ref(),
             &[OsString::from("/c"), OsString::from("cmd")],
-            &the_base("held"),
+            &the_base(&format!("held-{}", std::process::id())),
             streams,
             Environment::Inherited,
         )
@@ -748,17 +774,19 @@ fn hold_a_stage() -> ! {
     std::process::exit(1)
 }
 
-/// The regression it rejects: a stage whose programs are ended by this process letting go of it
-/// and not by the platform. A crash runs no code here, so what ends the programs then is the job
-/// ending when its last handle is closed. The test that lets go of a stage passes either way.
-#[test]
-fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
+/// Start this binary again as the process that holds a stage, and hand the stage's child a line.
+///
+/// The holder runs `killing_the_process_holding_a_stage_ends_every_program_in_it`, which becomes
+/// [`hold_a_stage`] when [`HOLDING_A_STAGE`] is set. Returns the holder, the input it was handed
+/// the line on, and what its output shows.
+fn start_a_holder() -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    mpsc::Receiver<Seen>,
+) {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
-    if std::env::var_os(HOLDING_A_STAGE).is_some() {
-        hold_a_stage();
-    }
     let mut holder = spawned(
         Command::new(std::env::current_exe().expect("this test binary"))
             .args([
@@ -776,10 +804,21 @@ fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
     );
     let mut input = holder.stdin.take().expect("a stdin that was piped");
     let seen = watch(holder.stdout.take().expect("a stdout that was piped"));
-
     input
         .write_all(b"echo started\r\n")
         .expect("the child is handed a line");
+    (holder, input, seen)
+}
+
+/// The regression it rejects: a stage whose programs are ended by this process letting go of it
+/// and not by the platform. A crash runs no code here, so what ends the programs then is the job
+/// ending when its last handle is closed. The test that lets go of a stage passes either way.
+#[test]
+fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
+    if std::env::var_os(HOLDING_A_STAGE).is_some() {
+        hold_a_stage();
+    }
+    let (mut holder, input, seen) = start_a_holder();
     let started = seen.recv_timeout(STARTING);
     holder.kill().expect("the holder is killed");
     let _ = holder.wait();
@@ -796,6 +835,82 @@ fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
         ended,
         Ok(Seen::Ended),
         "a program the stage started outlived the process holding it"
+    );
+}
+
+/// Delete the container profile `name` and return the `HRESULT` the platform answered with, which
+/// is negative on failure.
+fn delete_container_profile(name: &str) -> i32 {
+    use windows_sys::Win32::Security::Isolation::DeleteAppContainerProfile;
+
+    let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `name` is a terminated wide string that is alive for the call, which reads it and
+    // nothing else.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe { DeleteAppContainerProfile(name.as_ptr()) }
+}
+
+/// SANDBOX-17 on Windows: a run that ends without reaching the drop of its backend leaves the
+/// container profile it made registered. The regression it rejects: a profile that is deleted when
+/// its holder is killed, which would need something outside the holder to delete it and is not what
+/// the spec says. The spec says a run that ends without the drop leaves the profile and its
+/// entries, and bounds what is left by a profile name that carries a per-backend nonce.
+///
+/// The holder is killed, so no code of its own runs. A profile is a folder under
+/// `%LOCALAPPDATA%\Packages` named for it, and its name starts with `bravebot-` and the process
+/// identifier of the process that made it, so the folders named for the holder are the profiles it
+/// left. They are deleted at the end so the machine is left as it was found, and the folders
+/// remaining afterwards are printed.
+#[test]
+fn a_holder_killed_while_it_holds_a_stage_leaves_its_container_profile_registered() {
+    let (mut holder, input, seen) = start_a_holder();
+    let started = seen.recv_timeout(STARTING);
+    let holder_id = holder.id();
+    holder.kill().expect("the holder is killed");
+    let _ = holder.wait();
+    let ended = seen.recv_timeout(ENDING);
+    drop(input);
+    assert_eq!(
+        started,
+        Ok(Seen::Started),
+        "the held stage's child never ran the line it was handed"
+    );
+    assert_eq!(
+        ended,
+        Ok(Seen::Ended),
+        "a program the stage started outlived the process holding it"
+    );
+
+    let packages = PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("the profile folder"))
+        .join("Packages");
+    let prefix = format!("bravebot-{holder_id}-");
+    let named_for_the_holder = || -> Vec<String> {
+        std::fs::read_dir(&packages)
+            .expect("the packages folder is readable")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&prefix))
+            .collect()
+    };
+    let left = named_for_the_holder();
+    let deleted: Vec<(String, i32)> = left
+        .iter()
+        .map(|name| (name.clone(), delete_container_profile(name)))
+        .collect();
+    eprintln!(
+        "profiles of holder {holder_id}: left {left:?}; deleted {deleted:?}; remaining after the \
+         delete {:?}",
+        named_for_the_holder()
+    );
+
+    assert!(
+        !left.is_empty(),
+        "no folder named {prefix}* under {}: the killed holder's profile is not registered",
+        packages.display()
+    );
+    assert!(
+        deleted.iter().all(|(_, result)| *result >= 0),
+        "a leftover profile was not deleted: {deleted:?}"
     );
 }
 
@@ -954,6 +1069,37 @@ fn a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses() {
     assert_eq!(printed, "hello");
 }
 
+/// A stage started with an environment that names only `SystemRoot` and one more variable, the
+/// shape that failed with error 203 when the job probes were started that way. The regression it
+/// rejects: an environment block the platform does not accept (a block out of order, or without
+/// its final terminator), which fails the start instead of reaching the program. The variable
+/// the program prints is the one the block named, so a block that was dropped and replaced by the
+/// inherited environment is rejected as well.
+#[test]
+fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable() {
+    let sandbox = sandbox();
+    let policy = the_base("named-environment");
+    let system_root = std::env::var_os("SystemRoot").expect("the system directory is named");
+    let environment = Environment::Only(
+        bravebot_sandbox::Variables::new()
+            .with("SystemRoot", system_root)
+            .with("BRAVEBOT_NAMED", "named"),
+    );
+
+    let (code, printed) = run_with(
+        &sandbox,
+        "cmd.exe",
+        &["/c", "echo %BRAVEBOT_NAMED%"],
+        &policy,
+        environment,
+    )
+    .expect("the stage starts with a named environment");
+
+    eprintln!("named-environment started: {printed}");
+    assert_eq!(code, Some(0), "{printed}");
+    assert_eq!(printed.trim_end_matches('"'), "named");
+}
+
 /// The line the next two tests hand `cmd.exe`: it starts a second `cmd.exe`, which is a program
 /// the first creates rather than a built-in it runs itself, and prints a word only that second
 /// one can print.
@@ -1000,15 +1146,199 @@ fn a_stage_starts_a_child_where_its_policy_allows_subprocesses() {
     assert_eq!(printed.trim_end_matches('"'), "child-ran");
 }
 
-/// The name this binary is copied to when it is started again inside a stage to say what its job
-/// limits. The stage is started with this process's environment. Starting it with only a named
-/// `SystemRoot` and one more variable failed on the Windows runner with error 203, and why is
-/// not known (#3883).
+/// The name this binary is copied to when it is started again inside a stage to run one of the
+/// probes below. The stage is started with this process's environment. Starting it with only a
+/// named `SystemRoot` and one more variable failed on the Windows runner with error 203, and why
+/// is not known (#3883).
 const PROBE_FILE: &str = "bravebot-job-probe.exe";
 
 /// The word a probe prints before what it found, so the test that started it picks the line out of
 /// what the test harness prints around it.
 const PROBED: &str = "job-probe";
+
+/// The word the junction probe prints before `junction made` or `junction not made: <os error>`.
+const JUNCTION_PROBED: &str = "junction-probe";
+
+/// The word the connection probe prints before `connected` or `refused: <os error>`.
+const CONNECT_PROBED: &str = "connect-probe";
+
+/// Whether this process is the copy of the test binary that a stage was started with, which is the
+/// only place a probe test does anything. Started any other way a probe returns, so the ordinary
+/// run of this binary passes it without acting on the terminal or runner it is in.
+fn this_is_a_probe_copy() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name == PROBE_FILE))
+        .unwrap_or(false)
+}
+
+/// Make a junction at `link` that leads to `target`, the way `mklink /J` does and without
+/// `cmd.exe`.
+///
+/// `link` is made as an empty directory first, and the mount point reparse point is set on it with
+/// `FSCTL_SET_REPARSE_POINT`. The directory is removed again when the reparse point is refused.
+fn make_a_junction(link: &Path, target: &Path) -> Result<(), std::io::Error> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    // The call is in the `Win32_System_IO` module of the bindings, a feature this crate's
+    // manifest does not enable and the account that writes these tests may not add. It is
+    // declared here with the platform's signature instead.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn DeviceIoControl(
+            device: *mut core::ffi::c_void,
+            control_code: u32,
+            input: *const core::ffi::c_void,
+            input_size: u32,
+            output: *mut core::ffi::c_void,
+            output_size: u32,
+            returned: *mut u32,
+            overlapped: *mut core::ffi::c_void,
+        ) -> i32;
+    }
+
+    /// `FSCTL_SET_REPARSE_POINT`.
+    const SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    /// `IO_REPARSE_TAG_MOUNT_POINT`, the tag of a junction.
+    const MOUNT_POINT: u32 = 0xA000_0003;
+
+    let too_long = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the target is too long for a reparse point",
+        )
+    };
+    let substitute: Vec<u16> = OsStr::new(r"\??\")
+        .encode_wide()
+        .chain(target.as_os_str().encode_wide())
+        .collect();
+    let print: Vec<u16> = target.as_os_str().encode_wide().collect();
+    let substitute_bytes = u16::try_from(substitute.len() * 2).map_err(|_| too_long())?;
+    let print_bytes = u16::try_from(print.len() * 2).map_err(|_| too_long())?;
+    // The four u16 fields of a mount point buffer, then both names and a terminator after each.
+    let data_length = 8u16
+        .checked_add(substitute_bytes)
+        .and_then(|length| length.checked_add(print_bytes))
+        .and_then(|length| length.checked_add(4))
+        .ok_or_else(too_long)?;
+    // REPARSE_DATA_BUFFER for a mount point, little-endian: the tag, the length of the data after
+    // the first eight bytes, a reserved field, the offset and length of the substitute name, the
+    // offset and length of the print name, and the names.
+    let mut buffer: Vec<u8> = Vec::new();
+    buffer.extend_from_slice(&MOUNT_POINT.to_le_bytes());
+    buffer.extend_from_slice(&data_length.to_le_bytes());
+    buffer.extend_from_slice(&0u16.to_le_bytes());
+    buffer.extend_from_slice(&0u16.to_le_bytes());
+    buffer.extend_from_slice(&substitute_bytes.to_le_bytes());
+    buffer.extend_from_slice(&(substitute_bytes + 2).to_le_bytes());
+    buffer.extend_from_slice(&print_bytes.to_le_bytes());
+    for unit in substitute
+        .iter()
+        .copied()
+        .chain([0])
+        .chain(print.iter().copied())
+        .chain([0])
+    {
+        buffer.extend_from_slice(&unit.to_le_bytes());
+    }
+    let size = u32::try_from(buffer.len()).map_err(|_| too_long())?;
+
+    std::fs::create_dir(link)?;
+    let wide: Vec<u16> = link.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: `wide` is a terminated wide string alive for the call, the security attributes and
+    // the template are null, and the call reads nothing else.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let directory = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if directory == INVALID_HANDLE_VALUE {
+        let refused = std::io::Error::last_os_error();
+        let _ = std::fs::remove_dir(link);
+        return Err(refused);
+    }
+    let mut returned = 0u32;
+    // SAFETY: `directory` is the open handle above. `buffer` holds `size` bytes and is alive for
+    // the call, which only reads it. The call has no output buffer, `returned` is a local it
+    // writes, and the overlapped pointer is null because the handle was not opened for it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let set = unsafe {
+        DeviceIoControl(
+            directory,
+            SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            size,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    let refused = (set == 0).then(std::io::Error::last_os_error);
+    // SAFETY: `directory` is the handle opened above and is not used again.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe { CloseHandle(directory) };
+    if let Some(refused) = refused {
+        let _ = std::fs::remove_dir(link);
+        return Err(refused);
+    }
+    Ok(())
+}
+
+/// Run only inside a stage that `a_grant_does_not_reach_through_a_junction_a_stage_made` started,
+/// where it makes a junction at the first of the last two arguments leading to the second, and
+/// prints
+/// `junction-probe junction made` or `junction-probe junction not made: <os error>`. Started any
+/// other way it does nothing.
+#[test]
+fn probe_make_a_junction_in_this_stage() {
+    if !this_is_a_probe_copy() {
+        return;
+    }
+    let arguments: Vec<String> = std::env::args().collect();
+    let [.., link, target] = arguments.as_slice() else {
+        println!("{JUNCTION_PROBED} junction not made: the probe was given no link and target");
+        return;
+    };
+    match make_a_junction(Path::new(link), Path::new(target)) {
+        Ok(()) => println!("{JUNCTION_PROBED} junction made"),
+        Err(error) => println!("{JUNCTION_PROBED} junction not made: {error}"),
+    }
+}
+
+/// Run only inside a stage that `a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`
+/// started, where it connects to the address in the last argument and prints `connect-probe connected` or
+/// `connect-probe refused: <os error>`. Started any other way it does nothing.
+#[test]
+fn probe_connect_from_this_stage() {
+    if !this_is_a_probe_copy() {
+        return;
+    }
+    let Some(address) = std::env::args()
+        .next_back()
+        .and_then(|text| text.parse::<SocketAddr>().ok())
+    else {
+        println!("{CONNECT_PROBED} refused: the probe was given no address");
+        return;
+    };
+    match std::net::TcpStream::connect_timeout(&address, Duration::from_secs(10)) {
+        Ok(_) => println!("{CONNECT_PROBED} connected"),
+        Err(error) => println!("{CONNECT_PROBED} refused: {error}"),
+    }
+}
 
 /// What the job the calling process is in limits, as the process itself reads it, or why it
 /// cannot.
@@ -1062,11 +1392,7 @@ fn the_job_this_process_is_in() -> Result<(u32, u32, u32), std::io::Error> {
 /// it without reading the job of the terminal or runner it is in.
 #[test]
 fn probe_the_job_this_stage_is_in() {
-    let is_the_copy = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.file_name().map(|name| name == PROBE_FILE))
-        .unwrap_or(false);
-    if !is_the_copy {
+    if !this_is_a_probe_copy() {
         return;
     }
     match the_job_this_process_is_in() {
@@ -1087,6 +1413,51 @@ struct JobSeen {
     processes: u32,
 }
 
+/// Copy this test binary into a directory of its own that the stage is granted, and run its test
+/// `test` as a stage under `policy` with `arguments` after the test's name. Returns what the probe
+/// printed.
+///
+/// The directory is not the one the binary was built in, since that holds every other artefact of
+/// the build and a grant is written onto each file beneath it. The stage is started with this
+/// process's environment, so the arguments are how a probe is told what to act on.
+fn probe_in_a_stage(
+    sandbox: &AppContainerSandbox,
+    name: &str,
+    policy: SandboxPolicy,
+    test: &str,
+    arguments: &[&str],
+) -> String {
+    let directory = scratch(&format!("{name}-probe"));
+    let probe = directory.join(PROBE_FILE);
+    std::fs::copy(std::env::current_exe().expect("this test binary"), &probe)
+        .expect("the test binary is copied");
+    let policy = policy.allow_read(&directory);
+    let mut args = vec![
+        "--exact",
+        test,
+        "--nocapture",
+        "--quiet",
+        "--test-threads=1",
+    ];
+    args.extend_from_slice(arguments);
+
+    let (code, printed) =
+        run(sandbox, &probe.display().to_string(), &args, &policy).expect("the probe starts");
+
+    assert_eq!(code, Some(0), "the probe failed: {printed}");
+    printed
+}
+
+/// What follows `marker` on the line of `printed` that starts with it, which is the line a probe
+/// printed among what the test harness prints around it.
+fn what_the_probe_printed<'a>(printed: &'a str, marker: &str) -> &'a str {
+    printed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(marker))
+        .unwrap_or_else(|| panic!("the probe printed no {marker} line: {printed}"))
+        .trim()
+}
+
 /// Start this test binary as a stage under `policy` and read its job from inside it.
 ///
 /// The binary is copied into a directory of its own that the stage is granted, since the
@@ -1094,31 +1465,14 @@ struct JobSeen {
 /// each file beneath it.
 fn the_job_a_stage_is_in(name: &str, policy: SandboxPolicy) -> JobSeen {
     let sandbox = sandbox();
-    let directory = scratch(&format!("{name}-probe"));
-    let probe = directory.join(PROBE_FILE);
-    std::fs::copy(std::env::current_exe().expect("this test binary"), &probe)
-        .expect("the test binary is copied");
-    let policy = policy.allow_read(&directory);
-
-    let (code, printed) = run(
+    let printed = probe_in_a_stage(
         &sandbox,
-        &probe.display().to_string(),
-        &[
-            "--exact",
-            "probe_the_job_this_stage_is_in",
-            "--nocapture",
-            "--quiet",
-            "--test-threads=1",
-        ],
-        &policy,
-    )
-    .expect("the probe starts");
-
-    assert_eq!(code, Some(0), "the probe failed: {printed}");
-    let found = printed
-        .lines()
-        .find_map(|line| line.trim().strip_prefix(PROBED))
-        .unwrap_or_else(|| panic!("the probe printed no {PROBED} line: {printed}"));
+        name,
+        policy,
+        "probe_the_job_this_stage_is_in",
+        &[],
+    );
+    let found = what_the_probe_printed(&printed, PROBED);
     assert!(!found.contains("error="), "the job was not read: {found}");
     let field = |key: &str| {
         found
@@ -1208,6 +1562,156 @@ fn a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subproces
         allowed.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
         0,
         "the job of a stage allowed subprocesses has a process limit"
+    );
+}
+
+/// Set when this binary is started again to run its stages from a process that is in a job.
+const IN_A_JOB: &str = "BRAVEBOT_TEST_IN_A_JOB";
+
+/// What the copy of this binary that runs its stages from inside a job prints once they passed.
+const NESTED: &str = "nested-job-limits-held";
+
+/// Whether the platform says this process is in a job.
+fn this_process_is_in_a_job() -> bool {
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut in_a_job = 0;
+    // SAFETY: `GetCurrentProcess` returns the pseudo handle of this process, a null job names any
+    // job, and `in_a_job` is a local the call writes.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let asked = unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_a_job) };
+    assert_ne!(asked, 0, "{}", std::io::Error::last_os_error());
+    in_a_job != 0
+}
+
+/// Put this process in a job of its own with no limits, left open until the process ends.
+///
+/// Where this process is already in a job, the new one is nested under it.
+fn put_this_process_in_a_job() {
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    // SAFETY: both arguments are null, so the job is unnamed and has default security. The call
+    // reads no memory.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    assert!(!job.is_null(), "{}", std::io::Error::last_os_error());
+    // SAFETY: `job` is the handle created above and is never closed, and `GetCurrentProcess`
+    // returns the pseudo handle of this process.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let assigned = unsafe { AssignProcessToJobObject(job, GetCurrentProcess()) };
+    assert_ne!(
+        assigned,
+        0,
+        "this process was not put in a job: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
+/// Assert that stages started from this process are held to the limits of their policy: the UI
+/// limits and the end of the job with its handle for every policy, a process limit of one only
+/// where the policy denies subprocesses, and a child refused where it does.
+fn assert_stages_are_limited(name: &str) {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+        JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    };
+
+    let every_ui_limit = JOB_OBJECT_UILIMIT_READCLIPBOARD
+        | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
+        | JOB_OBJECT_UILIMIT_GLOBALATOMS
+        | JOB_OBJECT_UILIMIT_DESKTOP
+        | JOB_OBJECT_UILIMIT_HANDLES;
+    let denying = SandboxPolicy {
+        allow_subprocesses: false,
+        ..the_base(&format!("{name}-denying"))
+    };
+
+    let denied = the_job_a_stage_is_in(&format!("{name}-denying"), denying.clone());
+    let allowed = the_job_a_stage_is_in(
+        &format!("{name}-allowing"),
+        the_base(&format!("{name}-allowing")),
+    );
+
+    for (which, seen) in [("denying", &denied), ("allowing", &allowed)] {
+        assert_eq!(
+            seen.interface & every_ui_limit,
+            every_ui_limit,
+            "a UI limit is missing from the job of a {which} stage started with {name}"
+        );
+        assert_eq!(
+            seen.flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            "the job of a {which} stage started with {name} does not end its programs when closed"
+        );
+    }
+    assert_eq!(
+        denied.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        "the job of a stage denied subprocesses has no process limit when started with {name}"
+    );
+    assert_eq!(denied.processes, 1);
+    assert_eq!(
+        allowed.flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        0,
+        "the job of a stage allowed subprocesses has a process limit when started with {name}"
+    );
+
+    let (code, printed) = cmd(&sandbox(), STARTING_A_CHILD, &denying)
+        .expect("a policy denying subprocesses is applied by the job and not refused");
+    assert_ne!(code, Some(0), "the stage started a child: {printed}");
+    assert!(!printed.contains("child-ran"), "{printed}");
+}
+
+/// SANDBOX-17 on Windows: a stage is held to the limits of its policy when this process is itself
+/// in a job, as it is under a terminal or a CI runner that puts its children in one. The
+/// regressions it rejects: a stage refused, or started without its limits, because the platform
+/// would not nest the job it is created in, and a nested job that keeps only some limits.
+///
+/// Two halves. This process is asked whether it is in a job, which is the fact about the machine
+/// that runs the suite and is printed, and its stages are checked as they are. A copy of this
+/// binary then puts itself in a job of its own, so the nested case is made whatever the machine
+/// does, and checks the same things from inside it. The copy is a process of its own because
+/// joining a job cannot be undone and the other tests here run beside this one.
+#[test]
+fn a_stage_is_limited_whether_or_not_this_process_is_in_a_job() {
+    if std::env::var_os(IN_A_JOB).is_some() {
+        put_this_process_in_a_job();
+        assert!(
+            this_process_is_in_a_job(),
+            "this process is in no job after joining one"
+        );
+        assert_stages_are_limited("nested");
+        println!("{NESTED}");
+        return;
+    }
+
+    eprintln!("this process is in a job: {}", this_process_is_in_a_job());
+    assert_stages_are_limited("direct");
+
+    let nested = spawned(
+        Command::new(std::env::current_exe().expect("this test binary"))
+            .args([
+                "--exact",
+                "a_stage_is_limited_whether_or_not_this_process_is_in_a_job",
+                "--nocapture",
+                "--quiet",
+                "--test-threads=1",
+            ])
+            .env(IN_A_JOB, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("the copy ends");
+    let printed = String::from_utf8_lossy(&nested.stdout);
+    let complained = String::from_utf8_lossy(&nested.stderr);
+    assert!(
+        nested.status.success() && printed.contains(NESTED),
+        "stages inside a job were not held to their limits: {printed} [stderr: {complained}]"
     );
 }
 
@@ -1546,5 +2050,41 @@ fn a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing() {
         failures.is_empty(),
         "a spelling started something other than the program named:\n{}",
         failures.join("\n")
+    );
+}
+
+/// SANDBOX-3 on Windows: a container is refused the loopback interface of the machine it runs on
+/// even when its policy grants the network. The regression it rejects: a container that reaches a
+/// service listening on this host's loopback, such as a local credential or admin endpoint, because
+/// the network capability was read as covering the loopback interface.
+///
+/// This process listens on an ephemeral loopback port and a probe in a stage granted the network
+/// connects to it, printing `connect-probe connected` or `connect-probe refused: <os error>`. The
+/// listener does not accept, since a connection completes against its backlog. The test
+/// asserts the connection did not complete. The reachability of the same listener from this
+/// process is asserted first, so a listener nothing can reach is not mistaken for a refusal.
+#[test]
+fn a_container_granted_the_network_cannot_connect_to_this_hosts_loopback() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    let address = listener.local_addr().expect("the listener's address");
+    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(10))
+        .expect("this process reaches its own listener");
+    let policy = the_base("loopback");
+    assert!(policy.allow_network);
+
+    let sandbox = sandbox();
+    let printed = probe_in_a_stage(
+        &sandbox,
+        "loopback",
+        policy,
+        "probe_connect_from_this_stage",
+        &[&address.to_string()],
+    );
+    let found = what_the_probe_printed(&printed, CONNECT_PROBED);
+    eprintln!("loopback {address} from a container granted the network: {found}");
+
+    assert!(
+        found.starts_with("refused"),
+        "a container granted the network connected to {address} on this host's loopback: {found}"
     );
 }

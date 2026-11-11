@@ -1018,7 +1018,7 @@ jobs:
         run: cargo test -p bravebot-sandbox --locked --no-fail-fast --lib 'windows::'
 
       - name: Test the backend with real processes
-        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows -- --nocapture
 
       - name: Test a confined program run for a person
         # The session is granted its temporary directory, so it is a directory of its own and not
