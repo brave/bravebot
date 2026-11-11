@@ -3081,14 +3081,14 @@ fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
     assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
 }
 
-/// A marked step a row of which would send an entry's value holding a character a line draws as
-/// nothing puts its list, where the question writes the character out, though its plan line, written
-/// before anything was read, said it would run unasked.
+/// A marked step sends an entry's value holding a character a line draws as nothing exactly as the
+/// list holds it, with no question at the step: nobody reads a covered step's values, so what a list
+/// returned decides nothing about whether the step asks (MANIFEST-17).
 ///
-/// Rejects an implementation that checks only the plan's literals, which leaves what a list returned
-/// unchecked.
+/// Rejects an implementation that decides from a resolved value whether to put the list, which
+/// takes a decision in the driver from bytes nobody vouched for.
 #[test]
-fn a_marked_step_sending_an_entry_holding_a_hidden_character_puts_its_list() {
+fn a_marked_step_sends_an_entry_holding_a_hidden_character_as_the_list_holds_it() {
     let scratch = Scratch::new("covered-hidden-entry");
     let (url, mcp) = serve_marks();
     let rows =
@@ -3108,7 +3108,12 @@ fn a_marked_step_sending_an_entry_holding_a_hidden_character_puts_its_list() {
         grants: None,
     });
     assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
-    assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
+    assert!(ran.asked.applies.is_empty(), "the list was put");
+    assert!(
+        ran.called.iter().any(|(tool, _)| tool == "move_mark"),
+        "{:?}",
+        ran.called
+    );
 }
 
 /// A marked step whose values hold a character the plan's line draws as nothing puts its list, where
