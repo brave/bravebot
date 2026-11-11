@@ -188,11 +188,18 @@ jobs:
       # step runs it under `dbus-run-session`, so a bus exists. With BRAVEBOT_OBSERVE_KDE_OPEN set the
       # test fails when `kde-open` is missing, when the baseline run starts no handler, and when a
       # name that made `kde-open` run the planted handler is not one the opener removes. The names
-      # it observed are in the log as `kde-open observed:` lines.
+      # it observed are in the log as `kde-open observed:` lines. The first command prints which
+      # `kde-open` programs the package installed, so a run that ends with a baseline that started no
+      # handler shows which program was run and what it printed (the test's own message carries its
+      # exit status and stderr). The step keeps failing only when the test fails.
       - name: Run kde-open with each name set to a marker handler
         env:
           BRAVEBOT_OBSERVE_KDE_OPEN: "1"
-        run: dbus-run-session -- cargo test -p bravebot-tui --lib kde_open_run_with_each_name --locked -- --nocapture
+        run: |
+          command -v kde-open kde-open5 kde-open6 || true
+          dpkg -s kde-cli-tools | grep -E '^(Package|Version):' || true
+          dpkg -L kde-cli-tools | grep -E '/bin/' || true
+          dbus-run-session -- cargo test -p bravebot-tui --lib kde_open_run_with_each_name --locked -- --nocapture
 
       # Run once, with its output, to put the number of workflows skipped for want of a tool in the
       # log. Running it inside the Test step as well used to double its tens of seconds.

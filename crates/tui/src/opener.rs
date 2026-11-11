@@ -1234,7 +1234,8 @@ mod tests {
     /// Runs the installed `kde-open` on an address that only a marker handler opens, with the
     /// variable `variable` set to a marker (`None` runs the baseline, which sets none), and says
     /// which handler ran: the one the baseline selects (`genuine`), the one the variable names
-    /// (`planted`), both, or neither.
+    /// (`planted`), both, or neither. The third value is what `kde-open` ended with and printed on
+    /// its two streams, for a failure message to carry.
     ///
     /// The environment is cleared and rebuilt, so that the host's desktop and the person's files
     /// select nothing: `HOME` and `XDG_CACHE_HOME` are scratch directories (the service cache is
@@ -1251,7 +1252,10 @@ mod tests {
     /// in it makes `planted` the default, so a name that makes `kde-open` read the tree runs
     /// `planted`.
     #[cfg(unix)]
-    fn kde_open_marker_outcome(kde_open: &Path, variable: Option<(&str, bool)>) -> (bool, bool) {
+    fn kde_open_marker_outcome(
+        kde_open: &Path,
+        variable: Option<(&str, bool)>,
+    ) -> (bool, bool, String) {
         use std::os::unix::fs::PermissionsExt;
 
         let label = variable.map_or("baseline".to_string(), |(name, _)| {
@@ -1317,8 +1321,8 @@ mod tests {
             .env_clear()
             .arg(format!("{scheme}://example.invalid/"))
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::fs::File::create(root.join("kde-open.stdout")).unwrap())
+            .stderr(std::fs::File::create(root.join("kde-open.stderr")).unwrap())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &home)
             .env("XDG_CACHE_HOME", &cache)
@@ -1348,9 +1352,15 @@ mod tests {
         }
         let mut child = command.spawn().unwrap();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while child.try_wait().unwrap().is_none() && std::time::Instant::now() < until {
+        let mut status = child.try_wait().unwrap();
+        while status.is_none() && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(50));
+            status = child.try_wait().unwrap();
         }
+        let ended = status.map_or_else(
+            || "still running after 30 seconds, then killed".to_string(),
+            |status| format!("ended with {status}"),
+        );
         let _ = child.kill();
         let _ = child.wait();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -1360,9 +1370,19 @@ mod tests {
         {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        let printed = |stream: &str| {
+            std::fs::read_to_string(root.join(format!("kde-open.{stream}")))
+                .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+        };
         let outcome = (
             session.join("genuine-ran").exists(),
             session.join("planted-ran").exists(),
+            format!(
+                "{} {ended}; stdout: {:?}; stderr: {:?}",
+                kde_open.display(),
+                printed("stdout"),
+                printed("stderr")
+            ),
         );
         let _ = std::fs::remove_dir_all(&root);
         outcome
@@ -1382,8 +1402,14 @@ mod tests {
     ///
     /// The regression it rejects: a `kde-open` that selects a program through a variable the
     /// opener leaves in the environment. It does not show that the names it did not exercise
-    /// (plug-in directories, plug-in names, `QT_STYLE_OVERRIDE`) select nothing. It was not run
-    /// where it could start `kde-open`; this host is macOS.
+    /// (plug-in directories, plug-in names, `QT_STYLE_OVERRIDE`) select nothing.
+    ///
+    /// The baseline failure carries the path of the `kde-open` run, how it ended, and what it
+    /// printed on stdout and stderr. In CI run 42972425516 (job `Format, lint, and test`, step `Run
+    /// kde-open with each name set to a marker handler`) the baseline ran neither handler,
+    /// `(false, false)`, and the whole test took 3.27 seconds. Both streams of `kde-open` were
+    /// discarded in that run, so how it ended and why no handler ran is not known. The test has
+    /// not been run to the point of a handler on the macOS host it was written on.
     #[cfg(unix)]
     #[test]
     fn kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes()
@@ -1403,17 +1429,19 @@ mod tests {
             println!("skipped: no kde-open on this host");
             return;
         };
-        let baseline = kde_open_marker_outcome(&kde_open, None);
-        if baseline != (true, false) {
+        let (genuine, planted, seen) = kde_open_marker_outcome(&kde_open, None);
+        if (genuine, planted) != (true, false) {
             assert!(
                 !observing,
-                "BRAVEBOT_OBSERVE_KDE_OPEN is set and the baseline kde-open ran (genuine, planted) = {baseline:?}"
+                "BRAVEBOT_OBSERVE_KDE_OPEN is set and the baseline kde-open ran (genuine, planted) = ({genuine}, {planted}): {seen}"
             );
-            println!("skipped: the kde-open here did not run the baseline handler: {baseline:?}");
+            println!(
+                "skipped: the kde-open here did not run the baseline handler: ({genuine}, {planted}): {seen}"
+            );
             return;
         }
         for &(name, is_tree) in KDE_OPEN_MARKER_NAMES {
-            let (genuine, planted) = kde_open_marker_outcome(&kde_open, Some((name, is_tree)));
+            let (genuine, planted, _) = kde_open_marker_outcome(&kde_open, Some((name, is_tree)));
             println!("kde-open observed: {name} genuine={genuine} planted={planted}");
             if planted && observing {
                 assert!(

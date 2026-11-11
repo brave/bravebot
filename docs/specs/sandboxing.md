@@ -4774,8 +4774,15 @@ shown by running the program, or not entirely:
     bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
     judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
     not run or read.
-  - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. A test added with
-    #3884 runs it once per name with a marker handler, and a CI step runs that test under
+  - **`kde-open`** was not run to the point of a handler: it cannot run on macOS, and on Linux the
+    run in CI run 42972425516 (job `Format, lint, and test`, step `Run kde-open with each name set
+    to a marker handler`, ubuntu-latest, under `dbus-run-session`) found the installed `kde-open`
+    and ran it with the baseline environment of the test, and neither marker handler ran:
+    `BRAVEBOT_OBSERVE_KDE_OPEN is set and the baseline kde-open ran (genuine, planted) = (false,
+    false)`. The test took 3.27 seconds. That run discarded `kde-open`'s output, so why no handler
+    ran is not known. The test now fails with `kde-open`'s path, how it ended and what it printed,
+    and the CI step prints the installed `kde-open` programs, so a later run shows them. A test
+    added with #3884 runs it once per name with a marker handler, and a CI step runs that test under
     `dbus-run-session`; no name has been observed yet. Its names are
     from source only, read at these commits, none of which is a release tag: kde-cli-tools
     aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
@@ -4816,12 +4823,13 @@ shown by running the program, or not entirely:
     program through systemd on the session bus when the bus reports systemd, and otherwise forks it;
     read so, a session bus may not be required, and the child gets the process environment. This is
     from source and was not run, and whether `kde-open` needs a session bus is not established. The
-    `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there. A run
-    of `kde-open` on Linux is tracked by #3822 and #3884.
+    `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there, and
+    the baseline there still ran no handler (run 42972425516), so whether a bus is enough is not
+    established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
   cells marked run below. Every test added after that run is not run: the host here is macOS,
-  the opener tests are Linux-only and print `skipped` elsewhere, and CI has not yet run them. In the
+  the opener tests are Linux-only and print `skipped` elsewhere, and CI has run only some of them. In the
   `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
@@ -4832,7 +4840,9 @@ shown by running the program, or not entirely:
   directories, once without a planted name and once per name in `KDE_OPEN_MARKER_NAMES`, and the
   `ci.yml` step that runs it under `dbus-run-session` sets `BRAVEBOT_OBSERVE_KDE_OPEN`, which makes
   a missing `kde-open`, a baseline that starts no handler, or a name that runs the planted handler
-  and is not removed by the opener fail the test. Names with no marker form (the plug-in
+  and is not removed by the opener fail the test. In run 42972425516 the baseline started no handler
+  and the step failed. The failure message now carries `kde-open`'s path, how it ended and its stdout
+  and stderr. Names with no marker form (the plug-in
   directories and names, `QT_STYLE_OVERRIDE`) are printed as not exercised. Without the variable
   it prints `skipped`, as it did on this macOS host. The test that puts a stand-in `kde-open` first on `PATH` and reads what
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
