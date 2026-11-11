@@ -1070,12 +1070,76 @@ mod tests {
     /// nothing. The names are those of [`CODE_SELECTORS`], so a name added to it is looked for.
     #[cfg(unix)]
     fn kde_open_stand_in(log: &Path) -> String {
-        let names: Vec<&str> = CODE_SELECTORS.iter().map(|(name, _)| *name).collect();
+        let names: Vec<String> = CODE_SELECTORS
+            .iter()
+            .map(|(name, _)| single_quoted(name))
+            .collect();
         format!(
             "#!/bin/sh\n{{\necho \"ARGS $*\"\nfor name in {}; do\n  if printenv \"$name\" >/dev/null 2>&1; then echo \"SET $name=$(printenv \"$name\")\"; fi\ndone\n}} > '{}'\n",
             names.join(" "),
             log.display()
         )
+    }
+
+    /// `text` as one word of `sh`: in single quotes, with each `'` written as `'\''`. A name such as
+    /// `ProgramFiles(x86)` holds a character `sh` reads as syntax when it is not quoted.
+    #[cfg(unix)]
+    fn single_quoted(text: &str) -> String {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+
+    /// The regression it rejects: a name of [`CODE_SELECTORS`] written into the stand-in `kde-open`
+    /// unquoted, so a name holding `(` makes the script a syntax error for `sh`, the stand-in writes
+    /// no log, and the test that places it first on `PATH` fails on a host with `xdg-open`. It
+    /// checks the generated script with `sh -n`, then runs it with `ProgramFiles(x86)` set and
+    /// reads the name back from the log, which needs no `xdg-open` and so runs on every unix host.
+    #[cfg(unix)]
+    #[test]
+    fn the_kde_open_stand_in_script_parses_and_logs_a_name_holding_a_parenthesis() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::testutil::scratch_dir("opener-kde-stand-in-script");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("seen.log");
+        let script = dir.join("kde-open");
+        std::fs::write(&script, kde_open_stand_in(&log)).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let parsed = std::process::Command::new("sh")
+            .arg("-n")
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert!(
+            parsed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&parsed.stderr)
+        );
+        let ran = std::process::Command::new("sh")
+            .arg(&script)
+            .arg("https://example.invalid/")
+            .env("ProgramFiles(x86)", "/safe/dir")
+            .output()
+            .unwrap();
+        let seen = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            ran.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        assert_eq!(
+            seen.lines().collect::<Vec<_>>().first(),
+            Some(&"ARGS https://example.invalid/"),
+            "{seen}"
+        );
+        assert!(
+            seen.lines()
+                .any(|line| line == "SET ProgramFiles(x86)=/safe/dir"),
+            "{seen}"
+        );
+        assert_eq!(single_quoted("a'b c"), "'a'\\''b c'");
     }
 
     /// What a stand-in `kde-open`, started by the installed `xdg-open` that the opener starts under
