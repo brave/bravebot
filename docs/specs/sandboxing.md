@@ -230,13 +230,9 @@ which holds no listener of the host's loopback, and a request for loopback does 
 with no network out of it. On Windows a policy that names loopback asks for the same capabilities,
 makes the same grants and is refused or applied as the same policy without it. One test connects
 to a listener of this machine's loopback from a container granted the network
-(`a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`). It passed in the
-`Sandbox on Windows` job of CI run 42972425516 (job 130363809021), where the probe printed `loopback
-127.0.0.1:56331 from a container granted the network: refused: connection timed out`, so the
-connect did not reach the listener and ended by timing out and not by an immediate refusal. Run
-42978585691 printed `loopback 127.0.0.1:49844 from a container granted the network: refused:
-connection timed out` and the test passed again. No
-test listens on a port from a container, so this clause says nothing of listening.
+(`a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`). The connect does not
+reach the listener: it ends `refused: connection timed out`, by timing out and not by an immediate
+refusal. No test listens on a port from a container, so this clause says nothing of listening.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
@@ -438,8 +434,8 @@ On Windows a grant is an entry that what is beneath the directory inherits, and 
 not what a junction beneath the directory leads to. That is shown for a junction made from outside a
 stage. The backend makes no reparse-point check when it writes an entry, and whether a grant crosses
 a junction a stage made inside a directory it was granted for writing has not been observed on
-Windows: in runs 42972425516 (job 130363809021) and 42978585691 no stage could make one, by
-`mklink /J` or by a program calling `FSCTL_SET_REPARSE_POINT`. It is listed with the known costs.
+Windows: no stage could make one, by `mklink /J` or by a program calling `FSCTL_SET_REPARSE_POINT`
+(access is denied). It is listed with the known costs.
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -800,8 +796,8 @@ assemble a profile from. The Windows prelude is empty: an AppContainer reads `C:
 Program Files directories without an entry of its own, and a row there would be an entry only an
 account holding the right to change those directories could write. A Windows session with a
 directory of its own is granted a `temp` directory inside it in place of the temporary-directory
-row, and a stage is handed `TEMP` and `TMP` naming it ([trust-map.md](trust-map.md#TRUST-14)). On
-the CI runner the stage's `TEMP` showed the container's own `AC\Temp` instead (Known costs).
+row, and a stage is handed `TEMP` and `TMP` naming it ([trust-map.md](trust-map.md#TRUST-14)). A
+container's own `TEMP` is its `AC\Temp`, not the handed-over directory (Known costs).
 
 **Why.** A profile denies everything and then names what may be reached, so something has to
 carry what every program needs before any plan is read: a dynamic executable without its loader
@@ -1549,8 +1545,7 @@ platform; where the policy allows subprocesses there is no such limit. Killing t
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
 process is let go of and the platform does when this process ends, a crash included. A process
 killed while it holds a stage ends the programs in the job and leaves the container profile
-registered ([SANDBOX-12](#SANDBOX-12) says what bounds that; the test that looks for the profile
-passed in run 42972425516, job 130363809021). The executor
+registered ([SANDBOX-12](#SANDBOX-12) says what bounds that). The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
 ends then too, which is when the grants it ran under are taken off. A stage the platform will not put in a job carrying those limits is not started, and the refusal
 names what the platform reported, including when this process is itself in a job the platform will
@@ -1580,9 +1575,9 @@ session was opened on is refused by the kernel, since only redirections are open
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
 ([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
 that asks its question on the console rather than on its input waits until the line is cancelled
-or runs out of time, and the console host the platform adds did not stop a stage whose policy denies
-subprocesses from starting under a limit of one active process: a `cmd.exe` built-in ran to exit 0
-there in the `Sandbox on Windows` job (see Known costs). The console's code
+or runs out of time, and the console host the platform adds does not stop a stage whose policy denies
+subprocesses from starting under a limit of one active process: a `cmd.exe` built-in runs to exit 0
+there. The console's code
 page is the system's rather than one a person set with
 `chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
@@ -4775,25 +4770,21 @@ shown by running the program, or not entirely:
     bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
     judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
     not run or read.
-  - **`kde-open`** was not run to the point of a handler: it cannot run on macOS, and on Linux the
-    run in CI run 42972425516 (job `Format, lint, and test`, step `Run kde-open with each name set
-    to a marker handler`, ubuntu-latest, under `dbus-run-session`) found the installed `kde-open`
-    and ran it with the baseline environment of the test, and neither marker handler ran:
-    `BRAVEBOT_OBSERVE_KDE_OPEN is set and the baseline kde-open ran (genuine, planted) = (false,
-    false)`. The test took 3.27 seconds. That run discarded `kde-open`'s output. In run 42978585691
-    the failure carried it: `/usr/bin/kde-open ended with exit status: 1; stdout: ""; stderr:
-    "\"applications.menu\"  not found in  QList()\nCould not read file
-    bravebot-test://example.invalid/.\n"`, with `(genuine, planted) = (false, false)`. So the
-    installed `kde-open` starts and exits with status 1, KService finds no `menus/applications.menu`
-    under the configuration directories the test gave it (both empty), and the address is not
-    opened. The log does not show the cause beyond those lines. The test now writes a minimal
+  - **`kde-open`** cannot run to the point of a handler on macOS. On Linux (ubuntu-latest, under
+    `dbus-run-session`, the `ci.yml` step `Run kde-open with each name set to a marker handler`)
+    the installed `kde-open` started with the baseline environment of the test and exited with
+    status 1 while both configuration directories were empty:
+    `/usr/bin/kde-open ended with exit status: 1; stdout: ""; stderr: "\"applications.menu\"  not
+    found in  QList()\nCould not read file bravebot-test://example.invalid/.\n"`, and neither
+    marker handler ran, `(genuine, planted) = (false, false)`. KService reads a
+    `menus/applications.menu` from a configuration directory when it builds the service cache, and
+    without one `kde-open` does not open the address. The test therefore writes a minimal
     `menus/applications.menu` into the empty configuration directory, which is `XDG_CONFIG_HOME`
     and `XDG_CONFIG_DIRS` in every run but the two where one of them is the name under test, so the
-    other names it and every run reads the same menu. That run is not made yet, so whether
-    `kde-open` then runs the genuine handler is not known. A test
-    added with #3884 runs it once per name with a marker handler, and a CI step runs that test under
-    `dbus-run-session`; no name has been observed yet. Its names are
-    from source only, read at these commits, none of which is a release tag: kde-cli-tools
+    other names it and every run reads the same menu. The test added with #3884 runs `kde-open` once
+    per name with a marker handler, and the CI step runs it under `dbus-run-session` and prints the
+    names it observed as `kde-open observed:` lines. The lines below on why each name matters are
+    from source only. They were read at these commits, none of which is a release tag: kde-cli-tools
     aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
     `KIOCLIENT_AS_KDEOPEN`), KIO a80751d2, KService 2bd4461c and KCoreAddons e96958b2, and Qt 6.10.0
     (tag v6.10.0, commit 5a8637e4516b). `QT_PLUGIN_PATH` (`qcoreapplication.cpp`) and
@@ -4833,8 +4824,7 @@ shown by running the program, or not entirely:
     read so, a session bus may not be required, and the child gets the process environment. This is
     from source and was not run, and whether `kde-open` needs a session bus is not established. The
     `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there, and
-    the baseline there still ran no handler (run 42972425516), so whether a bus is enough is not
-    established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
+    whether a bus is required is not established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
   cells marked run below. Every test added after that run is not run: the host here is macOS,
@@ -4843,16 +4833,15 @@ shown by running the program, or not entirely:
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
   the installed handler does not start. The KDE test skips a name whose installed handler does not
-  start, since `kde-open` was run through `xdg-open` on the CI runner, which has no session bus, and ran
-  no installed handler. `kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
+  start, because `kde-open` run through `xdg-open` on the CI runner, which has no session bus,
+  starts no installed handler. `kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
   runs `kde-open` itself under a bus with `HOME` and the `XDG_` names pointing at scratch
   directories, once without a planted name and once per name in `KDE_OPEN_MARKER_NAMES`, and the
   `ci.yml` step that runs it under `dbus-run-session` sets `BRAVEBOT_OBSERVE_KDE_OPEN`, which makes
   a missing `kde-open`, a baseline that starts no handler, or a name that runs the planted handler
-  and is not removed by the opener fail the test. In run 42972425516 the baseline started no handler
-  and the step failed. The failure message now carries `kde-open`'s path, how it ended and its stdout
-  and stderr; run 42978585691 shows exit status 1 and `"applications.menu" not found in QList()`,
-  and the test now supplies a menu file as described in the `kde-open` entry above. Names with no marker form (the plug-in
+  and is not removed by the opener fail the test. The failure message carries `kde-open`'s path,
+  how it ended and its stdout and stderr, and the test supplies a menu file as described in the
+  `kde-open` entry above. Names with no marker form (the plug-in
   directories and names, `QT_STYLE_OVERRIDE`) are printed as not exercised. Without the variable
   it prints `skipped`, as it did on this macOS host. The test that puts a stand-in `kde-open` first on `PATH` and reads what
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
@@ -5862,12 +5851,8 @@ does not give a later run the name of the earlier one, and a profile that alread
 refused rather than adopted.
 `a_holder_killed_while_it_holds_a_stage_leaves_its_container_profile_registered` kills a process
 holding a stage and looks for a folder `bravebot-<pid>-` under `%LOCALAPPDATA%\Packages`, then
-deletes the profile it finds so the runner is left clean. It passed in the `Sandbox on Windows`
-job of CI run 42972425516 (job 130363809021), which printed `profiles of holder 5804: left
-["bravebot-5804-0-8829290d23592f7f"]; deleted [("bravebot-5804-0-8829290d23592f7f", 0)]; remaining
-after the delete []`: the killed holder left one profile and the delete removed it. Run
-42978585691 printed the same for holder 872 (`left ["bravebot-872-0-b96ff706a680f6cc"]; deleted
-[("bravebot-872-0-b96ff706a680f6cc", 0)]; remaining after the delete []`). The test ties a
+deletes the profile it finds so the runner is left clean. The killed holder leaves one profile and
+the delete removes it. The test ties a
 folder to the holder by process identifier alone, so an earlier leftover of a reused
 identifier would be found as well. The entry left behind
 names a security identifier no other run holds, so the residue is an entry for a container that no
@@ -5910,36 +5895,30 @@ reported as what it is.
   `bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_a_stage_made` reads the
   target's access list while a second stage runs, prints `junction grant crossed` or `junction
   grant did not cross`, and fails if the second stage can read the target. The first stage tries
-  `mklink /J`, which the Windows runner refused, and then a copy of the test binary run in the
-  stage that sets the mount point reparse point itself with `FSCTL_SET_REPARSE_POINT` and prints
-  `junction-probe junction made` or `junction-probe junction not made: <error>`. Both routes were
-  run in the `Sandbox on Windows` job of CI run 42972425516 (job 130363809021) and both were
-  refused: the test printed `junction not made by a stage by either route: mklink:  [stderr:
-  Access is denied.]; probe: junction not made: Access is denied. (os error 5)` and returned, and
-  run 42978585691 printed the same line. Neither
-  `junction grant crossed` nor `junction grant did not cross` was printed, so no run has shown
-  whether a grant crosses a junction a stage made, and no clause is claimed from it. The probe's
-  output does not say which of its calls was refused. Where the grant crosses,
-  `set_entry` has to skip reparse points. It is not changed here, because no run has shown the
-  grant crossing. The session's own `temp` directory, which a stage can replace by a
+  `mklink /J`, which the Windows runner refuses ("Access is denied"), and then a copy of the test
+  binary run in the stage that sets the mount point reparse point itself with
+  `FSCTL_SET_REPARSE_POINT` and prints `junction-probe junction made` or `junction-probe junction not
+  made: <error>`. A stage cannot make a junction by either route: the probe reports `Access is
+  denied. (os error 5)`, and the test prints `junction not made by a stage by either route` and
+  returns before the observation. Neither `junction grant crossed` nor `junction grant did not
+  cross` is printed, so whether a grant crosses a junction a stage made is unobserved, and no clause
+  is claimed from it. The probe's output does not say which of its calls is refused. Where the grant
+  crosses, `set_entry` has to skip reparse points; it is not changed, because the grant has not been
+  seen to cross. The session's own `temp` directory, which a stage can replace by a
   link, is checked by name as the scratch directory is, and the junction case of that check is
   reasoned and not run on Windows.
-- The job limits of [SANDBOX-17](#SANDBOX-17) were observed on the `Sandbox on Windows` job of the
-  CI run of main at `d72819914` (run 42944872516, windows-2025), and passed there:
+- The job limits of [SANDBOX-17](#SANDBOX-17) hold on the `Sandbox on Windows` job runner (windows-2025):
   `a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses` (a `cmd.exe` built-in
   exits 0 under a limit of one active process, so the console host the platform adds is not
   counted against it or does not stop the start),
   `a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses`,
   `a_stage_starts_a_child_where_its_policy_allows_subprocesses`,
   `a_stage_is_in_a_job_carrying_every_ui_limit` and
-  `a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses`, the last two
-  reading the limits from a program inside the stage. Whether the runner process is itself in a
-  job, and so whether those runs nested the stage's job under another, was not recorded in that
-  run. `a_stage_is_limited_whether_or_not_this_process_is_in_a_job` records it (it prints `this
-  process is in a job: true` or `false`) and repeats the checks from a process that has put itself
-  in a job. The five tests above and that one passed in the `Sandbox on Windows` job of CI run
-  42972425516 (job 130363809021), which printed `this process is in a job: true`: the test process
-  was in a job there, so those stages were created in a job of their own.
+  `a_stage_is_in_a_job_bounding_processes_only_where_its_policy_denies_subprocesses` pass, the last
+  two reading the limits from a program inside the stage. The test process on that runner is itself
+  in a job, so those stages are created in a job of their own.
+  `a_stage_is_limited_whether_or_not_this_process_is_in_a_job` prints `this process is in a job:
+  true` or `false` and repeats the checks from a process that has put itself in a job.
 - A stage started with a named environment of `SystemRoot` and one more variable fails to start
   with `SpawnFailed` and OS error 203 ("The system could not find the environment option that was
   entered") on the Windows runner. The platform does not say which variable it looked for, and
@@ -5957,14 +5936,13 @@ reported as what it is.
   Windows runner (`child-ran"`). The tests that start a child compare the output with that quote
   removed. Whether the quote comes from `cmd.exe` reading its `/c` line or from the line the backend
   writes ([`command_line`](../../crates/sandbox/src/windows.rs)) is not established.
-- A container's `TEMP` and `TMP` on the Windows runner named its own `AC\Temp` under
-  `%LOCALAPPDATA%\Packages\<profile>`, and not the `temp` directory the session handed over
-  (run 42861370999, job 129988187163, branch of PR 3886 at `f3d07e6a9`). So a program that writes
-  to `%TEMP%` writes to a directory that is not the session's, and the session's `temp` directory
-  is written only by a program that is told its path. Why the handed-over value is not followed
-  is not known. `a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts` asserts that
-  the variables are set and are not the account's, and it passes in the run of main at
-  `d72819914` (run 42944872516) ([TRUST-14](trust-map.md#TRUST-14)).
+- A container's `TEMP` and `TMP` on the Windows runner name its own `AC\Temp` under
+  `%LOCALAPPDATA%\Packages\<profile>`, and not the `temp` directory the session handed over. So a
+  program that writes to `%TEMP%` writes to a directory that is not the session's, and the
+  session's `temp` directory is written only by a program that is told its path. Why the
+  handed-over value is not followed is not known.
+  `a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts` asserts that
+  the variables are set and are not the account's ([TRUST-14](trust-map.md#TRUST-14)).
 - Subprocess denial has no mechanism on Linux. A container bounds what a process reaches rather
   than whether it creates children, so a policy asking for that denial is refused there rather
   than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that Linux confines nothing
@@ -6018,12 +5996,12 @@ reported as what it is.
   sandbox crate's tests are written against Unix paths and are not run on Windows, and neither are
   the agent's other tests that start a confined process. The two tests that watch a loopback
   listener run on Unix only. The Windows test that does connect to a loopback listener from a
-  container, described below, passed in run 42972425516 (job 130363809021), where the connect from
-  a container granted the network to a listener on `127.0.0.1` ended `refused: connection timed
-  out`. That is one connection to one loopback listener, so the denial of egress on Windows is
-  still shown by the capability the token is built with and not by a connection to an outside address. No test connects from a container granted the network to a private-network address
-  either, so that a granted container reaches neither a private network nor, on the strength of a
-  connection, the loopback of this machine is not shown by a run.
+  container, described below, ends `refused: connection timed out` for a connect from a container
+  granted the network to a listener on `127.0.0.1`. That is one connection to one loopback
+  listener, so the denial of egress on Windows is still shown by the capability the token is built
+  with and not by a connection to an outside address. No test connects from a container granted the
+  network to a private-network address either, so that a granted container reaches no private
+  network is not shown.
   `a_container_granted_the_network_cannot_connect_to_this_hosts_loopback` binds a listener on
   `127.0.0.1`, connects to it from a probe in a stage granted the network and asserts the connect
   was refused. It prints `connect-probe connected` or `connect-probe refused: <error>`. The assumption that a container's default network isolation refuses

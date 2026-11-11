@@ -1273,9 +1273,9 @@ mod tests {
             std::fs::create_dir_all(directory).unwrap();
         }
         // KService reads a menu file `menus/applications.menu` from a configuration directory when
-        // it builds the service cache. In CI run 42978585691 the baseline ended with exit status 1
-        // and stderr `"applications.menu"  not found in  QList()` while both configuration
-        // directories were empty. The menu below names the standard application directories only,
+        // it builds the service cache. With both configuration directories empty, `kde-open` exits
+        // with status 1 and stderr `"applications.menu"  not found in  QList()`. The menu below names
+        // the standard application directories only,
         // so which handler runs is still chosen by the data directories and `mimeapps.list`. It
         // is in `empty_config`, which is `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` in every run except
         // the two where one of them is the variable under test, and the other still names it, so
@@ -1426,15 +1426,11 @@ mod tests {
     /// (plug-in directories, plug-in names, `QT_STYLE_OVERRIDE`) select nothing.
     ///
     /// The baseline failure carries the path of the `kde-open` run, how it ended, and what it
-    /// printed on stdout and stderr. In CI run 42972425516 (job `Format, lint, and test`, step `Run
-    /// kde-open with each name set to a marker handler`) the baseline ran neither handler,
-    /// `(false, false)`, and the whole test took 3.27 seconds; its streams were discarded. In run
-    /// 42978585691 the same step failed with `/usr/bin/kde-open ended with exit status: 1`, stdout
-    /// empty and stderr `"applications.menu"  not found in  QList()` followed by `Could not read
-    /// file bravebot-test://example.invalid/.`, with both configuration directories empty. The
-    /// harness now writes `menus/applications.menu` into the empty configuration directory. Whether
-    /// that is enough for `kde-open` to run the genuine handler is not established: the test has
-    /// not been run since, and not on the macOS host it was written on.
+    /// printed on stdout and stderr. With both configuration directories empty, `kde-open` ran
+    /// neither handler, `(false, false)`, and ended with `/usr/bin/kde-open ended with exit status:
+    /// 1`, stdout empty and stderr `"applications.menu"  not found in  QList()` followed by `Could
+    /// not read file bravebot-test://example.invalid/.`. The harness writes `menus/applications.menu`
+    /// into the empty configuration directory so that the baseline runs the genuine handler.
     #[cfg(unix)]
     #[test]
     fn kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes()

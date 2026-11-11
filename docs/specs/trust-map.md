@@ -1539,15 +1539,13 @@ describes.
 On Windows `TEMP` and `TMP` for a stage are the exception, where the session has a directory of its
 own: they are handed over naming a `temp` directory inside it, made as the session opens, and the stage is granted that
 directory in place of the account's temporary directory. A container's `TEMP` does not follow the
-one handed over. In the `Sandbox on Windows` job of CI on the branch of PR 3886 at `f3d07e6a9` (run
-42861370999, job 129988187163), `set TEMP` in a stage printed
-`C:\Users\runneradmin\AppData\Local\Packages\bravebot-2016-26-dfcf333f371e2f7b\AC\Temp`, the
-container's own directory, while the `temp` directory handed over was under `D:\a\_temp\confine`.
+one handed over. In a stage on the Windows runner, `set TEMP` prints
+`C:\Users\runneradmin\AppData\Local\Packages\<profile>\AC\Temp`, the container's own directory,
+while the `temp` directory handed over is elsewhere (under `D:\a\_temp\confine`).
 `a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts` therefore asserts that the
 `TEMP` and `TMP` a stage sees are set and are not the account's temporary directory, writes in the
 session's `temp` directory, and is refused a write in the account's; it does not assert that
-`TEMP` names the session's `temp` directory. That test passes in the `Sandbox on Windows` job of
-the CI run of main at `d72819914` (run 42944872516). A program that writes to `%TEMP%` in a
+`TEMP` names the session's `temp` directory. A program that writes to `%TEMP%` in a
 container writes inside the container's own `AC\Temp`, which is not the directory the session
 holds. A grant there is an entry written onto every
 file beneath the directory as the stage starts, and the account's temporary directory holds the
