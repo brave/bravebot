@@ -1583,6 +1583,11 @@ not listed yet, when another turn has run since the list, or when the file no lo
 listed. That last case is how an edit of your own is protected: the file is compared with what the
 turn kept, and a hunk that moved, grew, shrank or went is not the one you chose.
 
+**A hunk in a protected file is put to you.** A file that is, or has become a link to, a git hook,
+`.git`, `.bravebot`, `.husky`, `.gitmodules`, `.gitconfig` or `.pre-commit-config.yaml` is asked about
+as a write to it is, and the hunk is not put back unless you say yes. Where nobody can be asked, the
+line says it was not put back because the path is protected. `/undo` and `/rewind` ask the same way.
+
 **Only files you vouched for are compared.** Comparing two texts is a decision, so a file the session
 does not trust is named with the reason instead of being listed, and none of its lines is drawn.
 `/undo` is the way back for it, and it puts back the rest of the turn too. A file the turn created, one

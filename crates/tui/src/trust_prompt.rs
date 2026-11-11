@@ -1088,7 +1088,7 @@ mod tests {
     /// Takes the drawing rather than a path, so both questions are measured by one helper and an
     /// assertion about what a prompt says cannot be made of one and forgotten on the other.
     fn rendered(draw_it: impl FnOnce(&mut ratatui::Frame)) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(72, 24)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(72, 28)).expect("terminal");
         terminal.draw(draw_it).expect("draw");
         terminal
             .backend()
@@ -1788,7 +1788,7 @@ mod tests {
         );
 
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
-        let mut terminal = Terminal::new(TestBackend::new(80, 10)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
         let mut drawn = None;
         terminal
             .draw(|frame| drawn = Some(draw(frame, here(), Some(record), false, 0, &mut false)))

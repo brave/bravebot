@@ -76,15 +76,45 @@ pub fn a_turn_with_result_of(
     decision: RunDecision,
     trust: impl FnOnce(&Workspace) -> TrustStore,
 ) -> (Vec<bravebot_agent::RunRequest>, String) {
-    let workspace = Workspace::new(work).expect("workspace");
     let arguments = json!({ "command": command }).to_string();
-    let (endpoint, received) =
-        serve_sequence(vec![tool_request("run", &arguments), reply_with("done")]);
+    let turned = a_scripted_turn(
+        work,
+        vec![tool_request("run", &arguments), reply_with("done")],
+        decision,
+        trust,
+    );
+    // The first body is the task, the second carries the tool's result.
+    let after_the_line = turned.bodies.into_iter().nth(1).unwrap_or_default();
+    (turned.asked, after_the_line)
+}
+
+/// What one scripted turn left behind.
+pub struct Turned {
+    /// What the person was asked about a run.
+    pub asked: Vec<bravebot_agent::RunRequest>,
+    /// The trust map the turn ended with.
+    pub trust: TrustStore,
+    /// Every request body the model received, in order. The first holds the system prompt and the
+    /// task.
+    pub bodies: Vec<String>,
+}
+
+/// One turn in `work` with the model scripted to `replies`, where the person's trust of it is
+/// `trust` and whoever is asked answers `decision`. The one place the turn's setup is spelled, for
+/// the helpers above and for a test that needs the map or the system prompt as well.
+pub fn a_scripted_turn(
+    work: &Path,
+    replies: Vec<String>,
+    decision: RunDecision,
+    trust: impl FnOnce(&Workspace) -> TrustStore,
+) -> Turned {
+    let workspace = Workspace::new(work).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut asked = answers::Answers::new(decision);
     let trust = trust(&workspace);
-    turn::resume(
+    let completed = turn::resume(
         &config,
         &egress,
         &workspace,
@@ -102,12 +132,13 @@ pub fn a_turn_with_result_of(
         TrustedPrograms::new(),
         None,
         &Cancel::new(),
-    )
-    .outcome
-    .expect("the turn runs");
-    // The first body is the task, the second carries the tool's result.
-    let after_the_line = received.try_iter().nth(1).unwrap_or_default();
-    (asked.runs, after_the_line)
+    );
+    completed.outcome.expect("the turn runs");
+    Turned {
+        asked: asked.runs,
+        trust: completed.decisions.trust,
+        bodies: received.try_iter().collect(),
+    }
 }
 
 pub fn config_for(endpoint: &str) -> Config {

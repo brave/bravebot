@@ -2065,7 +2065,8 @@ trust-directory-regardless =
 # reads it should not expect more than they get.
 trust-directory-confined-lines =
     A yes also lets a command run here without asking when the sandbox confines it, with the
-    network closed for that command, which today is on macOS only. Anything that needs more still asks.
+    network closed for that command, which today is on macOS only. A command that can change files
+    and names a file you have not trusted, and anything that needs more, still asks.
 # The yes where the answer cannot be kept (TRUST-23): no state directory, a filesystem root, the home
 # directory or one holding it, a filesystem that does not say when a directory was made, or an
 # incognito session.
@@ -3684,6 +3685,7 @@ session-hunks-left-untrusted =
 session-hunks-left-not-text = it is not text
 session-hunks-left-too-different = so much of it changed that its hunks cannot be lined up
 session-hunks-left-outside = it does not resolve inside the project now, so it is not read
+session-hunks-left-protected = it is, or now leads to, a name a write would be asked about, and that was not approved here, so it is not written
 session-hunks-left-unreadable = it is gone, is not a file, or is larger than a rewind keeps
 session-hunks-left-as-it-was = it holds what it held before the turn
 session-hunk-put-back = put back hunk { $number } of { $path } as it stood before turn { $turn }

@@ -80,7 +80,10 @@ question a person can review afterwards in a diff, so no model is needed for it.
 
 A run is put to it only where the sandbox confines the line, the line did not ask to start with no
 profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)), no standard input comes from a reference, no
-credential scope was asked for, and nothing private is released. A fetch is put to it for
+credential scope was asked for, nothing private is released, and no stage of the line is `git`, the
+program whose profile lifts the `.git` hold-back ([SANDBOX-18](sandboxing.md#SANDBOX-18)). A stage is
+recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and on
+every platform, and any stage of a pipeline counts. A fetch is put to it for
 `fetch_url`, for the first question about the URL, and not for `download_url`, which puts bytes into
 a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). It is consulted
 only in auto, only in a turn of a session the person has typed to, and not for a delegate, whose task
@@ -90,7 +93,11 @@ Any name in `scopes` also keeps a run from it, whether a toolchain list, `loopba
 including one that lends the line nothing it needs ([SANDBOX-26](sandboxing.md#SANDBOX-26)).
 
 **Why.** The classifier is shown the words of the line and not the binary they resolve to, which can
-be a file in the tree. The sandbox is what holds the line to those words. The prompts it may answer
+be a file in the tree. The sandbox is what holds the line to those words. It does not for a git
+stage, which may write a repository's configuration and hooks, so `git config core.fsmonitor ...`
+would plant a program that runs unconfined the next time anybody runs git there, on the word of a
+model that was shown the line and not what git does with it. That line goes to the person, as it
+would in asking. The prompts it may answer
 are the ones whose routing field the planner typed from a context that holds nothing untrusted, so a
 person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](tools/fetch-url.md#FETCH-2)).
 
@@ -100,6 +107,9 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::turn::no_mode_but_auto_consults_the_classifier`
 `verified-by: bravebot_agent::turn::a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier`
 `verified-by: bravebot_agent::turn::in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person`
+`verified-by: bravebot_agent::turn::a_line_with_a_git_stage_is_not_put_to_the_classifier_and_goes_to_the_person`
+`verified-by: bravebot_agent::turn::a_stage_is_git_by_its_file_and_not_by_a_word_in_the_line`
+`verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_lifts_the_git_hold_back_for_the_classifier_gate`
 
 <a id="AUTO-4"></a>
 ### AUTO-4: the classifier answers no question that a mode may not answer, and none whose bytes can derive from untrusted content
@@ -232,6 +242,15 @@ nothing about what the person wanted.
 - Each run or fetch question costs one model round trip, on the session's own model.
 - A confined plain line in a trusted directory already runs unasked ([RUN-5](tools/run.md#RUN-5)), so
   the classifier is consulted in a directory the person has not trusted.
+- The classifier is kept from a git stage and from no other kind of stage that
+  [RUN-5](tools/run.md#RUN-5) keeps from the
+  unasked road. A line that keeps the network, or that runs a program the plan could have written, is
+  still put to it, because the classifier is shown that line's words and the sandbox holds what such a
+  line does to the machine. On Linux and Windows nothing holds a `.git` back from a stage that is not
+  git ([SANDBOX-14](sandboxing.md#SANDBOX-14)), so there the classifier can answer a line whose
+  stage writes a repository's hooks or configuration. It is not kept from every line there, because
+  that would remove the mode on those platforms. The hold-back is tracked in
+  [#2599](https://github.com/brave/bravebot/issues/2599), and the cost ends when it is built.
 
 ## Not built
 

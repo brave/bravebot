@@ -10144,7 +10144,10 @@ struct Settled {
 /// relative to the root where it is inside it, because [`Workspace::resolve`] refuses an absolute
 /// name inside the root and the file would then be found to have no other name. An operand the
 /// lookup could not finish for is recorded as incomplete, which the policy reads as untrusted.
-/// Empty for a line that is not read-proven, which has no operands to label.
+/// Empty for a line that is not read-proven and names no argv word, which has no operands to label.
+/// The words of a line's argv are looked up as well as the read set, because a held line is asked
+/// whether it names a path the map holds untrusted (RUN-5), and a line the table does not account
+/// for, such as `cp`, has no read set.
 ///
 /// A directory named as an operand is looked up as the directory; the names of the files beneath
 /// it are not, which TRUST-2 lists as a cost.
@@ -10154,7 +10157,12 @@ fn operand_names_of<S: Sink>(
     plan: &bravebot_core::command::Plan,
 ) -> std::collections::HashMap<String, (Vec<String>, bool)> {
     let mut found = std::collections::HashMap::new();
-    for operand in policy.operands_read_by(plan).unwrap_or_default() {
+    let operands = policy
+        .operands_read_by(plan)
+        .unwrap_or_default()
+        .into_iter()
+        .chain(policy.words_named_by(plan));
+    for operand in operands {
         if found.contains_key(&operand) {
             continue;
         }
@@ -10498,13 +10506,45 @@ fn run_call<S: Sink>(
     })
 }
 
+/// What the sandbox does to the stages of a line, as far as the auto mode's classifier is
+/// concerned (AUTO-3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Profile {
+    /// No confinement: the line starts without a profile.
+    Absent,
+    /// Every stage is confined and none lifts the `.git` hold-back.
+    Holding,
+    /// Some stage is confined by a profile that lifts the `.git` hold-back, which is the profile of
+    /// a stage whose program is git (SANDBOX-18). This is not
+    /// [`crate::confine::Confinement`]'s `writes_git_directories`, which is a fact about one
+    /// profile's write rows.
+    LiftingTheGitHoldBack,
+}
+
+/// The [`Profile`] the confinement a run is started with gives `plan`, from the profile each stage
+/// is built with and never from a name in the line.
+fn profile_of(
+    confinement: Option<&crate::confine::Confinement>,
+    plan: &bravebot_core::command::Plan,
+) -> Profile {
+    match confinement {
+        None => Profile::Absent,
+        Some(confinement) if confinement.lifts_the_git_hold_back(&plan.steps()) => {
+            Profile::LiftingTheGitHoldBack
+        }
+        Some(_) => Profile::Holding,
+    }
+}
+
 /// What the auto mode's classifier says of a line the policy is about to ask about, or that it was
 /// not consulted (AUTO-3).
 ///
-/// Consulted only in auto, and only for a line the sandbox holds that did not ask to start with no
-/// profile: the classifier is shown the words of the line and not the binary they resolve to, so
-/// the confinement is what holds the line to those words. The plan and the directory are the
-/// driver's own structure and no labelled value is built or released here.
+/// Consulted only in auto, and only for a line the sandbox confines that did not ask to start with
+/// no profile and has no git stage: the classifier is shown the words of the line and not the
+/// binary they resolve to, so the confinement is what holds the line to those words, and a git
+/// stage's profile lifts the `.git` hold-back, so it writes a hook or a configuration that runs
+/// later with no profile around it ([`Profile::LiftingTheGitHoldBack`], SANDBOX-18). The plan and
+/// the directory are the driver's own structure and no labelled value is built or released here.
 ///
 /// `told_in` is the directory as the planner typed it, and is `None` when the line runs at the
 /// workspace root. The classifier is a model, so a name a link in the tree chose is not put in its
@@ -10522,9 +10562,12 @@ fn consult_about_a_run<S: Sink>(
     requested: &[bravebot_sandbox::scope::Requested],
     stdin: bool,
     unconfined: bool,
-    confined: bool,
+    profile: Profile,
 ) -> crate::confirm::Classified {
-    if unconfined || !confined || tools.permission_mode.get() != crate::PermissionMode::Auto {
+    if unconfined
+        || profile != Profile::Holding
+        || tools.permission_mode.get() != crate::PermissionMode::Auto
+    {
         return crate::confirm::Classified::NotAsked;
     }
     // Only a line it can be shown whole: nothing fed to it from a reference, no name in `scopes`
@@ -10607,7 +10650,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         requested,
         stdin.is_some(),
         unconfined,
-        confinement.is_some(),
+        profile_of(confinement.as_ref(), plan),
     );
     let request = crate::confirm::RunRequest {
         plan: plan.clone(),
@@ -11536,7 +11579,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     for destination in &left.refused_at {
         if tools
             .workspace
-            .put_back(&destination.resolved, &destination.held)
+            .put_back(&destination.resolved, &destination.held, &mut *confirmer)
             .is_err()
         {
             stuck.push(destination.told.clone());

@@ -110,6 +110,10 @@ impl RewindCoverage {
 /// A definition's memory the old bytes can land in untrusted is recorded in the state directory
 /// `home` before they do, as a write's are, and a restore that cannot be recorded is refused
 /// (MEMORY-5).
+///
+/// A path that is a protected name, or lands on one once links are followed, is put to `confirmer`
+/// as a write to it is and is refused unless the answer is yes (PERM-9, MODE-2). A confirmer that
+/// cannot ask refuses, so the path is reported refused and the rest still go back.
 pub fn restore(
     workspace: &Workspace,
     backups: Vec<Backup>,
@@ -117,11 +121,12 @@ pub fn restore(
     target: &TrustStore,
     servers: &mut Option<crate::lsp::LanguageServers>,
     home: Option<&Path>,
+    confirmer: &mut dyn crate::confirm::Confirmer,
 ) -> Vec<PathBuf> {
     // The owning turn has joined. Stop tracked servers before any file restoration.
     drop(servers.take());
     restore_with(backups, current, target, home, |path, was| {
-        workspace.put_back(path, was)
+        workspace.put_back(path, was, confirmer)
     })
 }
 
@@ -333,7 +338,7 @@ mod tests {
                         detail: "failure after truncation".to_string(),
                     });
                 }
-                workspace.put_back(path, before)
+                workspace.put_back(path, before, &mut crate::confirm::Unattended)
             },
         );
         assert_eq!(refused, [root.join("broken"), root.join("unavailable")]);
@@ -539,6 +544,7 @@ mod tests {
             &TrustStore::new(&root),
             &mut None,
             Some(&home),
+            &mut crate::confirm::Unattended,
         );
         assert!(refused.is_empty());
         assert!(!fact.exists());
@@ -581,6 +587,7 @@ mod tests {
             &TrustStore::new(&root),
             &mut None,
             Some(&home),
+            &mut crate::confirm::Unattended,
         );
         assert!(refused.is_empty());
         assert_eq!(std::fs::read(&fact).unwrap(), b"old fact");
@@ -624,6 +631,7 @@ mod tests {
                 &TrustStore::new(&root),
                 &mut None,
                 Some(&home),
+                &mut crate::confirm::Unattended,
             );
             assert_eq!(refused.len(), 1);
         }
@@ -654,6 +662,7 @@ mod tests {
                 &TrustStore::new(&root),
                 &mut None,
                 Some(&home),
+                &mut crate::confirm::Unattended,
             )
         };
         workspace.record_home_backup(&agents);
@@ -712,6 +721,7 @@ mod tests {
                 &TrustStore::new(&root),
                 &mut None,
                 Some(&home),
+                &mut crate::confirm::Unattended,
             );
             assert_eq!(refused.len(), 1);
         }
@@ -731,6 +741,7 @@ mod tests {
                 &TrustStore::new(&root),
                 &mut None,
                 Some(&home),
+                &mut crate::confirm::Unattended,
             );
             assert_eq!(refused.len(), 1);
             assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
@@ -772,6 +783,7 @@ mod tests {
                 &TrustStore::new(&root),
                 &mut None,
                 Some(&home),
+                &mut crate::confirm::Unattended,
             )
         };
 

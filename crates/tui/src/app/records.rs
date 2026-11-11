@@ -174,6 +174,7 @@ pub(super) fn rewind(
     stored: &mut bravebot_session::sessions::Handle,
     workspace: &Workspace,
     servers: &mut Option<LanguageServers>,
+    confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
     steps: usize,
 ) {
     session.rewind.bind_coverage(workspace);
@@ -207,6 +208,7 @@ pub(super) fn rewind(
         &snapshot.trust,
         servers,
         bravebot_agent::home::directory().as_deref(),
+        confirmer,
     );
     if !refused.is_empty() {
         session
@@ -298,6 +300,7 @@ pub(super) fn carry_out_hunks(
     trust: &mut TrustStore,
     programs: &TrustedPrograms,
     servers: &mut Option<LanguageServers>,
+    confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
     argument: &str,
 ) {
     let trust_before = trust.clone();
@@ -313,6 +316,7 @@ pub(super) fn carry_out_hunks(
             trust,
             servers,
             bravebot_agent::home::directory().as_deref(),
+            confirmer,
             &mut trail,
         ),
         crate::hunks_command::Asked::Unreadable => session.note(t!(session_hunks_needs_a_number)),

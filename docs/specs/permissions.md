@@ -689,6 +689,15 @@ whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2))
 name of a file with a hard link (PERM-7). A file with several links whose other names could not all
 be found is protected, since one of them may be a protected path.
 
+Putting old bytes back is a write to that destination. A rewind and `/hunks` put the path to the
+confirmer as a write is, with the same match on the named path, the path it lands on and each other
+name of a hard link, before any byte goes back. Where nobody can be asked the path is refused,
+reported as not put back, and the other paths still go back. A destination of a refused `run` line
+that lands on a protected name is put back through the confirmer the same way
+(`crates/agent/src/tools.rs`), and one not approved is left as the line wrote it and named. The
+question carries no body: the
+bytes are the backup's and the driver does not read them.
+
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
 to hand one the user's data, exactly as vouching for a command is not, and a server is further from
@@ -717,6 +726,15 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
 `verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
+`verified-by: bravebot_agent::workspace::a_rewind_onto_a_protected_name_is_put_to_the_person`
+`verified-by: bravebot_agent::workspace::a_rewind_with_one_protected_landing_still_puts_the_others_back`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_link_to_a_git_hook`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_link_to_git_config`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_link_to_a_husky_hook`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_link_to_the_pre_commit_config`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_link_to_gitmodules`
+`verified-by: bravebot_agent::workspace::a_rewind_still_puts_back_through_a_link_to_a_name_that_is_not_protected`
+`verified-by: bravebot_agent::turn::a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confirmer`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 
 The planner's arguments to a server's tool are private once private content was let out of

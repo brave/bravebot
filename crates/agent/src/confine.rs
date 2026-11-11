@@ -794,6 +794,23 @@ impl Confinement {
         }
     }
 
+    /// Whether the profile of any stage of `steps` lifts the `.git` hold-back, which is the profile
+    /// of a stage whose program is git (SANDBOX-18). Such a stage writes a repository's hooks and
+    /// configuration, so the sandbox does not hold what the line does to the words it was shown,
+    /// and the auto mode's classifier is not put the line (AUTO-3).
+    ///
+    /// Asked of the profile each stage is built with, the fact [`Confinement::holds`] reads for the
+    /// same stage, on every platform: git is found by the file its program resolved to, and never
+    /// by a name in the line or by what a program printed. The answer is the same on macOS, where
+    /// the hold-back exists, and on Linux and Windows, where it does not and a stage that is not git
+    /// may write a `.git` as well (SANDBOX-14).
+    pub fn lifts_the_git_hold_back(&self, steps: &[&Step]) -> bool {
+        let environment = process_environment();
+        steps
+            .iter()
+            .any(|step| self.composed(step, &environment).0.git_directories_writable)
+    }
+
     /// Whether an argument of `step`, or one of the words in it, names a regular file under a
     /// directory the plan may write to, where the step is an interpreter or a wrapper, or the file
     /// is executable.
@@ -5883,6 +5900,43 @@ mod tests {
             reading_confinement(Prelude::MacOs, &["/work/project"]).with_mode(SandboxMode::Strict);
         assert!(lifted(&strict, step("/usr/bin/git", &["commit"])));
         assert!(!lifted(&strict, named_git));
+    }
+
+    /// AUTO-3, SANDBOX-18: the fact the auto mode's gate reads is true of a line when any stage is
+    /// git by the file it resolved to, on every platform and in every position of a pipeline, and
+    /// of no other line. The regressions it rejects: the first stage alone, the last stage alone, a
+    /// platform on which the answer differs, the name the line used rather than the file, and a
+    /// file named `git` that a stage could have written.
+    #[test]
+    fn only_a_step_whose_program_is_git_lifts_the_git_hold_back_for_the_classifier_gate() {
+        let git = step("/usr/bin/git", &["config", "core.fsmonitor", "touch x"]);
+        let make = step("/usr/bin/make", &["install"]);
+        let cat = step("/bin/cat", &["notes"]);
+        let mut named_git = step("/bin/sh", &["-c", "git commit"]);
+        named_git.program = "git".to_string();
+        let planted = step(
+            "/work/project/git",
+            &["config", "core.fsmonitor", "touch x"],
+        );
+
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let confined = reading_confinement(prelude, &["/work/project"]);
+            for (what, steps, lifted) in [
+                ("git alone", vec![&git], true),
+                ("git first", vec![&git, &cat], true),
+                ("git last", vec![&cat, &git], true),
+                ("git in the middle", vec![&cat, &git, &make], true),
+                ("no git", vec![&cat, &make], false),
+                ("the name the line used", vec![&named_git], false),
+                ("a file a stage could have written", vec![&planted], false),
+            ] {
+                assert_eq!(
+                    confined.lifts_the_git_hold_back(&steps),
+                    lifted,
+                    "{prelude:?}: {what}"
+                );
+            }
+        }
     }
 
     /// SANDBOX-18: on Linux and Windows nothing holds a `.git` back, so the prompt is where a person

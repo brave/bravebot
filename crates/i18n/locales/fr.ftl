@@ -1747,7 +1747,9 @@ trust-directory-regardless =
 trust-directory-confined-lines =
     Un oui permet aussi d'exécuter ici une commande sans la demander quand le bac à sable la
     confine, avec le réseau fermé pour cette commande, ce qui n'est le cas que sur macOS pour
-    l'instant. Tout ce qui demande davantage est toujours demandé.
+    l'instant. Une commande qui peut modifier des fichiers et dont les arguments nomment un fichier
+    auquel vous n'avez pas fait confiance est toujours demandée, de même que tout ce qui demande
+    davantage.
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 trust-directory-remember = faire confiance et retenir
@@ -2965,6 +2967,7 @@ session-hunks-left-untrusted =
 session-hunks-left-not-text = ce n'est pas du texte
 session-hunks-left-too-different = il a tellement changé que ses morceaux ne peuvent pas être alignés
 session-hunks-left-outside = il ne se résout plus à l'intérieur du projet, donc il n'est pas lu
+session-hunks-left-protected = il est, ou mène maintenant à, un nom pour lequel une écriture serait demandée, et cela n'a pas été approuvé ici, donc il n'est pas écrit
 session-hunks-left-unreadable = il a disparu, n'est pas un fichier, ou est plus grand que ce qu'un rembobinage conserve
 session-hunks-left-as-it-was = il contient ce qu'il contenait avant le tour
 session-hunk-put-back = morceau { $number } de { $path } remis comme il était avant le tour { $turn }

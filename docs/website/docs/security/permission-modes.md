@@ -65,6 +65,8 @@ or `.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit
 wherever they are. A file there is code that runs later with your own rights, such as a git hook the
 next `git commit` starts. Accepting edits does not answer a write to one, and neither does an `allow`
 rule or a vouched path. Only bypassing does, and where nobody can be asked the write is refused.
+Putting old bytes back with `/undo`, `/rewind` or `/hunks` is such a write: it is asked the same way,
+and the desktop app, which has no question for it, refuses it.
 
 **Plan mode refuses a write rather than asking**, whatever you would have answered, and the planner
 is told so and why, so a run of refusals reads as a constraint to work inside rather than as a series
@@ -98,8 +100,11 @@ printed.
 Only the single word `allow` answers the question. A reply that says anything else, a failed call
 and a refused model leave the question with you, or refuse it where nobody can be asked. The
 classifier can remove a question and never refuses one. It is not asked about a command that starts
-with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, or
-one that reads standard input from a reference. It is not asked about `download_url`, a redirect to
+with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, one
+that reads standard input from a reference, or one with a `git` stage, which may write a
+repository's hooks and configuration and so is put to you as in asking. On Linux and Windows nothing
+holds a `.git` back from a program that is not `git`, so the classifier can answer a command whose
+program writes one there. It is not asked about `download_url`, a redirect to
 another host, a delegate's questions, or any question once the planner's context holds private
 content or has met something untrusted. The questions that stay with you in every mode, and the other
 questions a mode may not answer, are put to you as in asking.

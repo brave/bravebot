@@ -33,7 +33,36 @@ fn restore_for_test(
     let mut current = TrustStore::new(workspace.root());
     current.trust(".");
     let target = current.clone();
-    bravebot_agent::rewind::restore(workspace, backups, &mut current, &target, &mut None, None)
+    bravebot_agent::rewind::restore(
+        workspace,
+        backups,
+        &mut current,
+        &target,
+        &mut None,
+        None,
+        &mut bravebot_agent::confirm::Unattended,
+    )
+}
+
+/// `restore_for_test`, with the person answering the question a protected restore raises.
+#[cfg(unix)]
+fn restore_asking(
+    workspace: &Workspace,
+    backups: Vec<bravebot_agent::workspace::Backup>,
+    confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+) -> Vec<PathBuf> {
+    let mut current = TrustStore::new(workspace.root());
+    current.trust(".");
+    let target = current.clone();
+    bravebot_agent::rewind::restore(
+        workspace,
+        backups,
+        &mut current,
+        &target,
+        &mut None,
+        None,
+        confirmer,
+    )
 }
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
@@ -9407,6 +9436,235 @@ fn a_rewind_does_not_write_through_a_file_since_replaced_by_a_link_out_of_the_wo
     assert_eq!(refused, vec![named]);
 }
 
+/// Make a scratch project whose `notes.txt` was backed up by a turn and has since been replaced by a
+/// link onto `target`, a name the write gate protects (PERM-9), then restore it with nobody to ask.
+/// Returns the scratch, the workspace and the paths the restore refused, having checked that it
+/// refused the one path.
+#[cfg(unix)]
+fn a_link_to_a_protected_name_since_the_turn(target: &str) -> (Scratch, Workspace, Vec<PathBuf>) {
+    let scratch = Scratch::new(&format!(
+        "rewind-protected-{}",
+        target.replace(['/', '.'], "-")
+    ));
+    let landing = scratch.path.join(target);
+    std::fs::create_dir_all(landing.parent().unwrap()).unwrap();
+    std::fs::write(&landing, "ORIGINAL").unwrap();
+    std::fs::write(
+        scratch.path.join("notes.txt"),
+        "PAYLOAD the repository carried",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let backups = backups_of_a_turn_writing(&workspace, &[("notes.txt", "the turn's edit")]);
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    let named = backups[0].path.clone();
+    std::fs::remove_file(scratch.path.join("notes.txt")).unwrap();
+    std::os::unix::fs::symlink(&landing, scratch.path.join("notes.txt")).unwrap();
+    let refused = restore_for_test(&workspace, backups);
+    assert_eq!(refused, vec![named], "the restore was not refused");
+    (scratch, workspace, refused)
+}
+
+/// A rewind may not put old bytes through a link that now replaces the file onto a name the write
+/// gate protects (PERM-9): nobody is there to ask, so the path is refused and the target keeps
+/// what it held.
+#[cfg(unix)]
+fn a_rewind_through_a_link_to_a_protected_name_is_refused(target: &str) {
+    let (scratch, _workspace, _refused) = a_link_to_a_protected_name_since_the_turn(target);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(target)).unwrap(),
+        "ORIGINAL",
+        "the rewind wrote the old bytes into {target}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_link_to_a_git_hook() {
+    a_rewind_through_a_link_to_a_protected_name_is_refused(".git/hooks/pre-commit");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_link_to_git_config() {
+    a_rewind_through_a_link_to_a_protected_name_is_refused(".git/config");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_link_to_a_husky_hook() {
+    a_rewind_through_a_link_to_a_protected_name_is_refused(".husky/pre-commit");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_link_to_the_pre_commit_config() {
+    a_rewind_through_a_link_to_a_protected_name_is_refused(".pre-commit-config.yaml");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_link_to_gitmodules() {
+    a_rewind_through_a_link_to_a_protected_name_is_refused(".gitmodules");
+}
+
+/// A link to a name that is not protected is unchanged: the old bytes go back through it.
+#[cfg(unix)]
+#[test]
+fn a_rewind_still_puts_back_through_a_link_to_a_name_that_is_not_protected() {
+    let scratch = Scratch::new("rewind-link-not-protected");
+    std::fs::write(scratch.path.join("plain.txt"), "ORIGINAL").unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "what the checkout held").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let backups = backups_of_a_turn_writing(&workspace, &[("notes.txt", "the turn's edit")]);
+    std::fs::remove_file(scratch.path.join("notes.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("plain.txt"),
+        scratch.path.join("notes.txt"),
+    )
+    .unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("plain.txt")).unwrap(),
+        "what the checkout held"
+    );
+}
+
+/// The path named in the point is itself a protected name, with no link in the way. A person who
+/// answers yes gets the bytes back; a refusal leaves the file as the turn left it.
+#[cfg(unix)]
+#[test]
+fn a_rewind_onto_a_protected_name_is_put_to_the_person() {
+    for (yes, expected) in [(true, "what the checkout held"), (false, "the turn's edit")] {
+        let scratch = Scratch::new(&format!("rewind-protected-asked-{yes}"));
+        std::fs::create_dir_all(scratch.path.join(".husky")).unwrap();
+        std::fs::write(
+            scratch.path.join(".husky/pre-commit"),
+            "what the checkout held",
+        )
+        .unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let backups =
+            backups_of_a_turn_writing(&workspace, &[(".husky/pre-commit", "the turn's edit")]);
+        assert_eq!(backups.len(), 1, "{backups:?}");
+
+        let refused = if yes {
+            restore_asking(
+                &workspace,
+                backups,
+                &mut bravebot_agent::confirm::ApproveWrites,
+            )
+        } else {
+            restore_asking(
+                &workspace,
+                backups,
+                &mut bravebot_agent::confirm::Unattended,
+            )
+        };
+
+        assert_eq!(refused.is_empty(), yes, "{refused:?}");
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+            expected
+        );
+    }
+}
+
+/// One protected path refused is not the rewind refused: the others still go back.
+#[cfg(unix)]
+#[test]
+fn a_rewind_with_one_protected_landing_still_puts_the_others_back() {
+    let scratch = Scratch::new("rewind-protected-some");
+    std::fs::create_dir_all(scratch.path.join(".git")).unwrap();
+    std::fs::write(scratch.path.join(".git/config"), "ORIGINAL").unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "PAYLOAD").unwrap();
+    std::fs::write(scratch.path.join("other.md"), "first").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let backups =
+        backups_of_a_turn_writing(&workspace, &[("notes.txt", "edit"), ("other.md", "second")]);
+    let named = backups[0].path.clone();
+    std::fs::remove_file(scratch.path.join("notes.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join(".git/config"),
+        scratch.path.join("notes.txt"),
+    )
+    .unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(refused, vec![named]);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".git/config")).unwrap(),
+        "ORIGINAL"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("other.md")).unwrap(),
+        "first"
+    );
+}
+
+/// A file that shares its contents with a hook through a hard link is matched on its other name
+/// (PERM-9), so the old bytes are not written into the hook through it.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_into_a_hook_through_a_hard_link() {
+    let scratch = Scratch::new("rewind-hard-link-to-hook");
+    let hook = scratch.path.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "ORIGINAL").unwrap();
+    std::fs::write(
+        scratch.path.join("notes.txt"),
+        "PAYLOAD the repository carried",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let backups = backups_of_a_turn_writing(&workspace, &[("notes.txt", "the turn's edit")]);
+    let named = backups[0].path.clone();
+    std::fs::remove_file(scratch.path.join("notes.txt")).unwrap();
+    std::fs::hard_link(&hook, scratch.path.join("notes.txt")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(refused, vec![named]);
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), "ORIGINAL");
+}
+
+/// Accepting edits answers a write and not a restore onto a protected landing (MODE-2), so with
+/// nobody behind it the restore is refused; only bypassing answers it.
+#[cfg(unix)]
+#[test]
+fn accepting_edits_does_not_answer_a_restore_onto_a_protected_name() {
+    use bravebot_agent::{Confining, PermissionMode};
+    for (mode, put_back) in [
+        (PermissionMode::AcceptEdits, false),
+        (PermissionMode::Bypass, true),
+    ] {
+        let scratch = Scratch::new(&format!("rewind-protected-mode-{put_back}"));
+        std::fs::create_dir_all(scratch.path.join(".husky")).unwrap();
+        std::fs::write(scratch.path.join(".husky/pre-commit"), "what it held").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let backups =
+            backups_of_a_turn_writing(&workspace, &[(".husky/pre-commit", "the turn's edit")]);
+        let mut nobody = bravebot_agent::confirm::Unattended;
+        let mut confining = Confining::new(&mut nobody, mode, false);
+
+        let refused = restore_asking(&workspace, backups, &mut confining);
+
+        assert_eq!(refused.is_empty(), put_back, "{mode:?}: {refused:?}");
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+            if put_back {
+                "what it held"
+            } else {
+                "the turn's edit"
+            }
+        );
+    }
+}
+
 /// Refusing one path is not refusing the rewind. The files that still resolve inside the
 /// workspace go back, and the one that does not is the only one named.
 #[cfg(unix)]
@@ -10677,6 +10935,7 @@ fn a_rewind_into_a_memory_in_another_case_is_recorded_in_the_state_directory() {
             &trusting,
             &mut None,
             home,
+            &mut bravebot_agent::confirm::ApproveWrites,
         )
     };
 

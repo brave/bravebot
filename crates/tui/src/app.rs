@@ -3081,9 +3081,14 @@ fn event_loop(
                     path.as_deref(),
                 );
             }
-            Action::Undo => held.rewind_steps(1),
-            Action::Rewind(turns) => held.rewind_command(&turns),
-            Action::Hunks(argument) => held.hunks_command(&argument),
+            Action::Undo => {
+                held.asking_about_a_restore(terminal, |held, ask| held.rewind_steps(ask, 1))
+            }
+            Action::Rewind(turns) => {
+                held.asking_about_a_restore(terminal, |held, ask| held.rewind_command(ask, &turns))
+            }
+            Action::Hunks(argument) => held
+                .asking_about_a_restore(terminal, |held, ask| held.hunks_command(ask, &argument)),
             Action::Show => show_transcript(terminal, held.session)?,
             Action::ChooseModel => open_model_picker(held.session, config),
             Action::ChooseTheme => choose_theme(terminal, held.session),
@@ -27182,6 +27187,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
 
@@ -38846,6 +38852,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert_eq!(
@@ -38893,6 +38900,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
 
@@ -39815,6 +39823,7 @@ mod tests {
             &mut stored,
             &workspace,
             servers,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
 
@@ -40273,6 +40282,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
 
@@ -40334,6 +40344,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             2,
         );
 
@@ -40392,6 +40403,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             5,
         );
         assert_eq!(
@@ -40408,6 +40420,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
 
@@ -40487,6 +40500,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert_eq!(
@@ -40504,6 +40518,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             1,
         );
         assert!(paths(&session).is_empty());
@@ -40568,7 +40583,7 @@ mod tests {
             run_settings: &run_settings,
         };
 
-        held.rewind_command("");
+        held.rewind_command(&mut bravebot_agent::confirm::Unattended, "");
         assert_eq!(held.session.turns, 3, "the bare word went back");
         assert!(
             held.session
@@ -40579,7 +40594,7 @@ mod tests {
         );
 
         for refused in ["0", "two", "-1", "1.5"] {
-            held.rewind_command(refused);
+            held.rewind_command(&mut bravebot_agent::confirm::Unattended, refused);
             assert_eq!(held.session.turns, 3, "`/rewind {refused}` went back");
             assert_eq!(
                 held.session.transcript.last().expect("a note").text,
@@ -40590,7 +40605,7 @@ mod tests {
 
         // Past what the session remembers it rewinds nothing and says how far back it does go,
         // not as far as it can, which would leave a tree younger than the person believes.
-        held.rewind_command("4");
+        held.rewind_command(&mut bravebot_agent::confirm::Unattended, "4");
         assert_eq!(
             held.session.turns, 3,
             "`/rewind 4` went back as far as the session could"
@@ -40603,7 +40618,10 @@ mod tests {
 
         // A number too large to fit a `usize` is still a number past what the session
         // remembers, not a non-number: it takes the same path `/rewind 4` just did.
-        held.rewind_command("99999999999999999999");
+        held.rewind_command(
+            &mut bravebot_agent::confirm::Unattended,
+            "99999999999999999999",
+        );
         assert_eq!(
             held.session.turns, 3,
             "`/rewind 99999999999999999999` went back as far as the session could"
@@ -40614,7 +40632,7 @@ mod tests {
             "`/rewind 99999999999999999999` did not say how far back the session goes"
         );
 
-        held.rewind_command("2");
+        held.rewind_command(&mut bravebot_agent::confirm::Unattended, "2");
         assert_eq!(
             held.session.turns, 1,
             "`/rewind 2` did not go back two turns"
@@ -43982,6 +44000,7 @@ mod tests {
             &mut stored,
             &workspace,
             &mut None,
+            &mut bravebot_agent::confirm::Unattended,
             2,
         );
         let record = sessions::load(&root, stored.id()).unwrap();

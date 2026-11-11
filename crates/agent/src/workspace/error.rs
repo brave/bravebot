@@ -67,6 +67,9 @@ pub enum WorkspaceError {
     Denied(Denial),
     /// The path resolved outside the workspace root.
     Escapes { path: String, remedy: Remedy },
+    /// A restore onto a protected path (PERM-9) was not approved, either because the person said
+    /// no or because nobody could be asked. Nothing was written.
+    Protected { path: String },
     /// The path was not usable as a relative workspace path.
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
@@ -245,6 +248,9 @@ impl WorkspaceError {
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")
             }
+            Self::Protected { .. } => format!(
+                "'{named}' is a protected path and the restore was not approved, so nothing was written"
+            ),
             Self::Binary { .. } => {
                 format!("'{named}' is a binary file, so it cannot be read as text")
             }
@@ -306,6 +312,7 @@ impl WorkspaceError {
             | Self::Unreadable { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
+            | Self::Protected { path }
             | Self::Binary { path }
             | Self::NotUtf8 { path }
             | Self::TooLarge { path, .. }

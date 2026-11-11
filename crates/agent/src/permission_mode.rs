@@ -116,9 +116,9 @@ impl PermissionMode {
     pub fn answers_this_run_unasked(self, request: &RunRequest) -> bool {
         match self {
             // Auto answers a run only on the classifier's word, and only a line the sandbox
-            // confines and that did not ask to start without a profile (AUTO-3). The classifier
-            // judges the words of the line and cannot see what its program name resolves to, so
-            // the profile is what holds the line to them.
+            // confines, that did not ask to start without a profile and that has no git stage
+            // (AUTO-3). The classifier judges the words of the line and cannot see what its
+            // program name resolves to, so the profile is what holds the line to them.
             Self::Auto => {
                 request.classified == Classified::Allowed
                     && request.confined.is_some()

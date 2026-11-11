@@ -438,6 +438,13 @@ has not entered its filesystem effect records no write.
 | untrusted | untrusted | no | a rule at that path, effective trust unchanged |
 | either | never mentioned | **yes** | that path takes the data's trust |
 
+A plain `run` line the sandbox holds, in a directory whose yes said confined lines run without asking
+([RUN-5](tools/run.md#RUN-5)), is held to the "untrusted into trusted" row as well: where a word of its
+argument list names a path the map holds untrusted, under any of that path's names, the line is put to a
+person. `cp fetched.md AGENTS.md` is that row. `sh -c`, `python3 -c` and `make` name no path in their
+argument list and are not covered. A line the audited table proves read-only copies nothing and is not
+put to a person for the paths it names; what it prints keeps the label of those paths.
+
 A prompt asks one question and only this one: **may this path stop being trusted?** That is the
 only consequence a later step cannot undo, since a path recorded as untrusted can no longer be
 examined or edited.
@@ -608,6 +615,8 @@ write is shown.
 `verified-by: bravebot_core::policy::an_unvouched_path_prompts_either_way`
 `verified-by: bravebot_core::policy::a_file_written_with_untrusted_data_reads_back_untrusted`
 `verified-by: bravebot_core::policy::a_file_read_back_under_another_spelling_is_still_untrusted`
+`verified-by: bravebot_core::policy::a_held_copy_of_an_untrusted_file_asks_and_the_copy_of_a_trusted_one_does_not`
+`verified-by: bravebot_core::policy::a_held_line_naming_a_path_outside_the_root_with_no_rule_asks`
 
 <a id="TRUST-5"></a>
 ### TRUST-5: reconciliation marks the exact path, never the parent
@@ -724,8 +733,9 @@ who has already decided to vouch for the tree, on a screen that names what a yes
 At startup the user is asked whether they trust the working directory. Yes writes a rule covering
 the tree and, where the answer may be kept ([TRUST-23](#TRUST-23)), keeps it for later sessions.
 The question also says that a command the sandbox confines then runs in the directory without asking
-([RUN-5](tools/run.md#RUN-5)), and a yes to it records that beside the rule, for the directory it was given
-in. The session record keeps it beside the rules (TRUST-6) and a resume in that directory brings it back, from
+([RUN-5](tools/run.md#RUN-5)), unless a word in the command's own argument list names a file the map
+holds untrusted and the audited table does not prove the command read-only, and a yes to it records that beside the rule, for the directory it was given in. The
+session record keeps it beside the rules (TRUST-6) and a resume in that directory brings it back, from
 the same file and on the same footing as the rules: a resume in a directory the checkout has moved to, or
 under another spelling, gets none and asks. A map made any other way (a kept answer written before the question
 said so, a resumed session whose record has none, `--trust-workspace`, a bridge client's yes whose reply did
@@ -755,6 +765,7 @@ every permission says the flag answered, which is what is in force, and never wr
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::ctrl_c_leaves_on_the_second_press`
 `verified-by: bravebot_tui::trust_prompt::one_interrupt_another_program_wrote_closes_nothing`
+`verified-by: bravebot_core::policy::a_held_copy_of_an_untrusted_file_asks_and_the_copy_of_a_trusted_one_does_not`
 `verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
@@ -1010,6 +1021,13 @@ written for it, `/add-dir` does not list it, and it ends when the mode changes.
 Confinement is decided by where an operation lands and not by how its path is spelled, so it holds
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
 refused whether or not there is anything at the other end of it.
+
+Putting old bytes back with a rewind or `/hunks` is confined the same way, and a path that is a
+protected name, lands on one or shares a file with one is put to the person as a write is
+([PERM-9](permissions.md#PERM-9)). Reading the file to work out a hunk stays a read: it is confined
+and is not asked about, and nothing is written until the person has answered.
+
+`verified-by: bravebot_agent::workspace::a_rewind_onto_a_protected_name_is_put_to_the_person`
 
 `write_file`, `download_url` and `apply_checkout` confine the destination before anyone is asked
 about it. Each resolves it as soon as it is read, and one the working directory and the opened
@@ -1605,7 +1623,9 @@ because it need not settle which name is the file's: it asks this map under ever
 has and labels its output from the weakest answer
 ([tools/command-line.md](tools/command-line.md#CMDLINE-8)). That is stronger than the reduction
 wherever the two differ, and it is the form that road can hold, since nothing there has a filesystem
-to settle a name with. One thing stays outside both: the prompt before a write asks under the
+to settle a name with. A plain `run` line the sandbox holds is asked about its argument words the
+same way, before the yes to the startup question lets it run ([RUN-5](tools/run.md#RUN-5)). One
+thing stays outside both: the prompt before a write asks under the
 spelling it was given, since it also matches the rules a person wrote in advance and those are
 matched on the path as written, so it asks where a reduced name would not have.
 
@@ -1641,6 +1661,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
 `verified-by: bravebot_agent::workspace::a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted`
+`verified-by: bravebot_core::policy::a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed`
 `verified-by: bravebot_agent::workspace::files_in_an_added_directory_named_through_a_link_are_labelled_as_a_read_labels_them`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_vouched_directory_reached_through_a_link_holds_its_files`
 
@@ -2077,6 +2098,11 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   with the keying cost every other write has (below). A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
 
+  A line the sandbox holds in a directory whose yes said confined lines run without asking is asked
+  about when a word of its argument list names a path the map holds untrusted ([RUN-5](tools/run.md#RUN-5)),
+  so `cp fetched.md AGENTS.md` is shown first. A line the audited table proves read-only is not, and a line that names no such path in its argument list
+  (`sh -c`, `python3 -c`, `make`) is not.
+
   This is not an oversight and cannot be closed by watching the filesystem: by the time anything
   noticed, the question would be whether to distrust a file the user may have created themselves,
   and asking that on every change would make the map useless. What vouching for a directory means
@@ -2176,7 +2202,10 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   - The operands of a `run` line that is read-proven are asked about under every name the file
     has, as a read is ([CMDLINE-8](command-line.md)): the label is the weakest answer over the
     spelling, the root-relative form and the other names the caller found, and an operand whose
-    lookup did not finish is untrusted. The lookup is of the operand itself. A directory operand
+    lookup did not finish is untrusted. The words of a line the sandbox holds are asked about the
+    same way before the directory's yes answers it ([RUN-5](tools/run.md#RUN-5)), unless the line is
+    read-proven, which is not asked about its words: the answer is the weakest over the same names, and a word whose lookup did
+    not finish makes the line ask. The lookup is of the operand itself. A directory operand
     is looked up as a directory, and a hard link to a file beneath it is not found, so a
     recursive `grep` or `wc` over a directory reaches such a file under the name the directory
     walk gives it. That is a cost in the label of a result and is not tested.
@@ -2185,7 +2214,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
     about, a single file and a hard link pair no rule is about are not, and the test fails with
     the lookup disabled) and `an_operand_is_labelled_by_every_name_the_caller_found_and_fails_closed`
     (crates/core/src/policy.rs: other name under a distrusted rule, unfinished lookup, and an
-    operand left out are each untrusted, with two controls).
+    operand left out are each untrusted, with two controls). The words of a held line are verified
+    by `a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed` and
+    `a_held_recursive_copy_of_a_directory_holding_an_untrusted_file_asks` (crates/core/src/policy.rs).
 - **A refusal reaches a name the volume may hold apart, and a vouch does not lift it.** The round
   trip TRUST-4 closes requires that a file marked untrusted under one spelling is not read back as
   trusted under another, so a refusal is about every canonically equivalent spelling of its name

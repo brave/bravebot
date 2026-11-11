@@ -93,6 +93,8 @@ starts. The mode is not the person, so it does not answer it; where nobody is th
 write is refused ([PROMPT-9](prompting.md#PROMPT-9)). The match is on the path the planner named and
 on the path it lands on once links are followed, so a write through a link to `.git` asks. A file
 with a hard link is matched on each of its other names. The decision reads no byte of the body.
+Putting old bytes back with a rewind or `/hunks` is such a write, and this mode does not answer it
+either; only bypassing does ([SESSION-19](sessions.md#SESSION-19)).
 
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
@@ -117,6 +119,7 @@ mode cannot be what answers it. Bypassing is that statement (MODE-4).
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
+`verified-by: bravebot_agent::workspace::accepting_edits_does_not_answer_a_restore_onto_a_protected_name`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
 `verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`

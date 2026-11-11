@@ -262,7 +262,9 @@ settings and the person's answer and never from what a stage wrote or printed:
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
   with no stage keeping the network ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
   on a platform that holds the protected names back from every stage, which is macOS and not Linux or Windows
-  ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
+  ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back
+  (the auto mode's classifier is kept from a line with such a stage as well, on every platform,
+  [AUTO-3](../auto-mode.md#AUTO-3));
 - nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
@@ -274,7 +276,23 @@ settings and the person's answer and never from what a stage wrote or printed:
   since a file name may hold a space or any character a word is cut at, and as the words in it, read with the
   quoting a shell applies and with an option's value after its `=`, so `sh "run script.sh"`, `sh -c "./gen.sh a"`,
   `sh -c "'run script.sh'"` and `node --require=./hook.js` name the file they run. A stage could have
-  written it, and under this answer the line that runs it would not ask.
+  written it, and under this answer the line that runs it would not ask;
+- no word of any stage's argument list, nor the part after the first `=` of a word (the value of
+  `--reference=file`, and the path of `if=file` or `of=file` in `dd if=fetched.md of=AGENTS.md`), names a
+  path the trust map holds untrusted ([TRUST-4](../trust-map.md#TRUST-4)), unless the audited table proves the whole line
+  read-only ([RUN-4](#RUN-4)): a line that copies nothing is not asked about the paths it reads, and what it prints
+  keeps the label of those paths. Every other line is asked, including one with a redirection, an environment
+  assignment, a renamed program or a program the table does not list. Every word is asked the way the proof road asks
+  about a path it reads ([command-line.md](command-line.md#CMDLINE-8)): under each name the path has,
+  the weakest answer deciding, a word that climbs out of the root with `..` counting as untrusted, and
+  a word whose names could not all be found counting as untrusted. A word the map says nothing about,
+  such as a path outside the root with no rule, counts as untrusted, as it does for a read
+  ([TRUST-4](../trust-map.md#TRUST-4)), and a directory word counts as untrusted when any path beneath
+  it is. The words are read from the compiled plan, where a glob has already been replaced by the names it
+  matched ([CMDLINE-4](command-line.md#CMDLINE-4)), so `cp fetched-*.md AGENTS.md` is asked about for
+  each name the pattern matched. This reads the line's own words, the map and
+  the file system's names for those words, and no byte of any file. A line that fails it falls through to
+  a vouched entry and a remembered line, which a person gave for that exact line, and otherwise asks.
 
 A line this answer lets through starts with the network closed for that line, whatever the session's
 setting: the answer was given about a line the sandbox holds, and a stage with the network open is not held
@@ -307,6 +325,11 @@ quoting and not expanded, so a name written with `$'...'`, a variable, a glob or
 or an option's value that holds an `=` and is followed by another `=`, is not found, and the file runs
 unasked under the same sandbox.
 
+A program that names no path in its argument list does not meet the condition on untrusted paths: `sh -c`
+and `python3 -c` take a string they read as a line, and `make` reads a file of its own. A path inside such a
+string, or a file such a program opens by itself, is not looked up. An untrusted file copied by one of them
+into a trusted one is written unasked.
+
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
 remembered line hold the program, its arguments and a tree, and not what the line was lent.
@@ -335,6 +358,17 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_line_run_on_the_trust_of_its_directory_prints_untrusted_output`
 `verified-by: bravebot_core::policy::a_held_line_that_asks_for_more_than_a_plain_line_still_asks`
 `verified-by: bravebot_core::policy::an_ask_rule_still_asks_about_a_held_line`
+`verified-by: bravebot_core::policy::a_held_copy_of_an_untrusted_file_asks_and_the_copy_of_a_trusted_one_does_not`
+`verified-by: bravebot_core::policy::a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed`
+`verified-by: bravebot_core::policy::a_vouched_held_copy_of_an_untrusted_file_runs_and_is_not_credited_to_the_directory`
+`verified-by: bravebot_agent::confined_lines::a_held_copy_of_an_untrusted_file_into_an_instruction_file_is_asked_about`
+`verified-by: bravebot_agent::confined_lines::a_refused_held_copy_leaves_the_map_and_the_next_turns_instructions_as_they_were`
+`verified-by: bravebot_core::policy::a_held_recursive_copy_of_a_directory_holding_an_untrusted_file_asks`
+`verified-by: bravebot_core::policy::a_held_line_naming_a_path_outside_the_root_with_no_rule_asks`
+`verified-by: bravebot_core::policy::a_held_line_the_table_proves_read_only_is_not_asked_about_the_paths_it_reads`
+`verified-by: bravebot_agent::confined_lines::a_held_audited_read_of_an_unruled_outside_path_runs_unasked_and_a_line_that_writes_asks`
+`verified-by: bravebot_core::policy::a_held_key_equals_path_operand_is_asked_about_as_the_path_it_names`
+`verified-by: bravebot_core::policy::a_held_line_is_asked_about_the_names_a_pattern_expanded_to`
 `verified-by: bravebot_core::policy::the_answer_does_not_follow_a_move_and_does_not_outlive_the_trust`
 `verified-by: bravebot_core::policy::a_held_line_asks_when_no_root_is_known`
 `verified-by: bravebot_core::trust::a_map_allows_confined_lines_only_after_a_yes_that_said_so`

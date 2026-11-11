@@ -76350,6 +76350,26 @@ fn a_run_turn_scanning_with_work(
     String,
     bravebot_agent::Work,
 ) {
+    a_run_turn_scanning_asking(
+        workspace,
+        command,
+        programs,
+        &mut bravebot_agent::confirm::ApproveRuns,
+    )
+}
+
+/// The same, with `confirmer` answering what the turn asks.
+fn a_run_turn_scanning_asking<C: bravebot_agent::confirm::Confirmer + Send>(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+) -> (
+    Scratch,
+    bravebot_agent::report::RecordingReporter,
+    String,
+    bravebot_agent::Work,
+) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
@@ -76372,7 +76392,7 @@ fn a_run_turn_scanning_with_work(
         workspace,
         &Task::new("back the file up before changing it").with_home(Some(home.path.clone())),
         &mut bravebot_agent::Conversation::new(),
-        &mut bravebot_agent::confirm::ApproveRuns,
+        confirmer,
         &mut reporter,
         &mut sink,
         trusting_the_workspace(),
@@ -76559,6 +76579,57 @@ fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_works
         answered.contains("d/credentials could not be put back"),
         "the planner was not told the destination did not go back: {answered}"
     );
+}
+
+/// Putting a destination back is a write to wherever it lands. A destination the line wrote
+/// through a link to a protected name is put to the confirmer before the old bytes go back into
+/// it (PERM-9), and where the confirmer refuses it is named as not put back.
+#[cfg(unix)]
+#[test]
+fn a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confirmer() {
+    let back = "kept";
+    for approved in [false, true] {
+        let scratch = Scratch::new(&format!("credential-run-protected-{approved}"));
+        let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+        std::fs::write(scratch.path.join(".env"), &env).unwrap();
+        std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+        std::fs::write(scratch.path.join(".git/hooks/pre-commit"), back).unwrap();
+        std::os::unix::fs::symlink(".git/hooks/pre-commit", scratch.path.join("notes.txt"))
+            .unwrap();
+        let programs = vouching_for("cat", &[".env"], &scratch.path);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut confirmer = match approved {
+            true => RecordingConfirmer::approving(),
+            false => RecordingConfirmer::rejecting(),
+        }
+        .and_approving_runs();
+
+        let (_home, _reporter, answered, _work) = a_run_turn_scanning_asking(
+            &workspace,
+            "cat .env > notes.txt",
+            programs,
+            &mut confirmer,
+        );
+
+        let asked: Vec<_> = confirmer
+            .seen
+            .iter()
+            .filter(|request| request.protected)
+            .map(|request| request.path.clone())
+            .collect();
+        assert!(
+            !asked.is_empty(),
+            "nothing protected was put to the confirmer (approved: {approved}): {answered}"
+        );
+        let hook = std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap();
+        match approved {
+            true => assert_eq!(hook, back, "an approved put-back did not restore the hook"),
+            false => assert!(
+                answered.contains("could not be put back"),
+                "a refused put-back was not reported: {answered}"
+            ),
+        }
+    }
 }
 
 /// A redirection is confined where it lands when it is opened, and not only when its line is
@@ -79239,6 +79310,10 @@ struct AutoRun {
     /// What the file it made holds, where it made one.
     #[cfg(target_os = "macos")]
     made_text: Option<String>,
+    /// What `.git/config` holds after the turn, where the directory is a repository.
+    git_config: Option<String>,
+    /// Whether a file named `git-out.txt` exists after the turn.
+    wrote_git_out: bool,
     /// The requests that were the planner's own rounds, in order.
     #[cfg(target_os = "macos")]
     rounds: Vec<String>,
@@ -79265,6 +79340,18 @@ fn an_auto_run_calling(
     input: &str,
     with_profile: bool,
 ) -> AutoRun {
+    an_auto_run_after(mode, said, before, input, with_profile, |_| {})
+}
+
+/// [`an_auto_run_calling`] in a directory `prepare` has been given before the session opens on it.
+fn an_auto_run_after(
+    mode: bravebot_agent::PermissionMode,
+    said: &str,
+    before: &[&str],
+    input: &str,
+    with_profile: bool,
+    prepare: impl FnOnce(&std::path::Path),
+) -> AutoRun {
     // A name of its own for each run: tests run side by side and a scratch directory is named by
     // the process and this, so a shared name would have one run delete another's files.
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -79273,6 +79360,7 @@ fn an_auto_run_calling(
         RUNS.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
+    prepare(&scratch.path);
     // One word for each call the classifier could be put, so a call wrongly put to it is answered
     // rather than left to fail for want of a reply.
     let words = (0..=before.len()).map(|_| reply_with(said)).collect();
@@ -79351,6 +79439,8 @@ fn an_auto_run_served(
         asked,
         trail,
         made_it: scratch.path.join("made.txt").exists(),
+        git_config: std::fs::read_to_string(scratch.path.join(".git").join("config")).ok(),
+        wrote_git_out: scratch.path.join("git-out.txt").exists(),
         #[cfg(target_os = "macos")]
         made_text: std::fs::read_to_string(scratch.path.join("made.txt")).ok(),
         #[cfg(target_os = "macos")]
@@ -79565,6 +79655,158 @@ fn a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classif
         );
         assert_eq!(run.asked, 1, "{what}: the person was not asked");
         assert!(!run.made_it, "{what}: ran on the classifier's word");
+    }
+}
+
+/// AUTO-3, SANDBOX-18 (#3911): a line with a git stage is not put to the classifier, wherever the
+/// stage is in the line, and goes to the person. The profile of a git stage lifts the `.git`
+/// hold-back, so `git config core.fsmonitor ...` writes the repository's configuration, which
+/// runs a program the next time anybody runs git there with no profile around it; the classifier
+/// is shown the words of the line and not what they do, and its word must not be the only thing
+/// between that and the repository. Each line is one the classifier would allow and the sandbox
+/// confines. The control, `touch made.txt` in the same repository, is still put to the classifier
+/// and runs on its word, so the test cannot pass by the classifier never being consulted.
+///
+/// The regressions it rejects: a gate that does not look at the stages' programs, and a gate that
+/// reads the first stage alone.
+#[test]
+fn a_line_with_a_git_stage_is_not_put_to_the_classifier_and_goes_to_the_person() {
+    use bravebot_agent::PermissionMode;
+    if bravebot_sandbox::base::Prelude::current().is_none() {
+        // No sandbox to confine the line, so the classifier is not consulted for any other reason
+        // and the test would pass against the regression.
+        return;
+    }
+    let in_a_repository = |dir: &std::path::Path| {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(["init", "-q"])
+            .output()
+            .expect("git starts");
+        assert!(output.status.success(), "git init failed");
+    };
+
+    let control = an_auto_run_after(
+        PermissionMode::Auto,
+        "allow",
+        &[],
+        r#"{"command":"touch made.txt"}"#,
+        false,
+        in_a_repository,
+    );
+    assert_eq!(control.classifier.len(), 1, "{:?}", control.trail);
+    assert_eq!(control.asked, 0, "{:?}", control.trail);
+    assert!(control.made_it, "{:?}", control.trail);
+
+    for (what, command) in [
+        (
+            "a git stage alone",
+            "git config core.fsmonitor 'touch b2-never' > git-out.txt 2>&1",
+        ),
+        (
+            "a git stage after another",
+            "echo x | git config core.fsmonitor 'touch b2-never'",
+        ),
+        (
+            "a git stage before another",
+            "git config core.fsmonitor 'touch b2-never' 2>&1 | cat",
+        ),
+        (
+            "a git stage between two others",
+            "echo x | git config core.fsmonitor 'touch b2-never' | cat",
+        ),
+        (
+            "a git stage that writes an object",
+            "git hash-object -w page.txt",
+        ),
+        ("git pull", "git pull origin main"),
+        ("git checkout", "git checkout -b other"),
+        ("git merge", "git merge other"),
+        ("git apply", "echo x | git apply -"),
+    ] {
+        let run = an_auto_run_after(
+            PermissionMode::Auto,
+            "allow",
+            &[],
+            &json!({ "command": command }).to_string(),
+            false,
+            in_a_repository,
+        );
+        assert!(
+            run.classifier.is_empty(),
+            "{what}: the classifier was put the line: {:?}",
+            run.classifier
+        );
+        assert_eq!(run.asked, 1, "{what}: the person was not asked");
+        assert!(
+            !run.trail
+                .iter()
+                .any(|entry| entry == "answered by auto mode, nobody was asked"),
+            "{what}: {:?}",
+            run.trail
+        );
+        assert!(
+            !run.trail
+                .iter()
+                .any(|entry| entry.starts_with("the classifier ")),
+            "{what}: {:?}",
+            run.trail
+        );
+        // The person's refusal is the end of it: the line did not run, so the repository's
+        // configuration holds no program for git to start and the redirection did not write.
+        let config = run
+            .git_config
+            .as_deref()
+            .unwrap_or_else(|| panic!("{what}: .git/config is gone"));
+        assert!(!config.contains("fsmonitor"), "{what}: {config}");
+        assert!(!run.wrote_git_out, "{what}: the line ran");
+    }
+}
+
+/// AUTO-3, SANDBOX-18 (#3911): a stage is git by the file its program resolved to and not by a word
+/// in the line, so a line that reaches git through `sh -c`, and a file named `git` that the session
+/// wrote, are put to the classifier as any other confined line is. On macOS the sandbox holds the
+/// `.git` hold-back for both, so the repository's configuration is unchanged. The regressions it
+/// rejects: a gate that searches the line's words for `git`, and one that takes the name of a
+/// program for the file it resolved to.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_is_git_by_its_file_and_not_by_a_word_in_the_line() {
+    use bravebot_agent::PermissionMode;
+    use std::os::unix::fs::PermissionsExt;
+    if bravebot_sandbox::base::Prelude::current().is_none() {
+        return;
+    }
+    let in_a_repository_with_a_git_of_its_own = |dir: &std::path::Path| {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(["init", "-q"])
+            .output()
+            .expect("git starts");
+        assert!(output.status.success(), "git init failed");
+        let planted = dir.join("git");
+        std::fs::write(&planted, "#!/bin/sh\ntouch made.txt\n").unwrap();
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    for (what, command) in [
+        (
+            "git named inside sh -c",
+            "sh -c \"git config core.fsmonitor 'touch b2-never'\"",
+        ),
+        ("a file named git the session wrote", "./git status"),
+    ] {
+        let run = an_auto_run_after(
+            PermissionMode::Auto,
+            "allow",
+            &[],
+            &json!({ "command": command }).to_string(),
+            false,
+            in_a_repository_with_a_git_of_its_own,
+        );
+        assert_eq!(run.classifier.len(), 1, "{what}: {:?}", run.trail);
+        assert_eq!(run.asked, 0, "{what}: {:?}", run.trail);
+        let config = run.git_config.as_deref().expect(".git/config");
+        assert!(!config.contains("fsmonitor"), "{what}: {config}");
     }
 }
 
@@ -92679,6 +92921,7 @@ fn a_save_is_undone_by_undo() {
         &target,
         &mut None,
         Some(&home),
+        &mut bravebot_agent::confirm::Unattended,
     );
     assert!(refused.is_empty(), "{refused:?}");
     assert!(!fact.exists(), "undo left the fact it made");
