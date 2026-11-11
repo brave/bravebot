@@ -1069,27 +1069,22 @@ fn a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses() {
     assert_eq!(printed, "hello");
 }
 
-/// A stage started with an environment that names only `SystemRoot` and one more variable, the
-/// shape that failed with error 203 when the job probes were started that way. The regression it
-/// rejects: an environment block the platform does not accept (a block out of order, or without
-/// its final terminator), which fails the start instead of reaching the program. The variable
-/// the program prints is the one the block named, so a block that was dropped and replaced by the
-/// inherited environment is rejected as well.
+/// A stage started with a named environment prints the variable it was given wherever it starts.
+/// The regression it rejects: a block that is dropped and replaced by the inherited environment,
+/// which starts the program and prints nothing for the variable.
+///
+/// Whether a start succeeds is not asserted. The platform refuses a start with only `SystemRoot`
+/// and one more variable with `SpawnFailed` and OS error 203 ("The system could not find the
+/// environment option that was entered"), and which variable it looks for is not established
+/// (Known costs in the sandboxing spec). The test starts the program with five environments, each
+/// naming more than the one before, and prints the outcome of each, so the log shows which of
+/// them the platform refuses. An environment that does start the program must print the variable.
 ///
 /// The program is `cmd.exe /c set BRAVEBOT_NAMED`, which prints `BRAVEBOT_NAMED=named`. The line
 /// holds no `%`: the backend refuses a `cmd.exe` argument holding one, because `cmd.exe` reads it
-/// as its own syntax (SANDBOX-4), and `echo %BRAVEBOT_NAMED%` was refused that way in run
-/// 42972425516 before any process started.
-///
-/// In run 42978585691 the start of that program with only `SystemRoot` and `BRAVEBOT_NAMED`
-/// failed with `SpawnFailed` and OS error 203 ("The system could not find the environment option
-/// that was entered"), and the log does not show which variable the platform looked for. So the
-/// test starts the program with four environments, each naming more than the one before, and
-/// prints the outcome of each before it asserts anything. Each environment is asserted: every one
-/// must start the program and print the variable, and the failure message lists the outcome of all
-/// four, so a run shows which of them the platform refuses.
+/// as its own syntax (SANDBOX-4).
 #[test]
-fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable() {
+fn a_stage_that_starts_with_a_named_environment_prints_the_variable_it_was_given() {
     let sandbox = sandbox();
     let policy = the_base("named-environment");
     let system_root = std::path::PathBuf::from(
@@ -1119,12 +1114,37 @@ fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable
                 .with("TEMP", temporary.clone())
                 .with("TMP", temporary.clone())
                 .with("PATH", system_root.join("System32"))
-                .with("ComSpec", shell),
+                .with("ComSpec", shell.clone()),
+        ),
+        (
+            "plus windir, TEMP, TMP, PATH, ComSpec and the profile and machine variables",
+            [
+                "USERPROFILE",
+                "LOCALAPPDATA",
+                "APPDATA",
+                "ProgramData",
+                "SystemDrive",
+                "ProgramFiles",
+                "ProgramFiles(x86)",
+                "ProgramW6432",
+                "PROCESSOR_ARCHITECTURE",
+                "NUMBER_OF_PROCESSORS",
+                "OS",
+            ]
+            .into_iter()
+            .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+            .fold(
+                named()
+                    .with("windir", system_root.clone())
+                    .with("TEMP", temporary.clone())
+                    .with("TMP", temporary.clone())
+                    .with("PATH", system_root.join("System32"))
+                    .with("ComSpec", shell),
+                |held, (name, value)| held.with(name, value),
+            ),
         ),
     ];
 
-    let mut outcomes = Vec::new();
-    let mut refused = Vec::new();
     for (label, variables) in environments {
         let outcome = run_with(
             &sandbox,
@@ -1133,23 +1153,15 @@ fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable
             &policy,
             Environment::Only(variables),
         );
-        let line = format!("named-environment {label}: {outcome:?}");
-        eprintln!("{line}");
-        let started = matches!(
-            &outcome,
-            Ok((Some(0), printed)) if printed.trim_end_matches('"') == "BRAVEBOT_NAMED=named"
-        );
-        if !started {
-            refused.push(label);
+        eprintln!("named-environment {label}: {outcome:?}");
+        if let Ok((_, printed)) = &outcome {
+            assert_eq!(
+                printed.trim_end_matches('"'),
+                "BRAVEBOT_NAMED=named",
+                "{label}: the program started and did not print the variable"
+            );
         }
-        outcomes.push(line);
     }
-
-    assert!(
-        refused.is_empty(),
-        "these environments did not start the program and print the variable: {refused:?}\n{}",
-        outcomes.join("\n")
-    );
 }
 
 /// The line the next two tests hand `cmd.exe`: it starts a second `cmd.exe`, which is a program
@@ -1199,9 +1211,8 @@ fn a_stage_starts_a_child_where_its_policy_allows_subprocesses() {
 }
 
 /// The name this binary is copied to when it is started again inside a stage to run one of the
-/// probes below. The stage is started with this process's environment. Starting it with only a
-/// named `SystemRoot` and one more variable failed on the Windows runner with error 203, and why
-/// is not known (#3883).
+/// probes below. The stage is started with this process's environment, since a start with only a
+/// named `SystemRoot` and one more variable is refused with error 203 (#3883).
 const PROBE_FILE: &str = "bravebot-job-probe.exe";
 
 /// The word a probe prints before what it found, so the test that started it picks the line out of

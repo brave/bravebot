@@ -577,7 +577,6 @@ directory too.
 `verified-by: bravebot_sandbox::windows::named_variables_are_written_as_a_sorted_block_of_those_alone`
 `verified-by: bravebot_sandbox::windows::an_empty_environment_is_an_empty_block_and_an_inherited_one_is_none`
 `verified-by: bravebot_sandbox::windows::a_variable_the_platform_would_misread_is_refused`
-`verified-by: bravebot_sandbox::windows::a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable`
 `verified-by: bravebot_sandbox::macos::a_confined_process_starts_in_the_directory_its_policy_names`
 `verified-by: bravebot_sandbox::linux::a_confined_process_starts_in_the_directory_its_policy_names`
 `verified-by: bravebot_cli::running::a_program_of_the_same_user_cannot_read_the_environment_bravebot_was_started_with`
@@ -5941,40 +5940,19 @@ reported as what it is.
   in a job. The five tests above and that one passed in the `Sandbox on Windows` job of CI run
   42972425516 (job 130363809021), which printed `this process is in a job: true`: the test process
   was in a job there, so those stages were created in a job of their own.
-- The `Sandbox on Windows` job of CI, on the branch of PR 3886 at `0d87ef50f` (run 42856028633,
-  job 129969265030), showed two facts about a Windows stage, each from a failing test and not from
-  a passing one. A stage with write access to a directory was refused `mklink /J` there
-  ("Access is denied"), so a junction made by a stage by that route has not been seen to exist.
-  The test now also tries a program in the stage calling `DeviceIoControl` with
-  `FSCTL_SET_REPARSE_POINT`. Run 42972425516 (job 130363809021) ran that route and it was refused
-  with `Access is denied. (os error 5)`, so whether a grant crosses a
-  junction a stage made is still not observed. A program started with an environment naming only some variables
-  failed to start with error 203 ("The system could not find the environment option that was
-  entered") in the two job-probe tests; why is not known, and those tests start the probe with
-  the inherited environment. The agent's own start of a stage names its environment
-  (`Environment::Only`), and the stage tests of `bravebot-agent --test confine` that start through it
-  passed in the run of main above, so a named environment is not refused as such. Which variable or
-  ordering of the probe's two made the difference is not known.
-  `a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable` starts a stage
-  with a named `SystemRoot` and one other variable. It failed in run 42972425516 (job
-  130363809021) with `SetupFailed { mechanism: "appcontainer", detail: "`cmd.exe` reads its
-  command line by rules of its own, and it reads '%' in an argument as its own syntax ... refusing
-  rather than starting it" }`. The start was refused by [SANDBOX-4](#SANDBOX-4) before any process
-  ran, because the test's line was `echo %BRAVEBOT_NAMED%`, so that run does not show whether the
-  named-environment shape starts. The test then ran `cmd.exe /c set BRAVEBOT_NAMED`, which holds no
-  `%`, and expects `BRAVEBOT_NAMED=named`. In run 42978585691 that start failed with `SpawnFailed(Os
-  { code: 203, kind: Uncategorized, message: "The system could not find the environment option that
-  was entered." })` (panic at `crates\sandbox\tests\windows.rs:1084`, 28 tests passed and this one
-  failed). The same run passed the stage tests that inherit the environment and printed the same
-  junction, `profiles of holder`, `this process is in a job: true` and loopback lines as run
-  42972425516, so the only start that failed was the one naming `SystemRoot` and `BRAVEBOT_NAMED`
-  alone. The log does not say which variable the platform looked for, and whether the cause is the
-  block the backend writes or a variable `cmd.exe` needs is not established. No product code was
-  changed for it. The test now starts the same program with four environments, the first being
-  `SystemRoot` and `BRAVEBOT_NAMED` alone and each later one adding `windir`, then `TEMP` and `TMP`,
-  then `PATH` and `ComSpec`. It prints the outcome of each and fails, listing all four, if any does
-  not print `BRAVEBOT_NAMED=named`, so the next run on Windows shows which of them the platform
-  refuses.
+- A stage started with a named environment of `SystemRoot` and one more variable fails to start
+  with `SpawnFailed` and OS error 203 ("The system could not find the environment option that was
+  entered") on the Windows runner. The platform does not say which variable it looked for, and
+  whether the cause is the block the backend writes or a variable `cmd.exe` needs is not
+  established. The agent's own start of a stage names its environment (`Environment::Only`), and the
+  stage tests of `bravebot-agent --test confine` that start through it pass, so a named environment
+  is not refused as such. `a_stage_that_starts_with_a_named_environment_prints_the_variable_it_was_given`
+  starts `cmd.exe /c set BRAVEBOT_NAMED` with five environments, each naming more than the one
+  before (`SystemRoot` and `BRAVEBOT_NAMED` alone, then adding `windir`, then `TEMP` and `TMP`, then
+  `PATH` and `ComSpec`, then the profile and machine variables), and prints the outcome of each. It
+  asserts only that a start which succeeds prints `BRAVEBOT_NAMED=named`, so it is not listed as
+  verifying [SANDBOX-8](#SANDBOX-8). The job-probe tests start their probe with the inherited
+  environment for the same reason.
 - The output of a `cmd.exe` line that starts a second `cmd.exe` ended with a closing quote on the
   Windows runner (`child-ran"`). The tests that start a child compare the output with that quote
   removed. Whether the quote comes from `cmd.exe` reading its `/c` line or from the line the backend
