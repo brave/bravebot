@@ -32,4 +32,5 @@ serde_json = { workspace = true }
 rustix = { workspace = true, features = ["fs", "process"] }
 
 [dev-dependencies]
+bravebot-aichat = { path = "../aichat", features = ["fake-embeddings"] }
 tempfile = { workspace = true }

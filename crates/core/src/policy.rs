@@ -3599,6 +3599,63 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record what one retrieval sent in place of the messages its cut stopped sending.
+    ///
+    /// Counts and nothing else, as [`Policy::record_compaction`] writes: the excerpts themselves
+    /// are already in the record, and the trail carries no content.
+    pub fn record_retrieval(
+        &mut self,
+        round: usize,
+        sent: usize,
+        considered: usize,
+        tokens: u64,
+        passed: usize,
+        latency_ms: u64,
+    ) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: {sent} excerpt(s) of {considered} chunk(s) sent, about {tokens} \
+                 tokens, {passed} message(s) no longer sent, the query took {latency_ms} ms"
+            ),
+        );
+    }
+
+    /// Record that a round could not retrieve, and so compacts instead.
+    ///
+    /// `why` is one of the driver's own fixed words for the failure, never anything a service
+    /// replied, so the trail carries no content.
+    pub fn record_retrieval_fallback(&mut self, round: usize, why: &'static str) {
+        self.allow(
+            "retrieve",
+            format!("round {round}: could not retrieve ({why}), so the conversation is summarised"),
+        );
+    }
+
+    /// Record that a round within its budget could not find excerpts for its prompt, and goes on
+    /// without them. Nothing is summarised: the request fits.
+    pub fn record_retrieval_skipped(&mut self, round: usize, why: &'static str) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: could not retrieve ({why}), so the prompt goes without excerpts"
+            ),
+        );
+    }
+
+    /// Record that a round over its budget moved the retrieval cut without excerpts because the
+    /// vectors are still being built, rather than summarising. `passed` is how many messages the
+    /// cut moved past. A later round finds the excerpts once the vectors are ready.
+    pub fn record_retrieval_deferred(&mut self, round: usize, passed: usize) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: the index is still being built, so {passed} earlier message(s) \
+                 are left out without excerpts until it is"
+            ),
+        );
+    }
+
     /// Record a reply the output ceiling stopped: what it was part way through, and what the
     /// turn did about it.
     ///

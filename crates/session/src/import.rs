@@ -204,6 +204,9 @@ fn record_of(project: &Path, found: &Found) -> Record {
             asked_to_write: false,
             plan_mode_told: false,
             holds: "private".to_string(),
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
         },
         // Where one turn ended and the next began is not something these files say (SESSION-25).
         history: None,

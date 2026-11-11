@@ -1771,6 +1771,94 @@ impl Destination {
         names.len() != before
     }
 
+    /// Set `retrieval.enabled`, making the block where there is none, and say whether it went in.
+    ///
+    /// Not where `retrieval` is something other than a block: the settings reader ignores it, and
+    /// replacing it would lose what the person wrote. A `null` says nothing to lose, and is
+    /// replaced. Every other key in the block is kept.
+    pub fn set_retrieval(&mut self, enabled: bool) -> bool {
+        let value = self
+            .root
+            .0
+            .entry("retrieval")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if value.is_null() {
+            *value = Value::Object(Map::new());
+        }
+        match value {
+            Value::Object(block) => {
+                block.insert("enabled".to_string(), Value::Bool(enabled));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Select `service` under `retrieval.embeddings`, making the blocks where there are none, and
+    /// say whether it went in. What was kept for every service is left as it is (RETRIEVE-33).
+    pub fn select_embeddings(&mut self, service: crate::embeddings::Service) -> bool {
+        self.embeddings_block(None)
+            .map(|block| {
+                block.insert(
+                    "selected".to_string(),
+                    Value::String(service.word().to_string()),
+                );
+            })
+            .is_some()
+    }
+
+    /// Keep `value` as `field` of `service` under `retrieval.embeddings`, or remove the field where
+    /// `value` is `None`, and say whether the file now says so.
+    ///
+    /// Not where `retrieval`, `embeddings` or the service's block is something other than a block,
+    /// for the reason [`Self::set_retrieval`] gives.
+    pub fn keep_embeddings(
+        &mut self,
+        service: crate::embeddings::Service,
+        field: &str,
+        value: Option<Value>,
+    ) -> bool {
+        let Some(block) = self.embeddings_block(Some(service)) else {
+            return false;
+        };
+        match value {
+            Some(value) => {
+                block.insert(field.to_string(), value);
+            }
+            None => {
+                block.remove(field);
+            }
+        }
+        true
+    }
+
+    /// `retrieval.embeddings`, or the block of `service` under it, made where absent or `null`.
+    fn embeddings_block(
+        &mut self,
+        service: Option<crate::embeddings::Service>,
+    ) -> Option<&mut Map<String, Value>> {
+        fn block<'a>(
+            under: &'a mut Map<String, Value>,
+            key: &str,
+        ) -> Option<&'a mut Map<String, Value>> {
+            let value = under
+                .entry(key)
+                .or_insert_with(|| Value::Object(Map::new()));
+            if value.is_null() {
+                *value = Value::Object(Map::new());
+            }
+            value.as_object_mut()
+        }
+        let embeddings = block(
+            block(&mut self.root.0, "retrieval")?,
+            crate::embeddings::BLOCK,
+        )?;
+        match service {
+            Some(service) => block(embeddings, service.word()),
+            None => Some(embeddings),
+        }
+    }
+
     /// The whole file as it would be written.
     ///
     /// A [`Secret`], because it holds whatever key the person approved keeping in it.
@@ -3353,6 +3441,118 @@ mod tests {
         let text = absent.text().expect("small");
         let written: Value = serde_json::from_str(text.expose()).expect("json");
         assert_eq!(written, serde_json::json!({"provider": {"openai": {}}}));
+    }
+
+    /// RETRIEVE-24: the switch is written into the person's own settings file, so turning it on
+    /// must leave the rest of that file, and the rest of its `retrieval` block, as it was.
+    #[test]
+    fn a_destination_sets_retrieval_and_keeps_the_rest_of_the_file() {
+        let home = Scratch::new("destination-retrieval");
+        let path = home.path.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"model": "m", "retrieval": {"enabled": false, "note": "kept"}}"#,
+        )
+        .expect("settings");
+        let mut destination = Destination::open(&path).expect("a document");
+        assert!(destination.set_retrieval(true));
+        let written: Value =
+            serde_json::from_str(destination.text().expect("text").expose()).expect("json");
+        assert_eq!(written["model"], "m");
+        assert_eq!(
+            written["retrieval"],
+            serde_json::json!({"enabled": true, "note": "kept"})
+        );
+
+        let mut absent = Destination::open(&home.path.join("absent.json")).expect("empty");
+        assert!(absent.set_retrieval(false));
+        let written: Value =
+            serde_json::from_str(absent.text().expect("text").expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({"retrieval": {"enabled": false}})
+        );
+
+        for (name, text) in [
+            ("bare", r#"{"retrieval": true}"#),
+            ("list", r#"{"retrieval": []}"#),
+        ] {
+            let path = home.path.join(format!("{name}.json"));
+            std::fs::write(&path, text).expect("settings");
+            let mut destination = Destination::open(&path).expect("a document");
+            assert!(!destination.set_retrieval(true), "{text}");
+        }
+        let path = home.path.join("null.json");
+        std::fs::write(&path, r#"{"retrieval": null}"#).expect("settings");
+        let mut destination = Destination::open(&path).expect("a document");
+        assert!(destination.set_retrieval(true));
+    }
+
+    /// RETRIEVE-33: selecting another service keeps what was written for the one before it, and a
+    /// block that is not one is left alone.
+    #[test]
+    fn a_destination_selects_an_embeddings_service_and_keeps_each_ones_values() {
+        use crate::embeddings::Service;
+        let home = Scratch::new("destination-embeddings");
+        let mut destination = Destination::open(&home.path.join("settings.json")).expect("empty");
+        assert!(destination.set_retrieval(true));
+        assert!(destination.keep_embeddings(
+            Service::OpenRouter,
+            "model",
+            Some(Value::from("cohere/embed-5-fast"))
+        ));
+        assert!(destination.select_embeddings(Service::OpenRouter));
+        assert!(destination.keep_embeddings(
+            Service::Custom,
+            "url",
+            Some(Value::from("https://e.example/v1/embeddings"))
+        ));
+        assert!(destination.select_embeddings(Service::Custom));
+        assert!(destination.keep_embeddings(Service::Custom, "url", None));
+        let written: Value =
+            serde_json::from_str(destination.text().expect("text").expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({"retrieval": {"enabled": true, "embeddings": {
+                "openrouter": {"model": "cohere/embed-5-fast"},
+                "selected": "custom",
+                "custom": {}
+            }}})
+        );
+
+        for (name, text, selects) in [
+            ("bare", r#"{"retrieval": {"embeddings": "openai"}}"#, false),
+            ("switch", r#"{"retrieval": true}"#, false),
+            (
+                "service",
+                r#"{"retrieval": {"embeddings": {"openai": []}}}"#,
+                true,
+            ),
+        ] {
+            let path = home.path.join(format!("{name}.json"));
+            std::fs::write(&path, text).expect("settings");
+            let mut destination = Destination::open(&path).expect("a document");
+            assert!(
+                !destination.keep_embeddings(Service::OpenAi, "model", Some(Value::from("m"))),
+                "{text}"
+            );
+            assert_eq!(
+                destination.select_embeddings(Service::OpenAi),
+                selects,
+                "{text}"
+            );
+        }
+
+        let path = home.path.join("null.json");
+        std::fs::write(&path, r#"{"retrieval": {"embeddings": null}}"#).expect("settings");
+        let mut destination = Destination::open(&path).expect("a document");
+        assert!(destination.select_embeddings(Service::Brave));
+        let written: Value =
+            serde_json::from_str(destination.text().expect("text").expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({"retrieval": {"embeddings": {"selected": "brave"}}})
+        );
     }
 
     /// SERVERS-2: a request goes in once, beside what the file already requests, and comes out

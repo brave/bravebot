@@ -174,6 +174,35 @@ pub fn store_brave_key(directory: &Path, key: &Secret) -> std::io::Result<()> {
     written
 }
 
+/// Write `key` as the custom embeddings endpoint's key in `directory`, as [`store_brave_key`]
+/// writes Brave's, or remove the one there for `None`.
+pub fn store_embeddings_key(directory: &Path, key: Option<&Secret>) -> std::io::Result<()> {
+    use bravebot_config::embeddings_key;
+    let path = embeddings_key::file(directory);
+    let Some(key) = key else {
+        return match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    };
+    home::create_directory(directory)?;
+    let temporary = path.with_file_name(format!(
+        "{}.{}.tmp",
+        embeddings_key::FILE,
+        std::process::id()
+    ));
+    let written = bravebot_skus::store::create_private(&temporary)
+        .and_then(|mut file| {
+            file.write_all(embeddings_key::to_text(key).expose().as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, &path));
+    if written.is_err() {
+        std::fs::remove_file(&temporary).unwrap_or_default();
+    }
+    written
+}
+
 /// Why a gateway key was not stored.
 #[derive(Debug)]
 pub enum StoreError {
@@ -293,6 +322,39 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    /// RETRIEVE-35: the custom embeddings key is kept as Brave's is, replaced in place, and removed
+    /// by `None`, which is no failure where there is none.
+    #[test]
+    fn an_embeddings_key_is_stored_private_and_removed() {
+        use bravebot_config::embeddings_key;
+        let directory = scratch("embeddings");
+        store_embeddings_key(&directory, Some(&Secret::new("first"))).expect("stored");
+        store_embeddings_key(&directory, Some(&Secret::new("second"))).expect("replaced");
+        let read = embeddings_key::read(&directory)
+            .expect("readable")
+            .expect("held");
+        assert_eq!(read.expose(), "second");
+        assert!(
+            std::fs::read_dir(&directory)
+                .expect("listed")
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp")),
+            "no temporary file is left behind"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(embeddings_key::file(&directory))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        store_embeddings_key(&directory, None).expect("removed");
+        assert!(!embeddings_key::file(&directory).exists());
+        store_embeddings_key(&directory, None).expect("nothing to remove");
     }
 
     /// One file holds every gateway's key, so adding one must keep the rest, and a file that can't

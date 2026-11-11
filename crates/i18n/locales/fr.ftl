@@ -656,6 +656,9 @@ doctor-settings-language-ignored =
     language dans { $path } n'est pas appliqué : il n'est lu que depuis ~/.bravebot/settings.json
 doctor-settings-language-unmatched =
     language { $language } dans ~/.bravebot/settings.json ne désigne aucun catalogue, il choisit donc { $reference } ; les catalogues sont { $available }
+doctor-settings-retrieval-ignored =
+    retrieval dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings

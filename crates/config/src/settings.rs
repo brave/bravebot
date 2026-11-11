@@ -221,6 +221,9 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // be choosing what the person's home contributes to the prompt (INSTR-17):
     // [`Settings::shared_skill_directories_ignored`].
     (SHARED_SKILLS_KEY, Entitled::OwnOrNamed),
+    // Turning it on sends a bot's conversation to an embeddings endpoint, which makes it a
+    // destination, and a checkout cannot choose one (RETRIEVE-1): [`Settings::retrieval_ignored`].
+    (RETRIEVAL_BLOCK, Entitled::OwnOrNamed),
     // The interface is in one language for the whole process and is chosen before the command line
     // is read, so the one file that can say which is the person's own: a checkout's file would be
     // choosing the language for whoever opened the checkout: [`Settings::language_ignored`].
@@ -247,6 +250,9 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
 /// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
 /// since [`Retention::Days`] cannot hold zero.
 pub const DEFAULT_RETENTION_DAYS: NonZeroU32 = NonZeroU32::new(30).unwrap();
+
+/// The block whose `enabled` turns on retrieval in a bot's conversations (RETRIEVE-1).
+const RETRIEVAL_BLOCK: &str = "retrieval";
 
 /// The key naming the other agents' skill directories in the person's home that this program may
 /// read (INSTR-17).
@@ -299,6 +305,7 @@ const READ_KEYS: &[&str] = &[
     PROVIDER_BLOCK,
     REFERENCES_BLOCK,
     RETENTION_KEY,
+    RETRIEVAL_BLOCK,
     "run",
     SANDBOX_BLOCK,
     "search",
@@ -452,6 +459,13 @@ pub struct Settings {
     suggestions: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
     update_check: Option<bool>,
+    /// What `retrieval.enabled` said, if it said a boolean.
+    retrieval: Option<bool>,
+    /// What `retrieval.embeddings` said: the service selected and what was kept for each.
+    embeddings: crate::embeddings::Choice,
+    /// The file whose `retrieval.enabled` is the one in force, or the managed file where it turned
+    /// retrieval off.
+    retrieval_from: Option<PathBuf>,
     /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
     away_summary_enabled: Option<bool>,
     /// What the top-level `awaySummaryIdleSeconds` key said, if it said a whole positive count.
@@ -916,7 +930,7 @@ impl Settings {
     }
 
     /// These settings with the `deny` and `ask` rules the managed file wrote added to every
-    /// layer's own (PERM-19).
+    /// layer's own (PERM-19), and retrieval off where it turned it off (RETRIEVE-23).
     ///
     /// Put ahead of the layers' entries, so a refusal both a person's rule and the administrator's
     /// would have made names the administrator's file. Nothing is removed and `allow` is not
@@ -925,6 +939,10 @@ impl Settings {
     /// in any file outside the checkout does, and a `reason` is not read from it.
     #[must_use]
     pub fn under(mut self, managed: &crate::Managed) -> Self {
+        if managed.retrieval_off() {
+            self.retrieval = Some(false);
+            self.retrieval_from = managed.path().map(Path::to_path_buf);
+        }
         let (Some(path), rules) = (managed.path(), managed.rules()) else {
             return self;
         };
@@ -1103,6 +1121,7 @@ impl Settings {
         // Settled per layer for the same reason: which file chose a mode decides whether it binds.
         let mut sandbox_chosen = None;
         let mut sandbox_asked_strict = Vec::new();
+        let mut retrieval_from = None;
         let mut sandbox_ignored = Vec::new();
         let mut sandbox_unreadable = Vec::new();
         let mut sandbox_hold_back_temporary = false;
@@ -1212,6 +1231,9 @@ impl Settings {
             }
             for key in unreadable {
                 narrowing_unreadable.push((path.clone(), key));
+            }
+            if retrieval_stated(&root).is_some() {
+                retrieval_from = Some(path.clone());
             }
             if root.contains_key("model") {
                 model_above_home = !own;
@@ -1389,6 +1411,7 @@ impl Settings {
         settings.run_network_ignored = run_network_ignored;
         settings.run_network_unreadable = run_network_unreadable;
         settings.sandbox_chosen = sandbox_chosen;
+        settings.retrieval_from = retrieval_from;
         settings.sandbox_asked_strict = sandbox_asked_strict;
         settings.sandbox_ignored = sandbox_ignored;
         settings.sandbox_unreadable = sandbox_unreadable;
@@ -1522,6 +1545,8 @@ impl Settings {
             terminal_title: flag(root, "terminalTitle"),
             suggestions: flag(root, "suggestions"),
             update_check: flag(root, "updateCheck"),
+            retrieval: retrieval_stated(root),
+            embeddings: crate::embeddings::Choice::from_retrieval(object(root, RETRIEVAL_BLOCK)),
             away_summary_enabled: flag(root, "awaySummaryEnabled"),
             away_summary_idle_seconds: positive(root.get("awaySummaryIdleSeconds")),
             ask_idle_seconds: positive(root.get("askIdleSeconds")),
@@ -1545,6 +1570,7 @@ impl Settings {
             narrowed_by: Vec::new(),
             narrowing_unreadable: Vec::new(),
             // Filled by [`Settings::layered`], which knows which file each was written in.
+            retrieval_from: None,
             sandbox_chosen: None,
             sandbox_asked_strict: Vec::new(),
             sandbox_ignored: Vec::new(),
@@ -1801,6 +1827,33 @@ impl Settings {
     /// comes from the person's own configuration and never from a response.
     pub fn update_check(&self) -> Option<bool> {
         self.update_check
+    }
+
+    /// Whether a bot's turns retrieve earlier excerpts instead of summarising them (RETRIEVE-1).
+    ///
+    /// Off unless `retrieval.enabled` is a real `true`: turning it on sends the conversation to
+    /// another endpoint, so a quoted `"true"` is absence. A checkout's file is never obeyed: see
+    /// [`Settings::retrieval_ignored`].
+    pub fn retrieval(&self) -> bool {
+        self.retrieval == Some(true)
+    }
+
+    /// The file that decided [`Settings::retrieval`], where one stated it: the last layer entitled
+    /// to that gave `retrieval.enabled` a boolean, or the managed file where it turned retrieval
+    /// off (RETRIEVE-24).
+    pub fn retrieval_from(&self) -> Option<&Path> {
+        self.retrieval_from.as_deref()
+    }
+
+    /// The service a bot's retrieval embeds with and what the person kept for each one
+    /// (RETRIEVE-33), read from the same files [`Settings::retrieval`] is.
+    pub fn embeddings(&self) -> &crate::embeddings::Choice {
+        &self.embeddings
+    }
+
+    /// The files that named `retrieval` from a layer not entitled to, weakest first.
+    pub fn retrieval_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.not_obeyed(RETRIEVAL_BLOCK)
     }
 
     /// Whether the settings in force let the interface recap a session by itself when a person has
@@ -2278,6 +2331,8 @@ impl Settings {
             && self.terminal_title.is_none()
             && self.suggestions.is_none()
             && self.update_check.is_none()
+            && self.retrieval.is_none()
+            && self.embeddings == crate::embeddings::Choice::default()
             && self.away_summary_enabled.is_none()
             && self.away_summary_idle_seconds.is_none()
             && self.max_running_delegates.is_none()
@@ -2593,6 +2648,7 @@ impl Settings {
     /// Names only. The values include credentials on some machines, and a diagnostic that prints
     /// them is a diagnostic people paste into issues. The keys that are not variables are among them
     /// so a file that sets only one of those is not reported as setting nothing.
+    #[expect(clippy::too_many_lines, reason = "the list of keys, one row for each")]
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.model
             .is_some()
@@ -2624,6 +2680,11 @@ impl Settings {
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.suggestions.is_some().then_some("suggestions"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
+            .chain(self.retrieval.is_some().then_some("retrieval.enabled"))
+            .chain(
+                (self.embeddings != crate::embeddings::Choice::default())
+                    .then_some("retrieval.embeddings"),
+            )
             .chain(
                 self.away_summary_enabled
                     .is_some()
@@ -2950,6 +3011,11 @@ pub(crate) fn object<'a>(
         Some(serde_json::Value::Object(block)) => Some(block),
         _ => None,
     }
+}
+
+/// What `retrieval.enabled` says in `root`, where it says a boolean.
+fn retrieval_stated(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    object(root, RETRIEVAL_BLOCK).and_then(|block| flag(block, "enabled"))
 }
 
 /// The boolean under `key` in `root`, or `None` where the key is absent or holds anything else.
@@ -7920,6 +7986,42 @@ mod tests {
         assert_eq!(settings.unread_keys().count(), 0);
     }
 
+    /// Retrieval is off where nothing says, and where anything but a real `true` under
+    /// `retrieval.enabled` says; a file saying either boolean is not a file that set nothing; and a
+    /// checkout's file cannot turn it on, where the person's own can.
+    #[test]
+    fn retrieval_is_off_unless_the_persons_own_file_says_true() {
+        assert!(!Settings::parse("{}").retrieval());
+        assert!(Settings::parse(r#"{"retrieval": {"enabled": true}}"#).retrieval());
+        for off in [
+            r#"{"retrieval": {"enabled": false}}"#,
+            r#"{"retrieval": {"enabled": "true"}}"#,
+            r#"{"retrieval": {"enabled": 1}}"#,
+            r#"{"retrieval": true}"#,
+            r#"{"retrieval": {}}"#,
+        ] {
+            assert!(!Settings::parse(off).retrieval(), "{off} turned it on");
+        }
+
+        let settings = Settings::parse(r#"{"retrieval": {"enabled": false}}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["retrieval.enabled"]);
+        assert!(!settings.is_empty());
+
+        let checkout = Layers::new("retrieval-project")
+            .project(r#"{"retrieval": {"enabled": true}}"#)
+            .read();
+        assert!(!checkout.retrieval());
+        assert_eq!(checkout.retrieval_ignored().count(), 1);
+
+        let own = Layers::new("retrieval-home")
+            .global(r#"{"retrieval": {"enabled": true}}"#)
+            .project(r#"{"retrieval": {"enabled": false}}"#)
+            .read();
+        assert!(own.retrieval());
+        assert_eq!(own.unread_keys().count(), 0);
+    }
+
     /// A file that sets only this is not a file that set nothing: `doctor` reports which names a layer
     /// carried, and a person debugging why their box edits the way it does has to see it there.
     #[test]
@@ -8037,6 +8139,7 @@ mod tests {
         ("agent", false, false),
         ("style", false, false),
         ("sharedSkillDirectories", false, false),
+        ("retrieval", false, false),
         ("language", true, true),
         ("retentionDays", true, true),
         ("references", false, true),
@@ -8066,6 +8169,7 @@ mod tests {
             ("sharedSkillDirectories", |s| {
                 paths(s.shared_skill_directories_ignored())
             }),
+            ("retrieval", |s| paths(s.retrieval_ignored())),
             ("language", |s| paths(s.language_ignored())),
             ("retentionDays", |s| paths(s.retention_ignored())),
             ("references", |s| paths(s.references_ignored())),
@@ -9759,6 +9863,62 @@ mod tests {
         let file = dir.join("managed.json");
         std::fs::write(&file, text).expect("managed file");
         crate::Managed::at(&file)
+    }
+
+    /// RETRIEVE-23: a managed `retrieval.enabled: false` keeps retrieval off whatever the person's
+    /// own file and a named file say, and a managed `true` does not turn it on.
+    #[test]
+    fn a_managed_false_keeps_retrieval_off_and_a_managed_true_is_not_obeyed() {
+        let off = pinned("retrieval-off", r#"{"retrieval": {"enabled": false}}"#);
+        let settings = Layers::new("retrieval-pinned-off")
+            .global(r#"{"retrieval": {"enabled": true}}"#)
+            .named(r#"{"retrieval": {"enabled": true}}"#)
+            .read();
+        assert!(settings.retrieval());
+        assert!(!settings.under(&off).retrieval());
+
+        let on = pinned("retrieval-on", r#"{"retrieval": {"enabled": true}}"#);
+        assert!(
+            !Layers::new("retrieval-pinned-on")
+                .read()
+                .under(&on)
+                .retrieval()
+        );
+    }
+
+    /// RETRIEVE-24: the file named as deciding retrieval is the last one entitled to that gave it a
+    /// boolean, so a checkout's file is never named and a named file beats the person's own, and
+    /// it is the managed file where that turned retrieval off.
+    #[test]
+    fn the_file_that_decided_retrieval_is_the_last_entitled_one_or_the_managed_file() {
+        let home = Layers::new("retrieval-from-home").global(r#"{"retrieval": {"enabled": true}}"#);
+        assert_eq!(
+            home.read().retrieval_from(),
+            Some(home.home.join(SETTINGS_FILE).as_path())
+        );
+
+        let checkout = Layers::new("retrieval-from-checkout")
+            .global(r#"{"retrieval": {"enabled": false}}"#)
+            .project(r#"{"retrieval": {"enabled": true}}"#);
+        assert_eq!(
+            checkout.read().retrieval_from(),
+            Some(checkout.home.join(SETTINGS_FILE).as_path())
+        );
+
+        let named = Layers::new("retrieval-from-named")
+            .global(r#"{"retrieval": {"enabled": true}}"#)
+            .named(r#"{"retrieval": {"enabled": false}}"#);
+        assert_eq!(named.read().retrieval_from(), named.named.as_deref());
+
+        let quoted =
+            Layers::new("retrieval-from-quoted").global(r#"{"retrieval": {"enabled": "true"}}"#);
+        assert_eq!(quoted.read().retrieval_from(), None);
+
+        let off = pinned(
+            "retrieval-from-managed",
+            r#"{"retrieval": {"enabled": false}}"#,
+        );
+        assert_eq!(home.read().under(&off).retrieval_from(), off.path());
     }
 
     /// SANDBOX-22: the person's own file chooses any of the three, and a file the command line

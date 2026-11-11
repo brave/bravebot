@@ -19,6 +19,7 @@
 pub mod anthropic;
 pub mod call;
 pub mod conversation;
+pub mod embeddings;
 pub mod generate_content;
 pub mod llama_server;
 pub mod lm_studio;

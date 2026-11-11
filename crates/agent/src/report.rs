@@ -970,6 +970,46 @@ pub struct SentMessage {
     pub text: String,
 }
 
+/// Where a message a retrieval sent excerpts of was said, as a transcript places it: the exchange it
+/// belongs to and what it was there. Positions only, so the interface draws the row from its own
+/// copy of the transcript and no excerpt crosses twice
+/// ([RETRIEVE-27](../../../docs/specs/retrieval.md#RETRIEVE-27)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Place {
+    /// The message's place in the record's numbering.
+    pub ordinal: u32,
+    /// The exchange it belongs to, as the ordinal of the prompt that began it among the things the
+    /// person said, or `None` before the first.
+    pub prompt: Option<u32>,
+    /// What the message was in that exchange.
+    pub said: Spoken,
+}
+
+/// What a message a retrieval drew on was, within its exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Spoken {
+    /// The prompt itself.
+    Prompt,
+    /// The `nth` thing the model said in the exchange, counting from zero.
+    Reply { nth: u32 },
+    /// The result of the exchange's `nth` call, counting from zero, where the call is known.
+    Tool { nth: Option<u32> },
+    /// Something composed for the exchange, an attachment or an imported line.
+    Other,
+}
+
+/// What a retrieval in a turn drew on, or why there was none
+/// ([RETRIEVE-27](../../../docs/specs/retrieval.md#RETRIEVE-27)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retrieved {
+    /// The messages the excerpts came from, once each, in the order they were said.
+    pub used: Vec<Place>,
+    /// About how many tokens the excerpts came to.
+    pub tokens: u64,
+    /// Why the round could not retrieve and summarised instead, where it could not.
+    pub fell_back: Option<crate::retrieval::Unavailable>,
+}
+
 pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
@@ -1032,6 +1072,10 @@ pub trait Reporter {
     /// driver taking a decision from untrusted bytes, and an empty line is the interface's to
     /// leave undrawn.
     fn narration(&mut self, _text: String) {}
+
+    /// A round of a turn retrieved, or could not and summarised instead (RETRIEVE-27). Positions
+    /// and counts only, never the excerpts.
+    fn retrieved(&mut self, _retrieved: Retrieved) {}
 
     /// A summary of the conversation could not be made, so the turn goes on with the history it has.
     ///
@@ -1314,6 +1358,8 @@ pub struct RecordingReporter {
     pub requests: Vec<crate::request_view::RequestView>,
     /// Every exchange a turn published at a round boundary, in order.
     pub forks: Vec<crate::aside::Fork>,
+    /// What each round that retrieved drew on, in order.
+    pub retrieved: Vec<Retrieved>,
 }
 
 impl Reporter for RecordingReporter {
@@ -1355,6 +1401,10 @@ impl Reporter for RecordingReporter {
 
     fn narration(&mut self, text: String) {
         self.narration.push(text);
+    }
+
+    fn retrieved(&mut self, retrieved: Retrieved) {
+        self.retrieved.push(retrieved);
     }
 
     fn streaming(&mut self, text: String) {

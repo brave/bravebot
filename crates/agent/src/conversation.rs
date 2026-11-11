@@ -207,6 +207,26 @@ pub enum Composed {
         /// What the planner wrote.
         text: String,
     },
+    /// Excerpts of messages a retrieval cut no longer sends, put in front of the prompt they were
+    /// chosen for ([RETRIEVE-8](../../../docs/specs/retrieval.md#RETRIEVE-8)).
+    ///
+    /// The fields are the driver's: the place in the record and the chunk of each excerpt, and the
+    /// model that ranked them. House-keeping for the planner: every word in it is already in the
+    /// record, so a transcript draws no row for it and it is never embedded.
+    Retrieved {
+        /// The ordinal and chunk of each excerpt, in the order they were said.
+        excerpts: Vec<(u32, u16)>,
+        /// The embeddings model the excerpts were ranked with.
+        model: String,
+        /// Found for a later prompt without moving the cut, so the excerpts before it are still
+        /// sent whole ([RETRIEVE-30](../../../docs/specs/retrieval.md#RETRIEVE-30)).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        refreshed: bool,
+        /// The position in `excerpts` of each one sent as a context line, cut short, and not as
+        /// the excerpt found. Empty in a record written before this was kept.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        context: Vec<u16>,
+    },
 }
 
 impl Composed {
@@ -225,7 +245,27 @@ impl Composed {
                 | Self::Notice
                 | Self::ModeNotice { .. }
                 | Self::MessageSent { .. }
+                | Self::Retrieved { .. }
         )
+    }
+}
+
+/// The excerpts a retrieval's message holds, as [`Composed::Retrieved`] records them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Excerpts {
+    /// The place in the record and the chunk of each excerpt sent, in the order they were said.
+    pub sent: Vec<(u32, u16)>,
+    /// The position in `sent` of each one sent as a context line, cut short.
+    pub context: Vec<u16>,
+}
+
+impl From<Vec<(u32, u16)>> for Excerpts {
+    /// Excerpts none of which is a context line.
+    fn from(sent: Vec<(u32, u16)>) -> Self {
+        Self {
+            sent,
+            context: Vec::new(),
+        }
     }
 }
 
@@ -318,11 +358,44 @@ impl Stored {
             (Some(Composed::Watch { .. } | Composed::Resumed | Composed::Consolidation), _) => {
                 Provenance::Driver
             }
+            (Some(Composed::Retrieved { .. }), _) => Provenance::Trusted(RETRIEVED_PROVENANCE),
             (_, Role::Assistant) => Provenance::Planner,
             _ => Provenance::Unrecorded,
         }
     }
+
+    /// Whether the message has a place in the record's numbering, which the vectors kept beside
+    /// it name messages by.
+    ///
+    /// A summary, a skill sent again after one and a resume's note stand for or about other
+    /// messages, and a resume's note is never written down, so none of them is numbered.
+    pub fn holds_an_ordinal(&self) -> bool {
+        !matches!(
+            self.composed,
+            Some(Composed::Summary | Composed::SkillKept { .. } | Composed::Resumed)
+        )
+    }
 }
+
+/// One message of the record as [`Conversation::walked`] places it.
+struct Walked<'a> {
+    /// Where it was said, for a message the record numbers.
+    place: Option<crate::report::Place>,
+    /// The exchange it is in.
+    prompt: Option<u32>,
+    /// The excerpts it holds, for a retrieval's message.
+    excerpts: Option<&'a [(u32, u16)]>,
+}
+
+/// How what is pinned at a retrieval cut begins. Words for the planner; nothing decides from them.
+const PINNED_PREFIX: &str = "Earlier messages of this conversation are no longer sent. What they \
+held that still applies is repeated here.";
+
+/// What a request's view calls the excerpts a retrieval sent.
+const RETRIEVED_PROVENANCE: &str = "earlier excerpts";
+
+/// What an older message of excerpts is sent as once a later one has been added (RETRIEVE-8).
+pub const RETRIEVED_STUB: &str = "[earlier excerpts, no longer sent]";
 
 /// The record a session carries from one turn to the next.
 ///
@@ -452,6 +525,28 @@ pub struct Conversation {
     /// session rather than once per turn, so a session with nothing to say about it at first
     /// still says it once a long description appears, and never repeats it after that.
     long_descriptions_said: bool,
+    /// Messages before this position are not sent in a turn's request: a retrieval sent excerpts
+    /// of them instead ([RETRIEVE-2](../../../docs/specs/retrieval.md#RETRIEVE-2)).
+    ///
+    /// A view of the request, as `masked_before` is: the messages stay where they are, and moved
+    /// only in steps, so the prefix a cache holds survives the turns between two moves (RETRIEVE-8).
+    retrieval_cut: usize,
+    /// The most messages the request has left out at once, the archive's and those behind the cut
+    /// together, which a compaction that brings some back does not lower
+    /// ([RETRIEVE-28](../../../docs/specs/retrieval.md#RETRIEVE-28)).
+    left_out: usize,
+    /// What the request sends at the cut in place of what the messages before it carried: the
+    /// task, the task list and the skills (RETRIEVE-10).
+    ///
+    /// Taken when the cut moved and kept with it, so every request until the next move reads the
+    /// same.
+    pinned: Vec<Stored>,
+    /// Where the prompt of the turn now running sits in `messages`, which is where excerpts for it
+    /// go. A position, moved with everything else a compaction or an insertion moves.
+    prompt_at: Option<usize>,
+    /// Whether the person has been told that a turn summarised because retrieval could not run,
+    /// since retrieval last worked (RETRIEVE-7). Not part of a [`Snapshot`]: once per session.
+    recall_fallback_said: bool,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -546,6 +641,11 @@ impl Conversation {
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
+            prompt_at: None,
+            recall_fallback_said: false,
         }
     }
 
@@ -576,7 +676,7 @@ impl Conversation {
     /// server rather than merely missing something. Filling the gap keeps the record of what
     /// was attempted, which is the reason the conversation survives a failed turn at all.
     pub fn with_system(&self, system: &str) -> Vec<Message> {
-        self.assembled(system, self.messages.len())
+        self.assembled(system, self.retrieval_cut, self.messages.len())
     }
 
     /// The same as [`Conversation::with_system`], with each message shared and not copied.
@@ -586,7 +686,7 @@ impl Conversation {
     /// carries in another form, a stubbed result or the answer to a call that never ran, is built
     /// new. The quarantine is not part of it.
     pub fn shared_with_system(&self, system: &str) -> Vec<Arc<Message>> {
-        self.assembled_marked(system, self.messages.len())
+        self.assembled_marked(system, self.retrieval_cut, self.messages.len())
             .into_iter()
             .map(|(message, _)| message)
             .collect()
@@ -597,7 +697,7 @@ impl Conversation {
     /// One list from one pass, so a mark cannot land on a message other than the one it was made
     /// for: a call answered here has the driver's sentence as its answer.
     pub fn with_system_marked(&self, system: &str) -> (Vec<Message>, Vec<Provenance>) {
-        let marked = self.assembled_marked(system, self.messages.len());
+        let marked = self.assembled_marked(system, self.retrieval_cut, self.messages.len());
         let marks = marked
             .iter()
             .skip(1)
@@ -617,22 +717,40 @@ impl Conversation {
     /// Shared with [`Conversation::with_system`] rather than written twice, because the gap
     /// filling below is the difference between a well-formed request and one a server refuses,
     /// and a summariser sending a prefix needs it exactly as much as a turn sending the whole.
-    fn assembled(&self, system: &str, end: usize) -> Vec<Message> {
-        self.assembled_marked(system, end)
+    fn assembled(&self, system: &str, from: usize, end: usize) -> Vec<Message> {
+        self.assembled_marked(system, from, end)
             .into_iter()
             .map(|(message, _)| Arc::unwrap_or_clone(message))
             .collect()
     }
 
     /// [`Conversation::assembled`] with each message's origin beside it.
-    fn assembled_marked(&self, system: &str, end: usize) -> Vec<(Arc<Message>, Provenance)> {
+    ///
+    /// From `from` on, with what is pinned at a retrieval cut in front when `from` is past the
+    /// start (RETRIEVE-10). Only the latest message of excerpts is sent as it stands: an older one
+    /// is sent as [`RETRIEVED_STUB`], a fixed sentence at a fixed place (RETRIEVE-8).
+    fn assembled_marked(
+        &self,
+        system: &str,
+        from: usize,
+        end: usize,
+    ) -> Vec<(Arc<Message>, Provenance)> {
         let exchange = &self.messages[..end];
         let mut messages = Vec::with_capacity(exchange.len() + 1);
         messages.push((Arc::new(Message::system(system)), Provenance::Driver));
-
-        for (index, stored) in exchange.iter().enumerate() {
+        if from > 0 {
+            for stored in &self.pinned {
+                messages.push((Arc::clone(&stored.message), stored.provenance()));
+            }
+        }
+        for (index, stored) in exchange.iter().enumerate().skip(from) {
             let message = &stored.message;
-            match self.stub_at(index) {
+            let stub = if self.excerpts_stubbed(index) {
+                Some(RETRIEVED_STUB.to_string())
+            } else {
+                self.stub_at(index)
+            };
+            match stub {
                 Some(stub) => {
                     let mut stubbed = Message::clone(message);
                     stubbed.content = Content::Text(stub);
@@ -917,6 +1035,11 @@ impl Conversation {
         }
         self.messages.drain(mark.0..end);
         self.masked_before = self.masked_before.min(mark.0);
+        self.prompt_at = None;
+        if self.retrieval_cut > mark.0 {
+            self.retrieval_cut = mark.0;
+            self.pinned = self.pinned_at(mark.0);
+        }
         true
     }
 
@@ -1038,7 +1161,7 @@ impl Conversation {
             .iter()
             .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
-        let carried = self.skills_to_carry(cut);
+        let carried = self.skills_to_carry(cut, Gone::Summarised);
         let task = self.task_to_carry(cut).or(self.carried_task.as_deref());
         if given_up < kept + carried.len() + usize::from(task.is_some()) {
             return None;
@@ -1103,7 +1226,7 @@ impl Conversation {
     /// [`SKILLS_KEPT_BYTES`] for all of them, so one long skill cannot push out the rest and a
     /// session that loaded many does not trade a short summary for a long list. What does not fit
     /// is left to the summary, which says what the conversation did with it.
-    fn skills_to_carry(&self, boundary: usize) -> Vec<Stored> {
+    fn skills_to_carry(&self, boundary: usize, gone: Gone) -> Vec<Stored> {
         // What the turn wrote in front of the skill. Formatting only: a skill is found by its tag.
         let header = format!("{TOOL_RESULT_PREFIX}load_skill:\n\n");
         let mut room = SKILLS_KEPT_BYTES;
@@ -1127,7 +1250,7 @@ impl Conversation {
             // other words, and the rest of one cut short is the person's to ask for again.
             let named = matches!(stored.composed, Some(Composed::SkillNamed { .. }));
             carried.push(Stored {
-                message: Arc::new(Message::user(kept_skill(name, shown, cut, named))),
+                message: Arc::new(Message::user(kept_skill(name, shown, cut, named, gone))),
                 composed: Some(Composed::SkillKept { name: name.clone() }),
                 address: None,
                 source: stored.source.clone(),
@@ -1197,10 +1320,30 @@ impl Conversation {
 
     /// What the request holds for the message at `index`, in bytes.
     fn sent_bytes(&self, index: usize) -> usize {
+        if self.excerpts_stubbed(index) {
+            return RETRIEVED_STUB.len();
+        }
         match self.stub_at(index) {
             Some(stub) => stub.len(),
             None => stored_bytes(&self.messages[index]),
         }
+    }
+
+    /// Whether the message at `index` holds excerpts a later move of the cut replaced, and so goes
+    /// as a stub (RETRIEVE-8). Excerpts found for a later prompt replace none (RETRIEVE-30).
+    fn excerpts_stubbed(&self, index: usize) -> bool {
+        matches!(
+            self.messages[index].composed,
+            Some(Composed::Retrieved { .. })
+        ) && self.messages[index + 1..].iter().any(|stored| {
+            matches!(
+                stored.composed,
+                Some(Composed::Retrieved {
+                    refreshed: false,
+                    ..
+                })
+            )
+        })
     }
 
     fn stub_len(&self, index: usize) -> usize {
@@ -1267,12 +1410,336 @@ impl Conversation {
         ))
     }
 
+    /// Where the next retrieval cut would fall, or `None` while moving it frees too little.
+    ///
+    /// Compaction's points ([RETRIEVE-10](../../../docs/specs/retrieval.md#RETRIEVE-10)): the
+    /// start of the last [`RECENT_EXCHANGES_KEPT`] exchanges, or of the last
+    /// [`RECENT_ROUNDS_KEPT`] rounds for a turn long by itself, so a cut never falls inside a
+    /// round. It moves only when what it passes is at least a quarter of `budget` tokens, so
+    /// requests between two moves share their prefix
+    /// ([RETRIEVE-8](../../../docs/specs/retrieval.md#RETRIEVE-8)).
+    pub fn retrieval_boundary(&self, budget: u64) -> Option<usize> {
+        let step = usize::try_from(budget / 4)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(BYTES_PER_TOKEN);
+        [
+            self.cut_point(&self.boundaries(opens_an_exchange), RECENT_EXCHANGES_KEPT),
+            self.cut_point(&self.boundaries(opens_a_round), RECENT_ROUNDS_KEPT),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|&cut| cut > self.retrieval_cut)
+        .find(|&cut| {
+            let passed: usize = (self.retrieval_cut..cut)
+                .map(|index| self.sent_bytes(index))
+                .sum();
+            passed >= step
+        })
+    }
+
+    /// Where the request starts: messages before it are not sent.
+    pub fn retrieval_cut(&self) -> usize {
+        self.retrieval_cut
+    }
+
+    /// How many of the conversation's messages its request has left out, compaction's and the
+    /// retrieval cut's together. It only ever rises, and rises exactly when the request stopped
+    /// carrying something it carried before (RETRIEVE-28).
+    pub fn out_of_request(&self) -> usize {
+        self.left_out.max(self.archive.len() + self.retrieval_cut)
+    }
+
+    /// About how many tokens the messages from `index` on come to as a request sends them.
+    pub fn tokens_from(&self, index: usize) -> u64 {
+        let bytes: usize = (index.min(self.messages.len())..self.messages.len())
+            .map(|at| self.sent_bytes(at))
+            .sum();
+        (bytes / BYTES_PER_TOKEN) as u64
+    }
+
+    /// Move the retrieval cut to `cut`, a point [`Conversation::retrieval_boundary`] gave, and take
+    /// what is pinned there.
+    pub fn cut_for_retrieval(&mut self, cut: usize) {
+        self.retrieval_cut = cut.min(self.messages.len());
+        self.pinned = self.pinned_at(self.retrieval_cut);
+        self.measured = 0;
+    }
+
+    /// The place in the record of the message at `index`, as the vectors number it: the archive
+    /// first, then the messages, counting only those that hold one.
+    pub fn ordinal_at(&self, index: usize) -> u32 {
+        let counted = self
+            .archive
+            .iter()
+            .chain(self.messages.iter().take(index))
+            .filter(|stored| stored.holds_an_ordinal())
+            .count();
+        u32::try_from(counted).unwrap_or(u32::MAX)
+    }
+
+    /// Record that the message pushed last is the prompt of the turn now running.
+    pub fn prompt_given(&mut self) {
+        self.prompt_at = self.messages.len().checked_sub(1);
+    }
+
+    /// Whether the turn's prompt is past a retrieval cut and has no excerpts of its own in front of
+    /// it yet (RETRIEVE-30).
+    pub fn excerpts_owed(&self) -> bool {
+        self.retrieval_cut > 0
+            && self.prompt_at.is_some_and(|at| {
+                at > self.retrieval_cut
+                    && at < self.messages.len()
+                    && !matches!(
+                        self.messages[at - 1].composed,
+                        Some(Composed::Retrieved { .. })
+                    )
+            })
+    }
+
+    /// Store excerpts a retrieval that moved the cut chose as one message just before the turn's
+    /// prompt, or at the end where the prompt is behind the cut (RETRIEVE-8).
+    pub fn insert_retrieved(&mut self, text: String, excerpts: impl Into<Excerpts>, model: String) {
+        self.insert_excerpts(text, excerpts.into(), model, false);
+    }
+
+    /// Store excerpts found for the turn's prompt without moving the cut, just before the prompt,
+    /// leaving the excerpts already sent as they were (RETRIEVE-30).
+    pub fn insert_recalled(&mut self, text: String, excerpts: impl Into<Excerpts>, model: String) {
+        self.insert_excerpts(text, excerpts.into(), model, true);
+    }
+
+    /// Every position recorded at or after the place the excerpts go moves one along with them.
+    fn insert_excerpts(
+        &mut self,
+        text: String,
+        excerpts: Excerpts,
+        model: String,
+        refreshed: bool,
+    ) {
+        let at = self
+            .prompt_at
+            .filter(|&at| at >= self.retrieval_cut && at < self.messages.len())
+            .unwrap_or(self.messages.len());
+        let after = |position: &mut usize| {
+            if *position >= at {
+                *position += 1;
+            }
+        };
+        for position in [&mut self.task_at, &mut self.task_list, &mut self.prompt_at]
+            .into_iter()
+            .flatten()
+        {
+            after(position);
+        }
+        if let Some(end) = &mut self.opening_end
+            && *end > at
+        {
+            *end += 1;
+        }
+        if self.masked_before > at {
+            self.masked_before += 1;
+        }
+        for (position, _) in &mut self.reads.shown {
+            after(position);
+        }
+        self.messages.insert(
+            at,
+            Stored {
+                message: Arc::new(Message::user(text)),
+                composed: Some(Composed::Retrieved {
+                    excerpts: excerpts.sent,
+                    model,
+                    refreshed,
+                    context: excerpts.context,
+                }),
+                address: None,
+                source: Some(Provenance::Trusted(RETRIEVED_PROVENANCE)),
+            },
+        );
+    }
+
+    /// Where each message of `ordinals` was said, as a transcript places it, once each and in the
+    /// order they were said (RETRIEVE-27). An ordinal the record does not hold is left out.
+    pub fn places(&self, ordinals: &[u32]) -> Vec<crate::report::Place> {
+        let wanted: std::collections::BTreeSet<u32> = ordinals.iter().copied().collect();
+        self.walked()
+            .into_iter()
+            .filter_map(|walked| walked.place)
+            .filter(|place| wanted.contains(&place.ordinal))
+            .collect()
+    }
+
+    /// What each exchange's retrievals drew on, as the record keeps it in its
+    /// [`Composed::Retrieved`] messages: the prompt the excerpts were put in front of and the
+    /// messages they came from, so a resumed transcript draws the same line a live one did
+    /// (RETRIEVE-27).
+    pub fn retrieved_by_prompt(&self) -> Vec<(u32, Vec<crate::report::Place>)> {
+        let mut found: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (prompt, stored) in self.retrievals() {
+            let Some(Composed::Retrieved { excerpts, .. }) = &stored.composed else {
+                continue;
+            };
+            let ordinals = excerpts.iter().map(|&(ordinal, _)| ordinal);
+            match found.iter_mut().find(|(at, _)| *at == prompt) {
+                Some((_, kept)) => kept.extend(ordinals),
+                None => found.push((prompt, ordinals.collect())),
+            }
+        }
+        found
+            .into_iter()
+            .map(|(prompt, ordinals)| (prompt, self.places(&ordinals)))
+            .collect()
+    }
+
+    /// Each retrieval's message the record holds, with the exchange it was sent for as
+    /// [`Conversation::retrieved_by_prompt`] attributes it, in the order they were put in.
+    pub fn retrievals(&self) -> Vec<(u32, &Stored)> {
+        let walked = self.walked();
+        let stored = self.archive.iter().chain(self.messages.iter());
+        walked
+            .iter()
+            .zip(stored)
+            .enumerate()
+            .filter_map(|(index, (step, stored))| {
+                step.excerpts?;
+                // Put just before the prompt, or after it where the prompt was behind the cut. A
+                // second retrieval in the same turn goes in after the first, so both are the
+                // prompt's that follows them.
+                let next = walked[index + 1..]
+                    .iter()
+                    .find(|next| next.excerpts.is_none());
+                let prompt = match next.and_then(|next| next.place) {
+                    Some(place) if place.said == crate::report::Spoken::Prompt => place.prompt,
+                    _ => step.prompt,
+                };
+                Some((prompt?, stored))
+            })
+            .collect()
+    }
+
+    /// Every message of the record with its place, counted as [`Conversation::recounted`] counts
+    /// prompts and as the vectors number messages.
+    fn walked(&self) -> Vec<Walked<'_>> {
+        use crate::report::{Place, Spoken};
+        let mut ordinal = 0u32;
+        let mut prompts = 0u32;
+        let mut prompt = None;
+        let mut replies = 0u32;
+        let mut calls: Vec<&str> = Vec::new();
+        let mut walked = Vec::new();
+        for stored in self.archive.iter().chain(self.messages.iter()) {
+            let composed = stored
+                .composed
+                .as_ref()
+                .filter(|why| **why != Composed::Imported);
+            let message = &stored.message;
+            let said = match (composed, message.role) {
+                (Some(Composed::ToolResult), _) => Spoken::Tool { nth: None },
+                (Some(_), _) | (None, Role::System) => Spoken::Other,
+                (None, Role::User) => {
+                    prompt = Some(prompts);
+                    prompts += 1;
+                    replies = 0;
+                    calls.clear();
+                    Spoken::Prompt
+                }
+                (None, Role::Assistant) => {
+                    let nth = replies;
+                    if !message.content.text().trim().is_empty() {
+                        replies += 1;
+                    }
+                    calls.extend(
+                        message
+                            .tool_calls
+                            .iter()
+                            .flatten()
+                            .map(|call| call.id.as_str()),
+                    );
+                    Spoken::Reply { nth }
+                }
+                (None, Role::Tool) => Spoken::Tool {
+                    nth: message.tool_call_id.as_deref().and_then(|id| {
+                        calls
+                            .iter()
+                            .position(|call| *call == id)
+                            .and_then(|at| u32::try_from(at).ok())
+                    }),
+                },
+            };
+            let place = stored.holds_an_ordinal().then(|| {
+                ordinal += 1;
+                Place {
+                    ordinal: ordinal - 1,
+                    prompt,
+                    said,
+                }
+            });
+            let excerpts = match &stored.composed {
+                Some(Composed::Retrieved { excerpts, .. }) => Some(excerpts.as_slice()),
+                _ => None,
+            };
+            walked.push(Walked {
+                place,
+                prompt,
+                excerpts,
+            });
+        }
+        walked
+    }
+
+    /// Whether the person has been told retrieval fell back since it last worked (RETRIEVE-7).
+    pub fn recall_fallback_said(&self) -> bool {
+        self.recall_fallback_said
+    }
+
+    /// Record that they have been told, or with `false` that retrieval has worked since.
+    pub fn set_recall_fallback_said(&mut self, said: bool) {
+        self.recall_fallback_said = said;
+    }
+
+    /// What a cut at `cut` sends in front of the messages it keeps: the delegate's task and the
+    /// task list where the cut passes them, then the skills it passes (RETRIEVE-10).
+    ///
+    /// Each from a position or a tag, as compaction finds them, and never from what a message
+    /// says. What an earlier summary carried is carried again once the cut passes the summary.
+    fn pinned_at(&self, cut: usize) -> Vec<Stored> {
+        if cut == 0 {
+            return Vec::new();
+        }
+        let task = self.task_to_carry(cut).or(self.carried_task.as_deref());
+        let list = match self.task_list {
+            Some(at) if at < cut => self.messages[at].message.content.as_text(),
+            Some(_) => None,
+            None => self.carried_task_list.as_deref(),
+        };
+        let mut pinned = Vec::new();
+        if task.is_some() || list.is_some() {
+            let mut note = PINNED_PREFIX.to_string();
+            if let Some(task) = task {
+                note.push_str("\n\nThe task you were given, word for word:\n");
+                note.push_str(task);
+            }
+            if let Some(list) = list {
+                note.push_str("\n\nYour task list, as you last wrote it:\n");
+                note.push_str(list);
+            }
+            pinned.push(Stored {
+                message: Arc::new(Message::user(note)),
+                composed: Some(Composed::Notice),
+                address: None,
+                source: Some(Provenance::Driver),
+            });
+        }
+        pinned.extend(self.skills_to_carry(cut, Gone::NoLongerSent));
+        pinned
+    }
+
     /// The part compaction would replace, as one request's messages.
     ///
     /// The system prompt is the summariser's, so it is passed in the same way a turn passes its
     /// own: the conversation stores neither.
     pub fn to_summarise(&self, boundary: usize, system: &str) -> Vec<Message> {
-        self.assembled(system, boundary)
+        self.assembled(system, 0, boundary)
     }
 
     /// Put a summary in place of everything before `boundary`.
@@ -1289,7 +1756,7 @@ impl Conversation {
     /// summary of instructions is not the instructions (COMPACT-17). So is a delegate's task,
     /// which is the whole of what it was told (COMPACT-19).
     pub fn compacted(&mut self, boundary: usize, summary: &str) {
-        let carried = self.skills_to_carry(boundary);
+        let carried = self.skills_to_carry(boundary, Gone::Summarised);
         // Before the drain, while the message is still there to copy.
         match self.task_at {
             Some(at) if at < boundary => {
@@ -1324,6 +1791,14 @@ impl Conversation {
             _ => 0,
         };
         self.opening_end = None;
+        self.prompt_at = self
+            .prompt_at
+            .and_then(|at| at.checked_sub(boundary))
+            .map(|past| past + 1 + carried.len());
+        self.left_out = self.out_of_request();
+        // The summary stands for everything before it, so nothing is cut from in front of it.
+        self.retrieval_cut = 0;
+        self.pinned.clear();
         let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
         self.reads.compacted(boundary, 1 + carried.len());
@@ -1517,6 +1992,32 @@ pub struct Snapshot {
     /// nothing says what that session's planner was shown.
     #[serde(default = "unrecorded")]
     pub holds: String,
+    /// Where a retrieval cut stood in `messages` (RETRIEVE-8), so a resumed session sends what the
+    /// last request sent. Left out at the start, which is where a record written without it reads.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retrieval_cut: usize,
+    /// What [`Conversation::out_of_request`] had reached, so a resumed session does not count down
+    /// from it. Left out at none, which is where a record written without it reads.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub left_out: usize,
+    /// What was pinned at the cut (RETRIEVE-10), as it was taken when the cut moved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned: Vec<Stored>,
+}
+
+impl Snapshot {
+    /// [`Conversation::out_of_request`] as this record left it.
+    pub fn out_of_request(&self) -> usize {
+        self.left_out.max(self.archive.len() + self.retrieval_cut)
+    }
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 impl Snapshot {
@@ -1595,6 +2096,13 @@ impl Conversation {
                 Confidentiality::Public => PUBLIC.to_string(),
                 Confidentiality::Private => PRIVATE.to_string(),
             },
+            // Counted without the notes left out above, so it stands in front of the same message.
+            retrieval_cut: self.messages[..self.retrieval_cut]
+                .iter()
+                .filter(|stored| !matches!(stored.composed, Some(Composed::Resumed)))
+                .count(),
+            left_out: self.out_of_request(),
+            pinned: self.pinned.clone(),
         }
     }
 
@@ -1641,6 +2149,13 @@ impl Conversation {
     /// here, from a counter the kernel kept, and holds no byte of what was quarantined.
     pub fn restored(snapshot: Snapshot) -> Self {
         let mut messages = snapshot.messages;
+        // A cut past the end is a record something else shortened, and is not trusted to say
+        // where the request starts.
+        let (retrieval_cut, pinned) = if snapshot.retrieval_cut <= messages.len() {
+            (snapshot.retrieval_cut, snapshot.pinned)
+        } else {
+            (0, Vec::new())
+        };
         if let Some(note) = dead_references(snapshot.references) {
             messages.push(Stored {
                 message: Arc::new(Message::user(note)),
@@ -1684,6 +2199,11 @@ impl Conversation {
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            retrieval_cut,
+            left_out: snapshot.left_out,
+            pinned,
+            prompt_at: None,
+            recall_fallback_said: false,
         }
     }
 
@@ -1902,7 +2422,11 @@ fn within(text: &str, limit: usize) -> (&str, bool) {
 /// A skill the planner loaded is its own to read again with `load_skill`. One the person named is
 /// not offered to it, so it is told the instructions are for the line that named it and that only the
 /// person can have the rest loaded again.
-fn kept_skill(name: &str, body: &str, cut: bool, named: bool) -> String {
+fn kept_skill(name: &str, body: &str, cut: bool, named: bool, gone: Gone) -> String {
+    let gone = match gone {
+        Gone::Summarised => "are summarised above",
+        Gone::NoLongerSent => "are no longer sent",
+    };
     let ending = match (cut, named) {
         (false, _) => String::new(),
         (true, false) => format!(
@@ -1916,15 +2440,24 @@ fn kept_skill(name: &str, body: &str, cut: bool, named: bool) -> String {
     match named {
         false => format!(
             "You loaded the skill {name} earlier in this conversation, and the messages that held \
-             it are summarised above. Its instructions still apply. This is what you were given:\n\n\
+             it {gone}. Its instructions still apply. This is what you were given:\n\n\
              {body}{ending}"
         ),
         true => format!(
             "{NAMED_SKILL_OPENING}{name} earlier in this conversation, and the messages that held \
-             it are summarised above. Apply its instructions as the line that named it asked. This \
+             it {gone}. Apply its instructions as the line that named it asked. This \
              is what you were given:\n\n{body}{ending}"
         ),
     }
+}
+
+/// What became of the messages a skill sent again was in.
+#[derive(Debug, Clone, Copy)]
+enum Gone {
+    /// A compaction summarised them.
+    Summarised,
+    /// A retrieval cut passed them.
+    NoLongerSent,
 }
 
 /// Whether a message begins a round, so a cut may fall in front of it: anything that is not the
@@ -1933,7 +2466,12 @@ fn opens_a_round(stored: &Stored) -> bool {
     stored.message.tool_call_id.is_none()
         && !matches!(
             stored.composed,
-            Some(Composed::ToolResult | Composed::SkillNamed { .. } | Composed::SkillKept { .. })
+            Some(
+                Composed::ToolResult
+                    | Composed::SkillNamed { .. }
+                    | Composed::SkillKept { .. }
+                    | Composed::Retrieved { .. }
+            )
         )
 }
 
@@ -1953,6 +2491,7 @@ fn opens_an_exchange(stored: &Stored) -> bool {
                     | Composed::SkillKept { .. }
                     | Composed::Notice
                     | Composed::ModeNotice { .. }
+                    | Composed::Retrieved { .. }
             )
         )
 }
@@ -4003,6 +4542,9 @@ mod tests {
                 asked_to_write: false,
                 plan_mode_told: false,
                 holds: PUBLIC.to_string(),
+                retrieval_cut: 0,
+                left_out: 0,
+                pinned: Vec::new(),
             });
             assert_eq!(
                 restored.context(),
@@ -4066,6 +4608,9 @@ mod tests {
                 asked_to_write: false,
                 plan_mode_told: false,
                 holds: word.to_string(),
+                retrieval_cut: 0,
+                left_out: 0,
+                pinned: Vec::new(),
             });
             assert_eq!(
                 restored.holds(),
@@ -5462,5 +6007,472 @@ mod tests {
 
         conversation.mask_old_results();
         assert_eq!(conversation.compaction_boundary(), None);
+    }
+
+    /// A conversation of `exchanges` prompts, each answered at about 150 tokens.
+    fn long_bot_conversation(exchanges: usize) -> Conversation {
+        let mut conversation = Conversation::new();
+        for n in 0..exchanges {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        conversation
+    }
+
+    /// Messages as the bytes a request carries them in.
+    fn wire(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .map(|message| serde_json::to_string(message).expect("serialises"))
+            .collect()
+    }
+
+    /// The request's messages after the system prompt, as text.
+    fn request_texts(conversation: &Conversation) -> Vec<String> {
+        conversation
+            .with_system("SYSTEM")
+            .into_iter()
+            .skip(1)
+            .map(|message| message.content.text())
+            .collect()
+    }
+
+    /// RETRIEVE-27. A message is placed by the prompt whose exchange it is in and by what it was
+    /// there, counted as the transcript counts prompts, replies and calls.
+    #[test]
+    fn a_retrieved_message_is_placed_by_its_exchange_and_its_kind() {
+        use crate::report::{Place, Spoken};
+        let calling = |id: &str| ToolCallRequest {
+            id: id.to_string(),
+            ..a_call("read_file", "{}")
+        };
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push(Message::assistant("first answer"));
+        conversation.push(Message::user("second"));
+        conversation.push(Message::assistant_calling(
+            "reading two",
+            vec![calling("call-a"), calling("call-b")],
+        ));
+        conversation.push(Message::tool_result("call-a", "one"));
+        conversation.push(Message::tool_result("call-b", "two"));
+        conversation.push(Message::assistant("read them"));
+
+        let place = |ordinal, prompt, said| Place {
+            ordinal,
+            prompt: Some(prompt),
+            said,
+        };
+        assert_eq!(
+            conversation.places(&[6, 5, 0, 3, 5, 40]),
+            vec![
+                place(0, 0, Spoken::Prompt),
+                place(3, 1, Spoken::Reply { nth: 0 }),
+                place(5, 1, Spoken::Tool { nth: Some(1) }),
+                place(6, 1, Spoken::Reply { nth: 1 }),
+            ],
+        );
+
+        conversation.push(Message::user("third"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("excerpts".into(), vec![(0, 0), (5, 0)], "m".into());
+        assert_eq!(
+            conversation.retrieved_by_prompt(),
+            vec![(
+                2,
+                vec![
+                    place(0, 0, Spoken::Prompt),
+                    place(5, 1, Spoken::Tool { nth: Some(1) }),
+                ]
+            )],
+        );
+    }
+
+    /// RETRIEVE-27. Two retrievals in one turn both go in front of its prompt, the second after
+    /// the first, and both are that prompt's, not the exchange before it.
+    #[test]
+    fn two_retrievals_in_one_turn_are_both_the_prompts() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push(Message::assistant("first answer"));
+        conversation.push(Message::user("second"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("one".into(), vec![(0, 0)], "m".into());
+        conversation.insert_retrieved("two".into(), vec![(1, 0)], "m".into());
+
+        let found: Vec<(u32, String)> = conversation
+            .retrievals()
+            .into_iter()
+            .map(|(prompt, stored)| (prompt, stored.message.content.text()))
+            .collect();
+        assert_eq!(found, vec![(1, "one".to_string()), (1, "two".to_string())]);
+        let by_prompt = conversation.retrieved_by_prompt();
+        assert_eq!(by_prompt.len(), 1, "{by_prompt:?}");
+        assert_eq!(by_prompt[0].0, 1);
+        assert_eq!(by_prompt[0].1.len(), 2);
+    }
+
+    /// RETRIEVE-2. The cut is a view of the request: every message is still in the record, the
+    /// transcript and the written snapshot, and none went to the archive.
+    #[test]
+    fn a_retrieval_cut_leaves_the_record_whole() {
+        let mut conversation = long_bot_conversation(8);
+        let before = conversation.recounted();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+
+        assert_eq!(conversation.len(), 16);
+        assert_eq!(conversation.given(), 16);
+        assert_eq!(conversation.recounted(), before);
+        let snapshot = conversation.snapshot();
+        assert_eq!(snapshot.messages.len(), 16);
+        assert!(snapshot.archive.is_empty());
+        assert_eq!(snapshot.retrieval_cut, cut);
+        // The request is what was cut from.
+        let sent = request_texts(&conversation);
+        assert_eq!(sent.len(), 16 - cut);
+        assert_eq!(sent[0], "prompt 6");
+    }
+
+    /// RETRIEVE-8. A cut passing less than a quarter of the budget is not made, and once made it
+    /// stays put while the next exchanges are small, so each request starts with the bytes the
+    /// last one did.
+    #[test]
+    fn the_retrieval_cut_moves_only_in_steps() {
+        let mut conversation = long_bot_conversation(8);
+        // Six exchanges of about 150 tokens are under a quarter of 8,000.
+        assert_eq!(conversation.retrieval_boundary(8_000), None);
+        let cut = conversation
+            .retrieval_boundary(1_000)
+            .expect("a quarter of 1,000 tokens is passed");
+        conversation.cut_for_retrieval(cut);
+        let first = conversation.with_system("SYSTEM");
+
+        an_exchange(&mut conversation, "prompt 8");
+        assert_eq!(
+            conversation.retrieval_boundary(1_000),
+            None,
+            "one exchange more is not a step"
+        );
+        let second = conversation.with_system("SYSTEM");
+        assert_eq!(wire(&second[..first.len()]), wire(&first));
+
+        for n in 9..12 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let moved = conversation
+            .retrieval_boundary(1_000)
+            .expect("enough has built up again");
+        assert!(moved > cut);
+    }
+
+    /// RETRIEVE-10. A turn long by itself is cut between rounds, never between a call and its
+    /// result, and the request it leaves answers every call it holds.
+    #[test]
+    fn a_retrieval_cut_keeps_rounds_whole() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read everything"));
+        a_read_rounds(&mut conversation, 0..12);
+        let cut = conversation
+            .retrieval_boundary(400)
+            .expect("rounds to pass");
+        let opening = &conversation.messages()[cut];
+        assert!(opening.message.tool_call_id.is_none());
+        assert_eq!(opening.message.role, Role::Assistant);
+        conversation.cut_for_retrieval(cut);
+
+        let sent = conversation.with_system("SYSTEM");
+        for (index, message) in sent.iter().enumerate() {
+            if let Some(id) = &message.tool_call_id {
+                let called = sent[..index]
+                    .iter()
+                    .flat_map(|earlier| earlier.tool_calls.iter().flatten())
+                    .any(|call| &call.id == id);
+                assert!(called, "a result whose call was cut away: {id}");
+            }
+        }
+    }
+
+    /// RETRIEVE-10. A skill loaded before the cut is sent after it word for word, and so is the
+    /// task list the cut passes, ahead of the first message still sent.
+    #[test]
+    fn a_pinned_skill_is_sent_after_the_cut() {
+        let mut conversation = Conversation::new();
+        an_exchange(&mut conversation, "first");
+        a_skill_load(&mut conversation, "s1", "ship-it", "ALWAYS RUN THE TESTS");
+        conversation.push(Message::tool_result("t1", "0 of 1 done\n[pending] ship"));
+        conversation.task_list_shown();
+        for n in 0..6 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        assert!(cut > 4, "the skill and the list have to be passed");
+        conversation.cut_for_retrieval(cut);
+
+        let sent = request_texts(&conversation);
+        assert!(sent[0].starts_with(PINNED_PREFIX), "{}", sent[0]);
+        assert!(
+            sent[0].ends_with("0 of 1 done\n[pending] ship"),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[1].contains("are no longer sent"), "{}", sent[1]);
+        assert!(sent[1].ends_with("ALWAYS RUN THE TESTS"), "{}", sent[1]);
+        assert_eq!(sent[2], "prompt 4");
+        // Written down with the cut, so a resumed session sends the same.
+        let resumed = Conversation::restored(conversation.snapshot());
+        assert_eq!(
+            wire(&resumed.with_system("SYSTEM")),
+            wire(&conversation.with_system("SYSTEM"))
+        );
+    }
+
+    /// RETRIEVE-10. Nothing is pinned where the cut passes nothing to carry, so a plain bot
+    /// conversation gains no message of the driver's at the start.
+    #[test]
+    fn a_cut_that_passes_nothing_to_carry_pins_nothing() {
+        let mut conversation = long_bot_conversation(8);
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        assert_eq!(request_texts(&conversation)[0], "prompt 6");
+    }
+
+    /// RETRIEVE-8. Excerpts go in front of the turn's prompt as one message, and once a later
+    /// message of excerpts is added the earlier one is sent as a fixed stub.
+    #[test]
+    fn excerpts_are_one_message_in_front_of_the_prompt() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("what did I say first?"));
+        conversation.prompt_given();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        conversation.insert_retrieved("FIRST EXCERPTS".into(), vec![(0, 0)], "m".into());
+        conversation.push(Message::assistant("you said prompt 0"));
+
+        let sent = request_texts(&conversation);
+        let at = sent.iter().position(|text| text == "FIRST EXCERPTS");
+        assert_eq!(sent[at.expect("sent") + 1], "what did I say first?");
+        assert_eq!(
+            conversation.messages()[cut..]
+                .iter()
+                .filter(|stored| matches!(stored.composed, Some(Composed::Retrieved { .. })))
+                .count(),
+            1
+        );
+        // Not a turn of its own, so it does not count as an exchange the cut keeps.
+        assert!(!opens_an_exchange(
+            &conversation.messages()[cut + at.expect("sent")]
+        ));
+
+        conversation.push(Message::user("and second?"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("SECOND EXCERPTS".into(), vec![(2, 0)], "m".into());
+        let sent = request_texts(&conversation);
+        assert!(sent.contains(&RETRIEVED_STUB.to_string()), "{sent:?}");
+        assert!(!sent.contains(&"FIRST EXCERPTS".to_string()));
+        assert_eq!(sent[sent.len() - 2], "SECOND EXCERPTS");
+        assert_eq!(sent[sent.len() - 1], "and second?");
+        // The record still holds both whole (RETRIEVE-2), and a transcript draws neither.
+        assert!(
+            conversation
+                .messages()
+                .iter()
+                .any(|stored| stored.message.content.text() == "FIRST EXCERPTS")
+        );
+        assert!(
+            !conversation
+                .recounted()
+                .iter()
+                .any(|said| format!("{said:?}").contains("EXCERPTS"))
+        );
+    }
+
+    /// RETRIEVE-30. Excerpts found for a later prompt are owed only past a cut, leave the earlier
+    /// excerpts sent whole, and are written down as such; the next move of the cut stubs both.
+    #[test]
+    fn excerpts_for_a_later_prompt_leave_the_earlier_ones_whole() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("first?"));
+        conversation.prompt_given();
+        assert!(!conversation.excerpts_owed(), "nothing is cut yet");
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        conversation.insert_retrieved("FIRST EXCERPTS".into(), vec![(0, 0)], "m".into());
+        assert!(!conversation.excerpts_owed(), "the prompt has its excerpts");
+        conversation.push(Message::assistant("first answer"));
+
+        conversation.push(Message::user("second?"));
+        conversation.prompt_given();
+        assert!(conversation.excerpts_owed());
+        conversation.insert_recalled("SECOND EXCERPTS".into(), vec![(2, 0)], "m".into());
+        assert!(!conversation.excerpts_owed());
+        let sent = request_texts(&conversation);
+        assert!(sent.contains(&"FIRST EXCERPTS".to_string()), "{sent:?}");
+        assert!(!sent.contains(&RETRIEVED_STUB.to_string()), "{sent:?}");
+        assert_eq!(sent[sent.len() - 2], "SECOND EXCERPTS");
+        assert_eq!(sent[sent.len() - 1], "second?");
+        let resumed = Conversation::restored(conversation.snapshot());
+        assert_eq!(
+            wire(&resumed.with_system("SYSTEM")),
+            wire(&conversation.with_system("SYSTEM"))
+        );
+        conversation.push(Message::assistant("second answer"));
+
+        conversation.push(Message::user("third?"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("THIRD EXCERPTS".into(), vec![(4, 0)], "m".into());
+        let sent = request_texts(&conversation);
+        assert!(!sent.contains(&"FIRST EXCERPTS".to_string()), "{sent:?}");
+        assert!(!sent.contains(&"SECOND EXCERPTS".to_string()), "{sent:?}");
+        assert_eq!(sent[sent.len() - 2], "THIRD EXCERPTS");
+    }
+
+    /// The excerpts sent as context lines are written down with the retrieval, and a record
+    /// written before they were reads as one with none.
+    #[test]
+    fn the_context_lines_a_retrieval_sent_survive_a_resume_and_older_records_read() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("now?"));
+        conversation.prompt_given();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        conversation.insert_retrieved(
+            "EXCERPTS".into(),
+            Excerpts {
+                sent: vec![(0, 0), (0, 1), (1, 0)],
+                context: vec![2],
+            },
+            "m".into(),
+        );
+        let retrieved = |conversation: &Conversation| {
+            conversation
+                .messages()
+                .iter()
+                .find_map(|stored| match &stored.composed {
+                    Some(Composed::Retrieved { context, .. }) => Some(context.clone()),
+                    _ => None,
+                })
+                .expect("the retrieval's message")
+        };
+        let written = serde_json::to_string(&conversation.snapshot()).expect("the record");
+        let resumed =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
+        assert_eq!(retrieved(&resumed), vec![2]);
+
+        let older: Composed =
+            serde_json::from_str(r#"{"kind":"retrieved","excerpts":[[0,0],[4,1]],"model":"m"}"#)
+                .expect("a record written before the context lines were kept");
+        assert_eq!(
+            older,
+            Composed::Retrieved {
+                excerpts: vec![(0, 0), (4, 1)],
+                model: "m".into(),
+                refreshed: false,
+                context: Vec::new(),
+            }
+        );
+        let none = serde_json::to_string(&older).expect("written again");
+        assert!(!none.contains("context"), "{none}");
+    }
+
+    /// The vectors number messages without the summary and the resume's note, and so does the
+    /// ordinal a cut is asked about by.
+    #[test]
+    fn the_ordinal_at_a_position_skips_what_is_not_numbered() {
+        let mut conversation = long_bot_conversation(4);
+        compact_now(&mut conversation);
+        let archived = conversation.snapshot().archive.len();
+        assert_eq!(conversation.ordinal_at(0), archived as u32);
+        assert_eq!(
+            conversation.ordinal_at(1),
+            archived as u32,
+            "the summary is not numbered"
+        );
+        assert_eq!(conversation.ordinal_at(2), archived as u32 + 1);
+    }
+
+    /// A compaction stands for everything before it, so the cut starts again from the summary,
+    /// and a prompt the drain moved is still found.
+    #[test]
+    fn a_compaction_resets_the_retrieval_cut() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("now"));
+        conversation.prompt_given();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        compact_now(&mut conversation);
+
+        assert_eq!(conversation.retrieval_cut(), 0);
+        assert!(request_texts(&conversation)[0].starts_with(COMPACTED_PREFIX));
+        conversation.insert_retrieved("EXCERPTS".into(), Vec::new(), "m".into());
+        let sent = request_texts(&conversation);
+        assert_eq!(sent[sent.len() - 2], "EXCERPTS");
+        assert_eq!(sent[sent.len() - 1], "now");
+    }
+
+    /// RETRIEVE-28. What the request leaves out rises with each move of the cut and with each
+    /// compaction, a compaction that sends some of it again does not lower it, and a resumed
+    /// session counts on from it.
+    #[test]
+    fn what_the_request_leaves_out_only_rises_and_survives_a_resume() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("now"));
+        conversation.prompt_given();
+        assert_eq!(conversation.out_of_request(), 0);
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        assert_eq!(conversation.out_of_request(), cut);
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary.min(cut - 1), "a summary");
+        assert!(
+            conversation.archive.len() < cut,
+            "the compaction took everything"
+        );
+        assert_eq!(
+            conversation.out_of_request(),
+            cut,
+            "a compaction lowered it"
+        );
+
+        let resumed = Conversation::restored(conversation.snapshot());
+        assert_eq!(resumed.out_of_request(), cut);
+    }
+
+    /// A resume's note in front of the cut is not written down, so the cut written down stands in
+    /// front of the same message.
+    #[test]
+    fn the_cut_written_down_skips_a_resumes_note() {
+        let mut conversation = long_bot_conversation(2);
+        conversation.note_unfinished_turn();
+        for n in 2..8 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+
+        let snapshot = conversation.snapshot();
+        assert_eq!(snapshot.retrieval_cut, cut - 1);
+        let resumed = Conversation::restored(snapshot);
+        assert_eq!(request_texts(&resumed), request_texts(&conversation));
     }
 }

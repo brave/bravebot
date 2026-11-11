@@ -209,6 +209,13 @@ pub struct Task {
     ///
     /// [`Reporter::session_message`]: crate::report::Reporter::session_message
     pub inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>,
+    /// What finds the earlier excerpts a turn over its budget sends in place of a summary, or
+    /// `None` where the turn compacts as it always has
+    /// ([RETRIEVE-17](../../../../docs/specs/retrieval.md#RETRIEVE-17)).
+    ///
+    /// Set by the bridge for a bot's turn with the setting on and for nothing else. A delegate
+    /// never retrieves, since its conversation is its own and not the record the vectors are of.
+    pub retriever: Option<std::sync::Arc<dyn crate::retrieval::Retriever>>,
     /// How this session reaches the other background sessions, or `None` where it cannot send
     /// (MSG-12).
     ///
@@ -582,6 +589,7 @@ impl Task {
             remembering: None,
             advisor: None,
             inbox: None,
+            retriever: None,
             courier: None,
             keeps_links: false,
             model: None,
@@ -812,6 +820,15 @@ impl Task {
     /// Give the turn the inbox of the background session it runs in, or `None` for any other.
     pub fn with_inbox(mut self, inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>) -> Self {
         self.inbox = inbox;
+        self
+    }
+
+    /// Give the turn what retrieves for it, or `None` for a turn that compacts.
+    pub fn with_retriever(
+        mut self,
+        retriever: Option<std::sync::Arc<dyn crate::retrieval::Retriever>>,
+    ) -> Self {
+        self.retriever = retriever;
         self
     }
 
