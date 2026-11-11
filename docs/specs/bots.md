@@ -289,7 +289,7 @@ the window may send either ([BOT-6](#BOT-6)).
 The GUI's writes of its own file, `bravebot-ui.json`, no longer include the rows, so only the
 module changes them.
 
-What stays in the GUI is what only the GUI draws: the form. The briefing and the counters a bot made before definitions uses are not moved, because no turn reaches the briefing, since a bot is migrated before it is sent. The GUI's code for them is removed. The history of earlier memory versions is in `bravebot-ui-files`, and the module has no operation on it ([BOT-13](#BOT-13)). The code that
+What stays in the GUI is what only the GUI draws: the form. The briefing and the counters a bot made before definitions uses are not moved, because no turn reaches the briefing, since a bot is migrated before it is sent. The GUI's code for them is removed. The code that
 writes those counters into the rows (`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` in
 `ui/src/main/bots.ts`) is part of that removal, and the rows have no `remembered` or `quiet` field.
 `tidyMemory` stays in the GUI, since it acts only on a bot with no definition, which a first
@@ -304,7 +304,8 @@ anything from it. [LAYER-1](layering.md#LAYER-1) (which crate may do what) chang
 file in `~/.bravebot` and nothing else outside the person's own configuration. No crate is added. The
 slice that builds the module edits the row, because the table states what the crates are and a row
 ahead of its manifest fails the layering test. The rows of `bravebot-ui-files` and `bravebot-tui` change
-the same way, in the slice that adds the library and the dependency ([BOT-13](#BOT-13)).
+the same way, in the slice that builds the memory view, when the terminal reads the live memory file
+through `bravebot-ui-files` ([BOT-13](#BOT-13)).
 
 **Why a module of this crate.** The terminal and the GUI's bridge already depend on
 `bravebot-agent`, and the definitions a bot is written as are written there
@@ -409,12 +410,11 @@ definition.
 <a id="BOT-8"></a>
 ### BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
 
-Deleting a bot removes its row and the whole folder `<data folder>/bots/<slug>`, which holds the
-history of the bot's earlier memory versions ([BOT-13](#BOT-13)) and any `ground.md` an earlier
-GUI build left. The slug is checked before the path is composed. A delete from the terminal and
-one from the GUI remove the same things. It
-does not remove the definition, the sessions, the memory files in the folders the bot worked in, or
-the home folder. A bot made afterwards with the same name has the same slug only if no row holds it,
+Deleting a bot removes its row and the whole folder `<data folder>/bots/<slug>`. That folder is the
+GUI's history folder, and it may hold a leftover `ground.md` from an earlier GUI build. The module
+removes the folder and compares nothing. The slug is checked before the path is composed. A delete
+from the terminal and one from the GUI remove the same things. It does not remove the definition,
+the sessions, the memory files in the folders the bot worked in, or the home folder. A bot made afterwards with the same name has the same slug only if no row holds it,
 and its definition takes the next free name ([MEMORY-8](definition-memory.md#MEMORY-8)), so it does
 not share the earlier bot's memory, which is named after the earlier definition
 ([MEMORY-2](definition-memory.md#MEMORY-2), which names the memory after the definition).
@@ -584,7 +584,7 @@ kept with the run's ordinary tools and told to the run by path and never by its 
 [MEMORY-6](definition-memory.md#MEMORY-6), which keep and name the memory and add no tool). A write
 that leaves it untrusted is recorded by directory under `~/.bravebot/untrusted/`
 ([MEMORY-5](definition-memory.md#MEMORY-5), which records it in every session, incognito included).
-This design adds no memory tool and no memory file under the state directory. It keeps the history of earlier versions that the GUI keeps today, described below, which is a copy of a memory.
+This design adds no memory tool and no memory file under the state directory.
 
 A write the run makes to its memory passes the gate of every file write
 ([TRUST-4](trust-map.md#TRUST-4), which asks before untrusted data is written to a path that is trusted): a session
@@ -625,36 +625,15 @@ withheld after either. The one way a person grants trust to it is the yes to a q
 it ([TRUST-8](trust-map.md#TRUST-8), which asks whether to trust a file a turn reads that nobody vouched for). There
 is no `@` form for the memory and the GUI gets no control for it.
 
-The history of earlier versions of a memory that the GUI's panel shows today is kept by
-`bravebot-ui-files`, which becomes a library as well as the helper binary it is, and not by the
-module of [BOT-5](#BOT-5). Recording a version skips it when it equals the last one, and that
-comparison is on bytes a run wrote, so it runs in a crate that is not the driver
-([LAYER-2](layering.md#LAYER-2)). The history keeps up to 30 versions for each bot and folder, each
-with its time, its source (the bot's turn or the person's edit) and its text, in
-`<data folder>/bots/<slug>/memory-history-<hash>.json`. The module supplies the data folder and the
-slug ([BOT-4](#BOT-4)) and no operation on the history. The root of a history operation is
-`<data folder>/bots/<slug>`, composed by the program from the data folder and a validated slug and never
-named by a window, as the state directory is, and the helper's request names that one root. The slice
-that adds the library amends [TRUST-20](trust-map.md#TRUST-20) to admit it. The terminal calls the library directly
-and the GUI's main process calls the same operations through the helper binary it already
-uses for the memory file. The program that ran a turn records a version after it, and a person's
-save records one, so the terminal and the GUI record the same way
-([SHARE-001](../best-practices/shared-implementation.md#SHARE-001)). A delete removes the history
-with the bot's folder ([BOT-8](#BOT-8)), which compares nothing. The memory view lists the
-versions, newest first, with a read-only preview of the highlighted one and a key that opens it in the
-editor as the text to save, which the person then saves or not. The save is checked against the file's
-current text.
-[MEMORY-4](definition-memory.md#MEMORY-4) describes the history as retired in the GUI. Nothing builds that, and this clause keeps the GUI's behavior, and the memory spec's no-copy clause ([MEMORY-4](definition-memory.md#MEMORY-4)) is not amended here, so the two disagree (see "Known costs" below). A version is drawn by the rule above, inside the margin unless the memory's standing is `Kept` now, and the history stays where the GUI keeps it, outside every folder a run reaches by default.
-
-A version carries no mark of its own, as the GUI's history carries none. A version stored while the memory was untrusted is drawn without the margin once the memory's standing is `Kept` again, and a person who loads it and saves it writes those bytes to a trusted path. The GUI does this today, and this design keeps it as it is and does not close it (see "Known costs" below). A one-bit mark per version, taken from the record and not from the bytes, would close it and let this clause amend [MEMORY-4](definition-memory.md#MEMORY-4), and leaving the history out of the terminal's view would avoid it. Neither is adopted.
+The GUI keeps its history of earlier memory versions in TypeScript. The terminal does not record,
+list, or restore those versions.
 
 **Why the standing decides the margin.** The standing comes from the map and the record of
 untrusted writes, through the one function the run uses, so the pane and the run cannot disagree. The
-bytes decide nothing, so the driver does not branch on them. The comparisons on
-bytes a run wrote are the history's skip of a version equal to the last and the save's check that
-the file is the text the person started from. Both run in `bravebot-ui-files`, which is not the
-driver, and the driver hands it paths and the person's text and receives no bytes back to decide
-from.
+bytes decide nothing, so the driver does not branch on them. The save's check that the file is the
+text the person started from is a comparison on bytes a run wrote. It runs in `bravebot-ui-files`,
+which is not the driver, and the driver hands it paths and the person's text and receives no bytes
+back to decide from.
 
 `verified-by: none`
 
@@ -899,9 +878,6 @@ list later if the list looks too packed.
 - **A bot's row records folders as paths, and a directory put at a recorded path is one the bot may
   run in without a `/cd`.** A continued conversation there takes its map from its record, as any
   resume does ([BOT-9](#BOT-9), [KEPT-001](../best-practices/carried-grants.md#KEPT-001)).
-- **The history of memory versions can launder untrusted bytes, and [MEMORY-4](definition-memory.md#MEMORY-4)
-  plans to retire it.** [BOT-13](#BOT-13) ports it as the GUI has it, and that clause is not amended.
-  [MEMORY-10](definition-memory.md#MEMORY-10) records the retirement as not built.
 - **The GUI's rewind confirmation says a bot's memory is not rolled back, and the restore it
   calls puts the memory file back.** The text in `ui/src/renderer/components/Rewind.tsx` dates from
   when a bot's memory was a file the app owned. This design does not change it.
@@ -910,11 +886,6 @@ list later if the list looks too packed.
   there ([SKILL-3](skills.md#SKILL-3)), and trusting the folder does not change that. In the home
   directory itself the bot runs after a yes at the startup question and keeps no memory
   ([BOT-9](#BOT-9)).
-- **A directory the run may read that is, or holds, the GUI's data folder makes the history of memory
-  versions readable by the run, and writable under the session's write rules.** That includes a
-  session in the home directory, a folder opened with `/add-dir`, and a folder chosen in the GUI's
-  "Open a project" dialog, which does not exclude the data folder. A version a run planted can be
-  loaded and saved by a person ([BOT-13](#BOT-13)). The GUI behaves the same today.
 - **A run in a session whose workspace is, or holds, the state directory can write `bots.json`, and the
   module reads the rows as the person's own.** The write is put to the person in the default and
   accepting-edits modes ([PERM-9](permissions.md#PERM-9)) and is not asked in bypass mode. A row
@@ -926,9 +897,8 @@ list later if the list looks too packed.
   default one.** Bot homes are made under each program's own folder, and each row stores an absolute
   `home`, so both programs run either. The move from `bravebot-ui.json` reads the default folder when
   the terminal runs first, so rows kept in the custom folder are not moved and stay hidden from the
-  terminal. The history of memory versions and a delete are keyed on the data folder, so a version
-  recorded by one program is not listed by the other and a delete in one leaves the other's folder
-  ([BOT-4](#BOT-4), [BOT-13](#BOT-13)).
+  terminal. A delete is keyed on the data folder the program computes, so a delete in one leaves the
+  other's folder ([BOT-4](#BOT-4), [BOT-8](#BOT-8)).
 - **A `BRAVEBOT_HOME` that names the GUI's data folder, or a folder holding it or a bot's home, puts a
   bot's working folder inside the state directory.** The bot keeps no memory there
   ([MEMORY-2](definition-memory.md#MEMORY-2)), and a folder holding the state directory leaves its

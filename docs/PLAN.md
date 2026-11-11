@@ -23,21 +23,13 @@ The order of the remaining work:
 
 The design as a whole is proposed and not accepted. These decisions are accepted:
 
-- The history of memory versions is ported as the GUI has it, with no mark on a version. A
-  version stored while the memory was untrusted can be drawn without the margin and saved to a
-  trusted path, as the GUI allows today, and it is a known cost
-  ([BOT-13](specs/bots.md#BOT-13)). Existing requirements are not changed:
-  [MEMORY-4](specs/definition-memory.md#MEMORY-4) still says the GUI's history is retired, so it
-  disagrees with BOT-13. Decided 2026-10-13.
-- The comparisons on bytes a run wrote are not in the module. The history's skip of a version equal
-  to the last runs in `bravebot-ui-files`, which becomes a library as well as the helper binary, and
-  the save's check against the person's starting text already runs there. The terminal calls the
-  library and the GUI calls the same operations through the helper. `bravebot-tui` gains a
-  dependency on `bravebot-ui-files`, and the rows of [layering.md](specs/layering.md) change in the slice
-  that adds it, since a row ahead of its manifest fails the layering test. `tidyMemory` stays in the
-  GUI for a bot with no definition and the terminal does not tidy. Decided 2026-10-15. A history
-  request names the data folder's `bots/<slug>` folder as its one root, and slice 8 amends
-  [TRUST-20](specs/trust-map.md#TRUST-20) to admit it.
+- The terminal does not record, list, or restore earlier memory versions. The GUI keeps the history
+  it has until the retirement in [MEMORY-4](specs/definition-memory.md#MEMORY-4) is built.
+  [MEMORY-4](specs/definition-memory.md#MEMORY-4) and
+  [MEMORY-10](specs/definition-memory.md#MEMORY-10) are not amended. Decided 2026-11-11.
+- The comparisons on bytes a run wrote are not in the module. The save's check against the person's
+  starting text stays out of the module. `tidyMemory` stays in the GUI for a bot with no definition
+  and the terminal does not tidy. Decided 2026-10-15.
 - `--agent` is unchanged and does not open the bots layout. `--layout bots` with `--agent` is
   refused. Decided 2026-10-16.
 - The bots layout mimics the GUI's handling of a bot's definition. Every turn of a bot's session
@@ -142,7 +134,7 @@ for bots, so each terminal function is in the bots layout.
      that does not parse, or whose `bots` key is not an array, gives no rows, names its path and
      leaves no `bots.json`.
      Tests that read or write the state directory set `BRAVEBOT_HOME` to a scratch directory, and tests that
-     make a bot home or the history pass a scratch environment to the data-folder function, so none writes
+     make a bot home pass a scratch environment to the data-folder function, so none writes
      into the developer's real GUI data folder. Verified with `cargo test -p bravebot-agent`, `cargo test -p bravebot-ui-bridge`,
      `make check-spec`, and the GUI's test and type checks. The folder test names Linux with and
      without `XDG_CONFIG_HOME`, macOS and Windows.
@@ -297,37 +289,26 @@ for bots, so each terminal function is in the bots layout.
      the terminal. A session started as a bot asks the startup question about its folder, a no
      withholds the memory, leaving the question returns to the list, a continued conversation whose
      record holds a map is not asked, and `--layout bots` asks nothing.
-8. **The history of memory versions is kept by `bravebot-ui-files`, and the GUI calls it.** Add the
-   library and the operations that record, list and review versions
-   ([BOT-13](specs/bots.md#BOT-13)) to `bravebot-ui-files`, and switch the GUI's recording and
-   listing to the same operations through the helper, and edit the `bravebot-ui-files` and `bravebot-tui`
-   rows of [layering.md](specs/layering.md) with the library and the dependency. Done when the GUI's panel is unchanged, a
-   version equal to the last is not recorded, a delete removes the history, and the root of a
-   history operation is `<data folder>/bots/<slug>`, composed by the program and never named by a window.
-   The crate has no library target today, and its request names one root, which a history request fills
-   with that folder, so the slice adds the library and amends [TRUST-20](specs/trust-map.md#TRUST-20) to
-   admit the folder.
-9. **The memory view.** Add the view and edit of [BOT-13](specs/bots.md#BOT-13) to the layout for the
+8. **The memory view.** Add the view and edit of [BOT-13](specs/bots.md#BOT-13) to the layout for the
    selected bot in the selected conversation's folder, drawn with control characters replaced inside
    the untrusted margin unless the memory's standing is `Kept`, with no
    notice, deciding the margin from the standing. A save is refused over 64 kilobytes (KB), with a null
    character, when the file is not the text the person started from, and while a turn of the bot is
    in progress in the terminal, as the GUI's edit is for its own turns. A person's save does not change the
-   record. The view lists the history of memory versions with a way to review one and load it into
-   the edit, with a read-only preview of the highlighted version, memory is edited in the person's own
-   editor, and the terminal records a version after each turn of a bot and on a save. A write by the
+   record. Memory is edited in the person's own editor. The read of the live memory file goes through
+   `bravebot-ui-files`, and the slice edits the `bravebot-ui-files` and `bravebot-tui` rows of
+   [layering.md](specs/layering.md) for that read. A write by the
    run is asked first in a session that has read untrusted content. Done when a memory left untrusted
    by a run is drawn inside the margin, a memory whose standing is `Kept` is drawn without it, the layout with no session draws every memory inside it, a save
    from the view leaves the record as it was, a yes at a quarantined read takes the memory out of
    quarantine, a `/undo` over the memory file does not put back bytes the map would not trust
-   ([BOT-14](specs/bots.md#BOT-14)), and the GUI's panel is unchanged. A turn in the terminal
-   leaves a version that the GUI's panel lists.
-10. **The consolidation turns are built in Rust, and the GUI uses them.** Add the constant and the
-    bridge method that builds the consolidation and carry-over turns
-    ([BOT-15](specs/bots.md#BOT-15)), and remove the GUI's TypeScript text and its copy of the
-    test of the archive's length. Done when a window's request that carries the tag is handled as
-    before, the GUI's consolidation after a compaction is unchanged, and a test pins the constant.
-11. **The terminal consolidates after a compaction.** Add the terminal's hook
+   ([BOT-14](specs/bots.md#BOT-14)), and the GUI's panel is unchanged.
+9. **The consolidation turns are built in Rust, and the GUI uses them.** Add the constant and the
+   bridge method that builds the consolidation and carry-over turns
+   ([BOT-15](specs/bots.md#BOT-15)), and remove the GUI's TypeScript text and its copy of the
+   test of the archive's length. Done when a window's request that carries the tag is handled as
+   before, the GUI's consolidation after a compaction is unchanged, and a test pins the constant.
+10. **The terminal consolidates after a compaction.** Add the terminal's hook
     ([BOT-16](specs/bots.md#BOT-16)): compare the archive's length across each turn and after
     `/compact`, record it in the row, run the turn before queued lines, draw it as the GUI's line
     "Asked to bring its memory up to date", and send the carry-over turn after the migrating turn, or

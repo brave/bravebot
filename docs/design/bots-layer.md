@@ -33,7 +33,6 @@ tools ([MEMORY-2](../specs/definition-memory.md#MEMORY-2)).
 | A bot's memory | `<folder>/.bravebot/memory/<definition>.md` | the bot's own turns and a person's save from the memory view |
 | The record of untrusted writes | `~/.bravebot/untrusted/` | the agent, for every session |
 | A bot's home folder | `<data folder>/bot-homes/<slug>` | the module, when a bot is made or a conversation starts in it |
-| The history of memory versions | `<data folder>/bots/<slug>/memory-history-<hash>.json` | `bravebot-ui-files`, called by the program that ran the turn and on a save |
 
 The data folder is the GUI's own: `$XDG_CONFIG_HOME/bravebot-ui` or `$HOME/.config/bravebot-ui` on
 Linux, `$HOME/Library/Application Support/bravebot-ui` on macOS and `%APPDATA%\bravebot-ui` on Windows
@@ -47,8 +46,9 @@ A terminal run before any GUI reads a missing bots file as no rows. The first bo
 `bravebot-ui.json` cannot be read, the GUI reads four older files, `layout.json`, `view.json`,
 `recents.json` and `forks.json`, for its other keys. The module does not read them. The terminal needs
 none of their values, and they never held bots. The module writes a bots file that holds the rows and
-nothing else, because no other program writes it. The history of memory versions stays in the data
-folder as the GUI keeps it, and moving it is not part of this design.
+nothing else, because no other program writes it. The GUI keeps its existing history of memory
+versions in its data folder. This design does not move that history and does not give it to the
+terminal.
 
 ## Why a module of `bravebot-agent` owns the rows
 
@@ -171,8 +171,7 @@ Each item is specified in [../specs/bots.md](../specs/bots.md).
   ([BOT-10](../specs/bots.md#BOT-10), [BOT-11](../specs/bots.md#BOT-11),
   [BOT-12](../specs/bots.md#BOT-12), [BOT-14](../specs/bots.md#BOT-14)).
 - **The memory view.** The view shows the memory of the selected bot in the selected conversation's
-  folder, lets a person edit it, and lists the history of earlier versions with a way to review one and
-  load it into the edit. It draws the bytes with control characters replaced, inside the untrusted
+  folder and lets a person edit it. It draws the bytes with control characters replaced, inside the untrusted
   margin unless the memory's standing is `Kept`, the standing `/memory` and the run use
   ([MEMORY-12](../specs/definition-memory.md#MEMORY-12)). The margin is a bar the renderer draws before
   the content, which the content cannot forge, and the decision to draw it comes from the standing and
@@ -193,11 +192,11 @@ Each item is specified in [../specs/bots.md](../specs/bots.md).
   ([BOT-15](../specs/bots.md#BOT-15), [BOT-16](../specs/bots.md#BOT-16)).
 - **Archive, restore and delete.** Archiving and deleting ask for a confirmation that names the bot,
   as the GUI's do (`ui/src/renderer/components/ConfirmArchive.tsx` and `ConfirmDelete.tsx`), once
-  and keeping nothing. A delete removes the row and the memory history and cannot be undone, and an
-  archive closes the bot's open session. Delete is offered only for an archived bot. A delete removes the row and the whole folder
-  `<data folder>/bots/<slug>`, which holds the history of memory versions and, on a machine that ran an
-  earlier build, an old `ground.md` and any half-written `ground.md.<uuid>.tmp`. The slug is checked
-  before the path is composed. A delete does not remove the home folder, the definition, the sessions
+  and keeping nothing. A delete removes the row and the folder `<data folder>/bots/<slug>` and cannot be undone, and an
+  archive closes the bot's open session. Delete is offered only for an archived bot. That folder is the
+  GUI's history folder. On a machine that ran an earlier build it may hold an old `ground.md` and any
+  half-written `ground.md.<uuid>.tmp`. The module removes the folder and compares nothing. The slug is
+  checked before the path is composed. A delete does not remove the home folder, the definition, the sessions
   or the memory files in the folders the bot worked in. A delete and a save of the memory are refused
   while a turn of the bot is in progress in the same program. The GUI refuses them today with its
   own record of turns (`botHandles` and `runningHandles`, `ui/src/main/index.ts:80-81`, `:361-362`, `:784`,
@@ -230,7 +229,7 @@ because one implementation serves both programs.
 | The rows are written in place with `writeFileSync`, a read drops invalid rows without saying so, and two programs writing at once lose one write. | The file is written through a temporary file and a rename under a lock. A read reports each row it dropped and the next write still removes it. |
 | A delete removes the row and the folder `<data folder>/bots/<slug>` with a recursive removal (`removeMemoryHistory`, `ui/src/main/memory.ts:45-49`). | Unchanged, done by the module, which compares nothing. |
 | `migrateBot` (`ui/src/main/bots.ts:296-312`), `owesCarryOver` (`:282`), `oldMemoryFolder` (`:271`) and the consolidation text are TypeScript. | They are in the module and the GUI calls them through the bridge. `migrate` calls `migrate_definition` with the slug, the purpose, the model and the old memory folder, stores the name the agent answers with as the row's definition, and leaves the row as it was when the agent refuses. `owes_carry_over` is true for a bot with no definition in the old memory folder. The terminal migrates a bot before its first turn, and it does not refuse a bot with no definition. The GUI's handling of the `consolidation` tag on a window's request is unchanged (`sanitised`, `ui/src/main/sanitise.ts:43-78`, and `wire::composed`, `crates/ui-bridge/src/wire.rs:411-418`). |
-| The history of memory versions is kept by the GUI alone, in TypeScript. | It is kept by `bravebot-ui-files`, which becomes a library as well as the helper binary. The terminal calls the library and the GUI calls the same operations through the helper. The skip of a version equal to the last is a comparison on bytes a run wrote, so it is not in the module, which is driver code. |
+| The history of memory versions is kept by the GUI alone, in TypeScript. | The GUI keeps that TypeScript history. The terminal does not record, list, or restore it. |
 | The briefing file `ground.md` and the counters that decide when it is attached are code no turn reaches, since `sendBotTurn` runs `migrateBot` before it sends, and that returns a bot with a definition or throws (`ui/src/main/index.ts:196-227`, `ui/src/main/bots.ts:296-312`). | The code is removed, and the row has no `remembered` or `quiet` field. The code is `ground`, `groundText`, the `Grounding` type, `GITIGNORE`, `seedProjectMemory`, the branch of `sendBotTurn` that attaches the briefing (`ui/src/main/index.ts:228-245`), the `grounded` and `nudge` arguments, the counting of quiet turns (`noteBotMemory`, `nudgeDue`, `noteBotNudged`, `QUIET_MAX`) and the `grounded` flag of the renderer and the preload where nothing else uses it. The two calls that run before the migration, `nudgeDue` and `noteBotNudged` (`ui/src/main/index.ts:850-851`), change only the counters of a legacy bot's row. A search for callers confirms the list when the slice is written. |
 | The GUI's model handler is TypeScript (`saveBotModel`) that asks the agent to rewrite the definition and then writes the row. | It calls the module's set-model operation, which does both writes. |
 | The GUI shows no dialog before a bot is made or edited, and the methods that write a bot are not in the window's list. | Unchanged. The methods this design adds are kept out of the window's list the same way. |
@@ -332,7 +331,7 @@ takes in a diff.
 
 | Shape | Result |
 |---|---|
-| A branch on untrusted bytes | None. The module validates a slug, a name, a purpose and a model, which are text a person typed and rows from the person's own file, with one known cost, under "Where the rows come from", which is not one of the seven places [labels.md](../specs/labels.md) admits, and carries them. The memory view decides its margin from the memory's standing and never from the bytes. The history's skip of a version equal to the last and the save's check against the text the person started from run in `bravebot-ui-files`, which is not the driver, and the driver receives no bytes back to decide from. The test for a compaction compares two numbers the agent computes. |
+| A branch on untrusted bytes | None. The module validates a slug, a name, a purpose and a model, which are text a person typed and rows from the person's own file, with one known cost, under "Where the rows come from", which is not one of the seven places [labels.md](../specs/labels.md) admits, and carries them. The memory view decides its margin from the memory's standing and never from the bytes. The save's check against the text the person started from runs in `bravebot-ui-files`, which is not the driver, and the driver receives no bytes back to decide from. The test for a compaction compares two numbers the agent computes. |
 | The same branch moved into the kernel | None. No decision moves. |
 | A `declassify` outside the gates | None. Nothing is declassified. |
 | A `Labelled` built by hand | None. The module holds plain driver data and adds no construction site, so the count pinned in [labels.md](../specs/labels.md) does not change. |
@@ -348,8 +347,8 @@ The consolidation turn ([BOT-15](../specs/bots.md#BOT-15)) is composed by the br
 constant and names a path, never bytes. A window can still send the `consolidation` tag on its own
 request, as it can today. The tag changes how a transcript draws the turn and nothing a run decides.
 
-The history of memory versions is a copy of memory text under another path, kept in the GUI's data
-folder as the GUI keeps it today. That folder is not `~/.bravebot`, so
+The GUI keeps its history of earlier memory versions in its data folder. This design does not add a
+copy of that history and does not give it to the terminal. The data folder is not `~/.bravebot`, so
 [TRUST-11](../specs/trust-map.md#TRUST-11) does not make it trusted. Nothing is trusted until a person
 grants it ([TRUST-1](../specs/trust-map.md#TRUST-1)), and reading is confined to the working directory
 and the directories opened beside it ([TRUST-10](../specs/trust-map.md#TRUST-10)), which the bot's home
@@ -387,6 +386,5 @@ a live request with the person's credentials, so none is made. This is a known c
 ## Known costs
 
 The known costs are listed once, under "Known costs" in [bots.md](../specs/bots.md#known-costs), which
-governs them. The decisions about the memory history ([BOT-13](../specs/bots.md#BOT-13)) and about
-where the rows come from ("Where the rows come from", above) are recorded there as costs and as the
-alternatives that were not adopted.
+governs them. The decision about where the rows come from ("Where the rows come from", above) is
+recorded there as a cost.
