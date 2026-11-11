@@ -5301,6 +5301,24 @@ shown by running the program, or not entirely:
   `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
+- A file a stage wrote in an earlier process is not known to a later one. The record of directories a
+  stage may write lasts one process, and a command that opens no session records only the directory
+  it ran in and the checkout holding it. A program a stage planted in a directory that no later
+  command runs in, a virtualenv's `bin` among them, is found by that command if the directory is on
+  its `PATH`. Closing this takes a record that outlives the process, which holds a path a session
+  once wrote and nothing it removed. It is not built. [#3901](https://github.com/brave/bravebot/issues/3901)
+  tracks it.
+- What a confined `git` stage opened in a subdirectory reads or runs from the enclosing `.git`
+  (hooks, `core.fsmonitor`) has not been traced. It depends on the read grants of the sandbox
+  backend, which were not followed for this case. [#3901](https://github.com/brave/bravebot/issues/3901)
+  tracks it.
+- The lookups and the check of a `--settings` file on Windows have not been run, since no Windows
+  host was available. The checkout is found with the same function there, and `programs::program_name`
+  reads a Windows executable name, but no test of this clause ran on Windows.
+  [#3901](https://github.com/brave/bravebot/issues/3901) tracks it.
+- A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not found by
+  `with_checkout`, and neither is a layout with no `.git` above the working directory. The directory
+  itself is still recorded, so only a `bin` above it is searched.
 - Names and effects of the make, cargo, npm, go and python3 starts that are not settled, each with the
   run that would settle it:
   - Whether a `-fplugin=<library>` value in `FFLAGS`, `ASFLAGS`, `OBJCFLAGS`, `CGO_CXXFLAGS` or
@@ -5546,6 +5564,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::running::auth_status_starts_no_aws_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_with_the_aws_outside_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::doctor_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::doctor_starts_no_aws_from_the_checkout_or_the_directory_it_runs_in`
 `verified-by: bravebot_cli::scheduled_runs::schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in`
 `verified-by: bravebot_tui::opener::a_browser_opener_in_the_bin_of_the_checkout_holding_the_directory_is_not_the_one_started`
 `verified-by: bravebot_sandbox::checkout_in_search::a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin`
