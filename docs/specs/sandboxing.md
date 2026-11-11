@@ -4781,9 +4781,17 @@ shown by running the program, or not entirely:
     to a marker handler`, ubuntu-latest, under `dbus-run-session`) found the installed `kde-open`
     and ran it with the baseline environment of the test, and neither marker handler ran:
     `BRAVEBOT_OBSERVE_KDE_OPEN is set and the baseline kde-open ran (genuine, planted) = (false,
-    false)`. The test took 3.27 seconds. That run discarded `kde-open`'s output, so why no handler
-    ran is not known. The test now fails with `kde-open`'s path, how it ended and what it printed,
-    and the CI step prints the installed `kde-open` programs, so a later run shows them. A test
+    false)`. The test took 3.27 seconds. That run discarded `kde-open`'s output. In run 42978585691
+    the failure carried it: `/usr/bin/kde-open ended with exit status: 1; stdout: ""; stderr:
+    "\"applications.menu\"  not found in  QList()\nCould not read file
+    bravebot-test://example.invalid/.\n"`, with `(genuine, planted) = (false, false)`. So the
+    installed `kde-open` starts and exits with status 1, KService finds no `menus/applications.menu`
+    under the configuration directories the test gave it (both empty), and the address is not
+    opened. The log does not show the cause beyond those lines. The test now writes a minimal
+    `menus/applications.menu` into the empty configuration directory, which is `XDG_CONFIG_HOME`
+    and `XDG_CONFIG_DIRS` in every run but the two where one of them is the name under test, so the
+    other names it and every run reads the same menu. That run is not made yet, so whether
+    `kde-open` then runs the genuine handler is not known. A test
     added with #3884 runs it once per name with a marker handler, and a CI step runs that test under
     `dbus-run-session`; no name has been observed yet. Its names are
     from source only, read at these commits, none of which is a release tag: kde-cli-tools
@@ -4844,7 +4852,8 @@ shown by running the program, or not entirely:
   a missing `kde-open`, a baseline that starts no handler, or a name that runs the planted handler
   and is not removed by the opener fail the test. In run 42972425516 the baseline started no handler
   and the step failed. The failure message now carries `kde-open`'s path, how it ended and its stdout
-  and stderr. Names with no marker form (the plug-in
+  and stderr; run 42978585691 shows exit status 1 and `"applications.menu" not found in QList()`,
+  and the test now supplies a menu file as described in the `kde-open` entry above. Names with no marker form (the plug-in
   directories and names, `QT_STYLE_OVERRIDE`) are printed as not exercised. Without the variable
   it prints `skipped`, as it did on this macOS host. The test that puts a stand-in `kde-open` first on `PATH` and reads what
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the

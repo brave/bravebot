@@ -1241,7 +1241,8 @@ mod tests {
     /// select nothing: `HOME` and `XDG_CACHE_HOME` are scratch directories (the service cache is
     /// built there), `XDG_DATA_HOME` and `XDG_CONFIG_HOME` are empty directories, `XDG_DATA_DIRS`
     /// is a directory holding both handlers' entries and an `applications/mimeapps.list` that makes
-    /// `genuine` the default for the address, and `XDG_CONFIG_DIRS` is an empty directory. The
+    /// `genuine` the default for the address, and `XDG_CONFIG_DIRS` is the same directory as
+    /// `XDG_CONFIG_HOME`, which holds only a minimal `menus/applications.menu` (see below). The
     /// session bus and runtime directory are passed on, in case `kde-open` needs a bus (not
     /// established), and
     /// `QT_QPA_PLATFORM=offscreen` lets it start without a display. A name that replaces one of
@@ -1271,6 +1272,26 @@ mod tests {
         for directory in [&session, &home, &cache, &empty_data, &empty_config] {
             std::fs::create_dir_all(directory).unwrap();
         }
+        // KService reads a menu file `menus/applications.menu` from a configuration directory when
+        // it builds the service cache. In CI run 42978585691 the baseline ended with exit status 1
+        // and stderr `"applications.menu"  not found in  QList()` while both configuration
+        // directories were empty. The menu below names the standard application directories only,
+        // so which handler runs is still chosen by the data directories and `mimeapps.list`. It
+        // is in `empty_config`, which is `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` in every run except
+        // the two where one of them is the variable under test, and the other still names it, so
+        // every run reads the same menu.
+        std::fs::create_dir_all(empty_config.join("menus")).unwrap();
+        std::fs::write(
+            empty_config.join("menus/applications.menu"),
+            concat!(
+                "<!DOCTYPE Menu PUBLIC \"-//freedesktop//DTD Menu 1.0//EN\"\n",
+                " \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n",
+                "<Menu>\n<Name>Applications</Name>\n<DefaultAppDirs/>\n",
+                "<DefaultDirectoryDirs/>\n<DefaultMergeDirs/>\n",
+                "<Include><All/></Include>\n</Menu>\n"
+            ),
+        )
+        .unwrap();
         let scheme = "bravebot-test";
         let script = |marker: &str| {
             let path = root.join(format!("{marker}.sh"));
@@ -1407,9 +1428,13 @@ mod tests {
     /// The baseline failure carries the path of the `kde-open` run, how it ended, and what it
     /// printed on stdout and stderr. In CI run 42972425516 (job `Format, lint, and test`, step `Run
     /// kde-open with each name set to a marker handler`) the baseline ran neither handler,
-    /// `(false, false)`, and the whole test took 3.27 seconds. Both streams of `kde-open` were
-    /// discarded in that run, so how it ended and why no handler ran is not known. The test has
-    /// not been run to the point of a handler on the macOS host it was written on.
+    /// `(false, false)`, and the whole test took 3.27 seconds; its streams were discarded. In run
+    /// 42978585691 the same step failed with `/usr/bin/kde-open ended with exit status: 1`, stdout
+    /// empty and stderr `"applications.menu"  not found in  QList()` followed by `Could not read
+    /// file bravebot-test://example.invalid/.`, with both configuration directories empty. The
+    /// harness now writes `menus/applications.menu` into the empty configuration directory. Whether
+    /// that is enough for `kde-open` to run the genuine handler is not established: the test has
+    /// not been run since, and not on the macOS host it was written on.
     #[cfg(unix)]
     #[test]
     fn kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes()

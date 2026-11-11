@@ -199,6 +199,7 @@ jobs:
           command -v kde-open kde-open5 kde-open6 || true
           dpkg -s kde-cli-tools | grep -E '^(Package|Version):' || true
           dpkg -L kde-cli-tools | grep -E '/bin/' || true
+          ls /etc/xdg/menus 2>&1 || true
           dbus-run-session -- cargo test -p bravebot-tui --lib kde_open_run_with_each_name --locked -- --nocapture
 
       # Run once, with its output, to put the number of workflows skipped for want of a tool in the
