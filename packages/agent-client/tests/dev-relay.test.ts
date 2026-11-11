@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { connectDevRelay, RelayRefusedError, type DevRelay, type RelaySocket } from '../src/dev-relay/index.js'
-import type { AgentSession, Pending } from '../src/common/index.js'
+import type { AgentClient, AgentSession, InstanceInfo, Pending } from '../src/common/index.js'
 import { ModelStub, type PlannerStep } from './support/model-stub.js'
 import { hostBinary, isolatedEnvironment, until } from './support/rig.js'
 import { within } from './support/wait.js'
@@ -165,6 +165,17 @@ function replies(session: AgentSession): string[] {
   return session.view.rows.filter((row) => row.kind === 'reply').map((row) => (row.data as { reply: string }).reply)
 }
 
+/** The host's listing once no session it holds is working. A turn's worker can still be returning after its view says completed. */
+async function settled(client: AgentClient, what: string): Promise<InstanceInfo> {
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    const info = await client.instance()
+    if (info.sessions.every((held) => !held.working)) return info
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
 test('an app whose connection ended takes its session over through the next relay, holds what it had, and sends again', async () => {
   const host = await startHost({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'second reply' }] })
   const made = sockets()
@@ -174,7 +185,7 @@ test('an app whose connection ended takes its session over through the next rela
   await until(session, 'trust to be recorded', (view) => view.status === 'idle')
   await session.send('plan:first')
   await until(session, 'the first turn to end', (view) => view.status === 'completed')
-  const before = await first.client.instance()
+  const before = await settled(first.client, 'the first turn\'s worker to return')
   assert.deepEqual(before.sessions, [{ session: session.id, state: 'open', working: false, controlled: true }])
 
   made.opened[0]!.close(1000, 'the phone lost its network')
