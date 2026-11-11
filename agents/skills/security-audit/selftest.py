@@ -5375,7 +5375,7 @@ def test_a_new_program_lookup_is_not_unlisted():
     records the directory after it has matched the command.
     """
     recorded = (
-        "fn main() {\n    workspace::keep_out_where_this_ran();\n    match args.first() {}\n}\n"
+        "fn keep_out_where_this_ran() {}\nfn main() {\n    keep_out_where_this_ran();\n    match args.first() {}\n}\n"
     )
     listed = next(iter(audit.LOOKUPS_LISTED))
     one = "fn a() {\n    let r = Resolved::find(\"aws\", &path);\n}\n"
@@ -5416,11 +5416,14 @@ def test_a_new_program_lookup_is_not_unlisted():
     )
 
     late = (
-        "fn main() {\n    match args.first() {}\n    workspace::keep_out_where_this_ran();\n}\n"
+        "fn keep_out_where_this_ran() {}\nfn main() {\n    match args.first() {}\n    keep_out_where_this_ran();\n}\n"
     )
     for name, text in {
         "records after matching the command": late,
         "never records": "fn main() {\n    match args.first() {}\n}\n",
+        "defines the helper and never calls it": (
+            "fn keep_out_where_this_ran() {}\nfn main() {\n    match args.first() {}\n}\n"
+        ),
     }.items():
         found = audit_lookups({"crates/cli/src/main.rs": text})
         check(

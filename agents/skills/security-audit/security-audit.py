@@ -385,7 +385,7 @@ LOOKUP_QUALIFIED = re.compile(r"\b(?:programs|Resolved)::find(?:_on|_in)?\(")
 LOOKUP_BARE = re.compile(r"(?<![\w:.])(?<!fn )find_(?:on|in)\(")
 LOOKUP_IMPORT = re.compile(r"\buse\b[^;]*\bprograms::(?:find_(?:on|in)\b|\{[^}]*\bfind_(?:on|in)\b)")
 RECORD_IN = Path("crates/cli/src/main.rs")
-RECORD_CALL = re.compile(r"\bworkspace::keep_out_where_this_ran\(\)")
+RECORD_CALL = re.compile(r"(?<!fn )(?<![\w:])keep_out_where_this_ran\(\)")
 RECORD_BEFORE = re.compile(r"\bmatch\s+args\.first\(\)")
 # The production files that look a program up by name, with how many lookups each holds and why.
 # A command with no session records the directory it ran in (`record_findings`), and a session
@@ -1286,12 +1286,12 @@ def record_findings(sources):
             "program-lookup-record-missing",
             "a command that opens no session looks a program up without the directory it was run "
             "in having been recorded",
-            f"`{RECORD_IN}` does not call `workspace::keep_out_where_this_ran()` before it "
+            f"`{RECORD_IN}` does not call `keep_out_where_this_ran()` before it "
             "matches the command",
             "sandbox",
             "high",
             evidence=[str(RECORD_IN)],
-            fix="call `workspace::keep_out_where_this_ran()` before `match args.first()` in `main` "
+            fix="call `keep_out_where_this_ran()` before `match args.first()` in `main` "
             "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
             gain="a program found in the checkout a command was run in",
         )

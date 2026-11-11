@@ -83,7 +83,7 @@ list.
 
 `make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`) in a
 production file that `LOOKUPS_LISTED` in the same script does not count, and a `main` that does not
-call `workspace::keep_out_where_this_ran()` before it matches the command. A command that opens no
+call `keep_out_where_this_ran()` before it matches the command. A command that opens no
 session has recorded only that directory, so a new lookup is read for what is recorded when it runs
 (SANDBOX-30).
 
