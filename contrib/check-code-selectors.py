@@ -5,7 +5,8 @@ A program bravebot starts reads variables that name code to run (`LD_PRELOAD`, `
 `CLOUDSDK_PYTHON`, `NODE_OPTIONS`, and so on). `start` and `start_against` take a fourth argument,
 `CodeSelectors::Kept` or `CodeSelectors::Checked(&list)`, so a call site says whether those
 variables are taken off when their value names a path a stage may write. `gcloud`, `aws`,
-`ssh-keygen`, `ssh` and `git` each pass a CODE_SELECTORS list of their own, and the generic list
+`ssh-keygen`, `ssh`, `git`, `systemctl`, `systemd-inhibit` and `wl-copy` each pass a CODE_SELECTORS
+list of their own, and the generic list
 every checked start removes is in crates/sandbox/src/programs.rs. This script fails for:
 
 1. A `programs::start` or `programs::start_against` call outside crates/sandbox/src/programs.rs
@@ -82,6 +83,7 @@ SOURCES = [
     "crates/agent/src/usability.rs",
     "crates/bedrock/src/credentials.rs",
     "crates/cli/src/push_identity.rs",
+    "crates/schedule/src/schedule.rs",
     "crates/tui/src/opener.rs",
     "crates/tui/src/powershell.rs",
 ]

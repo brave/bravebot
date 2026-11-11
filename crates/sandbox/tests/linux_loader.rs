@@ -415,3 +415,39 @@ fn locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_c
         "NLSPATH was kept, though a list of templates is not checked as a path"
     );
 }
+
+/// The regression it rejects: `LD_ORIGIN_PATH` or `MUSL_LOCPATH` left in the environment of a
+/// checked start when it names a place a stage may write, or removed when it names a directory
+/// outside every one. A process the start made reports what it was given, so this shows the
+/// environment of a real process.
+///
+/// It does not show what the loader does with `LD_ORIGIN_PATH`. glibc 2.40 reads it only when it
+/// cannot read `/proc/self/exe` (`sysdeps/unix/sysv/linux/dl-origin.c`), so a run in which a
+/// library is loaded from the directory it names needs a process with no `/proc`. That run was not
+/// made. This test has not been run on a Linux host.
+#[test]
+fn ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write()
+ {
+    if !compiler_present() {
+        return;
+    }
+    let fixture = Fixture::new("origin");
+
+    for name in ["LD_ORIGIN_PATH", "MUSL_LOCPATH"] {
+        assert_eq!(
+            fixture.reported(name, &fixture.planted, false),
+            fixture.planted.to_str().unwrap(),
+            "{name} did not reach the process when nothing checked it"
+        );
+        assert_eq!(
+            fixture.reported(name, &fixture.planted, true),
+            "(unset)",
+            "{name} reached the process through a checked start"
+        );
+        assert_eq!(
+            fixture.reported(name, &fixture.genuine, true),
+            fixture.genuine.to_str().unwrap(),
+            "{name} was removed though it names a directory outside every writable one"
+        );
+    }
+}

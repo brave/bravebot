@@ -385,8 +385,7 @@ with no comment at the call or whose file has no row in the table of empty-list 
 `docs/specs/sandboxing.md`, and holds each variable in a `CODE_SELECTORS` list, in
 `crates/sandbox/src/programs.rs` (the generic table), `crates/agent/src/gcloud.rs`,
 `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`, the browser opener's in
-`crates/tui/src/opener.rs`, the Windows `powershell` starts' (and `osascript`'s, in a second
-list named `OSASCRIPT_CODE_SELECTORS`) in `crates/tui/src/powershell.rs` and
+`crates/tui/src/opener.rs`, the Windows `powershell` starts' (and `osascript`'s, `systemd-inhibit`'s and `wl-copy`'s, in lists named `OSASCRIPT_CODE_SELECTORS`, `SYSTEMD_INHIBIT_CODE_SELECTORS` and `WL_COPY_CODE_SELECTORS`) in `crates/tui/src/powershell.rs`, the `systemctl --user` starts' (`SYSTEMCTL_CODE_SELECTORS`) in `crates/schedule/src/schedule.rs` and
 the sandbox usability suite's in `crates/agent/src/usability.rs`, to
 a test that keeps a safe value and a test that removes one a stage may write. It fails when the
 opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read

@@ -3898,15 +3898,16 @@ file. A new spawn that looks a name up through
   bravebot's `PATH` reduced to the entries the lookup searches, in the order
   they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool, the
   browser opener or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
-  person's ssh configuration that names a bare program, or the program a `unixexec:` address in the
-  person's `DBUS_SYSTEM_BUS_ADDRESS` names to `systemd-inhibit` finds the program it starts only
-  among them. The authority is always an absolute path
+  person's ssh configuration that names a bare program finds the program it starts only among
+  them. The authority is always an absolute path
   ([CONNECTOR-2](connectors.md#CONNECTOR-2)). A hook named by a path gets the same `PATH` as one
   named bare. Where no entry is searched the program is started with no `PATH` variable. An empty
   `PATH` would be read as the current directory. A program the editor, a hook, a clipboard tool,
-  the browser opener, `ssh`, `systemd-inhibit` or the AWS CLI starts by name that is found only in a directory left out
+  the browser opener, `ssh` or the AWS CLI starts by name that is found only in a directory left out
   is not found by it, such as a bare `credential_process` command in the person's `~/.aws/config`.
-  A path in a `unixexec:` address, relative or not, is the person's own and is started as written.
+  `systemd-inhibit` and `systemctl --user` are given no `DBUS_SYSTEM_BUS_ADDRESS` or
+  `DBUS_SESSION_BUS_ADDRESS` at all (SANDBOX-30, "What a checked start does not cover"), so no
+  `unixexec:` address reaches them from the environment.
   A `PATH` names directories, so a file in a searched entry that links into a directory left out
   is still found by those lookups.
 - **The suite's programs started with no sandbox search only those entries as well.** The `gh` of
@@ -3943,10 +3944,10 @@ file. A new spawn that looks a name up through
 
   | Variable | Names |
   |---|---|
-  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `MUSL_LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
   | `LD_ORIGIN_PATH`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
   | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
-  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
+  | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, `PYTHONPLATLIBDIR`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
 
   `SHELLOPTS`, `PS4`, `BASH_FUNC_` and the asdf and pyenv names are in the generic table and not in
   one program's list because an asdf or pyenv shim is a `#!/usr/bin/env bash` script that is found
@@ -4014,12 +4015,23 @@ file. A new spawn that looks a name up through
   under a GNOME session the application's opener therefore still reads a `HOME` a stage may write.
   [#3904](https://github.com/brave/bravebot/issues/3904) tracks that. The names another program
   reads are added to its start when that program is audited. The usability suite's list
-  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 57 names) adds the names `git`, `make`,
-  `cargo` (with `rustc`, `rustdoc`, `rustup` and the `BROWSER` of `cargo doc --open`), `npm`
-  (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`) and `go` (with the C compiler, `pkg-config` and
-  linker flags a cgo build reads) read to choose code, and it matches by form
-  `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS` and every
-  `npm_config_` name in any case. `python3` is also given the generic table.
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 77 names) adds the names `git`, `make`
+  (the programs and flags of its built-in rules, `MAKE_COMMAND`, and `COMPILER_PATH` and
+  `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
+  the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, and the credential providers),
+  `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, and `OPENSSL_CONF`, `OPENSSL_MODULES` and
+  `OPENSSL_ENGINES` through the constants in `programs::selectors`) and `go` (with the C
+  compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
+  choose code, and it matches by form `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and
+  `_RUSTDOCFLAGS`, `CARGO_CREDENTIAL_ALIAS_<name>`, make's `COMPILE.<suffix>`, `LINK.<suffix>`,
+  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, and every
+  `npm_config_` name in any case. `python3` is also given the generic table, which holds
+  `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
+  compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
+  only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
+  applies to every checked start (`gcloud`, `aws`, `ssh` and `git` among them), none of which reads
+  them, and no list in `crates/sandbox/src/programs.rs` is selected by `cfg(windows)`. That row of
+  [#3811](https://github.com/brave/bravebot/issues/3811) stays open.
   `CC`, `CXX` and `PKG_CONFIG` are in this list and not in the generic table, because the generic
   table is applied to every checked start and only these starts compile or link. A run with a
   planted helper on the host recorded in the last bullet of "What a checked start does not cover"
@@ -4144,7 +4156,7 @@ file. A new spawn that looks a name up through
   | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
   | The browser opener | reduced to the entries the lookup searches, on every platform: an opener that is a script starts its interpreter by name |
   | The clipboard tools and `osascript` | reduced to the entries the lookup searches, on every platform: a tool that is a script or a launcher starts its interpreter by name |
-  | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first, and the other name `systemd-inhibit` can start is the program a `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names. |
+  | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first. `DBUS_SYSTEM_BUS_ADDRESS` is removed whatever it holds, so no program named by a `unixexec:` address is started. |
   | A `run` stage or background job, a line typed at the `!` prompt and the client the host starts | not applicable: the program is the one the planner or the person named, and what it starts is theirs. A stage under the sandbox is given the `PATH` a session's stage is given. |
   | `xcode-select` and `sandbox-exec` | not applicable: each is an absolute path written in the source that starts no other program by name |
   | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
@@ -4340,9 +4352,9 @@ file. A new spawn that looks a name up through
   | File | Start | Names read | Basis |
   |---|---|---|---|
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
-  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload`, `systemctl --user` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl` has four starts, `--user daemon-reload` (twice), `--user enable --now` and `--user disable --now`, each through `succeeds` in `schedule.rs`, which sends stdin, stdout and stderr to `/dev/null`. None passes `edit`, `-H` or `-M`. No name is listed for it. The systemctl manual page (freedesktop.org, latest) was read: `SYSTEMD_PAGER` and `PAGER` can only disable the pager unless `SYSTEMD_PAGERSECURE` is set, and `SYSTEMD_EDITOR`, `EDITOR` and `VISUAL` run only for `systemctl edit`, which `crates/` never calls. `SYSTEMD_UNIT_PATH`, `SYSTEMD_LIB_DIR` and `DBUS_SESSION_BUS_ADDRESS` are not named by the page read and are not listed. `Names` has no kind that judges a D-Bus address. Not run on Linux | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads. For `systemctl`, the manual page, with no run on any host |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis. None of the four passes `edit`, `-H` or `-M`. No Linux run was made | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
-  | `crates/tui/src/powershell.rs` | `pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`, `/usr/bin/caffeinate` and `systemd-inhibit`, every tool but `powershell` and `osascript`, which have lists of their own | on macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. For `systemd-inhibit`, `xclip`, `xsel` and `wl-copy` no name was added to a list. The bullets on what a checked start does not cover give the manual pages read. None of the four was run on Linux | the strings of the macOS binaries for those two, and the manual pages for the Linux tools |
+  | `crates/tui/src/powershell.rs` | `xclip` and `xsel`, the clipboard tools that are not `powershell`, `osascript`, `systemd-inhibit` or `wl-copy`, with `pbcopy`, `clip` and `/usr/bin/caffeinate`, which are started through the same function | `xclip` 0.13 and `xsel` 1.2.1 read no variable of their own that selects code, and the libraries they use read names that select a socket, a credential file or data only (`DISPLAY`, `XAUTHORITY`, `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). On macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. `systemd-inhibit` and `wl-copy` have lists of their own and are not empty-list starts. No Linux run was made | `xclip.c`, `xclib.c` of xclip 0.13, `xsel.c` of xsel 1.2.1, libX11 1.8.7, libxcb 1.16 and libXau 1.0.11, read for `getenv`, `exec*`, `dlopen` and `popen`; the strings of the macOS binaries for the other two |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
 
   The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
@@ -4358,9 +4370,8 @@ its own arguments through the `PATH` it was started with, not through the lookup
 judges where a link leads. `systemd-inhibit` starts `cat` that way, so its argument is the resolved
 path and not the bare name.
 An editor, a hook, a credential authority, a clipboard tool or an `aws` that is a script starts its
-interpreter the same way, `ssh` starts a `ProxyCommand`'s program so, and `systemd-inhibit` starts
-the program a `unixexec:` bus address names so, so each is given the `PATH` the lookup would have
-searched.
+interpreter the same way, and `ssh` starts a `ProxyCommand`'s program so, so each is given the
+`PATH` the lookup would have searched.
 
 **What it costs.** A directory is compared by device and inode, so a filesystem that reports the
 same pair for two directories (some FUSE, 9p and network mounts) leaves out an entry that should be
@@ -4404,9 +4415,9 @@ shown by running the program, or not entirely:
   running `powershell` on Windows that any variable in it changes what runs, or that no other
   variable does. `gcloud.cmd` and `APPDATA` are not in it, and have not been checked on Windows. It
   is tracked by #3808.
-- The dynamic-loader names (`LD_*`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`) have two tests in
-  `crates/sandbox/tests/linux_loader.rs`, which is compiled only on Linux. Neither has been run on
-  a Linux host or loader. The file was compiled and linted for `x86_64-unknown-linux-gnu` on
+- The dynamic-loader names (`LD_*`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `MUSL_LOCPATH`) have three
+  tests in `crates/sandbox/tests/linux_loader.rs`, which is compiled only on Linux. None has been
+  run on a Linux host or loader. The file was compiled and linted for `x86_64-unknown-linux-gnu` on
   macOS. The first,
   `a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_one_still_loads`,
   builds libraries that write a marker file when the loader runs them. For `LD_PRELOAD`,
@@ -4418,7 +4429,11 @@ shown by running the program, or not entirely:
   `locpath_and_nlspath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
   starts a program that reports its environment. It shows what the start hands the process and
   runs no loader or locale code. With no `cc` a test prints `skipped`, and with `CI` set it fails.
-  `LD_ORIGIN_PATH` is in the generic table and no test starts a program with it.
+  The third,
+  `ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
+  is of the same kind for `LD_ORIGIN_PATH` and `MUSL_LOCPATH`. It does not show what the loader
+  does with `LD_ORIGIN_PATH`, which glibc reads only when it cannot read `/proc/self/exe`
+  (see below). That run was not made.
   The names come from ld.so(8) on man7.org, which was read. Its secure-execution section says that
   in that mode "the effects of some environment variables are voided or modified, and furthermore
   those environment variables are stripped from the environment", and lists `GCONV_PATH`,
@@ -4430,44 +4445,154 @@ shown by running the program, or not entirely:
   (fetched from sourceware.org, version not recorded) lists these and also `GLIBC_TUNABLES`,
   `LD_BIND_NOT`, `LD_BIND_NOW`, `LD_PROFILE_OUTPUT`, `LD_VERBOSE`, `LD_WARN` and eight `MALLOC_`
   names. Both files show which names glibc distrusts under privilege. Neither says which of the names
-  outside the table select code. The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and
-  `LD_PRELOAD`, which name a library, a module or a directory searched for libraries, and `LOCPATH`
-  (`Names::Directories`) and `NLSPATH` (`Names::Options`, since it is a list of templates). `LOCPATH`
-  and `NLSPATH` are there because #3810 lists them as candidates. No source read shows that either
-  runs code. `TZDIR` and `RESOLV_HOST_CONF` are named by ld.so(8) and `unsecvars.h` too, are not
-  among the candidates in #3810, and are left out. The other names in the two lists are left out
-  for the same reason: nothing read shows that they name a library or program to run. No start in
-  `crates/` runs `getconf` on Linux, so `GETCONF_DIR` has no start to apply to.
-  `GLIBC_TUNABLES` is listed in `unsecvars.h` and is not in the table. The glibc manual page on
-  tunables (sourceware.org) was read and showed only the `GLIBC_TUNABLES=glibc.malloc...` syntax.
-  It gave no basis that the variable selects code to run, so there is no mechanism to judge. It
-  stays out until a Linux run shows one. #3810 lists it.
-  No musl documentation was read and no musl loader was run. `LD_LIBRARY_PATH` and `LD_PRELOAD`
-  are in the table by name, so a checked start removes them whichever loader the program uses.
+  outside the table select code, so the source was read as well: glibc 2.40 (the release tarball
+  from ftp.gnu.org, with `raw.githubusercontent.com/bminor/glibc/glibc-2.40` for single files and
+  `dl-tunables.list` of glibc 2.41 and 2.42) and musl 1.2.5 (musl.libc.org release tarball). Every
+  `getenv` and `secure_getenv` call in the library code of both was listed, and each name below was
+  decided from the code that reads it. No Linux host was available, so no loader or library was
+  run, and every decision rests on that reading.
+  The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and `LD_PRELOAD`,
+  which name a library, a module or a directory searched for libraries (glibc `elf/rtld.c`
+  `process_envvars` lines 2565 to 2728, `elf/dl-load.c` line 833, `iconv/gconv_cache.c` line 56 with
+  `iconv/gconv_conf.c` lines 372 to 410, which load a converter module from each directory).
+  `GCONV_PATH` is the only environment variable the `.c` and `.h` files of glibc's `iconv/`
+  directory read: a search of that directory at tag glibc-2.40 (read from source, not run) for
+  `getenv`, `secure_getenv` and `__libc_enable_secure` finds one call, `getenv ("GCONV_PATH")` in
+  `iconv/gconv_cache.c` line 56, which also turns the converter cache off when the variable is set.
+  `iconvdata/`, the modules themselves, was not searched, so a variable a converter module reads
+  is not examined. The table also holds `LOCPATH` (`Names::Directories`; `locale/newlocale.c`
+  reads locale data from each
+  entry), `NLSPATH` (`Names::Options`, since it is a list of templates; `catgets/catgets.c` lines 45
+  to 65 and musl `src/locale/catopen.c` line 37) and `MUSL_LOCPATH` (`Names::Directories`; musl
+  `src/locale/locale_map.c` line 66). `LOCPATH`, `NLSPATH` and `MUSL_LOCPATH` name locale and message
+  data the library maps and parses, not code, and are kept because the data selects what the library
+  interprets and #3810 lists them. A maintainer who holds that data is not code can remove them.
+  `LD_ORIGIN_PATH` is read only when glibc cannot read `/proc/self/exe`
+  (`sysdeps/unix/sysv/linux/dl-origin.c`), so it has an effect only in a process with no `/proc`.
+  musl reads `LD_LIBRARY_PATH` and `LD_PRELOAD` only when the process is not secure
+  (`ldso/dynlink.c` lines 1819 to 1825); a checked start removes them by name for either loader. musl
+  reads no other loader variable. musl `ldso/dynlink.c` `path_open` splits `LD_LIBRARY_PATH` on `:`
+  and newline and `load_preload` splits `LD_PRELOAD` on whitespace and `:`; glibc splits
+  `LD_LIBRARY_PATH` on `:` and `;` and `LD_PRELOAD` on space and `:`. A value that joins entries
+  with a separator `PATH` does not use is read as one nonexistent entry and removed.
+  Names left out, with the code that was read:
+  - `GLIBC_TUNABLES`. In glibc 2.40, 2.41 and 2.42 the only tunables of type STRING are
+    `glibc.cpu.hwcaps`, `glibc.cpu.x86_ibt`, `glibc.cpu.x86_shstk` and `glibc.cpu.name`
+    (`sysdeps/x86`, `sysdeps/aarch64`, `sysdeps/powerpc`, `sysdeps/s390`, `sysdeps/loongarch`
+    `dl-tunables.list`). They select CPU features and hwcaps subdirectory names. No tunable names a
+    file or directory, including `glibc.rtld.*`. Other releases and other architectures were not
+    read.
+  - `GETCONF_DIR`. `posix/getconf.c` executes a program from it only when not every `_SC_V*` and
+    `_SC_XBS5_*` environment constant is defined (line 510 against lines 527 to 625). They are
+    defined in glibc 2.40 `bits/confname.h`, so that branch is not compiled there.
+    `sysdeps/posix/sysconf.c` line 1225 only calls `stat` on a name under it. No start in `crates/`
+    runs `getconf` on Linux.
+  - `TZDIR` (`time/tzfile.c` line 150), `RESOLV_HOST_CONF` (`resolv/res_hconf.c` line 277) and
+    `HOSTALIASES` (`resolv/res_context_hostalias.c` line 103) name a time zone file, a resolver
+    configuration file and an alias file, which are parsed as data. `TZDIR` is the same kind of name
+    as `LOCPATH`, and is left out because the brief of #3810 does not list it as selecting code.
+  - `MALLOC_TRACE` (`malloc/mtrace-impl.c` line 179) names a file that is opened for writing. The
+    other `MALLOC_*` names are numbers (`elf/dl-tunables.list` `env_alias`). The malloc debugging
+    hooks load only through `LD_PRELOAD` of `libc_malloc_debug.so` (glibc `NEWS` for 2.34), which
+    the table covers.
+  - `LD_PROFILE`, `LD_PROFILE_OUTPUT` and `LD_DEBUG_OUTPUT` name a library to profile or a place
+    to write; `LD_BIND_NOW`, `LD_BIND_NOT`, `LD_DEBUG`, `LD_DYNAMIC_WEAK`, `LD_SHOW_AUXV`,
+    `LD_VERBOSE` and `LD_WARN` are flags. `LD_HWCAP_MASK` is not read by glibc 2.40. None is
+    loaded or run. `LOCALDOMAIN`, `RES_OPTIONS`, `NIS_PATH` and `TMPDIR` are strings and not paths
+    to code.
   `ci.yml` has no musl or Alpine job. `linux_loader.rs` uses a glibc converter module and
   `RUNPATH`, so it is written for glibc.
-- `systemd-inhibit` and `systemctl --user` are given the generic table and no names of their own.
-  Neither was run on Linux. The manual pages read were systemctl(1) and systemd-inhibit(1) from
-  freedesktop.org (latest). Both say that without `SYSTEMD_PAGERSECURE`, `SYSTEMD_PAGER` and
-  `PAGER` can only disable the pager. Each `systemctl` start (`crates/schedule/src/schedule.rs`:
-  `--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, all through
-  `succeeds`) and the `systemd-inhibit` start (`crates/tui/src/caffeinate.rs`, `start_program`)
-  sends stdout and stderr to `/dev/null`. The systemctl page documents `SYSTEMD_EDITOR`, `EDITOR`
-  and `VISUAL` for `systemctl edit` only. No start in `crates/` passes `edit`, `-H` or `-M`
-  to `systemctl`. Neither page names `DBUS_SESSION_BUS_ADDRESS`, `DBUS_SYSTEM_BUS_ADDRESS` or
-  `SYSTEMD_UNIT_PATH`, so none is judged. The row for `crates/schedule/src/schedule.rs` in the
-  empty-list table has the rest.
-- `xclip`, `xsel` and `wl-copy` are given the generic table and no names of their own. None was
-  run on Linux. The pages read were xclip(1) and xsel(1) from linux.die.net and wl-copy(1) from
-  man.archlinux.org. The xclip page documents `DISPLAY`, the xsel page documents the X display
-  (`--display`), and the wl-copy page documents `WAYLAND_DISPLAY`, `WAYLAND_DEBUG` and `WL_SEAT`.
-  Each names a server to connect to and none selects code to run in the tool, so no name was added
-  and the start has an empty list. A server a stage
-  wrote can read what is copied, which this entry does not decide. The wl-copy page says it runs
-  `xdg-mime(1)` on the content to infer its type; the variables of `xdg-mime` are listed under the
-  browser opener below. The three pages do not name `XAUTHORITY`, `XLOCALEDIR` or `XCOMPOSEFILE`,
-  and what Xlib or libwayland read was not read, so those are unchecked. The starts are in
-  `crates/tui/src/clipboard.rs`.
+- `systemd-inhibit` and `systemctl --user` are given the generic table and one or two names of their
+  own. No Linux run was made for either; the decisions rest on systemd v255 source (v257 for a
+  cross-check of the names), and the manual pages systemctl(1) and systemd-inhibit(1) from
+  freedesktop.org (latest) were read as well. Not covered: no `systemd-inhibit` or `systemctl` was
+  started with any of these names, so that sd-bus runs the program a `unixexec:` address names, and
+  that `systemctl` ignores `DBUS_SYSTEM_BUS_ADDRESS` for user scope, are read from source and not
+  observed. A distribution's systemd differs from the v255 tag in patches and build options, and
+  was not read. Whether `systemctl enable` reads `SYSTEMD_UNIT_PATH` on a booted host is the third
+  item of the not-settled bullet below.
+  - `systemd-inhibit` (`crates/tui/src/caffeinate.rs`, `start_program`, through
+    `crates/tui/src/powershell.rs`) is given `DBUS_SYSTEM_BUS_ADDRESS` as `Names::Options`.
+    `sd_bus_default_system` reads it (`src/login/inhibit.c` line 268, `src/libsystemd/sd-bus/sd-bus.c`
+    lines 1280 to 1290) and accepts a `unixexec:` address, for which `bus_socket_exec`
+    (`src/libsystemd/sd-bus/bus-socket.c` lines 1066 to 1069) calls `execvp` on its `path=`.
+    `secure_getenv` ignores the variable only in a privileged process, which this start is not.
+    No `Names` kind judges an address, so the variable is removed whatever it holds, including a
+    plain `unix:path=` address. sd-bus then uses `unix:path=/run/dbus/system_bus_socket`. A person
+    whose system bus is elsewhere gets an inhibitor that exits at once, which `/caffeinate`
+    reports as no hold. A rule that kept a `unix:path=` address outside every stage-writable
+    directory and refused every other transport would keep that case working. It needs a new
+    `Names` kind and a test, for a variable few people set, and was not built.
+    `DBUS_STARTER_ADDRESS` and `DBUS_STARTER_BUS_TYPE` are read only by `sd_bus_default` and
+    `sd_bus_open`, which `inhibit.c` does not call. `SYSTEMD_PAGER` and `PAGER` are read by
+    `pager_open`, which `inhibit.c` line 62 calls only for `--list`, which no start passes. The
+    start sends stdout and stderr to `/dev/null`.
+  - `systemctl --user` (`crates/schedule/src/schedule.rs`: `--user daemon-reload` twice,
+    `--user enable --now` and `--user disable --now`, all through `succeeds`) is given
+    `DBUS_SESSION_BUS_ADDRESS` as `Names::Options` and `SYSTEMD_UNIT_PATH` as `Names::Directories`.
+    `bus_connect_user_systemd` (`src/shared/bus-util.c` lines 234 to 268) falls back to
+    `sd_bus_default_user` when `XDG_RUNTIME_DIR` is unset or its private socket cannot be
+    connected to, and that reads `DBUS_SESSION_BUS_ADDRESS` (`sd-bus.c` line 1343) with the same
+    `unixexec:` handling as above. Removing it leaves `unix:path=$XDG_RUNTIME_DIR/bus`. A person
+    on another session bus address has the scheduler's `systemctl` calls fail, which `succeeds`
+    reports as false. `SYSTEMD_UNIT_PATH` (`src/basic/path-lookup.c` line 588) is a list of
+    directories searched first for unit files by a client-side `enable`
+    (`src/systemctl/systemctl-util.c` lines 873 to 894). `DBUS_SYSTEM_BUS_ADDRESS` is read only for
+    system scope. `SYSTEMD_PAGER`, `PAGER`, `SYSTEMD_EDITOR`, `EDITOR` and `VISUAL` are reached only
+    by `list-*`, `show`, `status`, `edit` and help, which no start passes. `SYSTEMD_LIB_DIR` is not
+    in v255 or v257. `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are the values `schedule.rs` itself
+    uses to place the unit, and are left as set.
+- `xclip` and `xsel` are given the generic table and no names of their own. No Linux run was made.
+  Not covered: that neither tool loads a library or runs a program under any variable was not
+  observed, and a libX11 built with `--enable-loadable-i18n` was not read (the fourth item of the
+  not-settled bullet below).
+  xclip 0.13 (`xclip.c`, `xclib.c`) has no `getenv`, `exec*`, `dlopen`, `popen` or `system(`, and
+  xsel 1.2.1 (`xsel.c`) reads only `XDG_CACHE_HOME` and `HOME` (lines 354 and 355), to place a
+  state directory it writes to. libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 were read for every
+  `getenv`: `DISPLAY` selects a socket or a TCP peer, `XAUTHORITY`, `HOME` and `USERNAME` select
+  the cookie file (`AuFileName.c`), `XENVIRONMENT` a resource file, and `XLOCALEDIR`,
+  `XLOCALELIBDIR` (`src/xlibi18n/lcFile.c`), `XCOMPOSEFILE` and `XCOMPOSECACHE` locale and
+  compose data that is parsed. `XLOCALEDIR` is read only on the locale path, which neither tool
+  reaches. A server a stage wrote can read what is copied, which this entry does not decide.
+  The starts are in `crates/tui/src/clipboard.rs`.
+- `wl-copy` is given `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `QT_PLUGIN_PATH`, `PERL5LIB` and
+  `PERLLIB` (`WL_COPY_CODE_SELECTORS` in `crates/tui/src/powershell.rs`). No Linux run was made.
+  Not covered: which of the programs `xdg-mime` starts runs on a given desktop was not observed,
+  the source of `qtxdg-mat` (LXQt) was not read, and whether the Perl `mimetype` runs in taint mode
+  was not settled (the first and second items of the not-settled bullet below), so the list can be
+  short.
+  The start passes no `--type`, so `wl-copy` runs `xdg-mime query filetype` on the content
+  (wl-clipboard v2.2.1 `src/wl-copy.c` lines 266 to 267), and `xdg-mime` (xdg-utils v1.2.1
+  `scripts/xdg-mime.in` lines 63 to 129 and 684 to 700) runs `gio info`, `kmimetypefinder`,
+  `qtxdg-mat` or `mimetype` by name, chosen by the desktop. `GIO_EXTRA_MODULES` (a list of
+  directories) and `GIO_MODULE_DIR` (one directory) are loaded from by GLib 2.80.0
+  (`gio/giomodule.c` lines 1310 and 1249). `QT_PLUGIN_PATH` is a list of plug-in directories (Qt
+  5.15.12 `qcoreapplication.cpp` lines 2728 and 2939), kept as a precaution since it was not shown
+  that `kmimetypefinder` loads one. `PERL5LIB` and `PERLLIB` are added to `@INC` when Perl is not
+  in taint mode (perl v5.38.0 `perl.c` lines 4823 to 4830), for the Perl `mimetype`. `wl-copy`
+  itself reads `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `XDG_ACTIVATION_TOKEN` and
+  `DESKTOP_STARTUP_ID`, which select a socket or are tokens. It does not read `WL_SEAT`; `--seat`
+  is an argument. `GDBus` has no `unixexec:` transport (`gio/gdbusaddress.c`), so
+  `DBUS_SESSION_BUS_ADDRESS` is not a code selector for `gio info`. `XDG_CURRENT_DESKTOP`,
+  `DESKTOP_SESSION`, `KDE_SESSION_VERSION` and `GNOME_DESKTOP_SESSION_ID` choose which of those
+  programs runs and are not code selectors, but a stage that sets them changes which of the names
+  above matter. Passing `--type text/plain` so that `xdg-mime` never runs would remove the
+  exposure; it was not done because it declares a type the content may not have.
+- Not settled for the five programs above. Each needs a Linux host:
+  - `xdg-mime` under LXQt runs `qtxdg-mat mimetype` (`xdg-mime.in` lines 114 to 128), whose source
+    was not read. Run `XDG_CURRENT_DESKTOP=LXQt strace -f -e trace=execve,openat xdg-mime query
+    filetype /tmp/x 2>&1 | grep -E 'execve|\.so'`.
+  - Whether the Perl `mimetype` runs in taint mode, which ignores `PERL5LIB`, was not settled; the
+    module source could not be fetched. Run `head -1 $(command -v mimetype)` and
+    `PERL5LIB=/tmp/p strace -f -e trace=openat mimetype /tmp/x`.
+  - Whether `systemctl enable` reads `SYSTEMD_UNIT_PATH` on a booted host, where
+    `install_client_side()` is false, was not traced in `src/shared/install.c`. Run
+    `SYSTEMD_UNIT_PATH=/tmp/u strace -f -e trace=openat systemctl --user enable --now <timer>`. If
+    nothing under `/tmp/u` is opened, the name can be dropped.
+  - Distribution builds of libX11 with `--enable-loadable-i18n` were not read. Run
+    `ldd $(command -v xclip)` and `strings $(readlink -f /usr/lib/x86_64-linux-gnu/libX11.so.6) |
+    grep -c xi18n`, or `strace -f -e trace=openat,execve env XLOCALEDIR=/tmp/loc xclip -selection
+    clipboard -o` and check that nothing under `/tmp/loc` is opened.
 - A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
   examined for the variables they read to choose code, by running each where it could be run, and
   the names are in the generic table or in the list of the start that runs the program (the AWS
@@ -4528,8 +4653,19 @@ shown by running the program, or not entirely:
     `QT_QPA_PLATFORM_PLUGIN_PATH` (`qguiapplication.cpp`) name directories plug-ins load from,
     `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS` and `QT_QPA_PLATFORM` (`qguiapplication.cpp`)
     and `QT_STYLE_OVERRIDE` (`qapplication.cpp`) name the plug-in loaded from them, and
-    `KDESYCOCA` (`ksycoca.cpp`) names the cache the `Exec` line of a handler is read from. Which
-    release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
+    `KDESYCOCA` (`ksycoca.cpp` line 698) names the cache the `Exec` line of a handler is read from.
+    The directories the handler is looked for in come from Qt's `QStandardPaths`, which reads
+    `XDG_DATA_HOME` (`qstandardpaths_unix.cpp` line 227), `XDG_CONFIG_HOME` (line 247),
+    `XDG_DATA_DIRS` (line 394) and `XDG_CONFIG_DIRS` (line 406), and KService's `KMimeAssociations`
+    (`kmimeassociations.cpp` line 71) and `KSycoca` (`ksycoca.cpp` lines 695 and 707) take their
+    `mimeapps.list` and `.desktop` directories and the cache from it.
+    `KSycoca` puts the cache file under the generic cache directory, which is `XDG_CACHE_HOME`
+    (`qstandardpaths_unix.cpp` line 189) or `HOME/.cache`, when `KDESYCOCA` is not set.
+    `XDG_CACHE_HOME` is not in the opener's list, and whether it should be is not decided here.
+    `XDG_CURRENT_DESKTOP` is read by `KService::showInCurrentDesktop` (`kservice.cpp` line 445)
+    and by `KMimeAssociations` (`kmimeassociations.cpp` line 47), to choose which entries are shown
+    and the name `<desktop>-mimeapps.list`. These reads are from source and none was observed in a
+    run. Which release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
     `KDEDIRS`, `KDE_FULL_SESSION`, `KDE_SESSION_VERSION`, `KDE_FORK_SLAVES` and the `QML*_IMPORT_PATH`
     names have no read in the files searched, which does not show they are never read. A run of
     `kde-open` on Linux is tracked by #3822.
@@ -4622,9 +4758,12 @@ shown by running the program, or not entirely:
   `XDG_RUNTIME_DIR` (used only in a test build of GLib).
   `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
   `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
-  mirror of the KDE repositories. Those files read `PATH` directly, reference no `BROWSER`, and
-  read no `XDG_*` or `KDE_*` variable. The terminal emulator comes from the KDE configuration file
-  and not from the environment.
+  mirror of the KDE repositories. Those files read `PATH` directly (`desktopexecparser.cpp`
+  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable themselves.
+  `kprocessrunner.cpp` sets `XDG_ACTIVATION_TOKEN` in the environment of the process it starts and
+  does not read it. The libraries they call do read `XDG_*` names, which are listed in the
+  `kde-open` entry above (KService 2bd4461c and Qt 6.10.0). The terminal emulator comes from the
+  KDE configuration file and not from the environment.
   `HOME` is in the opener's list and is removed when it names a directory a stage may write. With
   `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
   `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
@@ -4641,10 +4780,12 @@ shown by running the program, or not entirely:
   with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
-  stand-in for `xdg-open` instead; Qt's `QDesktopServices` and
-  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig`, which were not read, so that
-  `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`,
-  `XDG_CONFIG_DIRS` and `XDG_CURRENT_DESKTOP` is expected and unverified; the parts of GLib not
+  stand-in for `xdg-open` instead; KDE's `KConfig`, which was not read, and the platform
+  implementation of Qt's `QDesktopServices`, which was not located (`qdesktopservices.cpp` reads
+  no variable), so that what `kde-open` reads is complete only for the files named in the `kde-open`
+  entry above; that `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`,
+  `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and `XDG_CURRENT_DESKTOP` is read from
+  that source and was not run, so it is unverified by a run; the parts of GLib not
   read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
   the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
   set, which is shown only by a test of the opener's judgment of the value. The list of variables
@@ -4672,7 +4813,9 @@ shown by running the program, or not entirely:
 - The unconfined `make`, `cargo`, `npm`, `go` and `python3` of the `doctor --sandbox-check` re-run
   are given the generic table and the suite's own list ([SANDBOX-21](#SANDBOX-21)). Each name was
   found by running the program with a helper planted under it on macOS 26 (arm64) with GNU Make
-  3.81, cargo 1.99.0, npm 11.19.1, go 1.27.3 and python3 3.15.0. The helper ran under
+  3.81, cargo 1.99.0, npm 11.19.1, go 1.27.3 and python3 3.15.0, and the names added for #3811 with
+  python3 3.15.2, Apple clang, and GNU Make 4.0, 4.2.1, 4.3, 4.4 and 4.4.1 built from the
+  ftp.gnu.org tarballs with `./configure --without-guile`, with 3.81 as the control. The helper ran under
   `MAKEFLAGS` (`SHELL=` and `-I`), `MAKEFILES`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTC`,
   `RUSTDOC`, the `CARGO_BUILD_` forms of those, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`,
   `RUSTDOCFLAGS`, `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS`,
@@ -4687,6 +4830,22 @@ shown by running the program, or not entirely:
   `CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS` and `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` (for
   `cargo logout`), `CARGO_ENCODED_RUSTDOCFLAGS` and `CARGO_BUILD_RUSTDOCFLAGS` (`cargo test --doc` with
   `--test-runtool=`), `BROWSER` (`cargo doc --open`, in the suite's list as well as the browser opener's),
+  `CARGO_DOC_BROWSER` (`cargo doc --open --offline`, cargo 1.99.0), `CARGO_CREDENTIAL_ALIAS_<name>`
+  (cargo 1.99.0 `cargo --config registry.global-credential-providers=["<name>"] logout` ran the
+  program the variable names and did not run it without the variable), `GOAUTH` (`go list -m
+  example.com/x@latest` with `GOPROXY=https://127.0.0.1:9` ran the helper before the connection
+  failed), `CGO_CXXFLAGS` (a package with a `.cc` file, `-fno-integrated-as -B<dir>/` and an `as` in
+  the directory), `PYTHONPLATLIBDIR` (a relative value that climbs from `sys.prefix` to a copy of the
+  standard library holding a `sitecustomize.py`), `OPENSSL_CONF` with `OPENSSL_MODULES` (python3
+  `ssl.create_default_context()` loaded a provider library from the directory and its constructor
+  wrote a marker; `OPENSSL_CONF` alone loaded nothing), `COMPILER_PATH` (a directory holding `ld`),
+  and these make variables on 3.81 and on 4.0, 4.2.1, 4.3, 4.4 and 4.4.1 with the same result:
+  `MAKE_COMMAND` (through a `+$(MAKE)` recipe line), `OUTPUT_OPTION` (only when it holds
+  `-fno-integrated-as -B<dir>/ -o x.o`; a bare program name did not run), `ASFLAGS` and `CFLAGS` with
+  that form, `COMPILE.c`, `COMPILE.S`, `LINK.c`, `LINK.o`, `LEX.l`, `YACC.y`, `LINT.c` and
+  `PREPROCESS.r`. `OBJC` and `OBJCFLAGS` ran on 4.0 to 4.4.1 and not on 3.81, which has no
+  Objective-C rule. `TEX`, `TANGLE`, `CTANGLE`, `WEAVE` and `CWEAVE` ran on 4.4.1 and on 3.81. The
+  other suffixes of the dotted names are listed by analogy with those run.
   `PYTHONPATH` and `PYTHONUSERBASE` (a `sitecustomize`
   under the first and a `usercustomize` under the second), `PYTHONHOME` (a `sitecustomize` in the
   standard library it names), `PYTHONPYCACHEPREFIX` (an unchecked-hash `.pyc`), `PYTHONEXECUTABLE`
@@ -4695,26 +4854,44 @@ shown by running the program, or not entirely:
   `GNUMAKEFLAGS` or `MFLAGS` with `-f`, `-I` or `SHELL=` on 3.81, and `MAKEFLAGS` with `-f` in any
   spelling (`-f <file>`, `-f<file>`, `--file=`, `--makefile=`, `f <file>`, `-s -f <file>`), `-C`,
   `--directory=` or `-o`, none of which read the file or change directory when they come from
-  `MAKEFLAGS` on 3.81 (the same file passed on the command line does run, so the control holds),
-  `make` implicit-rule variables `ASFLAGS`, `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
-  built-in rule; a recipe that uses `$(CPP)` runs it), `CGO_CXXFLAGS`,
-  `CGO_FFLAGS`, the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
+  `MAKEFLAGS` on 3.81 (the same file passed on the command line does run, so the control holds).
+  On 4.0, 4.2.1, 4.3 and 4.4 the `-f` cases from `MAKEFLAGS` and `GNUMAKEFLAGS` also ran nothing; on
+  4.4.1 alone they ran the file, `--file=` and `f <file>` did too, and `-C /nonexistent` was
+  honoured. The 4.4 tag's `decode_switches` in `src/main.c` has the earlier condition, and 4.4.1's
+  adds `cs->env` to it, which reads from source as the cause. `--eval`, `-E`, `-- SHELL=<helper>`,
+  `SHELL=<helper>` as a variable, `MAKEFILES` and `CC` ran the helper on every version run.
+  `SHELL` in the environment, `MAKESHELL`, `CONFIG_SHELL`, `.SHELLFLAGS`, `MAKE_TERMOUT`,
+  `MAKE_TERMERR`, `-L`, `-l`, `-W` and the `getenv("SHELL")` fallback of an unexecutable recipe ran
+  nothing on 3.81 and on 4.0 to 4.4.1 (`make` does not export `SHELL`). GNU Make 4.1 was not run,
+  and no Guile-enabled build was run (`GUILE_LOAD_PATH` is read by libguile and a `$(guile)` call
+  needs makefile text, so it is reachable only through routes already withheld).
+  `make` implicit-rule variables `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
+  built-in rule; a recipe that uses `$(CPP)` runs it), the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
   `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
   through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
   `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
-  `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `CARGO`, `RUSTFMT`, `COMPILER_PATH`,
+  `CARGO_TARGET_DIR`, `CARGO_INSTALL_ROOT`, `CARGO`, `RUSTFMT`,
   `CARGO_REGISTRIES_CRATES_IO_CREDENTIAL_PROVIDER` for `cargo login`, `GOPATH` or `GOMODCACHE` holding a
-  toolchain (`go` tried to download it), `GOBIN`, `GOWORK`, `GOAUTH`, `GOPROXY`, `PYTHONSTARTUP` (for `-c`, `-m unittest` and `-m venv`),
+  toolchain (`go` tried to download it), `GOBIN`, `GOWORK`, `GOPROXY`, `PYTHONSTARTUP` (for `-c`, `-m unittest` and `-m venv`),
   `__PYVENV_LAUNCHER__`, `PYTHONBREAKPOINT`, `npm_config_node_options`,
   `npm_config_cache`, `npm_config_git` or `npm_config_prefix` (set to a directory holding the helper as
   `bin/npm` and `bin/node`, for `npm run`, `root -g`, `bin -g`, `prefix -g`, `config get prefix`, `ls`,
   `pack --dry-run`, `install --offline` and `-v`; it is removed anyway as an `npm_config_` name).
   `GNUMAKEFLAGS` and `MFLAGS` are in the suite's list because other versions of `make` read them.
+  `FFLAGS` and `CGO_FFLAGS` are listed from the documentation alone: no Fortran compiler was
+  installed on the host, so neither was run. `GCC_EXEC_PREFIX` is listed from the gcc manual
+  (`invoke.texi`) and ran nothing under Apple clang. `OPENSSL_ENGINES` is listed from the OpenSSL 3.0
+  `openssl-env` manual and was not run; `OPENSSL_MODULES` and `OPENSSL_CONF` are the constants
+  `crates/bedrock/src/credentials.rs` already shared. `PREPROCESS.S` was not run because the host's
+  file system ignores case, so `x.s` and `x.S` are one file; `PREPROCESS.r` was run in its place.
   `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
-  `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it. Windows was not run:
-  the suite runs nothing there. The names a Linux build of `make`, `cargo`, `npm`, `go` and
-  `python3` reads, and their versions, are not recorded; a Linux run of them is tracked by #3811
-  and #3863.
+  `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it.
+  No Linux or Windows run was made. The names a Linux build of `make`, `cargo`, `npm`, `go` and
+  `python3` reads, and their versions, are not recorded. The added names were read from the gcc
+  13.2.0 manual, openssl 3.0 `openssl-env`, the Node v24 command-line documentation, CPython
+  `Modules/main.c`, the go1.27.3 `cmd/go` source and the cargo 1.90.0 documentation, and none is
+  documented as read on Linux only. Windows was not run: the suite runs nothing there. A Linux run
+  of them is tracked by #3811 and #3863.
   Each test runs the program with the variable as the person set it first. Where the program does
   not run the helper, the test prints that it skipped and why, and asserts nothing further: a helper
   the program never reaches proves nothing. Where the control passes, the strict check runs on every
@@ -4726,11 +4903,35 @@ shown by running the program, or not entirely:
   the directory of `usercustomize.py` from `site.getusersitepackages()`, since the directory under a
   base is `lib/python/site-packages` for a macOS framework build and
   `lib/python3.<minor>/site-packages` for other builds. A skipped name stays in the lists and is
-  removed on every host. The results for the `cc` and `pkg-config`
+  removed on every host. The tests of `OBJC` and `OBJCFLAGS` print `skipped` where the `make` on
+  `PATH` is 3.81, which has no Objective-C rule. No test covers `FFLAGS`, `CGO_FFLAGS`,
+  `GCC_EXEC_PREFIX`, `PYTHONPLATLIBDIR` through a start or `OPENSSL_ENGINES`: unit tests pin their
+  kind and value rules. The results for the `cc` and `pkg-config`
   crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
-  `GOAUTH`, `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `COMPILER_PATH`, `RANLIB`,
+  `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `RANLIB`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
+- Names and effects of the make, cargo, npm, go and python3 starts that are not settled, each with the
+  run that would settle it:
+  - Whether a `-fplugin=<library>` value in `FFLAGS`, `ASFLAGS`, `OBJCFLAGS`, `CGO_CXXFLAGS` or
+    `CGO_FFLAGS` loads the library. The five are removed whatever they hold, so the question is
+    whether the removal was needed. A Linux host with gcc and a `.f` rule or a cgo package with a
+    `.cc` file would settle it.
+  - `GCC_EXEC_PREFIX` with a prefix holding a fake `cc1`, on a Linux gcc.
+  - `PYTHONINSPECT=1` with `PYTHONSTARTUP`. With python3 3.15.2, stdin from `/dev/null` and no
+    terminal the startup file did not run. That is weak evidence, since the interpreter had no
+    terminal. It is not listed.
+  - How far node trusts a cache entry a stage wrote under `NODE_COMPILE_CACHE`, and how far go
+    trusts one under `GOCACHE` or `GOMODCACHE`. None is listed. That is a question about the
+    integrity checks of those caches, which a probe of one host does not settle.
+  - Other `npm` names besides `npm_config_`: the public page of npm's configuration could not be
+    retrieved, so the list for npm is `npm_config_` and `NODE_OPTIONS` and `NODE_PATH` only.
+  - On Windows, `CL`, `_CL_` (which the MSVC compiler prepends and appends to its command line, and
+    which can hold `/analyze:plugin <dll>`), `LINK` and `_LINK_`, and the `VCINSTALLDIR`, `VSCMD_ARG_TGT_ARCH` and
+    `VSCMD_ARG_VCVARS_SPECTRE` that the `cc` crate reads to locate a toolset, are not listed and
+    were not run. make's use of `COMSPEC` and `MAKESHELL` on Windows is unread. The `ComSpec` of
+    Python's `subprocess` is used only with `shell=True`.
+  - A GNU Make built with Guile, and GNU Make 4.1.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
