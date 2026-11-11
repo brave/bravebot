@@ -2268,18 +2268,25 @@ linker or a credential provider. `GIT_SSH`,
 `CARGO_BUILD_RUSTC`, `CARGO_BUILD_RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`,
 `CARGO_BUILD_RUSTDOC`, `RUSTUP_TOOLCHAIN`, `PKG_CONFIG` and `PYTHONEXECUTABLE` are kept only when they name a
 program outside every directory a stage may write, `BROWSER` (the commands `cargo doc --open` runs)
-only when each command is one such program, and `RUSTUP_HOME` and `NODE_PATH` only when they
-name a directory (`NODE_PATH` a list of them) outside every one; `GIT_SSH_COMMAND`,
+only when each command is one such program, and `RUSTUP_HOME`, `NODE_PATH` and `COMPILER_PATH`
+only when they name a directory (`NODE_PATH` and `COMPILER_PATH` a list of them) outside every
+one; `GIT_SSH_COMMAND`,
 `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`,
 `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS`, `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTDOCFLAGS`,
 `CARGO_BUILD_RUSTDOCFLAGS`, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
-`CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS`, `GOFLAGS`, `GOCACHEPROG`, `CC`, `CXX`, `CGO_LDFLAGS`,
-`CGO_CFLAGS`, `CGO_CPPFLAGS`, the make variables `MAKE`, `RM`, `AR`, `AS`, `FC`, `PC`, `M2C`, `LEX`,
+`CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS`, `GOFLAGS`, `GOCACHEPROG`, `CC`, `CXX`,
+`CROSS_COMPILE`, `CGO_LDFLAGS`, `CGO_CFLAGS`, `CGO_CPPFLAGS`, `GCC_EXEC_PREFIX`,
+`_PYTHON_SYSCONFIGDATA_NAME`, `RANLIB`, `NVCC`, `ARFLAGS`, `RANLIBFLAGS`, the make variables
+`MAKE`, `RM`, `AR`, `AS`, `ASFLAGS`, `FC`, `PC`, `M2C`, `LEX`,
 `YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET` and `CO`, and the make flag variables `CFLAGS`,
 `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` are removed, as
 are `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER`,
 `CARGO_TARGET_<triple>_RUNNER`, `CARGO_TARGET_<triple>_RUSTFLAGS`,
-`CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` and every name that begins `npm_config_` in any case (this includes `npm_config_prefix`). A
+`CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`, the per-target
+forms of `CC`, `CXX`, `AR`, `RANLIB`, `NVCC`, `CFLAGS`, `CXXFLAGS`, `ARFLAGS`, `RANLIBFLAGS` and
+`PKG_CONFIG` that the `cc` and `pkg-config` crates read (`CC_<triple>`, `HOST_CC`, `TARGET_CFLAGS`
+and the others, as the next paragraphs state) and every name that begins `npm_config_` in any case
+(this includes `npm_config_prefix`). A
 `RUSTUP_HOME` that is removed, or that the environment checked does not hold, is set to the account's `.rustup`, since the `cargo` proxy finds
 its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX` and
 `NODE_OPTIONS` are in the generic table ([SANDBOX-30](#SANDBOX-30)), which a stage is given too.
@@ -2293,8 +2300,11 @@ the program never reaches through that variable does not make the test pass. `RU
 outside every directory a stage may write is kept. `GOENV`, `GOCACHEPROG`, `PKG_CONFIG`, `CXX`,
 `CGO_LDFLAGS`, `GOTOOLCHAIN`, `NODE_OPTIONS`, `NODE_PATH`, `BROWSER`, `npm_config_` names, `PYTHONHOME`,
 `PYTHONPYCACHEPREFIX`, `PYTHONEXECUTABLE`, `PYTHONSTARTUP`, `MAKEFLAGS` with `-I`, the make rule
-variables and linker flags, `CGO_CFLAGS`, `CGO_CPPFLAGS` and the cargo credential providers each have a
-test of the same kind against the real program.
+variables and linker flags, `CGO_CFLAGS`, `CGO_CPPFLAGS`, `_PYTHON_SYSCONFIGDATA_NAME`, `ASFLAGS` and
+the cargo credential providers each have a test of the same kind against the real program.
+`COMPILER_PATH` has one that ran on macOS. `GCC_EXEC_PREFIX` has one whose control runs the helper
+on no recorded host, so only the unit test of the list pins its removal
+([SANDBOX-30](#SANDBOX-30)).
 
 The variables below were examined for the programs the suite starts and are not removed, because
 planting a file under each and running the program as a stage runs it ran nothing. `xcrun` and the
@@ -2446,6 +2456,12 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_a_module_path`
 `verified-by: bravebot_agent::usability::a_setup_python_keeps_a_module_path_no_stage_can_write`
 `verified-by: bravebot_agent::usability::the_names_found_by_running_cargo_npm_go_and_python_are_removed`
+`verified-by: bravebot_agent::usability::the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_per_target_compiler_archiver_or_flags`
+`verified-by: bravebot_agent::usability::the_plain_ranlib_nvcc_and_archiver_flag_names_the_cc_crate_reads_are_removed`
+`verified-by: bravebot_agent::usability::a_setup_python_venv_is_not_handed_a_sysconfig_module_name`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler`
+`verified-by: bravebot_agent::usability::a_setup_make_is_not_handed_a_gcc_search_path_for_its_programs`
 `verified-by: bravebot_agent::usability::a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
@@ -4086,7 +4102,7 @@ file. A new spawn that looks a name up through
   The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
   the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP`, `HOME`,
   `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
-  and the GIO, Qt and KDE names in its table below. `GIO_LAUNCH_DESKTOP` is one file
+  and the GIO, Qt, KDE and Windows names in its table below. `GIO_LAUNCH_DESKTOP` is one file
   (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
   3100, read only when the process is not setuid), so a value is removed unless it is an existing
@@ -4135,17 +4151,19 @@ file. A new spawn that looks a name up through
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
   "What a checked start does not cover". The names another program
   reads are added to its start when that program is audited. The usability suite's list
-  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 77 names) adds the names `git`, `make`
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 83 names) adds the names `git`, `make`
   (the programs and flags of its built-in rules, `MAKE_COMMAND`, and `COMPILER_PATH` and
   `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
-  the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, and the credential providers),
-  `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, and `OPENSSL_CONF`, `OPENSSL_MODULES` and
+  the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, the credential providers, and the
+  `CROSS_COMPILE`, `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` the `cc` crate reads),
+  `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, `_PYTHON_SYSCONFIGDATA_NAME`, and `OPENSSL_CONF`,
+  `OPENSSL_MODULES` and
   `OPENSSL_ENGINES` through the constants in `programs::selectors`) and `go` (with the C
   compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
   choose code, and it matches by form `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and
   `_RUSTDOCFLAGS`, `CARGO_CREDENTIAL_ALIAS_<name>`, make's `COMPILE.<suffix>`, `LINK.<suffix>`,
-  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, and every
-  `npm_config_` name in any case. `python3` is also given the generic table, which holds
+  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, the per-target names
+  below, and every `npm_config_` name in any case. `python3` is also given the generic table, which holds
   `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
   compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
   only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
@@ -4160,11 +4178,70 @@ file. A new spawn that looks a name up through
   1.2.62 in a cargo build script ran `CC`, `CXX` and `AR`, and the `pkg-config` crate 0.3.33 ran
   `PKG_CONFIG`. `CC` and `CXX` hold a program and arguments, so they are options and removed whatever
   they hold; `PKG_CONFIG` is a program and is kept when it names one outside every directory a stage
-  may write. The `cc` crate also ran the helper through `CC_<triple>`, `CXX_<triple>`, `AR_<triple>`,
-  `HOST_CC`, `CFLAGS_<triple>`, `CXXFLAGS_<triple>` and `HOST_CFLAGS`, and the suite does not remove those:
-  the names are a family that this list does not match yet. No workflow of the suite builds a crate
-  with a build script that uses the `cc` crate, so the gap is not reached by a workflow that exists.
-  It is tracked by #3859. Configuration files that can name code, such as `.npmrc` and
+  may write.
+  The `cc` crate (1.4.3, the version `Cargo.lock` holds, read on macOS 26 arm64; 1.2.62 gives the same
+  order) and the `pkg-config` crate (0.3.33) read each of `CC`, `CXX`, `AR`, `RANLIB`, `NVCC`,
+  `CFLAGS`, `CXXFLAGS`, `ARFLAGS`, `RANLIBFLAGS` and `PKG_CONFIG` from the first of four names that is
+  set: `<NAME>_<target>`, `<NAME>_<target with - and . as _>`, `HOST_<NAME>` for a build that is not
+  cross compiling or `TARGET_<NAME>` for one that is, and `<NAME>`. The `cc` crate also puts
+  `CROSS_COMPILE` in front of the program names it looks for. The suite removes every one of them
+  whatever it holds: `CROSS_COMPILE` and the plain `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` are
+  in the list, as are `CC`, `CXX`, `AR`, `CFLAGS`, `CXXFLAGS` and `PKG_CONFIG`, and the
+  per-target forms are matched as a family by `names_a_compiler_for_a_target`. In `cc` 1.4.3 the
+  plain `RANLIB` is the program `get_ranlib` returns (`lib.rs` 3669) and `RANLIBFLAGS` is put on it
+  (3658), `ARFLAGS` is put on the `ar` that `Build::compile` runs (3611), and `NVCC` is the program
+  started in place of the compiler when a build script calls `cuda(true)` (3328). They are read
+  from `cc` source and not run: a build that reaches `get_ranlib` or `cuda(true)` was not made,
+  and the plain names are listed because the per-target forms of the same lookup are, so that
+  `HOST_RANLIB` is not removed while `RANLIB` is kept. A name matches the family when it is `HOST_`
+  or `TARGET_` and then one of the ten, or one of the ten, `_`, and a first character that is a
+  lower case letter or a digit, as a target is spelled. The per-target forms of `PKG_CONFIG` are
+  removed, where the plain `PKG_CONFIG` is kept when it names a program outside every directory a
+  stage may write: a target is a name that a person chooses, and the suite does not have one to
+  check the value against. The names these crates read that do not choose a program or a flag are
+  kept: `CC_FORCE_DISABLE`, `CC_ENABLE_DEBUG_OUTPUT`, `CC_SHELL_ESCAPED_FLAGS`,
+  `CRATE_CC_NO_DEFAULTS` and `CXXSTDLIB` (booleans or text the crate does not run),
+  `CC_KNOWN_WRAPPER_CUSTOM` (a wrapper program stem that is only compared with the compiler's name),
+  `PKG_CONFIG_PATH`, `PKG_CONFIG_LIBDIR`, `PKG_CONFIG_SYSROOT_DIR` and `PKG_CONFIG_ALLOW_CROSS`
+  (directories, or a boolean, for the `pkg-config` crate and program), `PAUTHTEST_SYSROOT` and
+  `PAUTHTEST_RESOURCE_DIR` (directories for the `pauthtest` target, `lib.rs` 4598 and 4613), and
+  `WASM_MUSL_SYSROOT` and `WASI_SYSROOT` (a sysroot for a WebAssembly target, which the suite does
+  not build).
+  The integration test runs the `cc` crate through ten per-target names on macOS 26 arm64, with a
+  build script that compiles a C file and a C++ file: `CC_<triple>`, `CC_<triple with _>`,
+  `HOST_CC`, `CXX_<triple>`, `HOST_CXX`, `AR_<triple>`, `HOST_AR`, `CFLAGS_<triple>`, `HOST_CFLAGS`
+  and `CXXFLAGS_<triple>`. The other per-target names (`RANLIB`, `NVCC`, `ARFLAGS`, `RANLIBFLAGS`
+  and `PKG_CONFIG` with a target, every `TARGET_` form and `HOST_CXXFLAGS`) are read from the
+  source and are pinned only by the unit test
+  `the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold`. `TARGET_CC` and the
+  other `TARGET_` names are read only for a cross compile; a build for the host reads the `HOST_`
+  names. The three flag cases pass `-fno-integrated-as -B<dir>` on macOS and `-B<dir>` elsewhere,
+  because gcc rejects `-fno-integrated-as`. The test was run on macOS only. The `-B<dir>` form was
+  not run with gcc, so whether those three cases run the helper on Linux is not recorded; where
+  the control does not run it they print `skipped`.
+  `a_setup_cargo_is_not_handed_a_per_target_compiler_archiver_or_flags` builds such a
+  package from the locked `cc`, `find-msvc-tools` and `shlex` in the account's registry cache as path
+  dependencies, with `--offline`, and skips and says so where the cache lacks one; where it lacks
+  one the test checks nothing. No workflow of the suite builds a crate with a build script that
+  uses the `cc` crate, so the workflows do not reach the names; the test does, and a workflow with
+  such a build script would need the crate on a host that has no registry cache.
+
+  The suite's list also holds these names for the `cc` crate, make and python3:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `ASFLAGS` | options | the flags make's built-in rule for a `.S` file gives the assembler; `-fno-integrated-as -B<dir>/` ran an `as` in the directory on macOS 26 (nothing for a `.s` file or a link) |
+  | `_PYTHON_SYSCONFIGDATA_NAME` | options | the name of the module `sysconfig` imports for its build variables, from `sys.path`, which holds the working directory for `-c` and `-m`; it ran a file a stage wrote there for `python3 -c` and `python3 -m venv` |
+  | `COMPILER_PATH` | a list of directories | the directories gcc searches for the programs it runs (`cc1`, `as`, `ld`); Apple clang on macOS 26 ran a helper `ld` found through it |
+  | `GCC_EXEC_PREFIX` | options | the prefix gcc searches first for the programs it runs, as `-B` does |
+  | `CROSS_COMPILE` | options | the `cc` crate puts it in front of the names of the compiler, `ar` and `ranlib` it looks for, so a value with a directory in it picks the program. Read from the crate source |
+  | `RANLIB` | options | the program `get_ranlib` returns in `cc` 1.4.3 (`lib.rs` 3669). Read from source, not run |
+  | `NVCC` | options | the program the `cc` crate starts in place of the compiler when a build script calls `cuda(true)` (3328). Read from source, not run |
+  | `ARFLAGS` | options | the flags put on the `ar` that `Build::compile` runs (3611). Read from source, not run |
+  | `RANLIBFLAGS` | options | the flags put on the `ranlib` it starts (3658). Read from source, not run |
+  | `CC_<target>`, `CXX_<target>`, `AR_<target>`, `RANLIB_<target>`, `NVCC_<target>`, `CFLAGS_<target>`, `CXXFLAGS_<target>`, `ARFLAGS_<target>`, `RANLIBFLAGS_<target>`, `PKG_CONFIG_<target>`, and `HOST_` or `TARGET_` in front of any of the ten | options (a family, matched by `names_a_compiler_for_a_target`) | the `cc` and `pkg-config` crates read each of the ten from the first of these spellings that is set, before the plain name, so each picks the same program or flags the plain name does. A build script ran the helper through ten of them on macOS 26 (`CC_<triple>`, `CC_<triple with _>`, `HOST_CC`, `CXX_<triple>`, `HOST_CXX`, `AR_<triple>`, `HOST_AR`, `CFLAGS_<triple>`, `HOST_CFLAGS`, `CXXFLAGS_<triple>`); the other forms are read from source and pinned by `the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold` |
+
+  Configuration files that can name code, such as `.npmrc` and
   `.cargo/config.toml` in a directory a stage may write, are not examined by the suite or by the
   lists; that is tracked by #3858.
   The stored-login `gh` removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite
@@ -4408,6 +4485,9 @@ file. A new spawn that looks a name up through
   | `QT_QPA_PLATFORM_PLUGIN_PATH` | a directory | where Qt loads the platform plug-in from |
   | `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS`, `QT_QPA_PLATFORM`, `QT_STYLE_OVERRIDE` | options | name the plug-in Qt loads from the directories above |
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
+  | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
+  | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
+  | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds; whether the start needs it was not run |
 
   What was run and what was read for these names is in "What a checked start does not cover".
 
@@ -4975,8 +5055,30 @@ shown by running the program, or not entirely:
   disk. What `gio` does with `HOME` removed was not run: the test removes nothing it can see
   `gio` fall back from, and does not run on a host where the account has handlers of its own.
   These were not run: a D-Bus service that answers `gio open` after the portal call it receives, so
-  that what it can make `gio open` start is unobserved; the Windows `rundll32` start, which was read, which no test on another
-  system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
+  that what it can make `gio open` start is unobserved. The Windows `rundll32 url.dll,FileProtocolHandler` start's list was read from public source:
+  Wine's `url.dll` hands the address to `ShellExecuteA`, Wine's `shlexec.c` expands
+  `%name%` in a handler's command template from the process's environment, Wine's `rundll32`
+  searches `PATH` for the library, and Wine's `kernelbase` starts a batch file through `COMSPEC`;
+  ReactOS's `shlexec.cpp` handles `SEE_MASK_DOENVSUBST` the same way; Microsoft's `ShellExecute`
+  pages name no variable; Microsoft's `rundll32` page and the rest of the ReactOS tree were not
+  read, and no source read shows `PATHEXT` being read by this start. No Windows run of this start
+  is recorded here. No Wine or ReactOS version is recorded for the source named. The opener
+  removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
+  `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
+  `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
+  `comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`, and on
+  Windows by `a_windows_name_is_removed_in_whatever_case_it_is_set`. The `sandbox-windows` job in
+  `.github/workflows/ci.yml` runs
+  `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`, which sets
+  the ten names in a child run of the test binary, asserts that the opener's start removes all
+  ten and that a stage-written batch file does not run, and prints for each name, and for
+  `PSModulePath`, whether a start with only that name put back ran the batch file. The child
+  begins with a newline and prefixes each record it prints with `windows-start-record: `, and the
+  test reads the records from the lines that begin with that prefix, so the check does not depend
+  on where the test harness's own output on the same stream ends; it also asserts that every
+  child printed its `start ended` record. The printed
+  record is not asserted. #3860 owns the Windows run; #3822 owns the rest of the opener list.
+  These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
   unobserved (the marker test and CI step are meant to observe it); a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
@@ -5094,8 +5196,9 @@ shown by running the program, or not entirely:
   nothing on 3.81 and on 4.0 to 4.4.1 (`make` does not export `SHELL`). GNU Make 4.1 was not run,
   and no Guile-enabled build was run (`GUILE_LOAD_PATH` is read by libguile and a `$(guile)` call
   needs makefile text, so it is reachable only through routes already withheld).
-  `make` implicit-rule variables `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
-  built-in rule; a recipe that uses `$(CPP)` runs it), the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
+  `make` implicit-rule variables `LD`, `F77`, `SHELL` and `CPP` (`ARFLAGS` is in the list
+  because the `cc` crate reads it; nothing from a
+  built-in rule; a recipe that uses `$(CPP)` runs it), `PKG_CONFIG_PATH`,
   `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
   through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
   `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
@@ -5115,12 +5218,37 @@ shown by running the program, or not entirely:
   file system ignores case, so `x.s` and `x.S` are one file; `PREPROCESS.r` was run in its place.
   `GOENV` and `CARGO_HOME` are removed from every start by the suite's `HOST_VARIABLES`, and
   `GOTOOLCHAIN` is set to `local`, so none of the three is handed a stage as the person set it.
-  No Linux or Windows run was made. The names a Linux build of `make`, `cargo`, `npm`, `go` and
-  `python3` reads, and their versions, are not recorded. The added names were read from the gcc
+  Windows was not run: the suite runs nothing there. The only Linux run is the one recorded below.
+  The names a Linux build of `make`, `cargo`, `npm`, `go` and `python3` reads, and their versions,
+  are not recorded beyond it. The added names were read from the gcc
   13.2.0 manual, openssl 3.0 `openssl-env`, the Node v24 command-line documentation, CPython
   `Modules/main.c`, the go1.27.3 `cmd/go` source and the cargo 1.90.0 documentation, and none is
-  documented as read on Linux only. Windows was not run: the suite runs nothing there. A Linux run
-  of them is tracked by #3811 and #3863.
+  documented as read on Linux only.
+  On macOS 26 (arm64) with python3 3.15.2 and GNU Make 3.81, `_PYTHON_SYSCONFIGDATA_NAME` ran a
+  module of that name found in the working directory for `python3 -c` and `python3 -m venv` (not
+  for a bare `python3 -c pass`), and `ASFLAGS` with `-fno-integrated-as -B<dir>/` ran an `as` in
+  the directory for a `.S` file and nothing for a `.s` file or a link. Both are in the list.
+  `COMPILER_PATH` (a list of directories) and `GCC_EXEC_PREFIX` (a prefix) are taken from the gcc
+  manual section "Environment Variables Affecting GCC", which says gcc searches them for the
+  programs it runs (`cc1`, `as`, `ld`). `cc` is gcc on Linux, and `make` and cgo start it. Neither
+  was run with gcc. `a_setup_make_is_not_handed_a_gcc_search_path_for_its_programs` runs `make` on
+  a C file with the helper planted as `as` and as `ld`, with a control first, and is not gated on a
+  platform. On macOS 26 (arm64) Apple clang ran a helper `ld` found through `COMPILER_PATH` on a
+  plain link, and a helper `as` with `-fno-integrated-as`, so that half passes there with its
+  control running the helper, and fails when `COMPILER_PATH` is taken out of the list. Apple clang
+  ran nothing through `GCC_EXEC_PREFIX`, and gcc looks in machine and version subdirectories of
+  the prefix, so a helper placed directly in the prefix is probably not found. The control of the
+  `GCC_EXEC_PREFIX` half therefore prints `skipped make-gcc-exec-prefix` on every host recorded
+  here, the half cannot fail on any of them, and only the unit test of the list pins the removal.
+  On Linux with GNU Make 4.4.1, gcc and python3 3.13.7, the controls of the tests for
+  `PKG_CONFIG` with `CGO_ENABLED=1`, `CGO_CFLAGS` with `-fno-integrated-as -B<dir>` (a clang
+  option) and `PYTHONEXECUTABLE` did not run the helper, so those tests print `skipped`. The three
+  names are not shown to be read there and stay in the list on every host. The controls of the
+  other tests were not reached on that run, so what they do on Linux is not recorded.
+  What GNU Make 4.x reads beyond `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS` and `MAKEFILES` is not
+  recorded. For `cargo`, `npm`, `go` and `python3` on Linux no version, run or name beyond the
+  ones above is recorded. A run on Linux, with versions and the names found, stays tracked by
+  #3863, and #3811 tracks the rest of the list.
   Each test runs the program with the variable as the person set it first. Where the program does
   not run the helper, the test prints that it skipped and why, and asserts nothing further: a helper
   the program never reaches proves nothing. Where the control passes, the strict check runs on every
@@ -5137,7 +5265,7 @@ shown by running the program, or not entirely:
   `GCC_EXEC_PREFIX`, `PYTHONPLATLIBDIR` through a start or `OPENSSL_ENGINES`: unit tests pin their
   kind and value rules. The results for the `cc` and `pkg-config`
   crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
-  `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `RANLIB`,
+  `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
 - Names and effects of the make, cargo, npm, go and python3 starts that are not settled, each with the
@@ -5315,13 +5443,17 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`
 `verified-by: bravebot_tui::opener::a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`
 `verified-by: bravebot_tui::opener::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the fifteen names set and the same calls on Electron's shell start it with all fifteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS, which the application keeps)`
 `verified-by: bravebot_sandbox::programs::a_bus_address_holds_only_when_every_entry_is_a_socket_outside_the_stage`
 `verified-by: bravebot_tui::opener::the_opener_removes_the_runtime_directory_and_bus_address_that_lead_to_a_socket_a_stage_may_write`
 `verified-by: bravebot_tui::opener::a_bus_socket_is_judged_by_where_it_leads_on_the_disk`
 `verified-by: bravebot_tui::opener::a_bus_address_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write`
+`verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
+`verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
+`verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the fifteen names set and the same calls on Electron's shell start it with all fifteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the nine Windows names, which the application keeps)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`

@@ -926,8 +926,12 @@ jobs:
   # and the empty Windows base rest on the code alone.
   #
   # Only the tests written for Windows run. The rest of the sandbox crate's tests use Unix paths
-  # and programs, and the agent's other confined-process tests spawn a POSIX shell. Target as in
-  # the windows job above.
+  # and programs, and the agent's other confined-process tests spawn a POSIX shell. The browser
+  # opener's three Windows tests in bravebot-tui also run (the step that follows the confine
+  # test): `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`,
+  # `a_windows_name_is_removed_in_whatever_case_it_is_set` and
+  # `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`. Target as
+  # in the windows job above.
   sandbox-windows:
     name: Sandbox on Windows
     runs-on: windows-latest
@@ -1047,6 +1051,24 @@ jobs:
           export TMP="$(cygpath -w "$RUNNER_TEMP/confine")"
           export TEMP="$TMP"
           cargo test -p bravebot-agent --locked --no-fail-fast --test confine
+
+      # The browser opener's Windows start, `rundll32 url.dll,FileProtocolHandler` (#3860). The
+      # run test starts a child of the test binary with the nine names of the list set to a
+      # stage-written helper, asserts the opener's start removes them and that the helper does not
+      # run, and prints, for each name and for `PSModulePath`, whether a start with that name put
+      # back ran it. The printed record is not asserted and is kept in the step output. `3 passed`
+      # fails the step if a test was filtered out.
+      - name: Test the browser opener's Windows start
+        run: |
+          mkdir -p "$RUNNER_TEMP/opener"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/opener")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-tui --locked --lib -- --nocapture --exact \
+            opener::tests::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it \
+            opener::tests::a_windows_name_is_removed_in_whatever_case_it_is_set \
+            opener::tests::the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments \
+            | tee "$RUNNER_TEMP/opener.log"
+          grep -q 'test result: ok. 3 passed' "$RUNNER_TEMP/opener.log"
 
   # The tests that ask the volume whether two awkward names are two files, run on the volume that
   # holds names apart that no other host does (#2869, TRUST-2). On every other host `two_files`

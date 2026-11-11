@@ -1127,6 +1127,204 @@ fn a_setup_cargo_is_not_handed_a_compiler_or_a_workspace_wrapper() {
     }
 }
 
+/// The version `Cargo.lock` holds for the crate `name`.
+fn locked_version(name: &str) -> Option<String> {
+    let lock =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .ok()?;
+    let rest = lock
+        .split(&format!("name = \"{name}\"\nversion = \""))
+        .nth(1)?;
+    Some(rest.split('"').next()?.to_string())
+}
+
+/// The `src` directory of the version of the crate `name` that `Cargo.lock` holds, from the
+/// registry cache of the account running the test. `None` when the cache does not hold it.
+fn cached_source(name: &str) -> Option<PathBuf> {
+    let version = locked_version(name)?;
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))?;
+    std::fs::read_dir(cargo_home.join("registry").join("src"))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|index| index.path().join(format!("{name}-{version}")).join("src"))
+        .find(|source| source.is_dir())
+}
+
+/// Every file under `directory` as a path under `prefix` and its text.
+fn source_files(directory: &Path, prefix: &str, into: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(directory).expect("a source directory") {
+        let path = entry.expect("an entry").path();
+        let name = format!(
+            "{prefix}/{}",
+            path.file_name().expect("a name").to_string_lossy()
+        );
+        if path.is_dir() {
+            source_files(&path, &name, into);
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            into.push((name, text));
+        }
+    }
+}
+
+/// A package whose build script compiles a C file and a C++ file with the `cc` crate, the version
+/// in `Cargo.lock`, which it takes with the two crates that one needs from the registry cache as
+/// path dependencies so that no network or registry index is read. `None` where the cache lacks
+/// one of them, and says so.
+fn package_that_builds_with_cc(name: &str) -> Option<Vec<(String, String)>> {
+    let crates = ["cc", "find-msvc-tools", "shlex"];
+    let sources: Vec<Option<PathBuf>> = crates.iter().map(|krate| cached_source(krate)).collect();
+    if sources.iter().any(Option::is_none) {
+        eprintln!(
+            "skipped {name}: the registry cache lacks the locked cc, find-msvc-tools or shlex"
+        );
+        return None;
+    }
+    let mut files = vec![
+        (
+            "demo/Cargo.toml".to_string(),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             build = \"build.rs\"\n[build-dependencies]\ncc = { path = \"vendor/cc\" }\n[workspace]\n"
+                .to_string(),
+        ),
+        ("demo/src/lib.rs".to_string(), "pub fn f() {}\n".to_string()),
+        (
+            "demo/build.rs".to_string(),
+            "fn main() {\n    cc::Build::new().file(\"c.c\").compile(\"democ\");\n    \
+             cc::Build::new().cpp(true).file(\"d.cpp\").compile(\"democpp\");\n}\n"
+                .to_string(),
+        ),
+        ("demo/c.c".to_string(), "int one(void) { return 1; }\n".to_string()),
+        ("demo/d.cpp".to_string(), "int two() { return 2; }\n".to_string()),
+    ];
+    let manifests = [
+        (
+            "cc",
+            "edition = \"2021\"\n[dependencies]\nfind-msvc-tools = { path = \"../find-msvc-tools\" }\n\
+             shlex = { path = \"../shlex\" }\n",
+        ),
+        (
+            "find-msvc-tools",
+            "edition = \"2021\"\n[lib]\nname = \"find_msvc_tools\"\n",
+        ),
+        (
+            "shlex",
+            "edition = \"2018\"\n[features]\ndefault = [\"std\"]\nstd = []\n",
+        ),
+    ];
+    for ((krate, source), (_, manifest)) in crates.iter().zip(&sources).zip(manifests) {
+        let version = locked_version(krate)?;
+        files.push((
+            format!("demo/vendor/{krate}/Cargo.toml"),
+            format!("[package]\nname = \"{krate}\"\nversion = \"{version}\"\n{manifest}"),
+        ));
+        source_files(
+            source.as_deref()?,
+            &format!("demo/vendor/{krate}/src"),
+            &mut files,
+        );
+    }
+    Some(files)
+}
+
+/// SANDBOX-30 (brave/bravebot#3859): the `cc` crate in a build script (the locked version, 1.4.3)
+/// takes the compiler, the C++ compiler, the archiver and the flags from `<NAME>_<target>`,
+/// `<NAME>_<target with _>`, `HOST_<NAME>` and `<NAME>`, in that order, and ran the program or the
+/// helper directory each named. Each is removed whatever it holds.
+///
+/// The test runs ten forms: `CC_<triple>`, `CC_<triple with _>`, `HOST_CC`, `CXX_<triple>`,
+/// `HOST_CXX`, `AR_<triple>`, `HOST_AR`, `CFLAGS_<triple>`, `HOST_CFLAGS` and `CXXFLAGS_<triple>`.
+/// The other forms (`RANLIB`, `NVCC`, `ARFLAGS`, `RANLIBFLAGS` and `PKG_CONFIG` per target, every
+/// `TARGET_` form, `HOST_CXXFLAGS`) are not run here; the unit test
+/// `the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold` pins them by name.
+///
+/// The regression it rejects: a setup `cargo build` of a package that uses `cc`, started with one
+/// of those per-target names the person's shell holds. A name the compiler does not act on, for
+/// example a `-B` directory with no external assembler to find, is skipped by the control and says
+/// so. The test is inert where the registry cache lacks a locked crate: it prints that it skipped
+/// and returns.
+#[test]
+fn a_setup_cargo_is_not_handed_a_per_target_compiler_archiver_or_flags() {
+    if !usability::available() {
+        return;
+    }
+    let Some(triple) = host_triple() else {
+        eprintln!("skipped the per-target cc names: the host is unknown to the tests");
+        return;
+    };
+    let underscored = triple.replace('-', "_");
+    let leak = |name: String| -> &'static str { Box::leak(name.into_boxed_str()) };
+    // Flags that make the compiler look for `as` and `ld` in a directory. Apple clang assembles
+    // inside the compiler unless told not to; gcc rejects `-fno-integrated-as`.
+    let search_dir: &'static str = if cfg!(target_os = "macos") {
+        "-fno-integrated-as -B"
+    } else {
+        "-B"
+    };
+    // A name, and what its value is in front of the helper.
+    let cases: Vec<(&str, &'static str, &str)> = vec![
+        ("cc-target-dashes", leak(format!("CC_{triple}")), ""),
+        (
+            "cc-target-underscores",
+            leak(format!("CC_{underscored}")),
+            "",
+        ),
+        ("cc-host", "HOST_CC", ""),
+        ("cxx-target", leak(format!("CXX_{triple}")), ""),
+        ("cxx-host", "HOST_CXX", ""),
+        ("ar-target", leak(format!("AR_{triple}")), ""),
+        ("ar-host", "HOST_AR", ""),
+        (
+            "cflags-target",
+            leak(format!("CFLAGS_{triple}")),
+            search_dir,
+        ),
+        ("cflags-host", "HOST_CFLAGS", search_dir),
+        (
+            "cxxflags-target",
+            leak(format!("CXXFLAGS_{triple}")),
+            search_dir,
+        ),
+    ];
+    for (name, variable, flags) in cases {
+        let Some(files) = package_that_builds_with_cc(name) else {
+            return;
+        };
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        let planted = planted_dir(name);
+        let marker = planted.join("ran");
+        let value = if flags.is_empty() {
+            // The program, or for flags a directory holding programs of the names the compiler asks for.
+            let helper = planted.join("helper");
+            plant(&helper, &marker);
+            helper.display().to_string()
+        } else {
+            for tool in ["as", "ld"] {
+                plant(&planted.join(tool), &marker);
+            }
+            format!("{flags}{}", planted.display())
+        };
+        withheld_from_a_setup_stage(
+            name,
+            "cargo",
+            &[
+                "build",
+                "-q",
+                "--offline",
+                "--manifest-path={session}/demo/Cargo.toml",
+            ],
+            &files,
+            &[(variable, &value)],
+            &marker,
+            Some(&planted),
+        );
+    }
+}
+
 /// SANDBOX-30 (brave/bravebot#3811): cargo 1.99.0 on macOS arm64 ran the program named as the
 /// linker by `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS` and
 /// `CARGO_TARGET_<triple>_LINKER`, and the program in `CARGO_TARGET_<triple>_RUNNER` for
@@ -2214,6 +2412,103 @@ fn a_setup_python_venv_is_not_handed_an_executable() {
         &marker,
         Some(&planted),
     );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): python3 3.15.2 on macOS arm64 imported the module that
+/// `_PYTHON_SYSCONFIGDATA_NAME` names from the working directory, which is on `sys.path` for
+/// `-m`, when `python3 -m venv` read the build variables, and so ran a file a stage had written
+/// there. A plain `python3 -c pass` did not read it. It is a module name, so a start removes it
+/// whatever it holds. The regression it rejects: a setup `python3 -m venv` started with the
+/// module name the person's shell holds.
+#[test]
+fn a_setup_python_venv_is_not_handed_a_sysconfig_module_name() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("python-sysconfigdata");
+    let marker = planted.join("ran");
+    let module = format!("open('{}', 'w').close()\n", marker.display());
+
+    withheld_from_a_setup_stage(
+        "python-sysconfigdata",
+        "python3",
+        &["-m", "venv", ".venv"],
+        &[("brave_sysconfigdata.py", &module)],
+        &[("_PYTHON_SYSCONFIGDATA_NAME", "brave_sysconfigdata")],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): GNU Make 3.81 on macOS arm64 ran the assembler
+/// `-B<directory>` finds when `ASFLAGS` held `-fno-integrated-as -B<directory>/` and the
+/// built-in rule for a `.S` file ran. A `.s` file ran nothing. gcc, which `cc` is on Linux, takes
+/// `-B` and not `-fno-integrated-as`, so the flag is given on macOS only. It is options, so the
+/// helper is left where no stage can write. The regression it rejects: a setup `make` started with
+/// the assembler flags the person's shell holds.
+#[test]
+fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
+    if !usability::available() {
+        return;
+    }
+    let planted = planted_dir("make-rule-asflags");
+    let marker = planted.join("ran");
+    plant(&planted.join("as"), &marker);
+    let value = if cfg!(target_os = "macos") {
+        format!("-fno-integrated-as -B{}/", planted.display())
+    } else {
+        format!("-B{}/", planted.display())
+    };
+
+    withheld_from_a_setup_stage(
+        "make-rule-asflags",
+        "sh",
+        &["-c", "make -s -C {session} || true"],
+        &[("Makefile", "all: x.o\n"), ("x.S", "")],
+        &[("ASFLAGS", &value)],
+        &marker,
+        None,
+    );
+}
+
+/// SANDBOX-30 (brave/bravebot#3863): `COMPILER_PATH` is a list of directories, and
+/// `GCC_EXEC_PREFIX` a prefix, that the gcc manual ("Environment Variables Affecting GCC") says gcc
+/// searches for the programs it runs (`cc1`, `as`, `ld`), after `-B` and before the standard
+/// directories. The helper is planted as both `as` and `ld`, since gcc runs `as` and Apple clang on
+/// macOS 26 arm64 runs `ld` and has no use for `as`. Apple clang ran the `ld` found through
+/// `COMPILER_PATH` on a plain link and ran nothing for `GCC_EXEC_PREFIX`, so the `COMPILER_PATH`
+/// half of this test runs on macOS. On no recorded host does the `GCC_EXEC_PREFIX` control run the
+/// helper, so it prints `skipped` and that half cannot fail; the unit test of the list pins that
+/// name. `COMPILER_PATH` is a list of directories, so its helper is put in a directory a stage may
+/// write; `GCC_EXEC_PREFIX` is options, so its helper is left where no stage can write. The
+/// regression it rejects: a setup `make` that compiles and links with the directories the person's
+/// shell holds in `COMPILER_PATH`.
+#[test]
+fn a_setup_make_is_not_handed_a_gcc_search_path_for_its_programs() {
+    if !usability::available() {
+        return;
+    }
+    for (variable, writable) in [("COMPILER_PATH", true), ("GCC_EXEC_PREFIX", false)] {
+        let label = format!("make-{}", variable.to_lowercase().replace('_', "-"));
+        let planted = planted_dir(&label);
+        let marker = planted.join("ran");
+        plant(&planted.join("as"), &marker);
+        plant(&planted.join("ld"), &marker);
+        let value = format!("{}/", planted.display());
+
+        withheld_from_a_setup_stage(
+            &label,
+            "sh",
+            &["-c", "make -s -C {session} || true"],
+            &[
+                ("Makefile", "all: x\n"),
+                ("x.c", "int main(void) { return 0; }\n"),
+            ],
+            &[(variable, &value)],
+            &marker,
+            writable.then_some(planted.as_path()),
+        );
+    }
 }
 
 /// SANDBOX-30 (brave/bravebot#3811): GNU Make 3.81 on macOS arm64 searched the directories of `-I` in

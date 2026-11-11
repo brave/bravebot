@@ -71,8 +71,8 @@ asked about; [the sandboxing spec](../../docs/specs/sandboxing.md#programs-a-per
 records that. The check reads the file's name and mode and no other metadata.
 `scripts/open-in-app.test.mjs` holds this.
 Every call to `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` in `src/main` goes
-through `src/main/external-open.ts`, which deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, `XDG_DATA_HOME`,
-`XDG_CONFIG_HOME`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` from the main process environment first, because the opener Electron
+through `src/main/external-open.ts`, which deletes the fifteen names of `OPENER_SELECTORS` (`BROWSER`, `GIO_LAUNCH_DESKTOP`, `XDG_DATA_HOME`,
+`XDG_CONFIG_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, the GIO, Qt and `KDESYCOCA` names) from the main process environment first, because the opener Electron
 starts reads them to choose the program it runs (`xdg-open` reads `BROWSER` only in its generic
 path, and not under GNOME with `gio` installed, where it runs `gio open`)
 ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). The names are removed whatever they hold,

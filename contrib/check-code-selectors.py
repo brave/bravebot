@@ -43,7 +43,8 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    or a folder to the system, so a name added to the Rust list and not there is passed on by the
    application. One difference is written down: `HOME` is in the Rust list and is not in the
    others, because the application and the agent it starts read `HOME`, so it is not deleted
-   there (the comment at the top of external-open.ts says so). `APPLICATION_EXCEPTIONS` holds it.
+   there (the comment at the top of external-open.ts says so). The ten Windows names of the
+   rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -66,11 +67,28 @@ APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
 # application and the agent it starts read `HOME`, so deleting it from the application's
 # environment would change both; the opener removes it from its own start instead. Electron finds
 # the session bus from `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager,
-# portal and notification calls, so deleting them would break those.
+# portal and notification calls, so deleting them would break those. The ten Windows
+# names (brave/bravebot#3860) are also left out of the application's list and removed by the
+# opener from its own start. Electron's own Windows start is not covered by that removal: it is
+# given those names as the application's process holds them.
+WINDOWS_REASON = (
+    "the opener removes this Windows variable from its own start; the desktop application's list "
+    "does not hold it"
+)
 APPLICATION_EXCEPTIONS = {
     "HOME": "the desktop application and the agent it starts read HOME, so it is not deleted there",
     "XDG_RUNTIME_DIR": "Electron and the agent it starts find the session bus and their runtime files here",
     "DBUS_SESSION_BUS_ADDRESS": "Electron connects to the session bus it names, so it is not deleted there",
+    "PATHEXT": WINDOWS_REASON,
+    "COMSPEC": WINDOWS_REASON,
+    "SystemRoot": WINDOWS_REASON,
+    "windir": WINDOWS_REASON,
+    "ProgramFiles": WINDOWS_REASON,
+    "ProgramW6432": WINDOWS_REASON,
+    "ProgramFiles(x86)": WINDOWS_REASON,
+    "LOCALAPPDATA": WINDOWS_REASON,
+    "APPDATA": WINDOWS_REASON,
+    "USERPROFILE": WINDOWS_REASON,
 }
 
 # The file that holds the generic list and the shared names.
@@ -95,13 +113,16 @@ SOURCES = [
 # A program's list is `const CODE_SELECTORS`, and a file that gives a second program a list of its own
 # names it `const <PROGRAM>_CODE_SELECTORS`. Every such list in a file is read.
 LIST = re.compile(r"const\s+(?:\w+_)?CODE_SELECTORS\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
+# A variable name is letters, digits and underscores, and may hold parentheses: Windows sets
+# `ProgramFiles(x86)`.
+NAME = r"[A-Za-z0-9_()]+"
 ENTRY = re.compile(
-    r'\(\s*"([A-Za-z0-9_]+)"\s*,\s*Names::\w+\s*,?\s*\)'
+    r'\(\s*"(' + NAME + r')"\s*,\s*Names::\w+\s*,?\s*\)'
     r"|\bselectors::([A-Z0-9_]+)"
 )
 # A name shared between lists, defined once in the sandbox crate: `pub const NAME: (&str, Names) =
 # ("NAME", ...)`. A list names it as `selectors::NAME`.
-SHARED = re.compile(r'pub const ([A-Z0-9_]+): \(&str, Names\) = \(\s*"([A-Za-z0-9_]+)"')
+SHARED = re.compile(r'pub const ([A-Z0-9_]+): \(&str, Names\) = \(\s*"(' + NAME + r')"')
 TESTS = re.compile(
     r"#\[cfg\(\s*(?:test|all\(\s*test\b[^\]]*)\)\s*\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*\{"
 )
@@ -155,7 +176,7 @@ APPLICATION_LIST = re.compile(
     r"export\s+const\s+OPENER_SELECTORS\b[^=]*=\s*\[(.*?)\]", re.DOTALL
 )
 APPLICATION_TEST_LIST = re.compile(r"\bconst\s+NAMES\s*=\s*\[(.*?)\]", re.DOTALL)
-QUOTED = re.compile(r"""['"]([A-Za-z0-9_]+)['"]""")
+QUOTED = re.compile(r"""['"](""" + NAME + r""")['"]""")
 
 
 def quoted_names(pattern, text):
@@ -219,7 +240,7 @@ def options_in(text):
     return [
         name
         for match in LIST.finditer(text)
-        for name in re.findall(r'"([A-Za-z0-9_]+)"\s*,\s*Names::Options\b', match.group(1))
+        for name in re.findall(r'"(' + NAME + r')"\s*,\s*Names::Options\b', match.group(1))
     ]
 
 
@@ -249,7 +270,7 @@ def prefixes(text, name):
     found = re.search(
         r"pub const " + re.escape(name) + r"\s*:\s*&\[&str\]\s*=\s*&\[(.*?)\]\s*;", text, re.DOTALL
     )
-    return re.findall(r'"([A-Za-z0-9_]+)"', found.group(1)) if found else None
+    return re.findall(r'"(' + NAME + r')"', found.group(1)) if found else None
 
 
 HOSTS = re.compile(r"const\s+HOST_VARIABLES\b[^=]*=\s*&?\[(.*?)\]\s*;", re.DOTALL)
@@ -268,7 +289,7 @@ def loops_in(tests, start, check):
         if re.search(re.escape(start) + r"\(", body) and re.search(
             r"assert!\(\s*" + re.escape(check) + r"\(", body
         ):
-            found += re.findall(r'"([A-Za-z0-9_]+)"', names)
+            found += re.findall(r'"(' + NAME + r')"', names)
     return found
 
 
@@ -323,7 +344,7 @@ def loader_complaints(files):
 def host_complaints(text, source=USABILITY):
     """Every way `HOST_VARIABLES` and the tests and start that use it disagree."""
     found = HOSTS.search(text)
-    names = re.findall(r'"([A-Za-z0-9_]+)"', found.group(1)) if found else None
+    names = re.findall(r'"(' + NAME + r')"', found.group(1)) if found else None
     if not names:
         return [
             f"HOST_VARIABLES is not in {source} or holds no name this script could read. If it "
@@ -731,13 +752,23 @@ mod tests {
 # The opener's list as opener.rs writes it, with a name taken from the shared module, and the
 # application's two lists of the names the application deletes.
 OPENER_LIST = """\
-const CODE_SELECTORS: [(&str, Names); 6] = [
+const CODE_SELECTORS: [(&str, Names); 16] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_RUNTIME_DIR", Names::Directory),
     ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),
     ("GIO_LAUNCH_DESKTOP", Names::File),
     ("XDG_DATA_HOME", Names::Directory),
+    ("PATHEXT", Names::Options),
+    ("COMSPEC", Names::File),
+    ("SystemRoot", Names::Directory),
+    ("windir", Names::Directory),
+    ("ProgramFiles", Names::Directory),
+    ("ProgramW6432", Names::Directory),
+    ("ProgramFiles(x86)", Names::Directory),
+    ("LOCALAPPDATA", Names::Directory),
+    ("APPDATA", Names::Directory),
+    ("USERPROFILE", Names::Directory),
 ];
 """
 TS_LIST = """\
@@ -774,6 +805,12 @@ def selftest():
         got == ["A_PROGRAM", "A_SHARED", "A_FILE"],
         got,
     )
+    got = selectors('const CODE_SELECTORS: [(&str, Names); 1] = [\n    ("ProgramFiles(x86)", Names::Directory),\n];\n')
+    case("parse: a name with parentheses is read", got == ["ProgramFiles(x86)"], got)
+    got = options_in('const CODE_SELECTORS: [(&str, Names); 1] = [\n    ("A_NAME(x86)", Names::Options),\n];\n')
+    case("parse: an options name with parentheses is read", got == ["A_NAME(x86)"], got)
+    got = quoted_names(APPLICATION_LIST, "export const OPENER_SELECTORS = [\n  'ProgramFiles(x86)',\n] as const\n")
+    case("parse: a quoted name with parentheses is read", got == ["ProgramFiles(x86)"], got)
     case(
         "shared: a constant named for its variable passes",
         shared_mismatches('pub const A_SHARED: (&str, Names) = ("A_SHARED", Names::File);') == [],
