@@ -1400,11 +1400,27 @@ mod tests {
     /// the control.
     #[cfg(windows)]
     const WINDOWS_START_PUT_BACK: &str = "BRAVEBOT_TEST_WINDOWS_START_PUT_BACK";
+    /// What every record the child prints begins with. The test harness writes `test <name> ... `
+    /// to the same output without a newline before a test runs, so a record is found by this
+    /// prefix at the start of its own line and not by its first words.
+    #[cfg(windows)]
+    const WINDOWS_START_RECORD: &str = "windows-start-record: ";
+
+    /// The records in what the child printed, each without [`WINDOWS_START_RECORD`]: the lines
+    /// that begin with it, whatever else the output holds.
+    #[cfg(windows)]
+    fn records_of_the_windows_start(printed: &str) -> Vec<&str> {
+        printed
+            .lines()
+            .filter_map(|line| line.strip_prefix(WINDOWS_START_RECORD))
+            .collect()
+    }
 
     /// Whether this process is the child of the test below, which has made the start it was asked
     /// for. The child makes the opener's start against its own environment, which the parent set,
-    /// prints `removed <name>` for each name the command takes off and `start ended: ..` for how
-    /// `rundll32` ended, and runs it.
+    /// prints a record `removed <name>` for each name the command takes off and a record
+    /// `start ended: ..` for how `rundll32` ended, and runs it. It begins with a newline, which
+    /// ends the line the test harness left open, so every record is at the start of a line.
     #[cfg(windows)]
     fn is_the_child_of_the_windows_start() -> bool {
         let (Some(stage), Some(program)) = (
@@ -1427,10 +1443,11 @@ mod tests {
             let value = std::env::var_os(&name).expect("the name to put back is not set");
             command.env(&name, value);
         }
+        println!();
         for name in withheld_from(&command) {
-            println!("removed {name}");
+            println!("{WINDOWS_START_RECORD}removed {name}");
         }
-        println!("start ended: {:?}", command.status());
+        println!("{WINDOWS_START_RECORD}start ended: {:?}", command.status());
         true
     }
 
@@ -1441,7 +1458,8 @@ mod tests {
     /// command takes its environment from the process and a test cannot set one: the parent gives
     /// the child those names with `Command::env`, and the child calls the opener's start against
     /// its own environment, prints the names the command takes off and runs it. The test asserts
-    /// that the child printed every one of the nine and that the marker was not created. The
+    /// that the child printed a record for every one of the nine and for how the start ended, each
+    /// on a line of its own, and that the marker was not created. The
     /// helper is shown to create the marker when run directly through `cmd`, so an absent marker
     /// is not a helper that cannot run.
     ///
@@ -1543,16 +1561,24 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            String::from_utf8_lossy(&output.stdout).into_owned()
+            let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+            // A child that printed nothing has not made the start.
+            assert!(
+                records_of_the_windows_start(&printed)
+                    .iter()
+                    .any(|record| record.starts_with("start ended: ")),
+                "the child did not print how the start ended: {printed}"
+            );
+            printed
         };
 
         let printed = made(&listed, None);
         println!("{printed}");
         for (name, _) in &listed {
             assert!(
-                printed
-                    .lines()
-                    .any(|line| line.trim().eq_ignore_ascii_case(&format!("removed {name}"))),
+                records_of_the_windows_start(&printed)
+                    .iter()
+                    .any(|record| record.eq_ignore_ascii_case(&format!("removed {name}"))),
                 "{name} was not removed from the start: {printed}"
             );
         }
@@ -1564,10 +1590,10 @@ mod tests {
         for (name, value) in listed.iter().chain(&not_listed) {
             let one = [(*name, value.clone())];
             let printed = made(&one, Some(name));
-            let ended = printed
-                .lines()
-                .find(|line| line.starts_with("start ended"))
-                .unwrap_or("the child did not print how the start ended");
+            let ended = records_of_the_windows_start(&printed)
+                .into_iter()
+                .find(|record| record.starts_with("start ended: "))
+                .expect("the child printed how the start ended");
             println!(
                 "unchecked start with only {name} set: {ended}, helper run {}",
                 appeared(&marker)

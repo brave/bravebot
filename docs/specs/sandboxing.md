@@ -5006,7 +5006,11 @@ shown by running the program, or not entirely:
   `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`, which sets
   the nine names in a child run of the test binary, asserts that the opener's start removes all
   nine and that a stage-written batch file does not run, and prints for each name, and for
-  `PSModulePath`, whether a start with only that name put back ran the batch file. The printed
+  `PSModulePath`, whether a start with only that name put back ran the batch file. The child
+  begins with a newline and prefixes each record it prints with `windows-start-record: `, and the
+  test reads the records from the lines that begin with that prefix, so the check does not depend
+  on where the test harness's own output on the same stream ends; it also asserts that every
+  child printed its `start ended` record. The printed
   record is not asserted. #3860 owns the Windows run; #3822 owns the rest of the opener list.
   These were not run: `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
