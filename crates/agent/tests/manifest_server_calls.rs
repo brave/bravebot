@@ -370,6 +370,9 @@ struct Calls {
     applies: Vec<ApplyRequest>,
     /// A mode the person moves the run into once they have answered its plan, where a test says.
     then_mode: Option<(bravebot_agent::LiveMode, PermissionMode)>,
+    /// A mode the person moves the run into when a call is put to them at its step, after the plan
+    /// was answered and before the steps after it run, where a test says.
+    then_mode_at_call: Option<(bravebot_agent::LiveMode, PermissionMode)>,
     apply_keeps: Option<Vec<usize>>,
     /// Whether the list is answered as by a client that cannot put it.
     apply_unasked: bool,
@@ -391,6 +394,7 @@ impl Calls {
             stopping: None,
             applies: Vec::new(),
             then_mode: None,
+            then_mode_at_call: None,
             apply_keeps: None,
             apply_unasked: false,
             puts_lists: true,
@@ -486,6 +490,9 @@ impl Confirmer for Calls {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.order.push("call");
+        if let Some((live, mode)) = &self.then_mode_at_call {
+            live.set(*mode);
+        }
         let at = self.calls.len().min(self.answers.len() - 1);
         self.calls.push(request.clone());
         self.answers[at].clone()
@@ -3048,19 +3055,28 @@ fn a_deny_rule_about_a_marked_tool_puts_the_steps_list() {
     )));
 }
 
-/// A switch into plan mode after the person approved the plan puts a marked step's list back: a
-/// change of mode can add a question, never take one away.
+/// A switch into plan mode between steps, after the person approved the plan and before a marked
+/// step runs, puts that step's list back: a change of mode can add a question, never take one away.
+/// The read before it is asked at its step, by an `ask` rule, and the person moves the run into plan
+/// mode while answering it, so only the check at the marked step can see the switch.
 ///
-/// Rejects an implementation that reads the mode only when the plan is written, which would run a
-/// step unasked in a mode that asks at each step.
+/// Rejects an implementation that reads the mode only when the plan is written or answered, which
+/// would run a step unasked in a mode that asks at each step.
 #[test]
 fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
     let scratch = Scratch::new("covered-switch");
     let (url, mcp) = serve_marks();
-    let task = Task::new("organise my bookmarks into folders");
+    let (asking, rejected) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &["Mcp(brave:list_marks)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let task = Task::new("organise my bookmarks into folders").with_permissions(asking);
     let live = task.permission_mode.clone();
     let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
-    confirmer.then_mode = Some((live, PermissionMode::Plan));
+    confirmer.then_mode_at_call = Some((live, PermissionMode::Plan));
     let ran = walk(Walk {
         session: marked_session(
             &url,
@@ -3078,6 +3094,11 @@ fn a_switch_into_plan_mode_after_the_plan_puts_a_marked_steps_list() {
     assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
     let line = &ran.asked.plans[0].steps[1];
     assert!(line.contains("run without asking you"), "{line}");
+    assert_eq!(
+        ran.asked.order,
+        ["plan", "call", "apply"],
+        "the switch came between steps"
+    );
     assert_eq!(ran.asked.applies.len(), 1, "the list was not put");
 }
 
@@ -3109,8 +3130,14 @@ fn a_marked_step_sends_an_entry_holding_a_hidden_character_as_the_list_holds_it(
     });
     assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
     assert!(ran.asked.applies.is_empty(), "the list was put");
-    assert!(
-        ran.called.iter().any(|(tool, _)| tool == "move_mark"),
+    let moved = ran
+        .called
+        .iter()
+        .find(|(tool, _)| tool == "move_mark")
+        .map(|(_, arguments)| arguments["url"].clone());
+    assert_eq!(
+        moved,
+        Some(json!("https://hidden.example/\u{200B}")),
         "{:?}",
         ran.called
     );
