@@ -1251,3 +1251,88 @@ fn cmd_with_an_argument_holding_an_ampersand_starts_nothing() {
         .collect();
     assert!(made.is_empty(), "cmd.exe made {made:?}");
 }
+
+/// SANDBOX-4 with a real process: `cmd.exe` spelled with a trailing dot, a trailing space or a
+/// stream suffix is refused before anything starts, so the directory is not made, whether or not
+/// `CreateProcessW` would have started the interpreter for that name. The regression it rejects is
+/// the refusals reading the name as written, which finds no `cmd.exe` in these spellings and starts
+/// them with arguments `cmd.exe` reads as its own.
+#[test]
+fn cmd_spelled_with_a_trailing_dot_a_space_or_a_stream_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("cmd-spellings");
+    let policy = the_base("cmd-spellings").allow_write(&directory);
+    let named = directory.join("R&D");
+    let named = named.display().to_string();
+    let system = r"C:\Windows\System32";
+
+    for program in [
+        format!(r"{system}\cmd.exe."),
+        format!(r"{system}\cmd.exe "),
+        format!(r"{system}\cmd.exe::$DATA"),
+        format!(r"{system}\cmd.exe:stream"),
+    ] {
+        let refused = run(&sandbox, &program, &["/c", "mkdir", &named], &policy);
+
+        assert!(
+            matches!(refused, Err(SandboxError::SetupFailed { .. })),
+            "{program} started: {refused:?}"
+        );
+    }
+    let made: Vec<_> = std::fs::read_dir(&directory)
+        .expect("the scratch directory")
+        .collect();
+    assert!(made.is_empty(), "a spelling of cmd.exe made {made:?}");
+}
+
+/// SANDBOX-4 with a real process: a batch file spelled with a trailing dot is refused before
+/// anything starts, so the file it would write is not there. The regression it rejects is the
+/// extension test reading `build.bat.` as having none.
+#[test]
+fn a_batch_file_spelled_with_a_trailing_dot_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("batch-dot");
+    let policy = the_base("batch-dot").allow_write(&directory);
+    let batch = directory.join("build.bat");
+    let marker = directory.join("ran");
+    std::fs::write(&batch, format!("@echo ran> {}\r\n", marker.display()))
+        .expect("the batch file is written");
+    let spelled = format!("{}.", batch.display());
+
+    let refused = run(&sandbox, &spelled, &[], &policy);
+
+    assert!(
+        matches!(refused, Err(SandboxError::SetupFailed { .. })),
+        "{spelled} started: {refused:?}"
+    );
+    assert!(!marker.exists(), "the batch file ran");
+}
+
+/// SANDBOX-4 with a real process, pinning the cost the spec records: a copy of `cmd.exe` called
+/// `tool.exe` is recognised by no test of its file, so it is not refused as `cmd.exe` is and the
+/// backend starts it. The regression it rejects is a change to `is_cmd` that refuses or accepts
+/// differently without the spec's account changing with it. Which of the two the copy then does
+/// with `R&D` is not asserted, since it has not been observed on Windows.
+#[test]
+fn a_copy_of_cmd_under_another_name_is_started_as_a_program() {
+    let sandbox = sandbox();
+    let directory = scratch("cmd-copy");
+    let policy = the_base("cmd-copy")
+        .allow_read(&directory)
+        .allow_write(&directory);
+    let copy = directory.join("tool.exe");
+    std::fs::copy(r"C:\Windows\System32\cmd.exe", &copy).expect("a copy of cmd.exe");
+    let named = directory.join("R&D");
+
+    let started = run(
+        &sandbox,
+        &copy.display().to_string(),
+        &["/c", "mkdir", &named.display().to_string()],
+        &policy,
+    );
+
+    assert!(
+        started.is_ok(),
+        "the copy was refused, so SANDBOX-4's account of what it costs is out of date: {started:?}"
+    );
+}

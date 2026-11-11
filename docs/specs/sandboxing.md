@@ -286,20 +286,38 @@ holds a quotation mark, an operator, `%`, `!`, a line end or one of the delimite
 the first argument after `/c`, `/k` or `/r` is written quoted and another follows it. One argument
 after the switch is the line `cmd.exe` is asked to run, and it starts.
 
+Windows reads a program's file name differently from the text it is written in: it drops a dot or a
+space that ends the name and reads what follows a `:` as a stream of the file. A program whose final
+path component ends in a dot or a space, or holds a `:`, is refused before the batch-file and
+`cmd.exe` tests are made, so those tests are never made on a name other than the one that is
+started. A drive's colon and a directory ending in a dot are not in the final component and do not
+refuse.
+
 **Why.** A grant list assembled from paths would otherwise be a place where a filename decides what
 the sandbox permits, and a command line assembled from arguments a place where one decides what the
 confined program is told to do. `cmd.exe` drops the outer quotation marks of a line that starts with
 one and acts on what it finds outside the rest, so no quoting holds for it.
 
-**What it costs.** The Windows refusals read the program name as it is written. `Path::extension`
-gives no extension for `build.bat.`, and `is_cmd` compares the whole file name, so an absolute
-program path with a trailing dot or space (`build.bat.`, `cmd.exe.`) or a stream suffix
-(`cmd.exe::$DATA`) skips the batch-file and `cmd.exe` refusals. An MCP server declared with an
-absolute program path reaches the backend that way, since the lookup returns an absolute path
-unchanged ([SERVERS-5](mcp-servers.md#SERVERS-5)). Whether `CreateProcessW` starts the interpreter
-for such a name is unchecked on Windows. `is_cmd` also goes by the name alone, so a copy of
-`cmd.exe` called `tool.exe` that a stage can write and run is started with the quoting a program
-is given, not the refusals `cmd.exe` gets.
+**What it costs.** The Windows refusals judge the final component of the program as it is written.
+A name that Windows resolves to the interpreter or to a batch file by another spelling is refused
+when it ends in a dot or a space or holds a `:`, which covers `build.bat.`, `cmd.exe.`, `cmd.exe `
+and `cmd.exe::$DATA`. Because those are refused outright, whether `CreateProcessW` starts the
+interpreter for such a name is not needed and has not been checked on Windows. An 8.3 short name
+(`CMD~1.EXE`, `BUILD~1.BAT`) is not recognised and is started with the quoting a program is given.
+`is_cmd` also goes by the final file name alone, so a copy of `cmd.exe` called `tool.exe` that a
+stage can write and run is started with the quoting a program is given, not the refusals `cmd.exe`
+gets.
+
+No test of the file is made, for these reasons. A copy has a file identity of its own, so identity
+matches only a hard link. A version resource or a hash matches an unmodified copy, and the stage that
+writes the file can change either while the program still reads its line as `cmd.exe` does. No test
+of one program finds another that reads its line by rules of its own. A test that opened the file
+would also run before `CreateProcessW` locates the program by its own search, so the file examined
+need not be the file started, and the copy can be replaced between the two. So the decision reads
+the program string only. It is made when the stage is prepared, before a profile exists and before
+`CreateProcessW` is called, in `refusal_for_program` for both the agent and the backend, and it has
+no failure path for a file that is missing or unreadable. The container still limits what the copy
+can reach.
 
 `verified-by: bravebot_sandbox::macos::paths_cannot_inject_profile_syntax`
 `verified-by: bravebot_sandbox::macos::a_profile_containing_a_hostile_path_still_applies`
@@ -317,6 +335,12 @@ is given, not the refusals `cmd.exe` gets.
 `verified-by: bravebot_sandbox::windows::cmd_is_refused_an_argument_it_would_read_as_its_own_syntax`
 `verified-by: bravebot_sandbox::windows::cmd_is_refused_a_quoted_first_argument_after_its_switch_with_another_after_it`
 `verified-by: bravebot_sandbox::windows::cmd_starts_where_it_reads_the_line_as_it_was_written`
+`verified-by: bravebot_sandbox::windows::a_program_name_windows_would_normalise_is_refused`
+`verified-by: bravebot_sandbox::windows::a_program_path_whose_file_name_is_ordinary_is_not_refused_for_its_directories`
+`verified-by: bravebot_sandbox::windows::cmd_spelled_with_a_trailing_dot_a_space_or_a_stream_starts_nothing`
+`verified-by: bravebot_sandbox::windows::a_batch_file_spelled_with_a_trailing_dot_starts_nothing`
+`verified-by: bravebot_sandbox::windows::only_the_final_file_name_makes_a_program_cmd`
+`verified-by: bravebot_sandbox::windows::a_copy_of_cmd_under_another_name_is_started_as_a_program`
 `verified-by: bravebot_agent::confine::a_cmd_line_cmd_would_read_otherwise_is_refused_before_its_redirection_is_opened`
 
 <a id="SANDBOX-5"></a>
