@@ -183,24 +183,37 @@ session.
 `verified-by: bravebot_tui::herdr::an_id_read_as_a_flag_and_a_session_not_yet_written_send_nothing`
 
 <a id="HERDR-10"></a>
-### HERDR-10: the command carries the modes that narrow the session and nothing that loosens it
+### HERDR-10: the command carries what narrows the session and nothing that loosens it
 
 A session run under `--locked` is reopened with `--locked`, and one run under `--safe` alone with
-`--safe`; nothing else the command line said is carried. `--agent`, `--issue` and `--pr` are kept
-by the record and come back with it. The system prompt flags hold for one run ([CLI-19](cli.md#CLI-19)), and their
-words would be kept in herdr's own state. `--dangerously-skip-permissions`,
-`--dangerously-bypass-approvals-and-sandbox`, `--accept-edits`, `--auto` and `--vet` each ask the
-session to ask less, and are not carried.
+`--safe`. A `--sandbox` mode is carried where the mode the session would get without the flag is
+looser than it and it is looser in nothing, by the one comparison a managed pin uses
+([SANDBOX-22](sandboxing.md#SANDBOX-22)): the modes are not a line, so `strict` is not carried over
+a `read-only` setting, since it writes what `read-only` does not. `--run-network closed` is carried
+where the network would be open without it; `open` never is. Each path `--sandbox-deny-read` and
+`--sandbox-deny-write` named is carried, since a denial only takes reach away; the denials a
+settings file or the managed file wrote are not, since that file says them again. Nothing else the
+command line said is carried. `--agent`, `--issue` and `--pr` are kept by the record and come back
+with it. The system prompt flags hold for one run ([CLI-19](cli.md#CLI-19)), and their words would
+be kept in herdr's own state. `--dangerously-skip-permissions`,
+`--dangerously-bypass-approvals-and-sandbox`, `--accept-edits`, `--auto`, `--vet`, a looser
+`--sandbox`, `--sandbox-allow-read`, `--sandbox-allow-write` and `--add-dir` each let the session
+reach or ask less, and are not carried.
 
-**Why.** herdr types the command with nobody asking for it. A mode that narrows what the session
-loads must survive that, since the record does not keep it and a session reopened without it would
-load what it was started to refuse; a mode that loosens must not, since nobody typed it for the run
-herdr starts.
+**Why.** herdr types the command with nobody asking for it. A mode that narrows the session must
+survive that, since the record does not keep it and a session reopened without it would do what it
+was started to refuse; a mode that loosens must not, since nobody typed it for the run herdr starts.
 
-**Known cost.** `--settings`, `--sandbox`, `--run-network`, the sandbox path lists, `--add-dir`
-and `--log-level` are not carried, so a session that ran under them is reopened under what its
-settings say.
+**Known cost.** `--settings` and `--log-level` are not carried, so a session that ran under a named
+settings file is reopened under the layers alone; `--log-level` changes nothing a session may do. A
+`--sandbox` mode that is narrower than the setting in one way and looser in the other, as `strict`
+is beside `read-only`, is not carried either, so the session is reopened under the setting. A
+denied path that holds an apostrophe or a control character makes a command herdr would refuse, so
+no command is sent for that session ([HERDR-5](#HERDR-5)).
 
+`verified-by: bravebot_tui::herdr::a_narrowing_sandbox_is_carried_and_a_loosening_one_is_not`
+`verified-by: bravebot_tui::herdr::a_closed_network_is_carried_and_an_open_one_is_not`
+`verified-by: bravebot_tui::herdr::a_path_the_command_line_denied_is_carried`
 `verified-by: bravebot_tui::herdr::a_session_run_safe_or_locked_is_reopened_so`
 
 <a id="HERDR-11"></a>

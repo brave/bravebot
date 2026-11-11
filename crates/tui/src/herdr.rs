@@ -12,6 +12,8 @@ use std::sync::OnceLock;
 
 use bravebot_herdr::{Reporter, Resume, State as Shown};
 use bravebot_i18n::t;
+use bravebot_sandbox::SandboxMode;
+use bravebot_sandbox::network::Network;
 
 use crate::title::State;
 
@@ -95,22 +97,99 @@ pub(crate) mod script {
 
 // The command that reopens the session (HERDR-9, HERDR-10, HERDR-11).
 
-/// The process-wide modes the resume command is built from, read once per call.
+/// What `--safe` or `--locked` left the run loading. `--locked` includes `--safe`, so it is the
+/// stricter and the one kept when both are given.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Strictness {
+    #[default]
+    Usual,
+    Safe,
+    Locked,
+}
+
+/// The process-wide modes the resume command is built from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Modes {
     pub(crate) incognito: bool,
-    pub(crate) safe: bool,
-    pub(crate) locked: bool,
+    pub(crate) strictness: Strictness,
+    /// The `--sandbox` mode to carry, which is narrower than the run would get without it.
+    pub(crate) sandbox: Option<SandboxMode>,
+    /// Whether `--run-network closed` is carried, closing what the run would get open without it.
+    pub(crate) network_closed: bool,
+    /// The paths `--sandbox-deny-read` and `--sandbox-deny-write` named, as typed.
+    pub(crate) deny_read: Vec<String>,
+    pub(crate) deny_write: Vec<String>,
 }
 
 impl Modes {
-    fn of_this_process() -> Modes {
-        Modes {
-            incognito: bravebot_core::incognito::engaged(),
-            safe: bravebot_core::safe::engaged(),
-            locked: bravebot_config::locked(),
-        }
+    /// Read once: the layers and flags it is built from are settled before the interface starts.
+    fn of_this_process() -> &'static Modes {
+        static MODES: OnceLock<Modes> = OnceLock::new();
+        MODES.get_or_init(|| {
+            let settings = bravebot_config::Settings::load();
+            let managed = bravebot_config::Managed::load();
+            let lists = bravebot_config::sandbox_filesystem();
+            Modes {
+                incognito: bravebot_core::incognito::engaged(),
+                strictness: if bravebot_config::locked() {
+                    Strictness::Locked
+                } else if bravebot_core::safe::engaged() {
+                    Strictness::Safe
+                } else {
+                    Strictness::Usual
+                },
+                sandbox: narrower_sandbox(
+                    &bravebot_config::sandbox::in_force(),
+                    bravebot_config::sandbox::resolve(None, &settings, &managed)
+                        .ok()
+                        .map(|choice| choice.mode),
+                ),
+                network_closed: closed_by_the_flag(
+                    &bravebot_config::settled_run_network().cloned().unwrap_or(
+                        bravebot_config::RunNetwork {
+                            network: Network::Open,
+                            decided: bravebot_config::Decided::Default,
+                        },
+                    ),
+                    bravebot_config::resolve_run_network(None, &settings, &managed).network,
+                ),
+                deny_read: typed(&lists.deny_read),
+                deny_write: typed(&lists.deny_write),
+            }
+        })
     }
+}
+
+/// The paths of `entries` the command line named, which a settings file or the managed file
+/// will name again on their own.
+pub(crate) fn typed(entries: &[bravebot_sandbox::rules::Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.by.is_none() && !entry.pinned)
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+/// The mode `--sandbox` gave the run, where the run would be looser without it and it is looser
+/// in nothing. The modes are not a line, so a flag that is looser in reads or writes than what
+/// the settings give is not carried, nor one where the settings would be refused without it.
+pub(crate) fn narrower_sandbox(
+    used: &bravebot_config::sandbox::Choice,
+    without: Option<SandboxMode>,
+) -> Option<SandboxMode> {
+    let without = without?;
+    (used.source == bravebot_config::sandbox::Source::Flag
+        && without.is_looser_than(used.mode)
+        && !used.mode.is_looser_than(without))
+    .then_some(used.mode)
+}
+
+/// Whether `--run-network` closed a network the run would have had open without it. The network
+/// has two settings, so `closed` is the only one that can narrow.
+pub(crate) fn closed_by_the_flag(used: &bravebot_config::RunNetwork, without: Network) -> bool {
+    used.decided == bravebot_config::Decided::Flag
+        && used.network == Network::Closed
+        && without == Network::Open
 }
 
 /// The command that reopens session `id` under `modes`, or `None` where none may be sent.
@@ -118,7 +197,7 @@ impl Modes {
 /// Only the modes that narrow a session and that its record does not keep are carried: a command
 /// herdr types with nobody asking must not reopen a session under looser rules than it ran under,
 /// nor under looser ones than anybody typed for it.
-pub(crate) fn command(id: &str, modes: Modes) -> Option<Vec<String>> {
+pub(crate) fn command(id: &str, modes: &Modes) -> Option<Vec<String>> {
     if modes.incognito || id.starts_with('-') {
         return None;
     }
@@ -127,10 +206,25 @@ pub(crate) fn command(id: &str, modes: Modes) -> Option<Vec<String>> {
         "--resume".to_string(),
         id.to_string(),
     ];
-    if modes.locked {
-        argv.push("--locked".to_string());
-    } else if modes.safe {
-        argv.push("--safe".to_string());
+    match modes.strictness {
+        Strictness::Usual => {}
+        Strictness::Safe => argv.push("--safe".to_string()),
+        Strictness::Locked => argv.push("--locked".to_string()),
+    }
+    if let Some(mode) = modes.sandbox {
+        argv.extend(["--sandbox".to_string(), mode.name().to_string()]);
+    }
+    if modes.network_closed {
+        argv.extend([
+            "--run-network".to_string(),
+            Network::Closed.name().to_string(),
+        ]);
+    }
+    for path in &modes.deny_read {
+        argv.extend(["--sandbox-deny-read".to_string(), path.clone()]);
+    }
+    for path in &modes.deny_write {
+        argv.extend(["--sandbox-deny-write".to_string(), path.clone()]);
     }
     Some(argv)
 }
@@ -148,7 +242,7 @@ pub(crate) fn resume(id: Option<&str>) {
     }
 }
 
-fn offer(reporter: &Reporter, id: &str, modes: Modes) {
+fn offer(reporter: &Reporter, id: &str, modes: &Modes) {
     if let Some(argv) = command(id, modes)
         && let Ok(resume) = Resume::new(id, argv)
     {
@@ -187,7 +281,7 @@ pub(crate) mod resume_script {
         HELD.with(|held| {
             held.borrow()
                 .as_ref()
-                .map(|(reporter, modes)| super::offer(reporter, id, *modes))
+                .map(|(reporter, modes)| super::offer(reporter, id, modes))
                 .is_some()
         })
     }
@@ -372,20 +466,19 @@ mod tests {
     #[test]
     fn a_session_run_safe_or_locked_is_reopened_so() {
         let safe = Modes {
-            safe: true,
+            strictness: Strictness::Safe,
             ..Modes::default()
         };
         let locked = Modes {
-            safe: true,
-            locked: true,
+            strictness: Strictness::Locked,
             ..Modes::default()
         };
         assert_eq!(
-            command(ID, safe),
+            command(ID, &safe),
             Some(strings(&["bravebot", "--resume", ID, "--safe"]))
         );
         assert_eq!(
-            command(ID, locked),
+            command(ID, &locked),
             Some(strings(&["bravebot", "--resume", ID, "--locked"]))
         );
         let (herdr, _reporter, _held) = reporting(locked);
@@ -400,8 +493,8 @@ mod tests {
     /// one; nor is a session with no record yet, which `--resume` could not find.
     #[test]
     fn an_id_read_as_a_flag_and_a_session_not_yet_written_send_nothing() {
-        assert_eq!(command("-x", Modes::default()), None);
-        assert_eq!(command("--safe", Modes::default()), None);
+        assert_eq!(command("-x", &Modes::default()), None);
+        assert_eq!(command("--safe", &Modes::default()), None);
         let (herdr, reporter, _held) = reporting(Modes::default());
         resume(Some("--locked"));
         resume(None);
@@ -420,7 +513,7 @@ mod tests {
             incognito: true,
             ..Modes::default()
         };
-        assert_eq!(command(ID, incognito), None);
+        assert_eq!(command(ID, &incognito), None);
         let (herdr, reporter, _held) = reporting(incognito);
         resume(Some(ID));
         reporter.report(Shown::Working, None);
@@ -446,6 +539,151 @@ mod tests {
         assert_eq!(
             params["resume_argv"],
             serde_json::json!(["bravebot", "--resume", NEXT])
+        );
+    }
+
+    /// HERDR-10. A `--sandbox` mode is carried where the run would be looser without it and it is
+    /// looser in nothing. The regressions it rejects are a narrowing mode dropped, which reopens
+    /// the session under the looser one its settings give, and a loosening one carried, which
+    /// reopens it under a mode nobody typed for that run; and a comparison by position, which
+    /// would take `strict` as narrower than `read-only` when it writes what `read-only` does not.
+    #[test]
+    fn a_narrowing_sandbox_is_carried_and_a_loosening_one_is_not() {
+        use bravebot_config::sandbox::{Choice, Source};
+        let flag = |mode| Choice {
+            mode,
+            source: Source::Flag,
+        };
+        assert_eq!(
+            narrower_sandbox(
+                &flag(SandboxMode::ReadOnly),
+                Some(SandboxMode::WorkspaceWrite)
+            ),
+            Some(SandboxMode::ReadOnly)
+        );
+        assert_eq!(
+            narrower_sandbox(&flag(SandboxMode::WorkspaceWrite), Some(SandboxMode::Off)),
+            Some(SandboxMode::WorkspaceWrite)
+        );
+        for (used, without) in [
+            (SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly),
+            (SandboxMode::Off, SandboxMode::WorkspaceWrite),
+            (SandboxMode::ReadOnly, SandboxMode::ReadOnly),
+        ] {
+            assert_eq!(
+                narrower_sandbox(&flag(used), Some(without)),
+                None,
+                "{used:?}"
+            );
+        }
+        if !cfg!(windows) {
+            assert_eq!(
+                narrower_sandbox(&flag(SandboxMode::Strict), Some(SandboxMode::ReadOnly)),
+                None
+            );
+        }
+        let from_a_file = Choice {
+            mode: SandboxMode::ReadOnly,
+            source: Source::File(PathBuf::from("settings.json")),
+        };
+        assert_eq!(
+            narrower_sandbox(&from_a_file, Some(SandboxMode::WorkspaceWrite)),
+            None
+        );
+        let modes = Modes {
+            sandbox: Some(SandboxMode::ReadOnly),
+            ..Modes::default()
+        };
+        assert_eq!(
+            command(ID, &modes),
+            Some(strings(&[
+                "bravebot",
+                "--resume",
+                ID,
+                "--sandbox",
+                "read-only"
+            ]))
+        );
+    }
+
+    /// HERDR-10. `--run-network closed` is carried where the run would have the network open
+    /// without it, and `open` never is. The regressions it rejects are a closed network dropped,
+    /// which reopens the session with its programs reaching the network, and an open one carried.
+    #[test]
+    fn a_closed_network_is_carried_and_an_open_one_is_not() {
+        use bravebot_config::{Decided, RunNetwork};
+        let by = |network, decided| RunNetwork { network, decided };
+        assert!(closed_by_the_flag(
+            &by(Network::Closed, Decided::Flag),
+            Network::Open
+        ));
+        assert!(!closed_by_the_flag(
+            &by(Network::Open, Decided::Flag),
+            Network::Closed
+        ));
+        assert!(!closed_by_the_flag(
+            &by(Network::Open, Decided::Flag),
+            Network::Open
+        ));
+        assert!(!closed_by_the_flag(
+            &by(Network::Closed, Decided::Flag),
+            Network::Closed
+        ));
+        assert!(!closed_by_the_flag(
+            &by(Network::Closed, Decided::Managed(None)),
+            Network::Open
+        ));
+        let modes = Modes {
+            network_closed: true,
+            ..Modes::default()
+        };
+        assert_eq!(
+            command(ID, &modes),
+            Some(strings(&[
+                "bravebot",
+                "--resume",
+                ID,
+                "--run-network",
+                "closed"
+            ]))
+        );
+    }
+
+    /// HERDR-10. A path the command line denied is carried, since it only takes reach away, and
+    /// one a settings file or the managed file wrote is not, since that file says it again. The
+    /// regression it rejects is a denial dropped, which reopens the session reaching the path.
+    #[test]
+    fn a_path_the_command_line_denied_is_carried() {
+        use bravebot_sandbox::rules::Entry;
+        let entry = |path: &str, by: Option<&str>, pinned| Entry {
+            path: path.to_string(),
+            by: by.map(PathBuf::from),
+            pinned,
+        };
+        assert_eq!(
+            typed(&[
+                entry("secrets", None, false),
+                entry("from-settings", Some("settings.json"), false),
+                entry("pinned", Some("managed.json"), true),
+            ]),
+            strings(&["secrets"])
+        );
+        let modes = Modes {
+            deny_read: strings(&["secrets"]),
+            deny_write: strings(&["~/notes"]),
+            ..Modes::default()
+        };
+        assert_eq!(
+            command(ID, &modes),
+            Some(strings(&[
+                "bravebot",
+                "--resume",
+                ID,
+                "--sandbox-deny-read",
+                "secrets",
+                "--sandbox-deny-write",
+                "~/notes",
+            ]))
         );
     }
 }
