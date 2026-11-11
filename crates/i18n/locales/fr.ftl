@@ -2592,6 +2592,7 @@ turn-done = tour { $turn } terminé
 turn-failed = tour { $turn } en échec
 notice-turn-finished = bravebot : tour terminé
 notice-waiting = bravebot : en attente d'une réponse
+herdr-waiting = en attente d'une réponse
 turn-cancelled = tour { $turn } annulé
 
 

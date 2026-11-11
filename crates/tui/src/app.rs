@@ -2630,6 +2630,9 @@ fn begin_session(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
     );
+    // Before the first question the session can ask, so herdr knows bravebot holds the pane from
+    // the start rather than from the first frame.
+    crate::herdr::state(crate::title::State::Ready);
     crate::notify::adopt(
         settings.notification_method(),
         settings.notification_condition(),

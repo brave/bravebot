@@ -3048,6 +3048,8 @@ turn-failed = turn { $turn } failed
 # terminal was left. Fixed: it never carries a command, a path or any part of a reply.
 notice-turn-finished = bravebot: turn finished
 notice-waiting = bravebot: waiting for an answer
+# What herdr shows beside a session that is waiting on the person. Fixed, like the notice above.
+herdr-waiting = waiting for an answer
 # Said of a turn the person stopped themselves, which is neither of the above.
 turn-cancelled = turn { $turn } cancelled
 

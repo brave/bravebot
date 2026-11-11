@@ -88,7 +88,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [releases.md](releases.md) | `RELEASE` | 22 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
-| [herdr.md](herdr.md) | `HERDR` | 7 | telling herdr, a terminal runtime, what a session is doing and how to resume it |
+| [herdr.md](herdr.md) | `HERDR` | 8 | telling herdr, a terminal runtime, what a session is doing and how to resume it |
 
 ## The tools
 

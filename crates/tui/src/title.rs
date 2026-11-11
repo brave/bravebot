@@ -84,9 +84,18 @@ impl Title {
     ///
     /// Called on every frame, so an unchanged state writes nothing: a title rewritten while a turn
     /// runs makes some terminals tick, and none of them needs it.
+    ///
+    /// herdr is told the same state here, title or none, so what it shows never disagrees with the
+    /// title ([HERDR-8](../../../docs/specs/herdr.md#HERDR-8)).
     pub(crate) fn mark<W: Write>(&mut self, out: &mut W, state: State) -> io::Result<()> {
+        crate::herdr::state(state);
         self.state = state;
         self.write(out)
+    }
+
+    /// Take what the settings say for this run.
+    pub(crate) fn adopt(&mut self, setting: Option<bool>, incognito: bool) {
+        self.on = wanted(setting, incognito);
     }
 
     fn write<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
@@ -153,7 +162,7 @@ fn title() -> std::sync::MutexGuard<'static, Title> {
 
 /// Take what the settings say for this run.
 pub(crate) fn adopt(setting: Option<bool>, incognito: bool) {
-    title().on = wanted(setting, incognito);
+    title().adopt(setting, incognito);
 }
 
 /// Whether to write a title: unless `terminalTitle` is `false`, and never in an incognito session,

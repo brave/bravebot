@@ -468,6 +468,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-filetype",
+ "bravebot-herdr",
  "bravebot-i18n",
  "bravebot-mcp",
  "bravebot-mentions",

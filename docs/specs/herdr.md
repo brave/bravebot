@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/herdr/src/lib.rs
   - crates/herdr/src/transport.rs
+  - crates/tui/src/herdr.rs
 documented-by: none (gap: a page saying a session inside herdr reports to it, owed with the interface reporting its state)
 ---
 
@@ -14,8 +15,8 @@ herdr is a terminal runtime that runs agents in panes and shows each pane's stat
 cannot recognize from the screen can tell it instead, over a Unix socket herdr names in the pane's
 environment: what the agent is doing (idle, working or blocked), and the command that resumes its
 session when herdr restores the pane. This spec is the reporter a session uses for that: when it
-is active, what a report carries, and what reporting may never do to the session. Which states an
-interface reports, and when, belongs to the interface.
+is active, what a report carries, and what reporting may never do to the session, and the states
+the terminal interface reports through it ([HERDR-8](#HERDR-8)).
 
 The socket is local and names a process the person started, so a report is not network egress
 ([network-egress.md](network-egress.md)). It is still a channel into something that can type into
@@ -128,3 +129,28 @@ in it, and a session on its way out may wait only briefly.
 
 `verified-by: bravebot_herdr::tests::nothing_is_sent_after_release`
 `verified-by: bravebot_herdr::tests::a_session_that_never_reported_releases_nothing`
+
+<a id="HERDR-8"></a>
+### HERDR-8: the terminal interface tells herdr what its title says it is doing
+
+Each state the title tracks ([PANEL-1](info-panel.md#PANEL-1)) is reported from the call that marks
+the title, whether or not a title is written: ready as `idle`, a turn or command running as
+`working`, and an approval, question or confirmation open as `blocked` with the fixed sentence
+`herdr-waiting` from the catalog as its message. `terminalTitle = false` and an incognito session
+turn the title off and leave the reports on. The interface reports `idle` once it has read the
+settings, before the first question it can ask. A background session has no interface, and
+`bravebot attach` relays its text without one, so neither reports.
+
+**Why.** herdr notifies, rolls up and ends an `agent wait` on what it is told, so a state reported
+from anywhere else than the title's could show a question as working or a turn as finished. A
+report names no session, prompt or path, which is why turning the title off for what it names is
+no reason to hide the session from herdr.
+
+**Known cost.** A question asked before the first frame that does not mark the title, as the
+startup trust prompt does not, shows in herdr as idle, as the title shows it as ready. An incognito
+session is still shown by herdr as bravebot running in its pane, which herdr knows for as long as
+the pane does; nothing of it is written under `~/.bravebot` ([INCOG-3](incognito.md#INCOG-3)).
+
+`verified-by: bravebot_tui::herdr::each_state_the_title_tracks_reaches_herdr_as_its_own`
+`verified-by: bravebot_tui::herdr::only_a_question_carries_a_message_and_it_is_the_fixed_one`
+`verified-by: bravebot_tui::herdr::a_title_turned_off_still_tells_herdr`
