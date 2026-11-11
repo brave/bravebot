@@ -230,8 +230,11 @@ which holds no listener of the host's loopback, and a request for loopback does 
 with no network out of it. On Windows a policy that names loopback asks for the same capabilities,
 makes the same grants and is refused or applied as the same policy without it. One test connects
 to a listener of this machine's loopback from a container granted the network
-(`a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`); it has not been run on
-Windows, and no test listens on a port from a container, so this clause says nothing of listening.
+(`a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`). It passed in the
+`Sandbox on Windows` job of CI run 42972425516 (job 130363809021), where the probe printed `loopback
+127.0.0.1:56331 from a container granted the network: refused: connection timed out`, so the
+connect did not reach the listener and ended by timing out and not by an immediate refusal. No
+test listens on a port from a container, so this clause says nothing of listening.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
@@ -433,7 +436,8 @@ On Windows a grant is an entry that what is beneath the directory inherits, and 
 not what a junction beneath the directory leads to. That is shown for a junction made from outside a
 stage. The backend makes no reparse-point check when it writes an entry, and whether a grant crosses
 a junction a stage made inside a directory it was granted for writing has not been observed on
-Windows; it is listed with the known costs.
+Windows: in run 42972425516 (job 130363809021) no stage could make one, by `mklink /J` or by a
+program calling `FSCTL_SET_REPARSE_POINT`. It is listed with the known costs.
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -1544,8 +1548,8 @@ platform; where the policy allows subprocesses there is no such limit. Killing t
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
 process is let go of and the platform does when this process ends, a crash included. A process
 killed while it holds a stage ends the programs in the job and leaves the container profile
-registered ([SANDBOX-12](#SANDBOX-12) says what bounds that; the test that looks for the profile has
-not been run on Windows). The executor
+registered ([SANDBOX-12](#SANDBOX-12) says what bounds that; the test that looks for the profile
+passed in run 42972425516, job 130363809021). The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
 ends then too, which is when the grants it ran under are taken off. A stage the platform will not put in a job carrying those limits is not started, and the refusal
 names what the platform reported, including when this process is itself in a job the platform will
@@ -4772,7 +4776,7 @@ shown by running the program, or not entirely:
     not run or read.
   - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. A test added with
     #3884 runs it once per name with a marker handler, and a CI step runs that test under
-    `dbus-run-session`; neither has run yet. Its names are
+    `dbus-run-session`; no name has been observed yet. Its names are
     from source only, read at these commits, none of which is a release tag: kde-cli-tools
     aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
     `KIOCLIENT_AS_KDEOPEN`), KIO a80751d2, KService 2bd4461c and KCoreAddons e96958b2, and Qt 6.10.0
@@ -5838,8 +5842,11 @@ does not give a later run the name of the earlier one, and a profile that alread
 refused rather than adopted.
 `a_holder_killed_while_it_holds_a_stage_leaves_its_container_profile_registered` kills a process
 holding a stage and looks for a folder `bravebot-<pid>-` under `%LOCALAPPDATA%\Packages`, then
-deletes the profile it finds so the runner is left clean. It has not been run on Windows, and it
-ties a folder to the holder by process identifier alone, so an earlier leftover of a reused
+deletes the profile it finds so the runner is left clean. It passed in the `Sandbox on Windows`
+job of CI run 42972425516 (job 130363809021), which printed `profiles of holder 5804: left
+["bravebot-5804-0-8829290d23592f7f"]; deleted [("bravebot-5804-0-8829290d23592f7f", 0)]; remaining
+after the delete []`: the killed holder left one profile and the delete removed it. The test ties a
+folder to the holder by process identifier alone, so an earlier leftover of a reused
 identifier would be found as well. The entry left behind
 names a security identifier no other run holds, so the residue is an entry for a container that no
 longer exists rather than a standing grant to something still running, and the next run's grants are
@@ -5883,9 +5890,13 @@ reported as what it is.
   grant did not cross`, and fails if the second stage can read the target. The first stage tries
   `mklink /J`, which the Windows runner refused, and then a copy of the test binary run in the
   stage that sets the mount point reparse point itself with `FSCTL_SET_REPARSE_POINT` and prints
-  `junction-probe junction made` or `junction-probe junction not made: <error>`. The second route
-  has not been run on Windows. If a runner refuses both, the test prints `junction not made by a
-  stage by either route` and returns, and no clause is claimed from it. Where the grant crosses,
+  `junction-probe junction made` or `junction-probe junction not made: <error>`. Both routes were
+  run in the `Sandbox on Windows` job of CI run 42972425516 (job 130363809021) and both were
+  refused: the test printed `junction not made by a stage by either route: mklink:  [stderr:
+  Access is denied.]; probe: junction not made: Access is denied. (os error 5)` and returned. Neither
+  `junction grant crossed` nor `junction grant did not cross` was printed, so no run has shown
+  whether a grant crosses a junction a stage made, and no clause is claimed from it. The probe's
+  output does not say which of its calls was refused. Where the grant crosses,
   `set_entry` has to skip reparse points. It is not changed here, because no run has shown the
   grant crossing. The session's own `temp` directory, which a stage can replace by a
   link, is checked by name as the scratch directory is, and the junction case of that check is
@@ -5903,14 +5914,16 @@ reported as what it is.
   job, and so whether those runs nested the stage's job under another, was not recorded in that
   run. `a_stage_is_limited_whether_or_not_this_process_is_in_a_job` records it (it prints `this
   process is in a job: true` or `false`) and repeats the checks from a process that has put itself
-  in a job. It was added after that run and has not been run on Windows; the `Sandbox on Windows`
-  job of CI is where it runs, with `--nocapture` so the line is in the log.
+  in a job. The five tests above and that one passed in the `Sandbox on Windows` job of CI run
+  42972425516 (job 130363809021), which printed `this process is in a job: true`: the test process
+  was in a job there, so those stages were created in a job of their own.
 - The `Sandbox on Windows` job of CI, on the branch of PR 3886 at `0d87ef50f` (run 42856028633,
   job 129969265030), showed two facts about a Windows stage, each from a failing test and not from
   a passing one. A stage with write access to a directory was refused `mklink /J` there
   ("Access is denied"), so a junction made by a stage by that route has not been seen to exist.
   The test now also tries a program in the stage calling `DeviceIoControl` with
-  `FSCTL_SET_REPARSE_POINT`. That route has not been run on Windows, so whether a grant crosses a
+  `FSCTL_SET_REPARSE_POINT`. Run 42972425516 (job 130363809021) ran that route and it was refused
+  with `Access is denied. (os error 5)`, so whether a grant crosses a
   junction a stage made is still not observed. A program started with an environment naming only some variables
   failed to start with error 203 ("The system could not find the environment option that was
   entered") in the two job-probe tests; why is not known, and those tests start the probe with
@@ -5919,8 +5932,13 @@ reported as what it is.
   passed in the run of main above, so a named environment is not refused as such. Which variable or
   ordering of the probe's two made the difference is not known.
   `a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable` starts a stage
-  with a named `SystemRoot` and one other variable. It has not been run on Windows, so whether
-  that shape starts there is not yet shown.
+  with a named `SystemRoot` and one other variable. It failed in run 42972425516 (job
+  130363809021) with `SetupFailed { mechanism: "appcontainer", detail: "`cmd.exe` reads its
+  command line by rules of its own, and it reads '%' in an argument as its own syntax ... refusing
+  rather than starting it" }`. The start was refused by [SANDBOX-4](#SANDBOX-4) before any process
+  ran, because the test's line was `echo %BRAVEBOT_NAMED%`, so that run does not show whether the
+  named-environment shape starts. The test now runs `cmd.exe /c set BRAVEBOT_NAMED`, which holds no
+  `%`, and expects `BRAVEBOT_NAMED=named`. That form has not been run on Windows.
 - The output of a `cmd.exe` line that starts a second `cmd.exe` ended with a closing quote on the
   Windows runner (`child-ran"`). The tests that start a child compare the output with that quote
   removed. Whether the quote comes from `cmd.exe` reading its `/c` line or from the line the backend
@@ -5986,15 +6004,15 @@ reported as what it is.
   sandbox crate's tests are written against Unix paths and are not run on Windows, and neither are
   the agent's other tests that start a confined process. The two tests that watch a loopback
   listener run on Unix only. The Windows test that does connect to a loopback listener from a
-  container, described below, has not been run on Windows, so whether a container reaches a
-  loopback listener, and with it the denial of egress on Windows, is shown by the capability the
-  token is built with and not by a connection. No test connects from a container granted the network to a private-network address
+  container, described below, passed in run 42972425516 (job 130363809021), where the connect from
+  a container granted the network to a listener on `127.0.0.1` ended `refused: connection timed
+  out`. That is one connection to one loopback listener, so the denial of egress on Windows is
+  still shown by the capability the token is built with and not by a connection to an outside address. No test connects from a container granted the network to a private-network address
   either, so that a granted container reaches neither a private network nor, on the strength of a
   connection, the loopback of this machine is not shown by a run.
   `a_container_granted_the_network_cannot_connect_to_this_hosts_loopback` binds a listener on
   `127.0.0.1`, connects to it from a probe in a stage granted the network and asserts the connect
-  was refused. It prints `connect-probe connected` or `connect-probe refused: <error>`. It has not
-  been run on Windows. The assumption that a container's default network isolation refuses
+  was refused. It prints `connect-probe connected` or `connect-probe refused: <error>`. The assumption that a container's default network isolation refuses
   loopback is the one it tests, and a runner that connects fails it.
   The Windows tests that connect out (`a_container_connects_out_only_when_its_policy_asks_for_the_network`
   and `a_container_without_the_network_cannot_look_up_a_name`) need `github.com` reachable from the

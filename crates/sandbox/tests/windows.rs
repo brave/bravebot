@@ -1075,6 +1075,11 @@ fn a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses() {
 /// its final terminator), which fails the start instead of reaching the program. The variable
 /// the program prints is the one the block named, so a block that was dropped and replaced by the
 /// inherited environment is rejected as well.
+///
+/// The program is `cmd.exe /c set BRAVEBOT_NAMED`, which prints `BRAVEBOT_NAMED=named`. The line
+/// holds no `%`: the backend refuses a `cmd.exe` argument holding one, because `cmd.exe` reads it
+/// as its own syntax (SANDBOX-4), and `echo %BRAVEBOT_NAMED%` was refused that way in run
+/// 42972425516 before any process started.
 #[test]
 fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable() {
     let sandbox = sandbox();
@@ -1089,7 +1094,7 @@ fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable
     let (code, printed) = run_with(
         &sandbox,
         "cmd.exe",
-        &["/c", "echo %BRAVEBOT_NAMED%"],
+        &["/c", "set BRAVEBOT_NAMED"],
         &policy,
         environment,
     )
@@ -1097,7 +1102,7 @@ fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable
 
     eprintln!("named-environment started: {printed}");
     assert_eq!(code, Some(0), "{printed}");
-    assert_eq!(printed.trim_end_matches('"'), "named");
+    assert_eq!(printed.trim_end_matches('"'), "BRAVEBOT_NAMED=named");
 }
 
 /// The line the next two tests hand `cmd.exe`: it starts a second `cmd.exe`, which is a program
