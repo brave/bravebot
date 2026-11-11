@@ -2413,6 +2413,16 @@ fn adopt_settings(
     session.adopt_suggestions(settings.suggestions() == Some(true));
 }
 
+/// Name the session's id where it is handed on, on every pass of the loop: to the panel, and to
+/// herdr, which reopens the session by it. Any path that changes the session reaches both on the
+/// next pass, once the record `--resume` reads is on disk (HERDR-9). Returns whether the panel
+/// changed.
+fn name_the_id(session: &mut Session, stored: &bravebot_session::sessions::Handle) -> bool {
+    let changed = session.name_id(stored.resumable());
+    crate::herdr::resume(stored.resumable());
+    changed
+}
+
 /// Put what the command line asked for on a session whose record is open and every startup
 /// question is answered: the links `--issue` and `--pr` gave, the prompt `-p` handed over, the text
 /// a link put in the box, and the Sessions screen `--resume` opens.
@@ -2892,10 +2902,7 @@ fn event_loop(
             crate::status::abbreviate(workspace.root()),
             stored.branch(),
         );
-        needs_draw |= session.name_id(stored.resumable());
-        // Beside the panel's id and for its reason: any path that changes the session reaches
-        // herdr on the next pass, once the record `--resume` reads is on disk (HERDR-9).
-        crate::herdr::resume(stored.resumable());
+        needs_draw |= name_the_id(&mut session, &stored);
         // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
         // and no report to wake the loop (MOUSE-37).
         needs_draw |= session.scroll_toward_the_pointer(Instant::now());

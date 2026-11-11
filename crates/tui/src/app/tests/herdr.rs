@@ -131,6 +131,50 @@ fn adopting_the_settings_tells_herdr_the_session_holds_its_pane_idle() {
     assert_eq!(request["params"]["state"], "idle");
 }
 
+/// HERDR-9, through `name_the_id`, which the event loop calls on every pass. Rejects: a loop that
+/// never hands herdr the session's id, so herdr has nothing to reopen after a restart; and one that
+/// hands it over before the record `--resume` reads is on disk.
+#[test]
+fn each_pass_of_the_loop_hands_herdr_the_id_once_the_record_is_written() {
+    use crate::herdr::{Modes, resume_script};
+    use bravebot_herdr::State as Shown;
+    use bravebot_session::sessions;
+    use std::rc::Rc;
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    let root = crate::test_profile::project("bravebot-app-herdr-resume");
+    std::fs::create_dir_all(&root).expect("create");
+    let workspace = Workspace::new(&root).expect("a workspace");
+    let herdr = FakeHerdr::start(true);
+    let reporter = Rc::new(herdr.reporter());
+    let _held = resume_script::hold(Rc::clone(&reporter), Modes::default());
+    reporter.report(Shown::Idle, None);
+    assert_eq!(herdr.next(), "pane.report_agent");
+    let mut session = Session::new("none");
+    let mut stored =
+        sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+
+    name_the_id(&mut session, &stored);
+    herdr.nothing_more();
+
+    with_standing(
+        &session,
+        &Conversation::new(),
+        &TrustStore::new(&root),
+        &TrustedPrograms::new(),
+        &workspace,
+        |standing| stored.save("a session", standing),
+    );
+    name_the_id(&mut session, &stored);
+    let request = herdr.next_request();
+    assert_eq!(request["params"]["agent_session_id"], stored.id());
+    assert_eq!(
+        request["params"]["resume_argv"],
+        serde_json::json!(["bravebot", "--resume", stored.id()])
+    );
+}
+
 /// HERDR-12, through the end of `run`. Rejects: a run that ends by handing the terminal back the
 /// way an editor or a stop does, which is what it did before it knew about herdr, and so never
 /// tells herdr it has gone.

@@ -183,6 +183,7 @@ session.
 `verified-by: bravebot_tui::herdr::a_plain_session_is_reopened_by_bravebot_resume_and_its_id`
 `verified-by: bravebot_tui::herdr::a_session_that_becomes_another_sends_the_new_id`
 `verified-by: bravebot_tui::herdr::an_id_read_as_a_flag_and_a_session_not_yet_written_send_nothing`
+`verified-by: bravebot_tui::app::tests::herdr::each_pass_of_the_loop_hands_herdr_the_id_once_the_record_is_written`
 
 <a id="HERDR-10"></a>
 ### HERDR-10: the command carries what narrows the session and nothing that loosens it
