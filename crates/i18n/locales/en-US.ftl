@@ -54,6 +54,7 @@ permissions-check-deny = deny
 permissions-check-ask = ask
 permissions-check-allow = allow
 permissions-check-none = no rule matches, so the ordinary gates decide
+permissions-check-short-name = refused, since a command rule is in force and an 8.3 short name cannot be matched against it
 permissions-check-rule = rule
 permissions-check-file = file
 permissions-check-reason = reason

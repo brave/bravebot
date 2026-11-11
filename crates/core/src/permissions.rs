@@ -880,8 +880,8 @@ impl Permissions {
         let argv = places(&words);
         // The stage as run is the only one an `allow` rule is matched against, as written. A list
         // that restricts is also matched against what is left after each leading wrapper
-        // (PERM-20), and against each of those with a `.exe` or `.com` taken off the program
-        // word (PERM-5).
+        // (PERM-20), and against each of those with the program word read as a host that ignores
+        // its dots, spaces, stream suffix and `.exe`, `.com`, `.cmd` or `.bat` reads it (PERM-5).
         let mut stages = vec![words.clone()];
         stages.extend(wrapped_commands(&words));
         let mut read_as: Vec<Vec<Place>> = Vec::new();
@@ -890,7 +890,7 @@ impl Permissions {
                 read_as.push(places(stage));
             }
             if let Some((program, rest)) = stage.split_first()
-                && let Some(bare) = without_extension(program)
+                && let Some(bare) = without_suffixes(program)
             {
                 let mut bare_stage = vec![bare];
                 bare_stage.extend_from_slice(rest);
@@ -1387,18 +1387,97 @@ fn places<S: AsRef<str>>(argv: &[S]) -> Vec<Place> {
     places
 }
 
-/// `program` with a trailing `.exe` or `.com` taken off, in either case, or `None` where it has
-/// neither or nothing else. A host that starts programs by those names runs `git.exe` as `git`.
-pub(crate) fn without_extension(program: &str) -> Option<&str> {
-    let at = program.len().checked_sub(4).filter(|at| *at > 0)?;
-    let (stem, extension) = program.split_at_checked(at)?;
-    (extension.eq_ignore_ascii_case(".exe") || extension.eq_ignore_ascii_case(".com"))
-        .then_some(stem)
+/// The extensions a Windows host starts a program by without being told them, each of which
+/// `git.exe` and `git.cmd` shares with `git`.
+const PROGRAM_EXTENSIONS: [&str; 4] = [".exe", ".com", ".cmd", ".bat"];
+
+/// `name` without `suffix` at its end, in either case, or `None`.
+fn strip_suffix_ignoring_case<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
+    let at = name.len().checked_sub(suffix.len())?;
+    let (stem, tail) = name.split_at_checked(at)?;
+    tail.eq_ignore_ascii_case(suffix).then_some(stem)
 }
 
-/// The name a wrapper is looked up under: without regard to case, and without a `.exe` or `.com`.
+/// `program` without the trailing dots and spaces Win32 drops from a name and without a
+/// `::$DATA` stream suffix, each taken off for as long as one is left (`git.exe. ` and
+/// `git.exe::$DATA.` are both `git.exe`).
+fn without_ignored_tail(program: &str) -> &str {
+    let mut rest = program;
+    loop {
+        let trimmed = rest.trim_end_matches(['.', ' ']);
+        let trimmed = strip_suffix_ignoring_case(trimmed, "::$DATA").unwrap_or(trimmed);
+        if trimmed.len() == rest.len() {
+            return rest;
+        }
+        rest = trimmed;
+    }
+}
+
+/// `program` as a host that ignores a trailing dot or space, a `::$DATA` stream suffix and one of
+/// `.exe`, `.com`, `.cmd` and `.bat` reads it, or `None` where nothing of that kind is there or
+/// nothing else is left. Such a host runs `git.exe. ` and `git.exe::$DATA` as `git.exe`, and
+/// `git.exe` and `git.cmd` as `git` (PERM-5).
+///
+/// One extension is taken off, not several: `git.exe.exe` is not `git`, and `touch.exe.bak` is
+/// not `touch`.
+pub(crate) fn without_suffixes(program: &str) -> Option<&str> {
+    let named = without_ignored_tail(program);
+    let stem = PROGRAM_EXTENSIONS
+        .iter()
+        .filter_map(|extension| strip_suffix_ignoring_case(named, extension))
+        .find(|stem| !stem.is_empty())
+        .unwrap_or(named);
+    (stem != program && !stem.is_empty()).then_some(stem)
+}
+
+/// The name a wrapper is looked up under: without regard to case, and read as the program word is
+/// ([`without_suffixes`]).
 fn wrapper_name(program: &str) -> String {
-    without_extension(program).unwrap_or(program).to_lowercase()
+    without_suffixes(program).unwrap_or(program).to_lowercase()
+}
+
+impl Permissions {
+    /// Whether a `deny` or `ask` rule about a command is in force and one of `argv`'s programs, the
+    /// stage's own or one under a leading wrapper, is spelled as an 8.3 short name (`POWERS~1`).
+    ///
+    /// A short name is another file's second spelling, and which file it is cannot be read off the
+    /// word: that is a question for the file system, which this crate does not ask. A rule that
+    /// restricts therefore cannot be matched against it, and the caller refuses the stage rather
+    /// than leave a `Bash(powershell *)` rule silent about it (PERM-5). Without such a rule there is
+    /// nothing to be silent about, so a session that restricts no command refuses nothing here. The
+    /// shape is the one the file-name check refuses in a path on Windows
+    /// (`crates/ui-files/src/short_name.rs`), and a program given by a path is not read (PERM-5), so
+    /// a word with a separator is not asked about.
+    pub fn reads_a_short_name<S: AsRef<str>>(&self, argv: &[S]) -> bool {
+        self.short_name_depth(argv).is_some()
+    }
+
+    /// How many wrappers lead to the program that is an 8.3 short name, under the conditions of
+    /// [`Permissions::reads_a_short_name`]: `Some(0)` where the stage's own program is one,
+    /// `Some(1)` where it is the program after one wrapper, and `None` where none is.
+    ///
+    /// The one place the decision is made, so the refusal at the gates and the report of
+    /// `permissions check` (CLI-30) cannot disagree, and a refusal can say whether the short name
+    /// is the program word it was written as or a word further along the line.
+    pub fn short_name_depth<S: AsRef<str>>(&self, argv: &[S]) -> Option<usize> {
+        let restricts = self
+            .deny
+            .iter()
+            .chain(&self.ask)
+            .any(|rule| rule.subject == Subject::Bash);
+        if !restricts {
+            return None;
+        }
+        let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
+        let mut stages = vec![words.clone()];
+        stages.extend(wrapped_commands(&words));
+        stages.iter().position(|stage| {
+            stage.first().is_some_and(|program| {
+                !program.contains(['/', '\\'])
+                    && crate::short_name::short(without_ignored_tail(program))
+            })
+        })
+    }
 }
 
 /// How a wrapper program's leading options are read.
@@ -2169,8 +2248,8 @@ mod tests {
     }
 
     /// The shapes of the documented table, read as a deny or an ask rule: wherever the pattern puts
-    /// the program word, the line's program word is compared without regard to case and with a
-    /// `.exe` or `.com` taken off, and every later word is compared as written. The same lines
+    /// the program word, the line's program word is compared without regard to case and with its
+    /// suffixes taken off (PERM-5), and every later word is compared as written. The same lines
     /// are asked as the first stage and as a later stage, and an `allow` rule of the same shape
     /// grants none of the respelled ones.
     #[test]
@@ -3738,7 +3817,8 @@ mod tests {
     }
 
     /// A deny or ask rule covers the program word and the wrapper names however they are cased,
-    /// and with a `.exe` or `.com` after them, because a host that folds case or starts programs by
+    /// and with a `.exe` or `.com` after them (the names of the other suffixes are in the test
+    /// below), because a host that folds case or starts programs by
     /// those names runs `TOUCH` as `touch` and `git.exe` as `git` (PERM-5, PERM-20). The answer
     /// does not depend on the machine the test runs on.
     #[test]
@@ -3789,6 +3869,175 @@ mod tests {
             for line in ["git.exe push", "GIT push origin", "Git.Com push"] {
                 assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
             }
+        }
+    }
+
+    /// A host that drops trailing dots and spaces, opens `::$DATA` as the file itself, and starts a
+    /// program by a name without `.exe`, `.com`, `.cmd` or `.bat` runs each of these as `touch`
+    /// (PERM-5), and a wrapper spelled any of these ways as the wrapper (PERM-20). The fold is the
+    /// same on every host, so the test is too.
+    #[test]
+    fn a_restricting_rule_covers_the_program_under_the_names_windows_ignores() {
+        let spellings = [
+            "touch. x",
+            "touch.. x",
+            "touch.exe. x",
+            "touch::$DATA x",
+            "touch.exe::$DATA x",
+            "TOUCH.EXE::$data x",
+            "touch.exe::$DATA. x",
+            "touch.cmd x",
+            "TOUCH.BAT x",
+            "touch.bat. x",
+            "touch.cmd::$DATA x",
+            "timeout.exe. 5 touch x",
+            "timeout::$DATA 5 touch x",
+            "TIMEOUT.CMD 5 touch x",
+            "nice.bat touch x",
+            "env.cmd touch.bat x",
+            "timeout 5 touch.exe. x",
+            "timeout 5 touch.cmd x",
+            "env. FOO=bar touch::$DATA x",
+        ];
+        for list in 0..2 {
+            let permissions = if list == 0 {
+                rules(&["Bash(touch *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(touch *)"], &[])
+            };
+            let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+            for line in spellings {
+                assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
+                assert_eq!(
+                    permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                    expected,
+                    "{line} as a later stage"
+                );
+            }
+            // A program word that ends in a space is one word, which `words` cannot spell.
+            for argv in [
+                &["touch ", "x"][..],
+                &["touch.exe ", "x"],
+                &["touch.exe . ", "x"],
+                &["timeout. ", "5", "touch", "x"],
+            ] {
+                assert_eq!(permissions.for_command(argv), expected, "{argv:?}");
+            }
+        }
+    }
+
+    /// An `allow` rule is matched as written, so none of the spellings above is granted by a rule
+    /// for the plain name (PERM-4).
+    #[test]
+    fn an_allow_rule_grants_none_of_the_names_windows_ignores() {
+        let permissions = rules(&[], &[], &["Bash(touch *)"]);
+        for line in [
+            "touch. x",
+            "touch.exe. x",
+            "touch::$DATA x",
+            "touch.cmd x",
+            "touch.bat x",
+            "timeout.exe. 5 touch x",
+            "env.cmd touch x",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+            assert_eq!(
+                permissions.for_pipeline(&[words("touch y"), words(line)]),
+                Decision::Unmatched,
+                "{line} as a later stage"
+            );
+        }
+    }
+
+    /// The fold takes off the names the loader ignores and nothing else: a second extension, an
+    /// extension that is not one of the four, and a word that is only the suffix are other names.
+    #[test]
+    fn the_fold_leaves_a_name_that_is_not_the_program_alone() {
+        for program in [
+            "touch",
+            "touch.exe.bak",
+            "touch.ps1",
+            "touch.sh",
+            "toucher.cmd",
+            ".exe",
+            ".cmd",
+            ".bat",
+            "::$DATA",
+            ".",
+            "..",
+            " ",
+            "",
+        ] {
+            let found = without_suffixes(program);
+            let wants = matches!(program, "toucher.cmd").then_some("toucher");
+            assert_eq!(found, wants, "{program:?}");
+        }
+        assert_eq!(without_suffixes("touch.exe."), Some("touch"));
+        assert_eq!(without_suffixes("touch.exe::$DATA"), Some("touch"));
+        assert_eq!(without_suffixes("touch. "), Some("touch"));
+        assert_eq!(without_suffixes("TOUCH.BAT"), Some("TOUCH"));
+        // One extension, not several: `touch.exe.exe` is the file `touch.exe`, not `touch`.
+        assert_eq!(without_suffixes("touch.exe.exe"), Some("touch.exe"));
+        let permissions = rules(&["Bash(touch *)"], &["Bash(rm *)"], &[]);
+        for line in [
+            "touch.exe.exe x",
+            "rm.bat.cmd x",
+            "touch.ps1 x",
+            "touch.cmd.bak x",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+    }
+
+    /// An 8.3 short name is another file's second spelling and no rule can be matched against it,
+    /// so a stage naming one is reported while a `deny` or `ask` command rule is in force: as its
+    /// program, or as a wrapper's program. With no such rule, and for a path, nothing is reported.
+    #[test]
+    fn a_short_name_program_is_reported_only_where_a_command_rule_restricts() {
+        for list in 0..2 {
+            let permissions = if list == 0 {
+                rules(&["Bash(powershell *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(powershell *)"], &[])
+            };
+            for line in [
+                "POWERS~1 x",
+                "powers~1.exe x",
+                "POWERS~1. x",
+                "POWERS~1.exe::$DATA x",
+                "TIMEOU~1 5 powershell x",
+                "timeout 5 POWERS~1 x",
+                "env FOO=bar POWERS~1.CMD x",
+            ] {
+                assert!(permissions.reads_a_short_name(&words(line)), "{line}");
+            }
+            for line in [
+                "powershell x",
+                "echo POWERS~1",
+                "POWERS~1x x",
+                "a~b x",
+                "/usr/bin/POWERS~1 x",
+                "C:\\POWERS~1 x",
+                "TOOLONGNAME~1 x",
+            ] {
+                assert!(!permissions.reads_a_short_name(&words(line)), "{line}");
+            }
+        }
+        // A path rule or an allow rule restricts no command.
+        for permissions in [
+            rules(&["Read(secrets)"], &[], &[]),
+            rules(&[], &[], &["Bash(powershell *)"]),
+            rules(&[], &[], &[]),
+        ] {
+            assert!(!permissions.reads_a_short_name(&words("POWERS~1 x")));
         }
     }
 

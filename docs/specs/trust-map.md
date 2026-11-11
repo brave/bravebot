@@ -31,6 +31,7 @@ governs:
   - crates/tui/src/app/actions.rs
   - crates/ui-files/src/main.rs
   - crates/ui-files/src/names.rs
+  - crates/ui-files/src/short_name.rs
   - crates/ui-files/src/posix.rs
   - crates/ui-files/src/windows.rs
   - ui/src/main/opened.ts

@@ -63,6 +63,7 @@ permissions-check-deny = refuser
 permissions-check-ask = demander
 permissions-check-allow = autoriser
 permissions-check-none = aucune règle ne correspond, les contrôles ordinaires décident
+permissions-check-short-name = refusé, car une règle de commande est en vigueur et un nom court 8.3 ne peut pas lui être comparé
 permissions-check-rule = règle
 permissions-check-file = fichier
 permissions-check-reason = raison

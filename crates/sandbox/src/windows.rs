@@ -337,7 +337,22 @@ fn grants_to_write(policy: &SandboxPolicy, readable_roots: &[PathBuf]) -> Vec<(P
 /// wherever they are left unquoted. It is started only where its reading and the line
 /// [`command_line`] writes agree: no argument holds a character in [`CMD_READS`], and the first
 /// argument after the switch is written quoted only when it is the last one.
+///
+/// Both decisions go by the file name as written, and Windows does not: it drops a dot or a space
+/// that ends a name, and reads what follows a `:` in it as a stream of the file. A program whose
+/// file name is spelled that way ([`is_normalised_by_windows`]) is refused outright, so the
+/// extension and `cmd.exe` tests are never made on a name other than the one that is started.
 pub fn refusal_for_program(program: &str, args: &[String]) -> Option<SandboxError> {
+    if is_normalised_by_windows(program) {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: format!(
+                "{program} ends its file name in a dot or a space or names a stream with a colon, \
+                 and Windows reads such a name as another file, so whether it is a batch file or \
+                 `cmd.exe` cannot be told from the name; refusing rather than starting it"
+            ),
+        });
+    }
     let is_a_batch_file = Path::new(program)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -404,8 +419,27 @@ const CMD_READS: [char; 15] = [
     '"', '&', '|', '<', '>', '^', '(', ')', '%', '!', '\n', '\r', ',', ';', '=',
 ];
 
+/// Whether the file name of `program`, the part after its last separator, ends in a dot or a space
+/// or holds a colon.
+///
+/// Windows drops the dot or space that ends a name and reads what follows a colon as a stream of
+/// the file, so `build.bat.`, `cmd.exe ` and `cmd.exe::$DATA` can each start the file the name
+/// without them names. A colon in a drive-relative `C:cmd.exe` is in the final component too. Only
+/// that component is judged: a drive's colon and a directory ending in a dot are in the part
+/// before it.
+fn is_normalised_by_windows(program: &str) -> bool {
+    let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+    name.ends_with(['.', ' ']) || name.contains(':')
+}
+
 /// Whether `program` is the command interpreter, spelled with or without its extension and in
-/// any directory.
+/// any directory. A name [`is_normalised_by_windows`] has been refused before this is asked, so
+/// the name compared is the one that is started.
+///
+/// The answer is the file name and nothing read from disk. A copy of `cmd.exe` under another name
+/// is not recognised, because no test of the file holds against the stage that wrote the copy
+/// (SANDBOX-4, "What it costs"). Reading no file also means the answer does not depend on what is
+/// on disk when the stage is prepared or when `CreateProcessW` runs.
 fn is_cmd(program: &str) -> bool {
     let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
     name.eq_ignore_ascii_case("cmd") || name.eq_ignore_ascii_case("cmd.exe")
@@ -787,6 +821,94 @@ mod tests {
         ] {
             assert!(refusal_for_program(program, &[]).is_none(), "{program}");
         }
+    }
+
+    /// Windows drops a trailing dot or space from a file name and reads `:` in it as a stream,
+    /// so `build.bat.`, `cmd.exe ` and `cmd.exe::$DATA` can name the file the batch-file and
+    /// `cmd.exe` refusals are about. A final component spelled that way is refused whatever the
+    /// arguments are. The regression it rejects is a refusal decided on the name as written,
+    /// which finds no extension in `build.bat.` and no `cmd.exe` in the other two.
+    #[test]
+    fn a_program_name_windows_would_normalise_is_refused() {
+        for program in [
+            r"C:\tools\build.bat.",
+            r"C:\tools\build.bat ",
+            r"C:\tools\build.bat::$DATA",
+            r"C:\tools\build.bat:stream",
+            r"C:\tools\build.cmd.",
+            r"C:\Windows\System32\cmd.exe.",
+            r"C:\Windows\System32\cmd.exe ",
+            r"C:\Windows\System32\cmd.exe::$DATA",
+            r"C:\Windows\System32\cmd.exe:stream",
+            r"C:\Windows\System32\CMD.EXE...",
+            r"C:\Windows\System32\cmd.exe. .",
+            "cmd.exe.",
+            "cmd.",
+            "cmd ",
+            "C:/Windows/cmd.exe.",
+            r"C:cmd.exe",
+            r"C:\tools\x.exe.",
+            r"C:\tools\x.exe::$DATA",
+            r"C:\tools\.",
+        ] {
+            for args in [strings(&[]), strings(&["/c", "echo", "hello"])] {
+                assert!(
+                    matches!(
+                        refusal_for_program(program, &args),
+                        Some(SandboxError::SetupFailed {
+                            mechanism: "appcontainer",
+                            ..
+                        })
+                    ),
+                    "{program} {args:?}"
+                );
+            }
+        }
+    }
+
+    /// Only the final component is judged: a dot or a space ending a directory, and the colon of
+    /// a drive, name nothing Windows reads differently. The regression it rejects is a refusal
+    /// of every path holding a colon or a dot, which leaves no absolute program to start.
+    #[test]
+    fn a_program_path_whose_file_name_is_ordinary_is_not_refused_for_its_directories() {
+        for program in [
+            r"C:\tools\x.exe",
+            r"C:\dir.\x.exe",
+            r"C:\dir \x.exe",
+            r"\\?\C:\tools\x.exe",
+            r"\\server\share\x.exe",
+            "C:/tools/x.exe",
+            r"C:\tools\a.b.c",
+            r"C:\tools\build.bat.exe",
+            "git",
+            "x.exe",
+            r".\x.exe",
+            r"..\x.exe",
+        ] {
+            assert!(refusal_for_program(program, &[]).is_none(), "{program}");
+        }
+    }
+
+    /// `cmd.exe` is recognised by its final file name only. A program under another name gets the
+    /// quoting a program is given, whatever it is a copy of, and a directory called `cmd.exe` or a
+    /// name that merely holds `cmd` does not make its program `cmd.exe`. The regression it rejects
+    /// is a recognition that looks at the whole path or at part of a name, which refuses programs
+    /// that read their line through `CommandLineToArgvW`.
+    #[test]
+    fn only_the_final_file_name_makes_a_program_cmd() {
+        let args = strings(&["/c", "echo", "a&b"]);
+        for program in [
+            r"C:\tools\tool.exe",
+            r"C:\cmd.exe\x.exe",
+            r"C:\cmd\x.exe",
+            r"C:\tools\mycmd.exe",
+            r"C:\tools\cmd2.exe",
+            r"C:\tools\cmd.exe.bak",
+            "tool",
+        ] {
+            assert!(refusal_for_program(program, &args).is_none(), "{program}");
+        }
+        assert!(refusal_for_program(r"C:\Windows\System32\cmd.exe", &args).is_some());
     }
 
     fn strings(args: &[&str]) -> Vec<String> {

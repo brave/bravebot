@@ -594,6 +594,10 @@ how Brave Bot quotes it. That is when an argument holds a quotation mark, `&`, `
 `/r` is quoted and another follows it. Run the program directly instead. One argument after the
 switch still starts.
 
+A program whose file name ends in a dot or a space, or holds a colon, is refused, since Windows reads
+such a name as another file. `cmd.exe` is recognised by its file name, so a copy of it under another
+name is started like any program.
+
 ## Data collection, usage, and retention
 
 Brave does not use your data and does not store it. Prompts and used file contents are sent to Brave's

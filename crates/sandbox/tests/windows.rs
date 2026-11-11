@@ -1251,3 +1251,250 @@ fn cmd_with_an_argument_holding_an_ampersand_starts_nothing() {
         .collect();
     assert!(made.is_empty(), "cmd.exe made {made:?}");
 }
+
+/// SANDBOX-4 with a real process: `cmd.exe` spelled with a trailing dot, a trailing space or a
+/// stream suffix is refused before anything starts, so the directory is not made, whether or not
+/// `CreateProcessW` would have started the interpreter for that name. The regression it rejects is
+/// the refusals reading the name as written, which finds no `cmd.exe` in these spellings and starts
+/// them with arguments `cmd.exe` reads as its own.
+#[test]
+fn cmd_spelled_with_a_trailing_dot_a_space_or_a_stream_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("cmd-spellings");
+    let policy = the_base("cmd-spellings").allow_write(&directory);
+    let named = directory.join("R&D");
+    let named = named.display().to_string();
+    let system = r"C:\Windows\System32";
+
+    for program in [
+        format!(r"{system}\cmd.exe."),
+        format!(r"{system}\cmd.exe "),
+        format!(r"{system}\cmd.exe::$DATA"),
+        format!(r"{system}\cmd.exe:stream"),
+    ] {
+        let refused = run(&sandbox, &program, &["/c", "mkdir", &named], &policy);
+
+        assert!(
+            matches!(refused, Err(SandboxError::SetupFailed { .. })),
+            "{program} started: {refused:?}"
+        );
+    }
+    let made: Vec<_> = std::fs::read_dir(&directory)
+        .expect("the scratch directory")
+        .collect();
+    assert!(made.is_empty(), "a spelling of cmd.exe made {made:?}");
+}
+
+/// SANDBOX-4 with a real process: a batch file spelled with a trailing dot is refused before
+/// anything starts, so the file it would write is not there. The regression it rejects is the
+/// extension test reading `build.bat.` as having none.
+#[test]
+fn a_batch_file_spelled_with_a_trailing_dot_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("batch-dot");
+    let policy = the_base("batch-dot").allow_write(&directory);
+    let batch = directory.join("build.bat");
+    let marker = directory.join("ran");
+    std::fs::write(&batch, format!("@echo ran> {}\r\n", marker.display()))
+        .expect("the batch file is written");
+    let spelled = format!("{}.", batch.display());
+
+    let refused = run(&sandbox, &spelled, &[], &policy);
+
+    assert!(
+        matches!(refused, Err(SandboxError::SetupFailed { .. })),
+        "{spelled} started: {refused:?}"
+    );
+    assert!(!marker.exists(), "the batch file ran");
+}
+
+/// SANDBOX-4 with a real process, pinning the cost the spec records: a copy of `cmd.exe` called
+/// `tool.exe` is recognised by no test of its file, so it is not refused as `cmd.exe` is and the
+/// backend starts it. The regression it rejects is a change to `is_cmd` that refuses or accepts
+/// differently without the spec's account changing with it. Which of the two the copy then does
+/// with `R&D` is not asserted, since it has not been observed on Windows.
+#[test]
+fn a_copy_of_cmd_under_another_name_is_started_as_a_program() {
+    let sandbox = sandbox();
+    let directory = scratch("cmd-copy");
+    let policy = the_base("cmd-copy")
+        .allow_read(&directory)
+        .allow_write(&directory);
+    let copy = directory.join("tool.exe");
+    std::fs::copy(r"C:\Windows\System32\cmd.exe", &copy).expect("a copy of cmd.exe");
+    let named = directory.join("R&D");
+
+    let started = run(
+        &sandbox,
+        &copy.display().to_string(),
+        &["/c", "mkdir", &named.display().to_string()],
+        &policy,
+    );
+
+    assert!(
+        started.is_ok(),
+        "the copy was refused, so SANDBOX-4's account of what it costs is out of date: {started:?}"
+    );
+}
+
+/// The long file name of the copy of `whoami.exe` the spelling tests start by its 8.3 short name.
+const LONG_PROGRAM: &str = "a_long_program_name.exe";
+
+/// Start `program` with no arguments, outside any container, and say how it ended and what it
+/// printed, or that it did not start.
+fn started_as(program: &Path) -> std::io::Result<(Option<i32>, String)> {
+    let child = {
+        let _spawning = spawning();
+        bravebot_sandbox::process::starting_a_program(|| {
+            Command::new(program)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        })?
+    };
+    let ended = child.wait_with_output()?;
+    Ok((
+        ended.status.code(),
+        String::from_utf8_lossy(&ended.stdout).trim().to_owned(),
+    ))
+}
+
+/// `base` with `suffix` added to the end of its name, without any normalisation of the result.
+fn spelled(base: &Path, suffix: &str) -> PathBuf {
+    let mut name = base.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// A directory holding a copy of `whoami.exe` as `tool.exe` and as `LONG_PROGRAM`, and a `t.cmd`
+/// and a `t.bat` that end with status 0. Returns the directory and what `whoami.exe` prints, which
+/// a copy prints too.
+fn a_directory_of_programs(name: &str) -> (PathBuf, String) {
+    let directory = scratch(name);
+    let root = std::env::var_os("SystemRoot").expect("the system directory is named");
+    let whoami = Path::new(&root).join("System32").join("whoami.exe");
+    std::fs::copy(&whoami, directory.join("tool.exe")).expect("a copy of whoami.exe");
+    std::fs::copy(&whoami, directory.join(LONG_PROGRAM)).expect("a copy of whoami.exe");
+    std::fs::write(directory.join("t.cmd"), "@exit /b 0\r\n").expect("a .cmd file");
+    std::fs::write(directory.join("t.bat"), "@exit /b 0\r\n").expect("a .bat file");
+    let (code, printed) = started_as(&whoami).expect("whoami.exe starts under its own name");
+    assert_eq!(code, Some(0), "whoami.exe failed: {printed}");
+    assert!(!printed.is_empty(), "whoami.exe printed nothing");
+    (directory, printed)
+}
+
+/// The 8.3 short name of `path`, as `cmd.exe` prints it with `%~s`, or `None` where the volume made
+/// none and `cmd.exe` printed the long name back.
+fn short_name_of(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+
+    let line = format!("for %I in (\"{}\") do @echo %~sI", path.display());
+    let ended = spawned(
+        Command::new("cmd.exe")
+            .arg("/c")
+            .raw_arg(line)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("cmd.exe ends");
+    assert!(
+        ended.status.success(),
+        "the short name was not read: {}",
+        String::from_utf8_lossy(&ended.stderr)
+    );
+    let printed = String::from_utf8_lossy(&ended.stdout).trim().to_owned();
+    assert!(!printed.is_empty(), "cmd.exe printed no short name");
+    let short = PathBuf::from(printed);
+    (!short.as_os_str().eq_ignore_ascii_case(path.as_os_str())).then_some(short)
+}
+
+/// #3926, PERM-5 and PERM-20: the spellings a `deny` or `ask` command rule reads as the program
+/// they name do start that program. This checks the platform assumption the fold relies on and
+/// never calls the fold, so a regression in the fold cannot fail it; the tests in
+/// `bravebot-core` pin the fold. The fault it rejects is a spelling the fold treats as the program
+/// that Windows does not start as that program, which would refuse or misattribute a line. Each
+/// spelling is started by this process through the standard library, outside any container, and a
+/// failure names the spelling. The failure of this test was not demonstrated, since it runs only
+/// on Windows.
+#[test]
+fn the_spellings_a_command_rule_folds_start_the_program_they_name() {
+    let (directory, expected) = a_directory_of_programs("spellings-fold");
+    let tool = directory.join("tool.exe");
+    let mut spellings: Vec<(String, PathBuf, bool)> = vec![
+        (
+            "tool.exe. (a trailing dot)".to_owned(),
+            spelled(&tool, "."),
+            true,
+        ),
+        (
+            "TOOL.EXE (another case)".to_owned(),
+            directory.join("TOOL.EXE"),
+            true,
+        ),
+        ("t.cmd".to_owned(), directory.join("t.cmd"), false),
+        ("t.bat".to_owned(), directory.join("t.bat"), false),
+    ];
+    match short_name_of(&directory.join(LONG_PROGRAM)) {
+        Some(short) => spellings.push((
+            format!("{} (an 8.3 short name)", short.display()),
+            short,
+            true,
+        )),
+        None => eprintln!(
+            "no 8.3 short name for {LONG_PROGRAM} on this volume; that spelling was not tried"
+        ),
+    }
+
+    let mut failures = Vec::new();
+    for (spelling, program, prints) in &spellings {
+        match started_as(program) {
+            Ok((Some(0), printed)) if !*prints || printed == expected => {
+                eprintln!("{spelling}: started the program and it ended with 0");
+            }
+            other => failures.push(format!("{spelling}: {other:?} (expected {expected:?})")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(
+        failures.is_empty(),
+        "a spelling the fold reads as the program did not start it:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// #3926: for the spellings whose result is not asserted, a trailing space and a `::$DATA` stream
+/// suffix, only that Windows never starts a different program under them. The fold reads both as
+/// the program they name, so the claim a rule needs is that a spelling either starts the program
+/// named or starts nothing. Which of the two it is gets printed for each; an outcome that is
+/// neither fails and names the spelling. Like the test above, this checks the platform assumption
+/// and never calls the fold.
+#[test]
+fn a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing() {
+    let (directory, expected) = a_directory_of_programs("spellings-observed");
+    let tool = directory.join("tool.exe");
+    let mut failures = Vec::new();
+    for (spelling, program) in [
+        ("tool.exe  (a trailing space)", spelled(&tool, " ")),
+        (
+            "tool.exe::$DATA (a stream suffix)",
+            spelled(&tool, "::$DATA"),
+        ),
+    ] {
+        match started_as(&program) {
+            Ok((Some(0), printed)) if printed == expected => {
+                eprintln!("{spelling}: started the program named");
+            }
+            Err(error) => eprintln!("{spelling}: did not start anything ({error})"),
+            other => failures.push(format!("{spelling}: {other:?} (expected {expected:?})")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(
+        failures.is_empty(),
+        "a spelling started something other than the program named:\n{}",
+        failures.join("\n")
+    );
+}
