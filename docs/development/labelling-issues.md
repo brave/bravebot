@@ -120,6 +120,30 @@ says what fits in the time available.
 The [triage-issues skill](../../agents/skills/triage-issues/SKILL.md) assigns the triple to every
 issue that survives a run, and takes the meanings from here.
 
+## Developed on one platform
+
+`develop-on/linux`, `develop-on/macos` and `develop-on/windows` say the issue can only be developed
+and tested on that platform: the code is gated to it (`cfg(target_os = ...)`, the Linux sandbox
+backend, the Windows installer), or the fix cannot be checked on another host. An issue with none of
+them can be developed anywhere, and most issues have none. The label says where the work is done and
+not where the defect shows up: a bug that appears on Windows because of shared code is not
+`develop-on/windows`. An issue that needs two platforms carries both labels, and a host of either
+satisfies it.
+
+[`make implement-issues`](maintainer-jobs.md) refuses an issue that has one or more of these labels
+when none of them is the host's, and `FORCE=1` works it anyway. The
+[triage-issues skill](../../agents/skills/triage-issues/SKILL.md) applies and removes the labels. They
+are not an axis, so an issue needs none of them to be complete. A person creates the labels:
+
+```bash
+gh label create develop-on/linux --repo brave/bravebot --color 1d76db \
+  --description "Can only be developed and tested on Linux"
+gh label create develop-on/macos --repo brave/bravebot --color 1d76db \
+  --description "Can only be developed and tested on macOS"
+gh label create develop-on/windows --repo brave/bravebot --color 1d76db \
+  --description "Can only be developed and tested on Windows"
+```
+
 ## Where the work is
 
 An `area` label says which part of the tree an issue lands in: `area/trust`, `area/tools`,

@@ -4,9 +4,10 @@ description:
   'Go through the open issues and decide, against the code, which are already fixed,
   which have gone stale, and which still stand. Closes the fixed ones citing the
   commit that fixed them, and labels every issue that stays open with an importance,
-  an urgency and a size. Triggers on: triage issues, go through all open issues,
+  an urgency and a size, and adds a develop-on label to one that can only be developed on Linux,
+  macOS or Windows. Triggers on: triage issues, go through all open issues,
   which issues are already fixed, are these issues still valid, close stale issues,
-  label the issues, importance and urgency labels, issue backlog.'
+  label the issues, importance and urgency labels, platform labels, issue backlog.'
 argument-hint: '[issue-number ...] [label:<name>] [dry-run]'
 ---
 
@@ -113,6 +114,40 @@ Replacing one means `--remove-label` in the same `gh issue edit` call as the
 
 ---
 
+## Issues that can only be developed on one platform
+
+An issue that stays open also gets a `develop-on/linux`, `develop-on/macos` or
+`develop-on/windows` label when the work can only be done and tested on that platform. These are not
+an axis: most issues get none, and an issue with none can be developed anywhere. `make
+implement-issues` refuses an issue whose develop-on labels do not include the host's platform unless
+`FORCE=1` is given, so a label put on an issue that does not need it blocks work for no reason, and a
+label left off one that needs it sends somebody to a host where the work cannot be done.
+[labelling-issues.md](../../../docs/development/labelling-issues.md#developed-on-one-platform) has
+the definition.
+
+Apply one only on evidence in the tree, cited in the report:
+
+- the change lands in code gated to one platform (`cfg(target_os = ...)`, `cfg(unix)`,
+  `cfg(windows)`, the Linux sandbox backend, the macOS Seatbelt profile, the Windows installer or
+  signing path), and nothing shared has to change;
+- the fix cannot be checked on another host, for example because it needs a Linux container
+  runtime, the Windows registry or macOS keychain.
+
+Do not apply one because the report came from that platform, because the defect shows there first,
+or because the issue mentions the platform. A defect in shared code that only appears on Windows is
+developed on any host, since `make check-linux` and the other Docker checks cover the other
+platforms. An issue that needs two platforms gets both labels. A label a person set stays, and one
+that the verdict made wrong (a STALE issue whose surviving ask is shared code) is removed, with the
+reason in the comment.
+
+The labels must exist. If `gh label list --repo brave/bravebot --search develop-on` lacks one, skip
+that label, say so in the report and give the creation command from
+[labelling-issues.md](../../../docs/development/labelling-issues.md#developed-on-one-platform),
+because an agent cannot create labels and `gh issue edit --add-label` with an unknown label fails
+the whole edit.
+
+---
+
 ## Method
 
 ### Step 1: intake
@@ -183,6 +218,8 @@ An issue that stays open gets its triple in the same pass:
 ```bash
 gh issue edit N --add-label importance/p3,urgency/p3,size/2
 gh issue edit N --add-label urgency/p2 --remove-label urgency/p4   # a value that moved
+gh issue edit N --add-label develop-on/linux                       # only where the work is Linux-only
+gh issue edit N --remove-label develop-on/windows                  # a label the verdict made wrong
 ```
 
 ### Step 6: check that nothing was left unlabelled
@@ -300,7 +337,8 @@ the commit, the symbol, the clause. "This is fixed" is not a citation.
 One table: closed, rescoped, annotated, untouched, with counts. Then the closes with
 their commits, and anything that needs a human decision.
 
-A count per axis by value, too, and the number of every issue whose triple was uncertain.
+A count per axis by value, too, and the number of every issue whose triple was uncertain. List the
+issues given a `develop-on` label, or one removed, with the evidence for each.
 The distribution reviews the run as much as it summarises the backlog: `urgency/p2`
 holding a third of the issues means the axis was read as importance a second time, and
 nothing at `size/4` or `size/5` means the large work was sized off issue summaries rather

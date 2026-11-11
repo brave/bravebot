@@ -29,13 +29,18 @@ signing and refused `run` arguments apply here unchanged. Below, `...` stands fo
 with the argument unchanged, then a `Claimed:` line, then `NOTES`, where it is given, on a line that
 starts with `Notes:` ([step 1](#1-resolve-the-list)). First, with no model,
 [implement-issues.py](implement-issues.py) stops when an item is assigned to anybody but the account
-`gh` writes as, assigns that account to each open issue, and adds `bot/in-progress` to each, which it
-removes when the session ends. The `Claimed:` line says when it did that and to which issues. An
+`gh` writes as, or is labelled `develop-on/linux`, `develop-on/macos` or `develop-on/windows` and
+none of those names the platform the host is, assigns that account to each open issue, and adds
+`bot/in-progress` to each, which it removes when the session ends. The `Claimed:` line says when it did that and to which issues. An
 assignee or a label that the line accounts for is this run's own, and a label it says was on an item
 before the run is not another session's either, so neither is a reason to skip or stop on the item.
 Leave the assignee and the label as they are. When the person gave `FORCE=1`, the script worked items
 that were assigned to somebody else as well and left those assignees, and the line names those items.
 That is the person's choice, so work them, and do not unassign or contact the other assignee.
+The same holds for `FORCE=1` and the platform labels: the script worked items developed on another
+platform, the line names them, and the labels stay. Those items cannot be built or run natively on
+this host, so run only the gates that can run here, say in the test plan which ones could not, and
+take the others from CI.
 
 An **item** is one issue. The **ledger** is the file in step 0 that records every item's state and
 its checklist. A pull request number given alone, as the whole argument, asks for
