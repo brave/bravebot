@@ -2884,6 +2884,9 @@ fn event_loop(
             stored.branch(),
         );
         needs_draw |= session.name_id(stored.resumable());
+        // Beside the panel's id and for its reason: any path that changes the session reaches
+        // herdr on the next pass, once the record `--resume` reads is on disk (HERDR-9).
+        crate::herdr::resume(stored.resumable());
         // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
         // and no report to wake the loop (MOUSE-37).
         needs_draw |= session.scroll_toward_the_pointer(Instant::now());

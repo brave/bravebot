@@ -16,7 +16,8 @@ cannot recognize from the screen can tell it instead, over a Unix socket herdr n
 environment: what the agent is doing (idle, working or blocked), and the command that resumes its
 session when herdr restores the pane. This spec is the reporter a session uses for that: when it
 is active, what a report carries, and what reporting may never do to the session, and the states
-the terminal interface reports through it ([HERDR-8](#HERDR-8)).
+the terminal interface reports through it ([HERDR-8](#HERDR-8)), and the command it hands herdr
+to reopen the session ([HERDR-9](#HERDR-9)).
 
 The socket is local and names a process the person started, so a report is not network egress
 ([network-egress.md](network-egress.md)). It is still a channel into something that can type into
@@ -154,3 +155,61 @@ the pane does; nothing of it is written under `~/.bravebot` ([INCOG-3](incognito
 `verified-by: bravebot_tui::herdr::each_state_the_title_tracks_reaches_herdr_as_its_own`
 `verified-by: bravebot_tui::herdr::only_a_question_carries_a_message_and_it_is_the_fixed_one`
 `verified-by: bravebot_tui::herdr::a_title_turned_off_still_tells_herdr`
+
+<a id="HERDR-9"></a>
+### HERDR-9: the terminal interface tells herdr how to reopen the session, once its record is written
+
+Once the session's record is on disk, the interface hands the reporter the session's id and the
+command `bravebot --resume <id>`, with the modes [HERDR-10](#HERDR-10) carries after it, and herdr
+is told them with the next state report ([HERDR-5](#HERDR-5)). The program is the plain name
+`bravebot`, as herdr types it into the pane's shell. The interface hands them over again on every
+pass of its loop, so a session that becomes another, as `/clear` and `/branch` make it, tells herdr
+the new id once the new record is written; an unchanged command is not sent again. An id that
+begins with `-` is not sent, since `--resume` would read it as a flag. A background session has no
+interface, and `bravebot attach` relays one without being it, so neither sends a command: the
+session `attach` shows is reopened by attaching to it, which herdr cannot be told to do.
+
+**Why.** herdr reopens what it was told when it restores the pane, and a record not yet written is
+one `--resume` could not find. A command told once, for the first id the process knew, would
+reopen the session before the one in front of the person.
+
+**Known cost.** herdr has no way to be told a command no longer holds short of the session leaving
+the pane. A session that became another keeps the previous one's command in herdr until the new
+record is written, and a rewind that removed the record leaves herdr a command that finds no
+session.
+
+`verified-by: bravebot_tui::herdr::a_plain_session_is_reopened_by_bravebot_resume_and_its_id`
+`verified-by: bravebot_tui::herdr::a_session_that_becomes_another_sends_the_new_id`
+`verified-by: bravebot_tui::herdr::an_id_read_as_a_flag_and_a_session_not_yet_written_send_nothing`
+
+<a id="HERDR-10"></a>
+### HERDR-10: the command carries the modes that narrow the session and nothing that loosens it
+
+A session run under `--locked` is reopened with `--locked`, and one run under `--safe` alone with
+`--safe`; nothing else the command line said is carried. `--agent`, `--issue` and `--pr` are kept
+by the record and come back with it. The system prompt flags hold for one run ([CLI-19](cli.md#CLI-19)), and their
+words would be kept in herdr's own state. `--dangerously-skip-permissions`,
+`--dangerously-bypass-approvals-and-sandbox`, `--accept-edits`, `--auto` and `--vet` each ask the
+session to ask less, and are not carried.
+
+**Why.** herdr types the command with nobody asking for it. A mode that narrows what the session
+loads must survive that, since the record does not keep it and a session reopened without it would
+load what it was started to refuse; a mode that loosens must not, since nobody typed it for the run
+herdr starts.
+
+**Known cost.** `--settings`, `--sandbox`, `--run-network`, the sandbox path lists, `--add-dir`
+and `--log-level` are not carried, so a session that ran under them is reopened under what its
+settings say.
+
+`verified-by: bravebot_tui::herdr::a_session_run_safe_or_locked_is_reopened_so`
+
+<a id="HERDR-11"></a>
+### HERDR-11: an incognito session tells herdr no command
+
+An incognito session hands the reporter no id and no command, including one that resumed a record.
+It still reports its state ([HERDR-8](#HERDR-8)).
+
+**Why.** The command would reopen the session as an ordinary one that writes, and herdr keeps its
+id in its own state, which outlives the session ([INCOG-3](incognito.md#INCOG-3)).
+
+`verified-by: bravebot_tui::herdr::an_incognito_session_sends_no_resume_command`

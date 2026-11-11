@@ -4,10 +4,13 @@
 //! herdr is told the state the title tracks, from the same call, so the two cannot disagree; but it
 //! is told whether or not a title is written, since a report carries no name. Outside herdr the
 //! reporter is inactive and nothing here does anything.
+//!
+//! The command that reopens the session is told from the same reporter, below the states
+//! ([HERDR-9](../../../docs/specs/herdr.md#HERDR-9)).
 
 use std::sync::OnceLock;
 
-use bravebot_herdr::{Reporter, State as Shown};
+use bravebot_herdr::{Reporter, Resume, State as Shown};
 use bravebot_i18n::t;
 
 use crate::title::State;
@@ -90,6 +93,106 @@ pub(crate) mod script {
     }
 }
 
+// The command that reopens the session (HERDR-9, HERDR-10, HERDR-11).
+
+/// The process-wide modes the resume command is built from, read once per call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Modes {
+    pub(crate) incognito: bool,
+    pub(crate) safe: bool,
+    pub(crate) locked: bool,
+}
+
+impl Modes {
+    fn of_this_process() -> Modes {
+        Modes {
+            incognito: bravebot_core::incognito::engaged(),
+            safe: bravebot_core::safe::engaged(),
+            locked: bravebot_config::locked(),
+        }
+    }
+}
+
+/// The command that reopens session `id` under `modes`, or `None` where none may be sent.
+///
+/// Only the modes that narrow a session and that its record does not keep are carried: a command
+/// herdr types with nobody asking must not reopen a session under looser rules than it ran under,
+/// nor under looser ones than anybody typed for it.
+pub(crate) fn command(id: &str, modes: Modes) -> Option<Vec<String>> {
+    if modes.incognito || id.starts_with('-') {
+        return None;
+    }
+    let mut argv = vec![
+        "bravebot".to_string(),
+        "--resume".to_string(),
+        id.to_string(),
+    ];
+    if modes.locked {
+        argv.push("--locked".to_string());
+    } else if modes.safe {
+        argv.push("--safe".to_string());
+    }
+    Some(argv)
+}
+
+/// Tell herdr how to reopen the session whose record is `id`, or nothing where it has none yet.
+/// Called on every pass of the event loop, so a session that changes is told on the next one.
+pub(crate) fn resume(id: Option<&str>) {
+    let Some(id) = id else { return };
+    #[cfg(test)]
+    if resume_script::told(id) {
+        return;
+    }
+    if reporter().is_active() {
+        offer(reporter(), id, Modes::of_this_process());
+    }
+}
+
+fn offer(reporter: &Reporter, id: &str, modes: Modes) {
+    if let Some(argv) = command(id, modes)
+        && let Ok(resume) = Resume::new(id, argv)
+    {
+        reporter.resume_with(resume);
+    }
+}
+
+/// A reporter and modes a test holds in place of the run's for [`resume`], for one thread.
+#[cfg(test)]
+pub(crate) mod resume_script {
+    use super::{Modes, Reporter};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    thread_local! {
+        static HELD: RefCell<Option<(Rc<Reporter>, Modes)>> = const { RefCell::new(None) };
+    }
+
+    /// The reporter and modes, until it is dropped.
+    pub(crate) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            HELD.with(|held| *held.borrow_mut() = None);
+        }
+    }
+
+    /// Make `reporter` the one this thread tells its resume command, built under `modes`.
+    pub(crate) fn hold(reporter: Rc<Reporter>, modes: Modes) -> Held {
+        HELD.with(|held| *held.borrow_mut() = Some((reporter, modes)));
+        Held
+    }
+
+    /// Offer the held reporter `id`, if one is held. Returns whether one was.
+    pub(super) fn told(id: &str) -> bool {
+        HELD.with(|held| {
+            held.borrow()
+                .as_ref()
+                .map(|(reporter, modes)| super::offer(reporter, id, *modes))
+                .is_some()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +202,7 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
+    use std::rc::Rc;
     use std::sync::mpsc::{Receiver, channel};
     use std::time::Duration;
 
@@ -142,16 +246,21 @@ mod tests {
 
         /// The state and message of the next report.
         fn next(&self) -> (String, Option<String>) {
+            let params = self.params();
+            (
+                params["state"].as_str().unwrap().to_string(),
+                params["message"].as_str().map(str::to_string),
+            )
+        }
+
+        /// The parameters of the next report.
+        fn params(&self) -> Value {
             let request = self
                 .requests
                 .recv_timeout(ARRIVES_WITHIN)
                 .expect("herdr was sent a report");
             assert_eq!(request["method"], "pane.report_agent");
-            let params = &request["params"];
-            (
-                params["state"].as_str().unwrap().to_string(),
-                params["message"].as_str().map(str::to_string),
-            )
+            request["params"].clone()
         }
     }
 
@@ -219,5 +328,124 @@ mod tests {
         incognito.adopt(None, true);
         assert!(mark(&mut incognito, State::Waiting).is_empty());
         assert_eq!(herdr.next().0, "blocked");
+    }
+
+    // The command that reopens the session (HERDR-9, HERDR-10, HERDR-11).
+
+    const ID: &str = "0193f1d2-7a3b-7c4d-8e5f-6a7b8c9d0e1f";
+
+    /// A herdr this thread's resume commands go to, under `modes`, that has been told one state
+    /// already, since a resume command rides on a state report.
+    fn reporting(modes: Modes) -> (FakeHerdr, Rc<Reporter>, resume_script::Held) {
+        let herdr = FakeHerdr::start();
+        let reporter = Rc::new(herdr.reporter());
+        let held = resume_script::hold(Rc::clone(&reporter), modes);
+        reporter.report(Shown::Idle, None);
+        assert_eq!(herdr.next().0, "idle");
+        (herdr, reporter, held)
+    }
+
+    fn strings(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    /// HERDR-9. A plain session is reopened by its id and nothing else, under the plain program
+    /// name herdr requires. The regressions it rejects are a command naming a path to the binary,
+    /// one that resumes by anything but the id, and one carrying a flag the session was not given.
+    #[test]
+    fn a_plain_session_is_reopened_by_bravebot_resume_and_its_id() {
+        let (herdr, _reporter, _held) = reporting(Modes::default());
+        resume(Some(ID));
+        let params = herdr.params();
+        assert_eq!(params["state"], "idle");
+        assert_eq!(params["agent_session_id"], ID);
+        assert_eq!(
+            params["resume_argv"],
+            serde_json::json!(["bravebot", "--resume", ID])
+        );
+    }
+
+    /// HERDR-10. A session run under `--safe` or `--locked` is reopened under it, because its
+    /// record does not keep it and a restart nobody typed must not loosen the session. `--locked`
+    /// already includes `--safe`, so it is the one carried. The regression it rejects is a
+    /// command built from the id alone, which would reopen the session loading what it refused.
+    #[test]
+    fn a_session_run_safe_or_locked_is_reopened_so() {
+        let safe = Modes {
+            safe: true,
+            ..Modes::default()
+        };
+        let locked = Modes {
+            safe: true,
+            locked: true,
+            ..Modes::default()
+        };
+        assert_eq!(
+            command(ID, safe),
+            Some(strings(&["bravebot", "--resume", ID, "--safe"]))
+        );
+        assert_eq!(
+            command(ID, locked),
+            Some(strings(&["bravebot", "--resume", ID, "--locked"]))
+        );
+        let (herdr, _reporter, _held) = reporting(locked);
+        resume(Some(ID));
+        assert_eq!(
+            herdr.params()["resume_argv"],
+            serde_json::json!(["bravebot", "--resume", ID, "--locked"])
+        );
+    }
+
+    /// HERDR-9. An id that would read as a flag is not sent, since `--resume` would take it as
+    /// one; nor is a session with no record yet, which `--resume` could not find.
+    #[test]
+    fn an_id_read_as_a_flag_and_a_session_not_yet_written_send_nothing() {
+        assert_eq!(command("-x", Modes::default()), None);
+        assert_eq!(command("--safe", Modes::default()), None);
+        let (herdr, reporter, _held) = reporting(Modes::default());
+        resume(Some("--locked"));
+        resume(None);
+        reporter.report(Shown::Working, None);
+        let params = herdr.params();
+        assert_eq!(params["state"], "working");
+        assert!(params.get("resume_argv").is_none(), "{params}");
+    }
+
+    /// HERDR-11. An incognito session sends no resume command, even when it resumed a record: the
+    /// command would reopen it as an ordinary session that writes, and its id would be kept in
+    /// herdr's own state. The regression it rejects is the command sent whatever the mode.
+    #[test]
+    fn an_incognito_session_sends_no_resume_command() {
+        let incognito = Modes {
+            incognito: true,
+            ..Modes::default()
+        };
+        assert_eq!(command(ID, incognito), None);
+        let (herdr, reporter, _held) = reporting(incognito);
+        resume(Some(ID));
+        reporter.report(Shown::Working, None);
+        let params = herdr.params();
+        assert_eq!(params["state"], "working");
+        assert!(params.get("agent_session_id").is_none(), "{params}");
+        assert!(params.get("resume_argv").is_none(), "{params}");
+    }
+
+    /// HERDR-9. A session that becomes another, as `/branch` and `/clear` make it, tells herdr the
+    /// new id once its record is written, so a restart reopens the session in front of the person
+    /// and not the one before it. The regression it rejects is a command told once, for the first
+    /// id the process knew.
+    #[test]
+    fn a_session_that_becomes_another_sends_the_new_id() {
+        const NEXT: &str = "0193f1d2-7a3b-7c4d-8e5f-000000000002";
+        let (herdr, _reporter, _held) = reporting(Modes::default());
+        resume(Some(ID));
+        assert_eq!(herdr.params()["agent_session_id"], ID);
+        resume(Some(NEXT));
+        let params = herdr.params();
+        assert_eq!(params["agent_session_id"], NEXT);
+        assert_eq!(
+            params["resume_argv"],
+            serde_json::json!(["bravebot", "--resume", NEXT])
+        );
     }
 }
