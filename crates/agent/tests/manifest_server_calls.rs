@@ -369,6 +369,8 @@ struct Calls {
     /// The lists of calls an apply step put, and which calls to keep: every one where `None`.
     applies: Vec<ApplyRequest>,
     apply_keeps: Option<Vec<usize>>,
+    /// Whether the list is answered as by a client that cannot put it.
+    apply_unasked: bool,
 }
 
 impl Calls {
@@ -385,6 +387,7 @@ impl Calls {
             stopping: None,
             applies: Vec::new(),
             apply_keeps: None,
+            apply_unasked: false,
         }
     }
 
@@ -458,6 +461,9 @@ impl Confirmer for Calls {
     fn confirm_apply(&mut self, request: &ApplyRequest) -> ApplyDecision {
         self.order.push("apply");
         self.applies.push(request.clone());
+        if self.apply_unasked {
+            return ApplyDecision::unasked();
+        }
         ApplyDecision::keep(
             self.apply_keeps
                 .clone()
@@ -2337,6 +2343,117 @@ fn an_apply_the_declaration_does_not_allow_is_refused_before_anybody_is_asked() 
     assert!(failure.contains("does not let a row give"), "{failure}");
     assert!(ran.asked.plans.is_empty());
     assert!(ran.called.is_empty());
+}
+
+/// Where nobody can answer an apply step's list, the step is refused and none of its calls is made.
+///
+/// Rejects an implementation that takes no answer for a yes, or makes the calls a list nobody saw
+/// would have held.
+#[test]
+fn an_apply_whose_list_nobody_can_answer_makes_no_call() {
+    let scratch = Scratch::new("apply-unasked");
+    let (url, mcp) = serve_marks();
+    let mut confirmer = Calls::answering(vec![CallDecision::approve()]);
+    confirmer.apply_unasked = true;
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders"),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer,
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(failure.contains("nobody could be asked"), "{failure}");
+    assert_eq!(ran.called.len(), 1, "only the read: {:?}", ran.called);
+}
+
+/// A `deny` rule naming a tool of an apply step refuses each of that tool's calls, though the
+/// person approved the list, and the run ends at the first one; calls of the step's other tools
+/// before it are made.
+///
+/// Rejects an implementation whose list answer stands in for the rules, which would let a call
+/// a person's own rule forbids through.
+#[test]
+fn a_deny_rule_refuses_an_apply_steps_call_the_list_approved() {
+    let scratch = Scratch::new("apply-deny");
+    let (url, mcp) = serve_marks();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(brave:move_mark)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let ran = walk(Walk {
+        session: marks_session(&url, &scratch, MARKS_DECLARED),
+        mode: PermissionMode::Ask,
+        task: Task::new("organise my bookmarks into folders").with_permissions(permissions),
+        replies: vec![shape(), plan(organise()), says(ROWS)],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::approve()]),
+        grants: None,
+    });
+    let failure = ran.outcome.expect_err("refused").to_string();
+    assert!(failure.contains("refused"), "{failure}");
+    assert!(
+        ran.called.iter().all(|(tool, _)| tool != "move_mark"),
+        "{:?}",
+        ran.called
+    );
+}
+
+/// An apply step naming a tool nobody vouched for, an argument its tool does not take, or leaving
+/// out an argument its tool requires is refused before the plan is put to anybody.
+///
+/// Rejects an implementation that checks these only for a fixed call, which would let an apply
+/// step reach a tool the person never saw or send a call its server cannot take.
+#[test]
+fn an_apply_naming_what_the_vouched_list_does_not_hold_is_refused_before_anybody_is_asked() {
+    let ghost = {
+        let mut steps = organise();
+        steps[1]["args"]["tools"] = json!("make_folder,ghost");
+        steps[1]["args"]["arguments"] = json!({
+            "make_folder": {"title": "new", "parent": {"literal": "Organised"}},
+            "ghost": {"url": {"entry": "url"}},
+        });
+        steps
+    };
+    let colour = {
+        let mut steps = organise();
+        steps[1]["args"]["arguments"]["make_folder"]["colour"] = json!({"literal": "red"});
+        steps
+    };
+    let unplaced = {
+        let mut steps = organise();
+        steps[1]["args"]["arguments"]["move_mark"]
+            .as_object_mut()
+            .expect("move_mark")
+            .remove("folder");
+        steps
+    };
+    for (steps, says_why) in [
+        (ghost, "is not a tool a person vouched for"),
+        (colour, "takes no argument 'colour'"),
+        (unplaced, "requires the argument 'folder'"),
+    ] {
+        let scratch = Scratch::new("apply-unknown");
+        let (url, mcp) = serve_marks();
+        let ran = walk(Walk {
+            session: marks_session(&url, &scratch, MARKS_DECLARED),
+            mode: PermissionMode::Ask,
+            task: Task::new("organise my bookmarks into folders"),
+            replies: vec![shape(), plan(steps.clone()), plan(steps)],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
+        let failure = ran.outcome.expect_err("refused").to_string();
+        assert!(failure.contains(says_why), "{says_why}: {failure}");
+        assert!(ran.asked.plans.is_empty(), "{says_why}");
+        assert!(ran.called.is_empty(), "{says_why}");
+    }
 }
 
 /// An apply step gives at least one argument a kind other than literal, which only a declaration
