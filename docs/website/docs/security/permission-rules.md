@@ -63,6 +63,10 @@ spelling you approved.
   `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
   An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
   through by any list.
+  On every host a program word is also read without a trailing dot or space, a `::$DATA` suffix and one
+  `.exe`, `.com`, `.cmd` or `.bat`, so `Bash(git *)` covers `git.exe.` and `git.cmd`. While a `deny` or
+  `ask` command rule is in force, a program written as an 8.3 short name such as `POWERS~1` is
+  refused, since the rule cannot be matched against it.
 - **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
   write. It holds when the redirection reaches the file through `..`, as `config/sub/../app.env`
   does, whether or not a link is on the path.

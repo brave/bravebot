@@ -40,6 +40,8 @@ pub mod reference;
 pub mod remembered;
 pub mod safe;
 pub mod selector;
+#[path = "../../ui-files/src/short_name.rs"]
+mod short_name;
 pub mod slot;
 pub mod spelling;
 pub mod todo;

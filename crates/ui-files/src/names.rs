@@ -3,6 +3,10 @@
 //! Each is refused rather than normalised, since a normalised name is one the caller did not
 //! check. Compiled for tests everywhere, so the rule is exercised on every host.
 
+#[path = "short_name.rs"]
+mod short_name;
+use short_name::short;
+
 /// Whether Windows would read `name` as something other than the one plain name it spells.
 ///
 /// That is a stream (`name:stream`), a device (`CON`, `NUL.md`, `COM1`), a name Win32 strips
@@ -38,20 +42,6 @@ fn device(name: &str) -> bool {
         (number.next(), number.next()),
         (Some('0'..='9' | '¹' | '²' | '³'), None)
     )
-}
-
-/// The shape of an 8.3 name NTFS generates: at most eight characters ending in `~` and digits,
-/// then at most three after a dot.
-fn short(name: &str) -> bool {
-    let (base, extension) = name.split_once('.').unwrap_or((name, ""));
-    let Some((_, digits)) = base.rsplit_once('~') else {
-        return false;
-    };
-    !digits.is_empty()
-        && digits.bytes().all(|b| b.is_ascii_digit())
-        && base.chars().count() <= 8
-        && extension.chars().count() <= 3
-        && !extension.contains('.')
 }
 
 #[cfg(test)]

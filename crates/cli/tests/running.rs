@@ -20257,8 +20257,9 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
 }
 
 /// CLI-30, PERM-5 and PERM-20: the report agrees with what a session does with a respelled program.
-/// A `deny` or `ask` rule is read without regard to case and a `.exe` or `.com` on the program
-/// word and the wrapper names, so the report names the same rule as for the plain spelling. An
+/// A `deny` or `ask` rule is read without regard to case and without the trailing dots, `::$DATA`
+/// suffix and `.exe`, `.com`, `.cmd` or `.bat` on the program word and the wrapper names, so the
+/// report names the same rule as for the plain spelling. An
 /// `allow` rule is read as written, so the respelling is not reported as allowed, and a program
 /// given by its path is covered by none.
 #[test]
@@ -20277,6 +20278,12 @@ fn permissions_check_reads_a_respelled_program_as_a_session_does() {
         &["Bash", "Git.COM", "push", "origin", "main"],
         &["Bash", "ENV", "git", "push", "origin", "main"],
         &["Bash", "timeout.exe", "5", "GIT.EXE", "push", "origin"],
+        &["Bash", "git.exe.", "push", "origin", "main"],
+        &["Bash", "git.exe::$DATA", "push", "origin", "main"],
+        &["Bash", "git.cmd", "push", "origin", "main"],
+        &["Bash", "GIT.BAT", "push", "origin", "main"],
+        &["Bash", "timeout.exe.", "5", "git", "push", "origin"],
+        &["Bash", "timeout::$DATA", "5", "git.cmd", "push", "origin"],
     ] {
         assert_eq!(
             permissions_check(&scratch, &checkout, call),
@@ -20307,6 +20314,49 @@ fn permissions_check_reads_a_respelled_program_as_a_session_does() {
             "{call:?}"
         );
     }
+}
+
+/// CLI-30 and PERM-5: while a `deny` or `ask` command rule is in force, a session refuses a program
+/// written as an 8.3 short name, itself or under a wrapper, before any rule is read, and the report
+/// says so instead of "no rule matches". A path and a name that is not that shape are left to the
+/// rules, and a rule that does not restrict a command is not enough to refuse. A report that read
+/// the rules alone would say no rule matches for each of the first group.
+#[test]
+fn permissions_check_reports_an_8_3_short_name_as_a_session_refuses_it() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check-short-name");
+    let refused = [
+        "decision: refused, since a command rule is in force and an 8.3 short name cannot be matched against it",
+    ];
+
+    for call in [
+        &["Bash", "POWERS~1", "x"][..],
+        &["Bash", "powers~1.exe", "x"],
+        &["Bash", "env", "POWERS~1", "x"],
+        &["Bash", "timeout", "5", "POWERS~1.CMD", "x"],
+    ] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, call),
+            refused,
+            "{call:?}"
+        );
+    }
+    // A path, and an ordinary name under a wrapper, are left to the rules, which name none here.
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "/usr/bin/POWERS~1", "x"]),
+        ["decision: no rule matches, so the ordinary gates decide"]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "env", "powershell", "x"]),
+        ["decision: no rule matches, so the ordinary gates decide"]
+    );
+
+    // With only an allow rule in force nothing restricts a command, so nothing is refused.
+    let allow_only = Scratch::new("cli-running-permissions-check-short-name-allow-only")
+        .with_settings(r#"{"permissions": {"allow": ["Bash(git *)"]}}"#);
+    assert_eq!(
+        permissions_check(&allow_only, &allow_only.path, &["Bash", "POWERS~1", "x"]),
+        ["decision: no rule matches, so the ordinary gates decide"]
+    );
 }
 
 /// CLI-30: an `allow` rule a checkout wrote is not in force until it is granted, so the call is
