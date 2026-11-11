@@ -122,6 +122,27 @@ apply its profile ([SANDBOX-17](#SANDBOX-17)).
 **Why.** Silently degrading is worse than an error: the caller believes it has a guarantee it does
 not have, and the audit trail records a sandbox that was never applied.
 
+A backend that confines a program the caller names (Landlock, Seatbelt, AppContainer) refuses a
+program that is not an absolute path, with `SetupFailed`, before it builds a command, writes a grant
+or starts a process. A bare or relative name would be found after the confinement is installed, by
+a search the caller's `PATH` and working directory decide. The agent starts each step from the
+absolute path it resolved, so its own path never meets the refusal. A local server whose program
+name is not text is not started: `start_under` in `crates/agent/src/servers.rs` refuses it before
+the launch, with a note that shows the path lossily. `resolve` produces only programs that are
+text, so a declaration does not reach it.
+
+The OpenShell backend does not make this check. It does not search the
+person's `PATH` after a confinement is installed on this machine: the program runs inside the image
+the sandbox was made from, where the image's own `PATH` finds a bare name (`real_path` finds it with
+`command -v`), and an absolute path on this machine names nothing there. The planner passes the
+program as the declaration spells it, so requiring an absolute path would refuse every declaration.
+
+`verified-by: bravebot_sandbox::lib::only_an_absolute_program_passes_the_check_every_backend_makes`
+`verified-by: bravebot_sandbox::linux::a_program_that_is_not_an_absolute_path_is_refused_before_a_command_exists`
+`verified-by: bravebot_sandbox::macos::a_program_that_is_not_an_absolute_path_is_refused_before_a_command_exists`
+`verified-by: bravebot_sandbox::windows::a_program_that_is_not_an_absolute_path_is_refused_before_a_container_exists`
+`verified-by: bravebot_agent::servers::a_local_server_whose_program_name_is_not_text_is_not_started`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_is_planned_with_its_program_as_named_in_the_image`
 `verified-by: bravebot_sandbox::lib::an_unavailable_backend_refuses_to_spawn`
 `verified-by: bravebot_sandbox::lib::refusal_is_not_a_silent_fallback`
 `verified-by: bravebot_sandbox::lib::the_platform_lookup_never_returns_an_unconfined_backend`

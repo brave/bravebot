@@ -1787,6 +1787,7 @@ servers-program-without-path =
     { $program } is found through PATH, which the declaration does not name: declare it with
     --env PATH, or give the program as an absolute path
 servers-program-not-found = { $program } is in no directory the PATH it names lists
+servers-program-not-text = { $program } is not text, so it cannot be started
 servers-requested-by = requested by { $file }
 servers-program = runs { $path }
 servers-changed = changed since it was approved

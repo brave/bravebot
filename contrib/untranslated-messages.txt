@@ -135,6 +135,7 @@ fr:servers-openshell-removed
 fr:servers-openshell-started
 fr:servers-openshell-unpinned
 fr:servers-openshell-unsupported
+fr:servers-program-not-text
 fr:session-link-not-opened
 fr:session-path-not-a-file
 fr:session-preview-denied

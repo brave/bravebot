@@ -614,6 +614,7 @@ impl SeatbeltSandbox {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
         }
+        crate::require_absolute_program("seatbelt", program)?;
 
         if let Some(path) = policy
             .readable
@@ -778,6 +779,46 @@ mod argument_tests {
                 "{refused:?}"
             );
         }
+    }
+
+    /// A program that is not an absolute path is refused before a command exists: `sandbox-exec`
+    /// resolves a name by the caller's `PATH` and working directory once the profile is installed,
+    /// so the file that runs is one nobody named.
+    ///
+    /// The regression it rejects is a backend that wraps a bare or relative program, which starts
+    /// whichever file the search finds. The absolute path is held to also wrap, so a refusal of
+    /// every program is not mistaken for the check.
+    #[test]
+    fn a_program_that_is_not_an_absolute_path_is_refused_before_a_command_exists() {
+        let policy = SandboxPolicy::strict().allow_read("/usr");
+        for program in ["cat", "./cat", "bin/cat", "../bin/cat", ""] {
+            let refused = SeatbeltSandbox::wrapping(
+                OsStr::new(program),
+                &[],
+                &policy,
+                &Environment::Inherited,
+            );
+
+            assert!(
+                matches!(
+                    refused,
+                    Err(SandboxError::SetupFailed {
+                        mechanism: "seatbelt",
+                        ..
+                    })
+                ),
+                "{program:?}: {refused:?}"
+            );
+        }
+        assert!(
+            SeatbeltSandbox::wrapping(
+                OsStr::new("/usr/bin/cat"),
+                &[],
+                &policy,
+                &Environment::Inherited
+            )
+            .is_ok()
+        );
     }
 
     /// A caller holding nothing the platform would strip reaches its program the way it
