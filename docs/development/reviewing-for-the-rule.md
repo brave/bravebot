@@ -111,6 +111,13 @@ the planner for any value of it, or a reader whose failure depends on what the a
 violation of shape 1. A second function that releases an answer's text to another crate's function
 is one of shape 3 and moves a pinned count. A `Carried` turned into a number in `bravebot-core` or
 `bravebot-agent` is one of shape 3 as well, and moves the count of `Carried::into_wire`.
+The crate reads an `apply` step's lists and rows the same way, through two more pinned gates:
+`Policy::number_a_list` hands it a read's reply to number the entries that hold the fields the plan
+takes, and `Policy::resolve_proposal` hands it the processor's answer, which it resolves against the
+plan's shape and those entries, typing each value as the server's list declares and dropping and
+counting each row that does not fit. The driver carries the resolved list to the person's question
+and to the server and reads none of it, so a branch in the driver on a resolved value is a
+violation of shape 1.
 The tenth is the trigger listener in `crates/cli/src/trigger.rs`, which is not the driver and holds
 no `declassify`. It decides from the request line and headers only: the framing refusals of
 `parse_head` (method, version, `Transfer-Encoding`, `Content-Length`, a path that is not a name),
