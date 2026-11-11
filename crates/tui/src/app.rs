@@ -1983,10 +1983,19 @@ pub fn run(
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
     // alternate screen is worse than the original error.
-    hand_back_terminal(terminal.backend_mut())?;
-    terminal.show_cursor()?;
+    end_the_run(&mut terminal)?;
 
     result
+}
+
+/// Give the terminal back for good at the end of [`run`], cursor and all. However the run ended, it
+/// has left its herdr pane: a `/resume` stays inside the loop, and a process started on the way out
+/// reports for itself.
+///
+/// Split from `run` so a test can reach it, since that function needs a real terminal.
+fn end_the_run<W: Write>(terminal: &mut Terminal<CrosstermBackend<W>>) -> io::Result<()> {
+    leave_for_good(terminal.backend_mut())?;
+    terminal.show_cursor()
 }
 
 /// Sign in to the backend the next request will use, where it needs one and has none.
@@ -2360,6 +2369,9 @@ fn adopt_settings(
     settings: &bravebot_config::Settings,
     asked_effort: Option<bravebot_aichat::protocol::Effort>,
 ) {
+    // Once the settings are read and before the first question the session can ask, so herdr
+    // knows bravebot holds the pane from the start rather than from the first frame (HERDR-8).
+    crate::herdr::state(crate::title::State::Ready);
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
     // And the level a turn asks for, which the record or this file answers, whichever BACKEND-43
@@ -2399,6 +2411,16 @@ fn adopt_settings(
     }
     session.adopt_prompt_files(crate::prompt_files::directory());
     session.adopt_suggestions(settings.suggestions() == Some(true));
+}
+
+/// Name the session's id where it is handed on, on every pass of the loop: to the panel, and to
+/// herdr, which reopens the session by it. Any path that changes the session reaches both on the
+/// next pass, once the record `--resume` reads is on disk (HERDR-9). Returns whether the panel
+/// changed.
+fn name_the_id(session: &mut Session, stored: &bravebot_session::sessions::Handle) -> bool {
+    let changed = session.name_id(stored.resumable());
+    crate::herdr::resume(stored.resumable());
+    changed
 }
 
 /// Put what the command line asked for on a session whose record is open and every startup
@@ -2880,7 +2902,7 @@ fn event_loop(
             crate::status::abbreviate(workspace.root()),
             stored.branch(),
         );
-        needs_draw |= session.name_id(stored.resumable());
+        needs_draw |= name_the_id(&mut session, &stored);
         // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
         // and no report to wake the loop (MOUSE-37).
         needs_draw |= session.scroll_toward_the_pointer(Instant::now());
@@ -45278,6 +45300,8 @@ mod tests {
     mod chrome;
     mod clicks;
     mod completions;
+    #[cfg(unix)]
+    mod herdr;
     mod hints;
     mod history_search;
     mod hover;

@@ -40,6 +40,7 @@ mod from_worker;
 pub mod goals;
 mod hangup;
 pub mod help_command;
+mod herdr;
 pub mod hidden;
 pub mod history;
 pub mod history_search;
