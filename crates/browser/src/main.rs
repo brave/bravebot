@@ -90,28 +90,7 @@ fn main() {
                     out.write_all(line.as_bytes())?;
                     out.write_all(b"\n")?;
                 }
-                // What a plan's approval may cover is the person's to declare, so it is suggested
-                // apart from the line and never put in it.
-                for group in &asked.groups {
-                    let Some((tools, line)) = installed.covering(group) else {
-                        continue;
-                    };
-                    let named = match tools.split_last() {
-                        Some((last, [])) => last.to_string(),
-                        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-                        None => continue,
-                    };
-                    writeln!(out)?;
-                    writeln!(
-                        out,
-                        "To let approving a plan run {named} of brave-{group} without asking at \
-                         the step, declare it with this instead:"
-                    )?;
-                    writeln!(out)?;
-                    out.write_all(b"  ")?;
-                    out.write_all(line.as_bytes())?;
-                    out.write_all(b"\n")?;
-                }
+                suggest_covering(&mut out, &installed, &asked.groups)?;
                 Ok(())
             })
         }
@@ -144,6 +123,39 @@ fn main() {
         eprintln!("bravebot-browser: {error}");
         std::process::exit(1);
     }
+}
+
+/// After the declarations `install` printed, the same declaration with `--plan-covers` for each
+/// group that has tools a plan's approval may cover. What a plan's approval covers is the person's
+/// to declare, so it is suggested apart from the line and never put in it.
+#[cfg(unix)]
+fn suggest_covering(
+    out: &mut impl std::io::Write,
+    installed: &bravebot_browser::install::Installed,
+    groups: &[&str],
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    for group in groups {
+        let Some((tools, line)) = installed.covering(group) else {
+            continue;
+        };
+        let named = match tools.split_last() {
+            Some((last, [])) => last.to_string(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => continue,
+        };
+        writeln!(out)?;
+        writeln!(
+            out,
+            "To let approving a plan run {named} of brave-{group} without asking at the step, \
+             declare it with this instead:"
+        )?;
+        writeln!(out)?;
+        out.write_all(b"  ")?;
+        out.write_all(line.as_bytes())?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 /// The words `main` matches on. `profile` takes directories, which are bytes, so it reads the
