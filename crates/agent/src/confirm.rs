@@ -780,8 +780,15 @@ impl RunRequest {
     ///
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    ///
+    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
+    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
+    /// neither ([PERM-9]).
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered() && !self.asks_for_scopes() && !self.unconfined
+        self.plan.can_be_remembered()
+            && !self.asks_for_scopes()
+            && !self.unconfined
+            && !self.protected
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -4610,6 +4617,19 @@ mod tests {
         let answer = Unattended.confirm_run(&request);
         assert!(!answer.approved());
         assert!(!answer.remember);
+        assert!(!request.can_be_remembered());
+    }
+
+    /// PERM-9: the `protected` mark removes the standing answer from a run by itself. The request
+    /// names no file to write, so the plan's own rule about writes does not apply, and the same
+    /// request without the mark can be remembered (control). Rejects a `can_be_remembered` that
+    /// leaves the mark out and relies on the plan's destinations alone.
+    #[test]
+    fn the_protected_mark_alone_removes_the_standing_answer_from_a_run() {
+        let mut request = a_run();
+        assert!(request.plan.writes.is_empty());
+        assert!(request.can_be_remembered(), "the control is rememberable");
+        request.protected = true;
         assert!(!request.can_be_remembered());
     }
 

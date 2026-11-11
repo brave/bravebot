@@ -1403,6 +1403,19 @@ fn a_run_into_a_protected_path_says_so_across_the_bridge() {
     });
     assert_eq!(plain["protected"], json!(false));
     assert_eq!(plain["shownWrites"], json!(["made.txt"]));
+
+    // The mark alone decides `canBeRemembered`: with no file to write, the plan's own rule about
+    // writes does not apply, and the same request unmarked can be remembered (control).
+    let marked = |protected: bool| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        assert!(request.plan.writes.is_empty());
+        request.protected = protected;
+        wire::run_request(1, &request)
+    };
+    assert_eq!(marked(false)["canBeRemembered"], json!(true));
+    assert_eq!(marked(true)["protected"], json!(true));
+    assert_eq!(marked(true)["canBeRemembered"], json!(false));
 }
 
 /// PROMPT-1: the desktop is handed the directory a line runs in and the file each step runs

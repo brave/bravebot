@@ -705,7 +705,7 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         // every other front end draws.
         "shownWrites": request.shown_writes(),
         // Whether a destination is a protected path. A front end that answers for the person does
-        // not answer a request with this set, and `canBeRemembered` is false for it already.
+        // not answer a request with this set, and `canBeRemembered` is false for it.
         "protected": request.protected,
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),

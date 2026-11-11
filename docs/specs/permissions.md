@@ -731,6 +731,7 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_core::protected::an_ordinary_path_and_a_lookalike_are_not_protected`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_core::policy::no_standing_answer_covers_a_line_redirecting_into_a_protected_path`
+`verified-by: bravebot_agent::confirm::the_protected_mark_alone_removes_the_standing_answer_from_a_run`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_symbolic_link_to_a_hook_is_put_to_the_person_with_its_landing`
 `verified-by: bravebot_agent::turn::a_redirection_into_a_protected_name_in_another_case_is_put_to_the_person`
