@@ -85,7 +85,7 @@ help:
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer, longest waiting first; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
-	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session and telling the session when it did [NOTES=\"<instructions for the run>\"] [FORCE=1 to work issues assigned to someone else too] [BYPASS=1 to skip permission prompts and the sandbox] [BRAVEBOT=path]"
+	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else or developed only on another platform, assigning you, and labelling bot/in-progress for the session and telling the session when it did [NOTES=\"<instructions for the run>\"] [FORCE=1 to work issues assigned to someone else or labelled develop-on for another platform too] [BYPASS=1 to skip permission prompts and the sandbox] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
@@ -578,11 +578,13 @@ review-ready:
 # written: issue numbers, links and search queries separated by commas. NOTES is the person's
 # instructions for the run, such as how to group the issues. The skill reads it, and no issue is taken
 # from it. Before the session opens, with no model, agents/skills/implement-issues/implement-issues.py
-# stops when an issue is assigned to anybody but the account gh writes as, assigns that account, and
-# adds the label bot/in-progress, which it removes when the session ends. It tells the session what it
+# stops when an issue is assigned to anybody but the account gh writes as, or is labelled develop-on/linux,
+# develop-on/macos or develop-on/windows without the label of the platform this host is, assigns that
+# account, and adds the label bot/in-progress, which it removes when the session ends. It tells the session what it
 # wrote and when, in a Claimed: line after the issues, so the session does not stop on the label or the
-# assignee it was given. FORCE=1 works the issues that are assigned to somebody else as well instead of
-# stopping, leaves those assignees, and says so in that line; any other value of FORCE is ignored.
+# assignee it was given. FORCE=1 works the issues that are assigned to somebody else or labelled for another
+# platform as well instead of stopping, leaves those assignees and labels, and says so in that line; any
+# other value of FORCE is ignored.
 # BYPASS=1 opens the client with --dangerously-bypass-approvals-and-sandbox, so the whole session runs
 # without permission prompts and without the sandbox; any other value of BYPASS is ignored.
 # ISSUES and NOTES reach the script through the environment, so no quote in them needs escaping.

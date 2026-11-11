@@ -21,10 +21,13 @@ Filed issues are assigned to netzenbot, and `/pr-fix <issue>` implements one.
 every issue a search returns, in one pull request, and `/pr-fix <pr>` handles its review comments.
 `make implement-issues ISSUES="<issues or search>"` opens it in the terminal client. Before the session
 opens it refuses the whole run when an issue is assigned to anybody but the account `gh` writes as,
+or is labelled `develop-on/linux`, `develop-on/macos` or `develop-on/windows` and none of those is the
+platform of the host (an issue with no such label can be developed anywhere),
 assigns that account to each issue, and adds `bot/in-progress`, which it removes when the session
 ends. The session is told what was written and when, so it does not take the assignee or the label
-for another session's work. `FORCE=1` works the issues that have another assignee as well, leaves
-those assignees, and tells the session which issues they are. `BYPASS=1` opens the session with
+for another session's work. `FORCE=1` works the issues that have another assignee or are labelled for
+another platform as well, leaves those assignees and labels, and tells the session which issues they
+are. `BYPASS=1` opens the session with
 `--dangerously-bypass-approvals-and-sandbox`, so the whole session runs without asking before a command
 and without the sandbox. The session reads issue and comment text that other people wrote, so use it
 for issues whose text you trust. Fixing is a separate step from finding, and a run never does both.
