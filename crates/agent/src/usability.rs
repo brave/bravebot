@@ -73,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 77] = [
+const CODE_SELECTORS: [(&str, Names); 82] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -174,6 +174,19 @@ const CODE_SELECTORS: [(&str, Names); 77] = [
     ("GOCACHEPROG", Names::Options),
     ("CC", Names::Options),
     ("CXX", Names::Options),
+    // The `cc` crate puts this in front of the name of the compiler, `ar` and `ranlib` it starts
+    // when it builds for another target, so a value with a directory in it picks the program. It is
+    // a prefix and not a program, so it is judged as options. The per-target names the crate reads
+    // are a family, matched by `names_a_compiler_for_a_target`.
+    ("CROSS_COMPILE", Names::Options),
+    // The `cc` crate reads these four with the same lookup as `CC` and `AR`: `RANLIB` is the
+    // program `get_ranlib` returns, `NVCC` the program it starts instead of the compiler for
+    // `cuda(true)`, and `ARFLAGS` and `RANLIBFLAGS` are put on the `ar` and `ranlib` it starts.
+    // Their per-target forms are removed whatever they hold, so these are judged as options too.
+    ("RANLIB", Names::Options),
+    ("NVCC", Names::Options),
+    ("ARFLAGS", Names::Options),
+    ("RANLIBFLAGS", Names::Options),
     ("PKG_CONFIG", Names::Program),
     ("CGO_LDFLAGS", Names::Options),
     ("CGO_CFLAGS", Names::Options),
@@ -198,6 +211,51 @@ fn names_a_target_program(name: &OsStr) -> bool {
             || ["COMPILE.", "LINK.", "PREPROCESS.", "LEX.", "YACC.", "LINT."]
                 .iter()
                 .any(|start| name.starts_with(start) && name.len() > start.len())
+    })
+}
+
+/// The names the `cc` crate and the `pkg-config` crate read through the same four spellings, in
+/// this order: `<NAME>_<target>`, `<NAME>_<target with - and . as _>`, `HOST_<NAME>` or
+/// `TARGET_<NAME>`, then `<NAME>`. The last is in [`CODE_SELECTORS`]. A compiler, an archiver, an
+/// indexer and the flags passed to them, and the `pkg-config` program.
+const PER_TARGET_NAMES: [&str; 10] = [
+    "CC",
+    "CXX",
+    "AR",
+    "RANLIB",
+    "NVCC",
+    "CFLAGS",
+    "CXXFLAGS",
+    "ARFLAGS",
+    "RANLIBFLAGS",
+    "PKG_CONFIG",
+];
+
+/// Whether the variable `name` is one of [`PER_TARGET_NAMES`] for a target or a kind of build, which
+/// the `cc` crate and the `pkg-config` crate read in place of the plain name: `CC_<target>`,
+/// `HOST_CC`, `TARGET_CFLAGS` and the others. The target is part of the name, so these are matched
+/// as a family and not listed.
+///
+/// A target is spelled in lower case, as rustc names it, with `-` and `.` or with `_` in their
+/// place, so the text after `<NAME>_` has to start with a lower case letter or a digit. That leaves
+/// out the names these crates read that do not choose a program or a flag, such as
+/// `CC_FORCE_DISABLE` and `PKG_CONFIG_PATH`;
+/// [SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30) lists them. A name that is not text
+/// is not one of them, because a target is.
+///
+/// A value of these is removed whatever it holds. They hold a program with arguments or flags, as
+/// the plain `CC`, `CXX`, `AR` and `CFLAGS` do, and a build that needs one sets it for the
+/// stage's own environment.
+fn names_a_compiler_for_a_target(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        PER_TARGET_NAMES.iter().any(|base| {
+            name.strip_prefix(base)
+                .and_then(|rest| rest.strip_prefix('_'))
+                .and_then(|target| target.chars().next())
+                .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+                || name.strip_prefix("HOST_") == Some(*base)
+                || name.strip_prefix("TARGET_") == Some(*base)
+        })
     })
 }
 
@@ -722,7 +780,11 @@ fn stage_command(
     let target_programs: Vec<OsString> = held
         .iter()
         .map(|(name, _)| name.clone())
-        .filter(|name| names_a_target_program(name) || is_npm_config_name(name))
+        .filter(|name| {
+            names_a_target_program(name)
+                || names_a_compiler_for_a_target(name)
+                || is_npm_config_name(name)
+        })
         .collect();
     let mut command = bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
@@ -1698,6 +1760,107 @@ mod tests {
             assert_eq!(set_to(&command, "RUSTUP_HOME"), None);
             assert!(!removed(&command, OsStr::new("RUSTUP_HOME")));
         }
+    }
+
+    /// The regression it rejects: removing `HOST_RANLIB` and `RANLIB_<triple>` and leaving the plain
+    /// `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS`, which the `cc` crate reads when none of its
+    /// per-target spellings is set (brave/bravebot#3859); or keeping one because its value names a
+    /// directory outside every one a stage may write, when it holds a program with arguments or flags.
+    #[test]
+    fn the_plain_ranlib_nvcc_and_archiver_flag_names_the_cc_crate_reads_are_removed() {
+        let (session, planted, genuine) = planted_and_genuine("usability-plain-cc");
+
+        for name in ["RANLIB", "NVCC", "ARFLAGS", "RANLIBFLAGS"] {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+            assert!(withheld(name, &genuine, &session), "{name} was kept");
+            let per_target = format!("HOST_{name}");
+            assert!(withheld(&per_target, &planted, &session), "{per_target}");
+        }
+        for name in [
+            "RANLIB_PATH",
+            "NVCC_PREPEND_FLAGS",
+            "ARFLAGS_",
+            "RANLIBFLAGS_X",
+        ] {
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+    }
+
+    /// The regression it rejects: leaving the per-target spellings of the compiler, archiver and flags
+    /// the `cc` crate reads (brave/bravebot#3859), because the list holds only the plain names; or
+    /// matching only one spelling of the triple, only `CC` and not the other names, or only the
+    /// `HOST_` form and not `TARGET_`; or removing a name that only begins like one, such as
+    /// `CC_FORCE_DISABLE`, `PKG_CONFIG_PATH` and `CARGO_TARGET_DIR`; or unwrapping a name that is not
+    /// text.
+    #[test]
+    fn the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold() {
+        let (session, planted, genuine) = planted_and_genuine("usability-per-target");
+
+        for name in [
+            "CC_aarch64-apple-darwin",
+            "CC_aarch64_apple_darwin",
+            "CC_x86_64-unknown-linux-gnu",
+            "CC_x86_64_unknown_linux_gnu",
+            "CC_armv7-unknown-linux-gnueabihf",
+            "CXX_aarch64_apple_darwin",
+            "CXX_x86_64-unknown-linux-gnu",
+            "AR_aarch64_apple_darwin",
+            "AR_x86_64-unknown-linux-gnu",
+            "RANLIB_aarch64_apple_darwin",
+            "NVCC_aarch64_apple_darwin",
+            "CFLAGS_aarch64_apple_darwin",
+            "CFLAGS_x86_64-unknown-linux-gnu",
+            "CXXFLAGS_aarch64_apple_darwin",
+            "ARFLAGS_aarch64_apple_darwin",
+            "RANLIBFLAGS_aarch64_apple_darwin",
+            "PKG_CONFIG_aarch64_apple_darwin",
+            "PKG_CONFIG_x86_64-unknown-linux-gnu",
+            "HOST_CC",
+            "HOST_CXX",
+            "HOST_AR",
+            "HOST_RANLIB",
+            "HOST_NVCC",
+            "HOST_CFLAGS",
+            "HOST_CXXFLAGS",
+            "HOST_ARFLAGS",
+            "HOST_RANLIBFLAGS",
+            "HOST_PKG_CONFIG",
+            "TARGET_CC",
+            "TARGET_CXX",
+            "TARGET_AR",
+            "TARGET_RANLIB",
+            "TARGET_CFLAGS",
+            "TARGET_CXXFLAGS",
+            "TARGET_PKG_CONFIG",
+            "CROSS_COMPILE",
+        ] {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+            assert!(withheld(name, &genuine, &session), "{name} was kept");
+        }
+        for name in [
+            "CC_FORCE_DISABLE",
+            "CC_ENABLE_DEBUG_OUTPUT",
+            "CC_SHELL_ESCAPED_FLAGS",
+            "CC_KNOWN_WRAPPER_CUSTOM",
+            "CRATE_CC_NO_DEFAULTS",
+            "CXXSTDLIB",
+            "PKG_CONFIG_PATH",
+            "PKG_CONFIG_LIBDIR",
+            "PKG_CONFIG_SYSROOT_DIR",
+            "PKG_CONFIG_ALLOW_CROSS",
+            "HOST_CCFLAGS",
+            "TARGET_ARCH_X",
+            "CCACHE_DIR",
+            "CC_",
+            "CARGO_TARGET_DIR",
+        ] {
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+        let bytes = OsString::from_vec(b"CC_\xff".to_vec());
+        assert!(!removed(
+            &stage_with(&bytes, genuine.as_os_str(), &session),
+            &bytes
+        ));
     }
 
     /// The regression it rejects: leaving `CARGO_TARGET_<triple>_LINKER` and `_RUNNER`, which name a

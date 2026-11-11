@@ -2255,13 +2255,18 @@ name a directory (`NODE_PATH` a list of them) outside every one; `GIT_SSH_COMMAN
 `GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS`, `RUSTFLAGS`,
 `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS`, `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTDOCFLAGS`,
 `CARGO_BUILD_RUSTDOCFLAGS`, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
-`CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS`, `GOFLAGS`, `GOCACHEPROG`, `CC`, `CXX`, `CGO_LDFLAGS`,
-`CGO_CFLAGS`, `CGO_CPPFLAGS`, the make variables `MAKE`, `RM`, `AR`, `AS`, `FC`, `PC`, `M2C`, `LEX`,
+`CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS`, `GOFLAGS`, `GOCACHEPROG`, `CC`, `CXX`,
+`CROSS_COMPILE`, `CGO_LDFLAGS`, `CGO_CFLAGS`, `CGO_CPPFLAGS`, `RANLIB`, `NVCC`, `ARFLAGS`,
+`RANLIBFLAGS`, the make variables `MAKE`, `RM`, `AR`, `AS`, `FC`, `PC`, `M2C`, `LEX`,
 `YACC`, `LINT`, `TEXI2DVI`, `MAKEINFO`, `GET` and `CO`, and the make flag variables `CFLAGS`,
 `CPPFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS` and `TARGET_ARCH` are removed, as
 are `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`, `CARGO_TARGET_<triple>_LINKER`,
 `CARGO_TARGET_<triple>_RUNNER`, `CARGO_TARGET_<triple>_RUSTFLAGS`,
-`CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER` and every name that begins `npm_config_` in any case (this includes `npm_config_prefix`). A
+`CARGO_TARGET_<triple>_RUSTDOCFLAGS`, `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`, the per-target
+forms of `CC`, `CXX`, `AR`, `RANLIB`, `NVCC`, `CFLAGS`, `CXXFLAGS`, `ARFLAGS`, `RANLIBFLAGS` and
+`PKG_CONFIG` that the `cc` and `pkg-config` crates read (`CC_<triple>`, `HOST_CC`, `TARGET_CFLAGS`
+and the others, as the next paragraphs state) and every name that begins `npm_config_` in any case
+(this includes `npm_config_prefix`). A
 `RUSTUP_HOME` that is removed, or that the environment checked does not hold, is set to the account's `.rustup`, since the `cargo` proxy finds
 its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX` and
 `NODE_OPTIONS` are in the generic table ([SANDBOX-30](#SANDBOX-30)), which a stage is given too.
@@ -2428,6 +2433,9 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_python_is_not_handed_a_module_path`
 `verified-by: bravebot_agent::usability::a_setup_python_keeps_a_module_path_no_stage_can_write`
 `verified-by: bravebot_agent::usability::the_names_found_by_running_cargo_npm_go_and_python_are_removed`
+`verified-by: bravebot_agent::usability::the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold`
+`verified-by: bravebot_agent::usability::a_setup_cargo_is_not_handed_a_per_target_compiler_archiver_or_flags`
+`verified-by: bravebot_agent::usability::the_plain_ranlib_nvcc_and_archiver_flag_names_the_cc_crate_reads_are_removed`
 `verified-by: bravebot_agent::usability::a_program_variable_naming_a_file_a_stage_may_write_is_not_run_and_one_outside_is`
 `verified-by: bravebot_agent::usability::a_setup_stage_is_not_handed_a_developer_directory`
 `verified-by: bravebot_agent::usability::a_setup_go_vet_is_not_handed_a_go_root`
@@ -4117,17 +4125,18 @@ file. A new spawn that looks a name up through
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
   "What a checked start does not cover". The names another program
   reads are added to its start when that program is audited. The usability suite's list
-  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 77 names) adds the names `git`, `make`
+  (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 82 names) adds the names `git`, `make`
   (the programs and flags of its built-in rules, `MAKE_COMMAND`, and `COMPILER_PATH` and
   `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
-  the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, and the credential providers),
+  the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, the credential providers, and the
+  `CROSS_COMPILE`, `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` the `cc` crate reads),
   `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, and `OPENSSL_CONF`, `OPENSSL_MODULES` and
   `OPENSSL_ENGINES` through the constants in `programs::selectors`) and `go` (with the C
   compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
   choose code, and it matches by form `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and
   `_RUSTDOCFLAGS`, `CARGO_CREDENTIAL_ALIAS_<name>`, make's `COMPILE.<suffix>`, `LINK.<suffix>`,
-  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, and every
-  `npm_config_` name in any case. `python3` is also given the generic table, which holds
+  `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, the per-target names
+  below, and every `npm_config_` name in any case. `python3` is also given the generic table, which holds
   `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
   compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
   only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
@@ -4142,11 +4151,54 @@ file. A new spawn that looks a name up through
   1.2.62 in a cargo build script ran `CC`, `CXX` and `AR`, and the `pkg-config` crate 0.3.33 ran
   `PKG_CONFIG`. `CC` and `CXX` hold a program and arguments, so they are options and removed whatever
   they hold; `PKG_CONFIG` is a program and is kept when it names one outside every directory a stage
-  may write. The `cc` crate also ran the helper through `CC_<triple>`, `CXX_<triple>`, `AR_<triple>`,
-  `HOST_CC`, `CFLAGS_<triple>`, `CXXFLAGS_<triple>` and `HOST_CFLAGS`, and the suite does not remove those:
-  the names are a family that this list does not match yet. No workflow of the suite builds a crate
-  with a build script that uses the `cc` crate, so the gap is not reached by a workflow that exists.
-  It is tracked by #3859. Configuration files that can name code, such as `.npmrc` and
+  may write.
+  The `cc` crate (1.4.3, the version `Cargo.lock` holds, read on macOS 26 arm64; 1.2.62 gives the same
+  order) and the `pkg-config` crate (0.3.33) read each of `CC`, `CXX`, `AR`, `RANLIB`, `NVCC`,
+  `CFLAGS`, `CXXFLAGS`, `ARFLAGS`, `RANLIBFLAGS` and `PKG_CONFIG` from the first of four names that is
+  set: `<NAME>_<target>`, `<NAME>_<target with - and . as _>`, `HOST_<NAME>` for a build that is not
+  cross compiling or `TARGET_<NAME>` for one that is, and `<NAME>`. The `cc` crate also puts
+  `CROSS_COMPILE` in front of the program names it looks for. The suite removes every one of them
+  whatever it holds: `CROSS_COMPILE` and the plain `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` are
+  in the list (`CC`, `CXX`, `AR`, `CFLAGS`, `CXXFLAGS` and `PKG_CONFIG` already were), and the
+  per-target forms are matched as a family by `names_a_compiler_for_a_target`. In `cc` 1.4.3 the
+  plain `RANLIB` is the program `get_ranlib` returns (`lib.rs` 3669) and `RANLIBFLAGS` is put on it
+  (3658), `ARFLAGS` is put on the `ar` that `Build::compile` runs (3611), and `NVCC` is the program
+  started in place of the compiler when a build script calls `cuda(true)` (3328). They are read
+  from `cc` source and not run: a build that reaches `get_ranlib` or `cuda(true)` was not made,
+  and the plain names are listed because the per-target forms of the same lookup are, so that
+  `HOST_RANLIB` is not removed while `RANLIB` is kept. A name matches the family when it is `HOST_`
+  or `TARGET_` and then one of the ten, or one of the ten, `_`, and a first character that is a
+  lower case letter or a digit, as a target is spelled. The per-target forms of `PKG_CONFIG` are
+  removed, where the plain `PKG_CONFIG` is kept when it names a program outside every directory a
+  stage may write: a target is a name that a person chooses, and the suite does not have one to
+  check the value against. The names these crates read that do not choose a program or a flag are
+  kept: `CC_FORCE_DISABLE`, `CC_ENABLE_DEBUG_OUTPUT`, `CC_SHELL_ESCAPED_FLAGS`,
+  `CRATE_CC_NO_DEFAULTS` and `CXXSTDLIB` (booleans or text the crate does not run),
+  `CC_KNOWN_WRAPPER_CUSTOM` (a wrapper program stem that is only compared with the compiler's name),
+  `PKG_CONFIG_PATH`, `PKG_CONFIG_LIBDIR`, `PKG_CONFIG_SYSROOT_DIR` and `PKG_CONFIG_ALLOW_CROSS`
+  (directories, or a boolean, for the `pkg-config` crate and program), `PAUTHTEST_SYSROOT` and
+  `PAUTHTEST_RESOURCE_DIR` (directories for the `pauthtest` target, `lib.rs` 4598 and 4613), and
+  `WASM_MUSL_SYSROOT` and `WASI_SYSROOT` (a sysroot for a WebAssembly target, which the suite does
+  not build).
+  The integration test runs the `cc` crate through ten per-target names on macOS 26 arm64, with a
+  build script that compiles a C file and a C++ file: `CC_<triple>`, `CC_<triple with _>`,
+  `HOST_CC`, `CXX_<triple>`, `HOST_CXX`, `AR_<triple>`, `HOST_AR`, `CFLAGS_<triple>`, `HOST_CFLAGS`
+  and `CXXFLAGS_<triple>`. The other per-target names (`RANLIB`, `NVCC`, `ARFLAGS`, `RANLIBFLAGS`
+  and `PKG_CONFIG` with a target, every `TARGET_` form and `HOST_CXXFLAGS`) are read from the
+  source and are pinned only by the unit test
+  `the_per_target_names_the_cc_crate_reads_are_removed_whatever_they_hold`. `TARGET_CC` and the
+  other `TARGET_` names are read only for a cross compile; a build for the host reads the `HOST_`
+  names. The three flag cases pass `-fno-integrated-as -B<dir>` on macOS and `-B<dir>` elsewhere,
+  because gcc rejects `-fno-integrated-as`. The test was run on macOS only. The `-B<dir>` form was
+  not run with gcc, so whether those three cases run the helper on Linux is not recorded; where
+  the control does not run it they print `skipped`.
+  `a_setup_cargo_is_not_handed_a_per_target_compiler_archiver_or_flags` builds such a
+  package from the locked `cc`, `find-msvc-tools` and `shlex` in the account's registry cache as path
+  dependencies, with `--offline`, and skips and says so where the cache lacks one; where it lacks
+  one the test checks nothing. No workflow of the suite builds a crate with a build script that
+  uses the `cc` crate, so the workflows do not reach the names; the test does, and a workflow with
+  such a build script would need the crate on a host that has no registry cache. Configuration
+  files that can name code, such as `.npmrc` and
   `.cargo/config.toml` in a directory a stage may write, are not examined by the suite or by the
   lists; that is tracked by #3858.
   The stored-login `gh` removes every `DYLD_` and `LD_` name ([SANDBOX-21](#SANDBOX-21)). The suite
@@ -5029,8 +5081,9 @@ shown by running the program, or not entirely:
   nothing on 3.81 and on 4.0 to 4.4.1 (`make` does not export `SHELL`). GNU Make 4.1 was not run,
   and no Guile-enabled build was run (`GUILE_LOAD_PATH` is read by libguile and a `$(guile)` call
   needs makefile text, so it is reachable only through routes already withheld).
-  `make` implicit-rule variables `ARFLAGS`, `LD`, `F77`, `SHELL` and `CPP` (nothing from a
-  built-in rule; a recipe that uses `$(CPP)` runs it), the `cc` crate's `TARGET_CC`, `TARGET_CXX`, `TARGET_AR`, `RANLIB`, `PKG_CONFIG_PATH`,
+  `make` implicit-rule variables `LD`, `F77`, `SHELL` and `CPP` (`ARFLAGS` is in the list
+  because the `cc` crate reads it; nothing from a
+  built-in rule; a recipe that uses `$(CPP)` runs it), `PKG_CONFIG_PATH`,
   `PKG_CONFIG_LIBDIR`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*` (an alias to a program on the `PATH` runs only
   through a `cargo-<name>` file found on `PATH`, which `PATH` handling covers),
   `CARGO_NET_GIT_FETCH_WITH_CLI`, `CARGO_HTTP_*`, `CARGO_BUILD_BUILD_DIR`, `CARGO_BUILD_TARGET`,
@@ -5072,7 +5125,7 @@ shown by running the program, or not entirely:
   `GCC_EXEC_PREFIX`, `PYTHONPLATLIBDIR` through a start or `OPENSSL_ENGINES`: unit tests pin their
   kind and value rules. The results for the `cc` and `pkg-config`
   crates, for GNU Make 3.81, and for the names that ran nothing (`GOPATH`, `GOBIN`, `GOWORK`,
-  `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`, `RANLIB`,
+  `GOPROXY`, `CARGO_PROFILE_*`, `CARGO_ALIAS_*`,
   `PYTHONBREAKPOINT`, `npm_config_cache` and the others above) were observed by hand, and no test
   repeats them.
 - Names and effects of the make, cargo, npm, go and python3 starts that are not settled, each with the
