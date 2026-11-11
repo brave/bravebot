@@ -500,6 +500,72 @@ fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
         .collect()
 }
 
+/// What became of one question, for the person to read back on their screen.
+///
+/// Built by [`settled_rows`] from the question that was shown and the answer the interface
+/// returned. It is for a screen only: nothing here is given to the planner, and the planner's own
+/// report of the answers is [`describe_series`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// The labels of the options picked, in the order they were confirmed.
+    Chose(Vec<String>),
+    /// The person's own words.
+    Typed(String),
+    /// No answer: declined, a selection that named no option, or no answer returned at all.
+    Skipped,
+    /// The question sat unanswered for as long as the settings allow (ASK-9).
+    ClosedOnTheClock,
+}
+
+/// One question of a settled series with what became of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledRow {
+    /// The tag the question was shown under, possibly empty.
+    pub header: String,
+    /// The sentence the question was shown as.
+    pub question: String,
+    pub outcome: Outcome,
+}
+
+/// Pair each question that was put with what became of it, for the person's screen.
+///
+/// Walks the questions and never the answers, for the reason [`describe_series`] does: one row
+/// per question shown, in order, and an interface cannot add one. Pairing is by position and is
+/// total. A question with no answer at its index is skipped, an index that names no option is
+/// dropped, and a selection left empty is skipped. Nothing here branches on the text of a
+/// question or an answer, only on the shape of the [`Answer`].
+pub fn settled_rows(asking: &Asking, answers: &[Answer]) -> Vec<SettledRow> {
+    asking
+        .prompts
+        .iter()
+        .enumerate()
+        .map(|(at, prompt)| {
+            let outcome = match answers.get(at).unwrap_or(&Answer::Declined) {
+                Answer::Chosen(indices) => {
+                    let labels: Vec<String> = indices
+                        .iter()
+                        .filter_map(|i| prompt.rows.iter().find(|row| row.index == *i))
+                        .map(|row| row.label.clone())
+                        .collect();
+                    if labels.is_empty() {
+                        Outcome::Skipped
+                    } else {
+                        Outcome::Chose(labels)
+                    }
+                }
+                Answer::Typed(text) => Outcome::Typed(text.clone()),
+                Answer::Declined => Outcome::Skipped,
+                Answer::TimedOut => Outcome::ClosedOnTheClock,
+            };
+            SettledRow {
+                header: prompt.header.clone(),
+                question: prompt.question.clone(),
+                outcome,
+            }
+        })
+        .collect()
+}
+
 /// What the planner is told when a question closed on the clock.
 ///
 /// Written here, from nothing the person or the question said, so the planner is not told the
@@ -616,6 +682,49 @@ mod tests {
     #[test]
     fn declining_says_what_to_do_next() {
         assert!(describe(&question(), &Answer::Declined).contains("Proceed without it"));
+    }
+
+    fn rows_for(answers: &[Answer]) -> Vec<SettledRow> {
+        settled_rows(&asking(&Series::new(vec![question(), question()])), answers)
+    }
+
+    /// Each outcome is its own variant. The regressions it rejects: a typed answer reported as a
+    /// pick, a close on the clock reported as a skip, an index outside the options reported as a
+    /// pick of something, and an answer attached to the wrong question.
+    #[test]
+    fn each_question_is_paired_with_what_became_of_it() {
+        let rows = rows_for(&[
+            Answer::Chosen(vec![1, 0, 9]),
+            Answer::Typed("neither".into()),
+        ]);
+        assert_eq!(rows[0].header, "Cache layer");
+        assert_eq!(rows[0].question, "Which cache layer?");
+        assert_eq!(
+            rows[0].outcome,
+            Outcome::Chose(vec!["Query".into(), "HTTP".into()])
+        );
+        assert_eq!(rows[1].outcome, Outcome::Typed("neither".into()));
+
+        let rows = rows_for(&[Answer::Declined, Answer::TimedOut]);
+        assert_eq!(rows[0].outcome, Outcome::Skipped);
+        assert_eq!(rows[1].outcome, Outcome::ClosedOnTheClock);
+    }
+
+    /// One row per question shown, however many answers came back. The regression it rejects:
+    /// a row per answer, which would let an interface add a question nobody was shown, or a
+    /// missing answer that drops its question or shifts the next one up.
+    #[test]
+    fn a_row_is_made_for_each_question_shown_whatever_came_back() {
+        let rows = rows_for(&[Answer::Chosen(vec![9])]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].outcome, Outcome::Skipped, "no option named");
+        assert_eq!(rows[1].outcome, Outcome::Skipped, "no answer returned");
+        let rows = rows_for(&[
+            Answer::Declined,
+            Answer::Declined,
+            Answer::Typed("x".into()),
+        ]);
+        assert_eq!(rows.len(), 2, "an answer past the last question got a row");
     }
 
     /// The key has to separate questions that read the same but ask something different, or the

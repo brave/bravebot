@@ -81,6 +81,10 @@ pub struct Task {
     /// Whether the driver wrote this prompt and no person typed it, which the view of the request
     /// says of it. Set only by a caller that composed the line itself.
     pub driver_wrote_the_prompt: bool,
+    /// Whether a question put to this run reaches nobody, as in a one-shot run (ASK-7). Set only by
+    /// a caller that knows, from how it was started, that it has no one to ask; the system prompt
+    /// then tells the planner to say in its reply what the person can do on another run (TURN-16).
+    pub nobody_answers: bool,
     /// What the planner is told at the start of the turn about the open loops of earlier ones,
     /// where they changed since it was last told (OPEN-4).
     pub open_loops: Option<String>,
@@ -205,6 +209,13 @@ pub struct Task {
     ///
     /// [`Reporter::session_message`]: crate::report::Reporter::session_message
     pub inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>,
+    /// What finds the earlier excerpts a turn over its budget sends in place of a summary, or
+    /// `None` where the turn compacts as it always has
+    /// ([RETRIEVE-17](../../../../docs/specs/retrieval.md#RETRIEVE-17)).
+    ///
+    /// Set by the bridge for a bot's turn with the setting on and for nothing else. A delegate
+    /// never retrieves, since its conversation is its own and not the record the vectors are of.
+    pub retriever: Option<std::sync::Arc<dyn crate::retrieval::Retriever>>,
     /// How this session reaches the other background sessions, or `None` where it cannot send
     /// (MSG-12).
     ///
@@ -363,6 +374,11 @@ pub struct Task {
     /// puts in its system instructions (SKILL-21). Only a name: the body comes from the catalogue
     /// the turn resolved, through the gate any skill goes through. Not given to a delegate.
     pub skill_mode: Option<String>,
+    /// The name of one skill the turn takes out of the catalogue it resolved, which is the baseline
+    /// arm of a skill evaluation. Taken out after discovery, so every gate has run on every other
+    /// skill and nothing else about the turn changes: hooks, `AGENTS.md`, definitions and servers
+    /// stay in force. Set by the driver from a command line the person typed and never from a file.
+    pub without_skill: Option<String>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -548,6 +564,7 @@ impl Task {
             // A line somebody typed until a caller says what composed it.
             composed: None,
             driver_wrote_the_prompt: false,
+            nobody_answers: false,
             open_loops: None,
             shows_open_loops: false,
             injected_facts: std::collections::BTreeSet::new(),
@@ -572,6 +589,7 @@ impl Task {
             remembering: None,
             advisor: None,
             inbox: None,
+            retriever: None,
             courier: None,
             keeps_links: false,
             model: None,
@@ -617,6 +635,7 @@ impl Task {
             system_prompts: SystemPrompts::default(),
             style: None,
             skill_mode: None,
+            without_skill: None,
             delegate: None,
             addressing: None,
             addressing_is_standing: false,
@@ -724,6 +743,13 @@ impl Task {
         self
     }
 
+    /// Say that nobody can answer a question put to this run, so the planner is told what to say
+    /// in its reply in the place of asking (TURN-16).
+    pub fn with_nobody_answering(mut self) -> Self {
+        self.nobody_answers = true;
+        self
+    }
+
     /// Name the kept facts the session has already injected (RECALL-9).
     pub fn with_injected_facts(mut self, injected: std::collections::BTreeSet<String>) -> Self {
         self.injected_facts = injected;
@@ -794,6 +820,15 @@ impl Task {
     /// Give the turn the inbox of the background session it runs in, or `None` for any other.
     pub fn with_inbox(mut self, inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>) -> Self {
         self.inbox = inbox;
+        self
+    }
+
+    /// Give the turn what retrieves for it, or `None` for a turn that compacts.
+    pub fn with_retriever(
+        mut self,
+        retriever: Option<std::sync::Arc<dyn crate::retrieval::Retriever>>,
+    ) -> Self {
+        self.retriever = retriever;
         self
     }
 
@@ -998,6 +1033,13 @@ impl Task {
     /// Open the system prompt with this style's words, unless `--system-prompt` named its own.
     pub fn with_style(mut self, style: Option<crate::styles::Style>) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Run the turn with the skill of this name taken out of its catalogue. See
+    /// [`Task::without_skill`].
+    pub fn without_skill(mut self, name: Option<String>) -> Self {
+        self.without_skill = name;
         self
     }
 

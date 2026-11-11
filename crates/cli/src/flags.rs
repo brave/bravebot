@@ -28,7 +28,7 @@ pub(crate) const AUTO: &str = "--auto";
 
 /// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
 /// list and [`is_a_one_shot`] reads the same one.
-pub(crate) const TASK_FLAGS: [&str; 20] = [
+pub(crate) const TASK_FLAGS: [&str; 21] = [
     "-p",
     "--print",
     "--mode",
@@ -45,6 +45,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
     "--json-stream",
     "--input-format",
     "--trust-input-lines",
+    "--approve-input-lines",
     "--output-schema",
     "--goal",
     "--max-rounds",
@@ -53,7 +54,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
 
 /// The commands that start neither a session nor a task, so a flag that shapes one is refused
 /// beside them rather than taken and ignored, for the reason CLI-13 gives about a settings file.
-const NON_SESSION_COMMANDS: [&str; 15] = [
+const NON_SESSION_COMMANDS: [&str; 18] = [
     "acp",
     "doctor",
     "update",
@@ -63,6 +64,9 @@ const NON_SESSION_COMMANDS: [&str; 15] = [
     "permissions",
     "sessions",
     "stats",
+    "schedule",
+    "skill",
+    "trigger",
     "attach",
     "reply",
     "import-leo-creds",
@@ -453,12 +457,12 @@ pub(crate) fn starts_no_program(first: Option<&str>) -> bool {
 /// floor.
 pub(crate) fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
     use bravebot_config::sandbox::Floor;
-    let pinned_in = refused.pinned_in.display().to_string();
+    let pinned_in = crate::progress::printable_path(&refused.pinned_in);
     match (&refused.asked_in, refused.because) {
         (Some(file), Floor::Mode) => t!(
             cli_sandbox_refused_file,
             asked = refused.asked.name(),
-            asked_in = file.display().to_string(),
+            asked_in = crate::progress::printable_path(file),
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
             looser = bravebot_agent::sandbox_reason::looser(refused)
@@ -473,7 +477,7 @@ pub(crate) fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> St
         (Some(file), Floor::Network) => t!(
             cli_sandbox_refused_network_file,
             asked = refused.asked.name(),
-            asked_in = file.display().to_string(),
+            asked_in = crate::progress::printable_path(file),
             pinned_in = pinned_in
         ),
         (None, Floor::Network) => t!(
@@ -623,6 +627,32 @@ mod tests {
         typed.iter().map(|word| word.to_string()).collect()
     }
 
+    /// LAYER-3: the file a refused mode was asked in can be a checkout's, so the refusal draws it,
+    /// and the managed file's path with it. The regression it rejects: either printed as it is.
+    #[test]
+    fn the_files_a_refused_sandbox_mode_names_are_drawn() {
+        use bravebot_config::sandbox::{Floor, Refused};
+        let hostile = "/x\u{1b}[2J\u{202e}/settings.json";
+        for (asked_in, because) in [
+            (Some(PathBuf::from(hostile)), Floor::Mode),
+            (Some(PathBuf::from(hostile)), Floor::Network),
+            (None, Floor::Mode),
+            (None, Floor::Network),
+        ] {
+            let said = sandbox_refusal(&Refused {
+                asked: SandboxMode::Off,
+                asked_in,
+                pinned: SandboxMode::WorkspaceWrite,
+                pinned_in: PathBuf::from(hostile),
+                because,
+            });
+
+            assert!(!said.contains('\u{1b}'), "{said:?}");
+            assert!(!said.contains('\u{202e}'), "{said:?}");
+            assert!(said.contains("\u{2039}U+202E\u{203A}"), "{said:?}");
+        }
+    }
+
     #[test]
     fn a_refused_value_leaves_the_arguments_as_they_were_typed() {
         let mut args = words(&["-p", "--a", "one", "task", "--a", "", "--b", "two"]);
@@ -679,11 +709,26 @@ mod tests {
     }
 
     #[test]
-    fn exactly_the_fifteen_commands_that_start_no_session_are_named() {
+    fn the_destination_word_is_an_add_word_and_not_a_flag_main_takes_or_a_run_starts_with() {
+        // `--deliver-to` is read by `schedule add` from the words after `add`. It is not
+        // a flag that opens a one-shot run, so a line that leads with it starts nothing, and
+        // `main` does not take it out of the arguments ahead of the command. The wrong
+        // implementation lists it among TASK_FLAGS, which would make it a flag a run is started with.
+        let word = bravebot_schedule::DELIVER_TO_WORD;
+        assert!(!TASK_FLAGS.contains(&word));
+        assert!(!is_a_one_shot(&words(&[word, "/bin/cat"]), false));
+        assert!(starts_neither_a_session_nor_a_task(word).is_none());
+        for taken in [ACCEPT_EDITS, SKIP_PERMISSIONS, AUTO] {
+            assert_ne!(taken, word);
+        }
+    }
+
+    #[test]
+    fn exactly_the_eighteen_commands_that_start_no_session_are_named() {
         for command in NON_SESSION_COMMANDS {
             assert_eq!(starts_neither_a_session_nor_a_task(command), Some(command));
         }
-        assert_eq!(NON_SESSION_COMMANDS.len(), 15);
+        assert_eq!(NON_SESSION_COMMANDS.len(), 18);
         for other in ["", "-p", "--resume", "resume", "Doctor", "doctor "] {
             assert_eq!(
                 starts_neither_a_session_nor_a_task(other),

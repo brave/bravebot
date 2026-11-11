@@ -8,6 +8,7 @@ import {
   STATUSES,
   SUPPORTED_APPROVALS,
   decodeIncoming,
+  decodeSnapshot,
   decodeUpdate,
   readActionTargets,
   readSessionViewCapability,
@@ -20,6 +21,7 @@ const contract = JSON.parse(readFileSync(join(FIXTURES, 'wire-contract.json'), '
   statuses: string[]
   rowKinds: string[]
   update: unknown
+  snapshot: unknown
 }
 
 /** The Rust test `the_client_wire_contract_matches_the_rust_types` writes this file from the Rust types. */
@@ -32,6 +34,19 @@ test('the client enumerations equal the Rust ones', () => {
 test('the capability the Rust runtime advertises is accepted as version 1', () => {
   const read = readSessionViewCapability({ capabilities: { sessionView: contract.capability } })
   assert.deepEqual(read, contract.capability)
+})
+
+test('a runtime from before snapshots is read without resync, and a resync without a bound is not read', () => {
+  const { resync: _resync, retainedRows: _retained, ...older } = contract.capability as Record<string, unknown>
+  assert.equal(readSessionViewCapability({ capabilities: { sessionView: { ...older, reconnect: false } } })?.resync, undefined)
+  assert.equal(readSessionViewCapability({ capabilities: { sessionView: older } }), null)
+  assert.equal(readSessionViewCapability({ capabilities: { sessionView: { ...older, resync: 'session.view.resync' } } }), null)
+})
+
+test('a snapshot the Rust types wrote decodes with every field intact, and one with no omitted count is refused', () => {
+  assert.deepEqual(decodeSnapshot(contract.snapshot), contract.snapshot)
+  const { omitted: _omitted, ...bare } = contract.snapshot as Record<string, unknown>
+  assert.throws(() => decodeSnapshot(bare), ProtocolError)
 })
 
 test('an update the Rust types wrote decodes with every field intact', () => {
@@ -62,6 +77,15 @@ test('a view update whose target is not a count is refused, and an absent one re
   const update = structuredClone(contract.update) as Record<string, unknown>
   delete update.target
   assert.equal(decodeUpdate(update).target, 0)
+})
+
+test('a view update whose omitted count is not a count is refused, and an absent one is left absent', () => {
+  for (const omitted of ['3', -1, 1.5, null]) {
+    assert.throws(() => decodeUpdate({ ...(contract.update as object), omitted }), ProtocolError, String(omitted))
+  }
+  const update = structuredClone(contract.update) as Record<string, unknown>
+  delete update.omitted
+  assert.equal('omitted' in decodeUpdate(update), false)
 })
 
 test('an absent capability, or one that is not version 1, is not read as supported', () => {

@@ -26,7 +26,9 @@
 //! worked out somewhere else, so a person shown the line has not been shown the plan. Quoting
 //! makes every one of them ordinary text, because a quoted `$` is a dollar sign and nothing more.
 
-use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
+use bravebot_core::command::{
+    Expansion, Joiner, Plan, Route, Step, Steps, ValuePart, is_the_null_device,
+};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -44,6 +46,17 @@ impl Span {
     fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+}
+
+/// Whether a line may carry a value that is worked out when its step starts.
+///
+/// [`Expansions::Refused`] is every mode but bypass, and is the grammar as it has always been.
+/// [`Expansions::Assignments`] is bypass mode alone, and admits `$NAME`, `${NAME}` and `$(cmd)` in
+/// the value of a `NAME=value` written in front of a program, and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expansions {
+    Refused,
+    Assignments,
 }
 
 /// One part of a word.
@@ -72,6 +85,13 @@ pub enum Piece {
     Range { from: i64, to: i64, width: usize },
     /// A leading unquoted `~`.
     Home,
+    /// `$NAME` or `${NAME}` in the value of an assignment in front of a program. Only produced
+    /// under [`Expansions::Assignments`], and only the name is held.
+    Variable(String),
+    /// `$(source)` in the value of an assignment in front of a program, with the text between the
+    /// parentheses and the byte offset in the line where that text begins. Only produced under
+    /// [`Expansions::Assignments`].
+    Substitution { source: String, offset: usize },
 }
 
 /// One word of a command: its program, an operand, or a redirection's target.
@@ -105,7 +125,11 @@ impl Word {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
     pub name: String,
+    /// The value where it is literal text, and empty where `computed` holds it.
     pub value: String,
+    /// The value as text, variables and substitutions, where it is not all literal. Only under
+    /// [`Expansions::Assignments`]; holds sources and never a value.
+    pub computed: Option<Vec<Piece>>,
     pub span: Span,
 }
 
@@ -209,6 +233,12 @@ pub enum Reason {
     ProcessSubstitution,
     /// `$VAR` or `${…}`.
     Variable,
+    /// `$?`.
+    ExitStatus,
+    /// `$$`, `$@`, `$*`, `$#`, `$-` or `$!`.
+    SpecialParameter,
+    /// `$'…'` or `$"…"`.
+    DollarQuote,
     /// `$((…))`.
     Arithmetic,
     /// A bare `&`.
@@ -217,8 +247,14 @@ pub enum Reason {
     HereDocument,
     /// A word in command position that would reintroduce interpretation.
     Interpreter(&'static str),
-    /// A word in command position that sets state in a shell, which no step of a plan has.
+    /// A `cd`, `pushd`, `popd` or `export` in command position: it sets state in a shell, which no
+    /// step of a plan has, and the refusal points at the `directory` argument and at `NAME=value`.
     ShellState(&'static str),
+    /// A shell builtin in command position that acts on the shell running it (`ulimit`, `umask`,
+    /// `unset`, `alias`, `unalias`, `hash`, `wait`). A host may ship a program of the name that
+    /// exits zero and changes nothing for the steps after it. The refusal says so and points at
+    /// `sh -c`, which has the builtin and the steps that need it in one process.
+    ShellBuiltin(&'static str),
     /// A reserved word that opens a control structure.
     ControlFlow(&'static str),
     /// An unquoted `!`.
@@ -235,6 +271,8 @@ pub enum Reason {
     Unclosed(char),
     /// A `NAME=` whose value is not literal text.
     AssignmentValue,
+    /// A `$NAME` naming a variable that is withheld from programs this agent starts.
+    WithheldVariable(String),
     /// A word standing for more arguments than a person can be shown at one prompt.
     TooMany { found: usize, cap: usize },
     /// A walk that read more directories than the ceiling allows.
@@ -251,6 +289,9 @@ pub enum Reason {
     NotOnePath,
     /// An invocation that would want a terminal, with what to do instead.
     Interactive(&'static str),
+    /// An editor in command position. Worded apart from the other interactive refusals because it
+    /// names `edit_file`, which a turn's list may not hold: [`Refused::said`] leaves it out then.
+    Editor,
     /// More commands in one line than a plan can put to a person at once.
     TooManySteps { cap: usize },
     /// Groups nested deeper than the grammar goes.
@@ -259,6 +300,30 @@ pub enum Reason {
     TooLong { cap: usize },
     /// Anything the shape of the line gets wrong.
     Syntax(&'static str),
+}
+
+/// The refusal of a shell builtin in command position: what it does stays in the shell that runs
+/// it, and the whole line goes inside `sh -c`. `ulimit` and `umask` get an example each, and
+/// `alias` and `unalias` are told to write the command out.
+fn write_shell_builtin(f: &mut fmt::Formatter<'_>, word: &str) -> fmt::Result {
+    write!(
+        f,
+        "`{word}` is a shell builtin, and what it does stays in the shell process that runs it. Each step of a line is a separate program started on its own, so a `{word}` step would change nothing for the steps after it, and a program of that name on the host runs it in a shell of its own. "
+    )?;
+    f.write_str(match word {
+        "ulimit" => {
+            "To run a program under a limit, write the whole line as `sh -c '... ulimit ...'`, for example `sh -c 'ulimit -n 10240 && cargo test'`, which is approved as one line. To read a limit, use `sh -c 'ulimit -a'`"
+        }
+        "umask" => {
+            "To run a program under a file creation mask, write the whole line as `sh -c '... umask ...'`, for example `sh -c 'umask 077 && touch f'`, which is approved as one line. To read the mask, use `sh -c 'umask'`"
+        }
+        "alias" | "unalias" => {
+            "An alias defined in one step is not seen by the other steps, and the host shell does not expand aliases in a non-interactive script, so write the command out instead"
+        }
+        _ => {
+            "It only means something between commands of one shell. Where a script needs it, write the whole script as `sh -c '...'`, which is approved as one line"
+        }
+    })
 }
 
 impl fmt::Display for Reason {
@@ -272,6 +337,15 @@ impl fmt::Display for Reason {
             ),
             Self::Variable => f.write_str(
                 "the value is not in the line, so the plan would not be in the line. Write the value out, or put a literal `$` in single quotes or write it as `\\$`",
+            ),
+            Self::ExitStatus => f.write_str(
+                "the exit status of an earlier step is not in the line, so the plan would not be in the line. The result of a run already says how each step ended. To pass the characters `$?` to a program, put them in single quotes",
+            ),
+            Self::SpecialParameter => f.write_str(
+                "no shell holds parameters between the steps of a line, so there is no value for this to stand for. To pass the text to a program, write it inside single quotes as one argument",
+            ),
+            Self::DollarQuote => f.write_str(
+                "a quote after a `$` asks a shell to read escapes in the text, and escapes are not read here. Write the text in plain quotes, and where it holds a newline, take the text from a file or from standard input",
             ),
             Self::Arithmetic => f.write_str(
                 "arithmetic is a language, and a language needs an interpreter. To hand the text to one, pass it as one literal argument in single quotes, as when handing a script to `sh -c`",
@@ -290,6 +364,7 @@ impl fmt::Display for Reason {
                 f,
                 "`{word}` sets state in a shell, and no shell holds state between the steps of a line or between calls, so it would change nothing for the steps after it. To run a line in another directory, name it in the `directory` argument of the call. To set a variable, write `NAME=value` in front of the program that needs it"
             ),
+            Self::ShellBuiltin(word) => write_shell_builtin(f, word),
             Self::ControlFlow(word) => {
                 write!(f, "`{word}` opens a control structure, and control flow is a program")
             }
@@ -309,7 +384,11 @@ impl fmt::Display for Reason {
             }
             Self::Unclosed(c) => write!(f, "`{c}` is never closed"),
             Self::AssignmentValue => f.write_str(
-                "an assignment's value must be literal text, so that the plan shows what the program will see",
+                "an assignment's value must be literal text, so that the plan shows what the program will see. In bypass mode only, `NAME=$VAR cmd`, `NAME=${VAR} cmd` and `NAME=\"$(cmd)\" cmd` are accepted in the assignment prefix in front of a program, and nowhere else",
+            ),
+            Self::WithheldVariable(name) => write!(
+                f,
+                "`{name}` is withheld from the programs this agent starts, so its value cannot be put in a command's environment"
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -333,6 +412,7 @@ impl fmt::Display for Reason {
                 "a redirection has to name exactly one file. A destination worked out from what is on disk is a destination that moves when the tree does",
             ),
             Self::Interactive(alternative) => f.write_str(alternative),
+            Self::Editor => f.write_str(EDITOR_WITH_EDIT_FILE),
             Self::TooManySteps { cap } => write!(
                 f,
                 "a line may hold at most {cap} commands. A plan longer than that is a prompt nobody reads"
@@ -349,6 +429,20 @@ impl fmt::Display for Reason {
     }
 }
 
+impl Refused {
+    /// The refusal as the planner is told it, naming `edit_file` only where `editing_offered`
+    /// says the turn's list holds it. What a list that holds it reads is what `Display` writes.
+    pub fn said(&self, editing_offered: bool) -> String {
+        match self.reason {
+            Reason::Editor if !editing_offered => format!(
+                "`{}` at offset {}: {EDITOR_WITHOUT_EDIT_FILE}",
+                self.text, self.span.start
+            ),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -360,6 +454,13 @@ impl fmt::Display for Refused {
 }
 
 impl std::error::Error for Refused {}
+
+/// What to do instead of opening an editor, for a list that holds `edit_file`.
+const EDITOR_WITH_EDIT_FILE: &str = "an editor needs a terminal. Use `edit_file`, or a program that takes what it needs on the command line";
+
+/// The same, for a list that does not.
+const EDITOR_WITHOUT_EDIT_FILE: &str =
+    "an editor needs a terminal. Use a program that takes what it needs on the command line";
 
 /// How many commands one line may hold.
 ///
@@ -383,9 +484,20 @@ pub const MAX_LINE: usize = 8192;
 /// Words that would put an interpreter back in the plan.
 const INTERPRETERS: [&str; 5] = ["eval", "source", ".", "exec", "trap"];
 
-/// Words that set state in a shell. Each step is started on its own, so a program of one of these
-/// names would either not exist or change nothing for the steps after it.
+/// Words that set the working directory or the environment of a shell. Each step is started on its
+/// own, so a program of one of these names would either not exist or change nothing for the steps
+/// after it. The call's `directory` argument and `NAME=value` in front of a program are the
+/// spellings a plan has for them.
 const SHELL_STATE: [&str; 4] = ["cd", "pushd", "popd", "export"];
+
+/// Shell builtins that act on the shell running them and have no argument or prefix of a plan to
+/// stand for them. A host may ship a program of one of these names (macOS has `/usr/bin/ulimit`)
+/// that runs the builtin in a shell of its own and exits zero, so the stage would succeed and
+/// change nothing for the steps after it. They are refused in every form, a read such as
+/// `ulimit -a` included, so the answer does not depend on whether the host has such a program.
+const SHELL_BUILTINS: [&str; 7] = [
+    "ulimit", "umask", "unset", "alias", "unalias", "hash", "wait",
+];
 
 /// Reserved words that open a control structure.
 const CONTROL_FLOW: [&str; 5] = ["if", "while", "for", "case", "function"];
@@ -407,6 +519,12 @@ const CONTROL_FLOW: [&str; 5] = ["if", "while", "for", "case", "function"];
 ///
 /// Everything else is a [`Refused`], and a refusal yields no tree at all.
 pub fn parse(line: &str) -> Result<Node, Refused> {
+    parse_with(line, Expansions::Refused)
+}
+
+/// [`parse`], with `expansions` saying whether the assignment prefix may hold a value that is
+/// worked out when its step starts. Everything outside that prefix is refused either way.
+pub fn parse_with(line: &str, expansions: Expansions) -> Result<Node, Refused> {
     // Trailing space is not part of anything, and trimming only the end leaves every offset in
     // the line where a caller would find it.
     let line = line.trim_end();
@@ -424,7 +542,7 @@ pub fn parse(line: &str) -> Result<Node, Refused> {
             Reason::TooLong { cap: MAX_LINE },
         ));
     }
-    let tokens = Scan::new(line).tokens()?;
+    let tokens = Scan::new(line, expansions).tokens()?;
     let mut parser = Parser {
         line,
         tokens,
@@ -574,6 +692,11 @@ struct Scan<'a> {
     line: &'a str,
     chars: Vec<(usize, char)>,
     at: usize,
+    expansions: Expansions,
+    /// Whether the word being scanned is a `NAME=value` in the assignment prefix of a command,
+    /// the one place a value may be worked out at spawn. Only ever set under
+    /// [`Expansions::Assignments`].
+    assign_word: bool,
     /// How deep inside `{ … }` the scan is, which is what stops one brace from costing more than
     /// the line it is in.
     brace_depth: usize,
@@ -584,12 +707,14 @@ struct Scan<'a> {
 }
 
 impl<'a> Scan<'a> {
-    fn new(line: &'a str) -> Self {
+    fn new(line: &'a str, expansions: Expansions) -> Self {
         Self {
             chars: line.char_indices().collect(),
             failed_braces: vec![0; line.char_indices().count()],
             brace_depth: 0,
             at: 0,
+            expansions,
+            assign_word: false,
             line,
         }
     }
@@ -623,6 +748,10 @@ impl<'a> Scan<'a> {
 
     fn tokens(mut self) -> Result<Vec<Tok>, Refused> {
         let mut out = Vec::new();
+        // Whether every word since the last separator has been an assignment, which is where a
+        // value may be computed, and whether the next word is a redirection's target.
+        let mut prefix = true;
+        let mut target = false;
         loop {
             // Every whitespace `ends_word` counts separates words here too, line breaks aside:
             // those are refused just below, as more than one line.
@@ -635,6 +764,7 @@ impl<'a> Scan<'a> {
             let start = self.offset();
             let Some(c) = self.peek() else { break };
             let single = Span::new(start, start + c.len_utf8());
+            let before = out.len();
             match c {
                 // A line, not a script. A newline in a shell separates commands, and admitting it
                 // would mean the thing being endorsed is no longer one line long.
@@ -730,10 +860,54 @@ impl<'a> Scan<'a> {
                     let token = self.io_redirect(start)?;
                     out.push(token);
                 }
-                _ => out.push(Tok::Word(self.word()?)),
+                _ => {
+                    let shaped = self.starts_assignment();
+                    self.assign_word =
+                        self.expansions == Expansions::Assignments && prefix && !target && shaped;
+                    let word = self.word();
+                    self.assign_word = false;
+                    out.push(Tok::Word(word?));
+                    if target {
+                        target = false;
+                    } else {
+                        prefix = prefix && shaped;
+                    }
+                }
+            }
+            if out.len() > before {
+                match out.last() {
+                    Some(
+                        Tok::Pipe(_) | Tok::AndIf(_) | Tok::OrIf(_) | Tok::Semi(_) | Tok::Open(_),
+                    ) => {
+                        prefix = true;
+                        target = false;
+                    }
+                    Some(Tok::Close(_)) => {
+                        prefix = false;
+                        target = false;
+                    }
+                    Some(Tok::Redirect(op, _)) => target = *op != Op::ErrToOut,
+                    _ => {}
+                }
             }
         }
         Ok(out)
+    }
+
+    /// Whether the word at the cursor begins `NAME=`, as written, with nothing quoted in the name.
+    fn starts_assignment(&self) -> bool {
+        let mut n = 0;
+        match self.ahead(0) {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => n += 1,
+            _ => return false,
+        }
+        while self
+            .ahead(n)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            n += 1;
+        }
+        self.ahead(n) == Some('=')
     }
 
     /// Whether the digits at the cursor are a redirection's descriptor.
@@ -845,8 +1019,14 @@ impl<'a> Scan<'a> {
                                 break;
                             }
                             // Expansion inside double quotes is still expansion, so the same
-                            // refusal applies as outside them.
+                            // refusal applies as outside them, except for the value of an
+                            // assignment in front of a program where bypass mode allows it.
                             Some('$') if self.opens_expansion(true) => {
+                                if let Some(piece) = self.assigned_expansion()? {
+                                    flush!();
+                                    pieces.push(piece);
+                                    continue;
+                                }
                                 return Err(self.dollar());
                             }
                             Some('$') => {
@@ -897,7 +1077,14 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
-                '$' if self.opens_expansion(false) => return Err(self.dollar()),
+                '$' if self.opens_expansion(false) => {
+                    if let Some(piece) = self.assigned_expansion()? {
+                        flush!();
+                        pieces.push(piece);
+                        continue;
+                    }
+                    return Err(self.dollar());
+                }
                 '$' => {
                     text.push('$');
                     self.bump();
@@ -972,6 +1159,102 @@ impl<'a> Scan<'a> {
         Ok(pieces)
     }
 
+    /// The `$NAME`, `${NAME}` or `$(source)` at the cursor, where the word is the value of an
+    /// assignment in front of a program and the line was compiled to allow it. The cursor is left
+    /// after it. `None` leaves the cursor where it was, and the caller refuses the `$` as ever.
+    ///
+    /// Only a plain name or a brace holding exactly one, and a single-parenthesis substitution:
+    /// `$1`, `${X:-y}`, `${#X}`, `$((…))` and the rest are not this and stay refused.
+    fn assigned_expansion(&mut self) -> Result<Option<Piece>, Refused> {
+        if !self.assign_word || self.expansions != Expansions::Assignments {
+            return Ok(None);
+        }
+        let name_at = |scan: &Self, from: usize| {
+            let mut n = from;
+            if !scan
+                .ahead(n)
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            {
+                return None;
+            }
+            let mut name = String::new();
+            while let Some(c) = scan
+                .ahead(n)
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            {
+                name.push(c);
+                n += 1;
+            }
+            Some((name, n))
+        };
+        match self.ahead(1) {
+            Some('{') => {
+                let Some((name, n)) = name_at(self, 2) else {
+                    return Ok(None);
+                };
+                if self.ahead(n) != Some('}') {
+                    return Ok(None);
+                }
+                self.at += n + 1;
+                Ok(Some(Piece::Variable(name)))
+            }
+            Some('(') if self.ahead(2) != Some('(') => {
+                let start = self.offset();
+                self.at += 2;
+                let from = self.offset();
+                let mut depth = 1usize;
+                loop {
+                    let at = self.offset();
+                    match self.bump() {
+                        None => {
+                            return Err(
+                                self.refuse(Span::new(start, self.offset()), Reason::Unclosed('('))
+                            );
+                        }
+                        Some('\\') => {
+                            self.bump();
+                        }
+                        Some(quote @ ('\'' | '"')) => loop {
+                            match self.bump() {
+                                None => {
+                                    return Err(self.refuse(
+                                        Span::new(start, self.offset()),
+                                        Reason::Unclosed(quote),
+                                    ));
+                                }
+                                Some('\\') if quote == '"' => {
+                                    self.bump();
+                                }
+                                Some(c) if c == quote => break,
+                                Some(_) => {}
+                            }
+                        },
+                        Some('(') => depth += 1,
+                        Some(')') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let source =
+                                    self.line.get(from..at).unwrap_or_default().to_string();
+                                return Ok(Some(Piece::Substitution {
+                                    source,
+                                    offset: from,
+                                }));
+                            }
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            _ => match name_at(self, 1) {
+                Some((name, n)) => {
+                    self.at += n;
+                    Ok(Some(Piece::Variable(name)))
+                }
+                None => Ok(None),
+            },
+        }
+    }
+
     /// Whether the `$` at the cursor begins an expansion, as a POSIX shell reads it.
     ///
     /// A `$` followed by anything else, or by nothing, is an ordinary character and nothing is
@@ -997,6 +1280,9 @@ impl<'a> Scan<'a> {
         let reason = match (self.ahead(1), self.ahead(2)) {
             (Some('('), Some('(')) => Reason::Arithmetic,
             (Some('('), _) => Reason::CommandSubstitution,
+            (Some('?'), _) => Reason::ExitStatus,
+            (Some('$' | '@' | '*' | '#' | '-' | '!'), _) => Reason::SpecialParameter,
+            (Some('\'' | '"'), _) => Reason::DollarQuote,
             _ => Reason::Variable,
         };
         self.bump();
@@ -1005,6 +1291,10 @@ impl<'a> Scan<'a> {
         match self.peek() {
             Some('(') => self.take_until(')'),
             Some('{') => self.take_until('}'),
+            Some('?' | '$' | '@' | '*' | '#' | '-' | '!') => {
+                self.bump();
+            }
+            Some(quote @ ('\'' | '"')) => self.take_quoted(quote),
             _ => {
                 while self.peek().is_some_and(|c| c.is_alphanumeric() || c == '_') {
                     self.bump();
@@ -1012,6 +1302,20 @@ impl<'a> Scan<'a> {
             }
         }
         self.refuse(Span::new(start, self.offset()), reason)
+    }
+
+    /// Consume a quoted text opening at the cursor, up to and including its closing quote, or to
+    /// the end of the line. A backslash keeps the character after it inside the text, so an
+    /// escaped quote does not end it.
+    fn take_quoted(&mut self, quote: char) {
+        self.bump();
+        while let Some(c) = self.bump() {
+            if c == '\\' {
+                self.bump();
+            } else if c == quote {
+                break;
+            }
+        }
     }
 
     /// A refusal for the backtick at the cursor.
@@ -1302,11 +1606,30 @@ impl<'a> Parser<'a> {
                     if words.is_empty()
                         && let Some((name, value)) = split_assignment(&word)
                     {
-                        let value = literal_of(&value)
-                            .ok_or_else(|| self.refuse(word.span, Reason::AssignmentValue))?;
+                        let (value, computed) = match literal_of(&value) {
+                            Some(value) => (value, None),
+                            // Only a scan that allowed it holds a variable or a substitution,
+                            // and only beside text and one another: a pattern, a brace or a `~`
+                            // in the value is refused as it always was.
+                            None if value.iter().all(|piece| {
+                                matches!(
+                                    piece,
+                                    Piece::Text(_)
+                                        | Piece::Variable(_)
+                                        | Piece::Substitution { .. }
+                                )
+                            }) =>
+                            {
+                                (String::new(), Some(value))
+                            }
+                            None => {
+                                return Err(self.refuse(word.span, Reason::AssignmentValue));
+                            }
+                        };
                         assignments.push(Assignment {
                             name,
                             value,
+                            computed,
                             span: word.span,
                         });
                         continue;
@@ -1378,6 +1701,9 @@ impl<'a> Parser<'a> {
             if let Some(found) = SHELL_STATE.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::ShellState(found)));
             }
+            if let Some(found) = SHELL_BUILTINS.iter().find(|word| **word == name) {
+                return Err(self.refuse(program.span, Reason::ShellBuiltin(found)));
+            }
             if let Some(found) = CONTROL_FLOW.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::ControlFlow(found)));
             }
@@ -1421,6 +1747,16 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         text: render(&word.pieces),
         reason,
     };
+
+    // A value worked out at spawn belongs to an assignment and to nothing a word can be expanded
+    // for: no scan puts one anywhere else, and this is the stop if one ever arrives.
+    if word
+        .pieces
+        .iter()
+        .any(|piece| matches!(piece, Piece::Variable(_) | Piece::Substitution { .. }))
+    {
+        return Err(refused(Reason::AssignmentValue));
+    }
 
     // Counted before anything is built, so the bound limits the work rather than only the answer.
     let count = alternative_count(&word.pieces);
@@ -1488,6 +1824,9 @@ fn is_pattern(piece: &Piece) -> bool {
         // check further down instead of by the rule that means to hold them.
         Piece::Alternatives(branches) => branches.iter().flatten().any(is_pattern),
         Piece::Text(_) | Piece::Range { .. } | Piece::Home => false,
+        // Neither is looked up on disk; the compile refuses one outside an assignment before a
+        // walk could be asked about it.
+        Piece::Variable(_) | Piece::Substitution { .. } => false,
     }
 }
 
@@ -1525,6 +1864,16 @@ fn render(pieces: &[Piece]) -> String {
                 out.push('}');
             }
             Piece::Home => out.push('~'),
+            Piece::Variable(name) => {
+                out.push_str("${");
+                out.push_str(name);
+                out.push('}');
+            }
+            Piece::Substitution { source, .. } => {
+                out.push_str("$(");
+                out.push_str(source);
+                out.push(')');
+            }
         }
     }
     out
@@ -1816,7 +2165,11 @@ fn atoms(part: &[Piece]) -> Vec<Atom<'_>> {
             Piece::Any | Piece::Tree => out.push(Atom::Star),
             Piece::Class(body) => out.push(Atom::Class(body)),
             // Braces are gone before a pattern is walked, and a `~` is a path by then.
-            Piece::Alternatives(_) | Piece::Range { .. } | Piece::Home => {}
+            Piece::Alternatives(_)
+            | Piece::Range { .. }
+            | Piece::Home
+            | Piece::Variable(_)
+            | Piece::Substitution { .. } => {}
         }
     }
     out
@@ -1920,7 +2273,19 @@ pub fn compile(
     home: Option<&Path>,
     rules: &mut Rules<'_>,
 ) -> Result<Plan, Stopped> {
-    let node = parse(line)?;
+    compile_with(line, directory, home, rules, Expansions::Refused)
+}
+
+/// [`compile`], with `expansions` saying whether the assignment prefix may hold a variable or a
+/// substitution. Only bypass mode passes [`Expansions::Assignments`].
+pub fn compile_with(
+    line: &str,
+    directory: &Path,
+    home: Option<&Path>,
+    rules: &mut Rules<'_>,
+    expansions: Expansions,
+) -> Result<Plan, Stopped> {
+    let node = parse_with(line, expansions)?;
     let mut compiler = Compiler {
         directory,
         home,
@@ -1951,37 +2316,103 @@ pub fn compile(
 ///
 /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
 pub fn display_as_written(plan: &Plan) -> String {
-    let Ok(node) = parse(&plan.line) else {
+    // The plan was compiled from this line, so a value worked out at spawn is there to be read
+    // past, whichever mode compiled it. Nothing here runs it.
+    let Ok(node) = parse_with(&plan.line, Expansions::Assignments) else {
         return plan.line.clone();
     };
     let mut written = Vec::new();
-    operands_as_written(&node, &mut written);
+    let mut targets = Vec::new();
+    operands_as_written(&node, &mut written, &mut targets);
     plan.steps
-        .display_with_operands(&written)
+        .display_with_operands(&written, &targets)
         .unwrap_or_else(|| plan.line.clone())
 }
 
-/// Each command's operands as the line spelled them, in the order the compiler builds its steps.
-fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>) {
-    let command = |command: &Command, out: &mut Vec<Vec<String>>| {
-        out.push(
-            command.words[1..]
-                .iter()
-                .map(|word| match word.pieces.iter().any(is_pattern) {
-                    true => render(&word.pieces),
-                    false => bravebot_core::command::quoted(&render(&word.pieces)),
-                })
-                .collect(),
-        );
+/// The plan with each pattern in the line left as the line wrote it, in place of the names it
+/// matched, for a question about what the line could do that must not turn on a directory listing.
+///
+/// A word with no pattern stands for what it expands to, which reads nothing from disk. A plan
+/// whose steps this walk cannot pair with the line's commands comes back as `None`, and the caller
+/// answers for a plan nothing is known about. Not a plan to run.
+pub fn plan_as_written(plan: &Plan, home: Option<&Path>) -> Option<Plan> {
+    let node = parse_with(&plan.line, Expansions::Assignments).ok()?;
+    let mut written = Vec::new();
+    unexpanded_operands(&node, &plan.directory, home, &mut written)?;
+    Some(Plan {
+        steps: plan.steps.with_operands(&written)?,
+        ..plan.clone()
+    })
+}
+
+/// Each command's operands with a pattern kept as written, in the order the compiler builds its
+/// steps. `None` where a word cannot be expanded.
+fn unexpanded_operands(
+    node: &Node,
+    directory: &Path,
+    home: Option<&Path>,
+    out: &mut Vec<Vec<String>>,
+) -> Option<()> {
+    let command = |command: &Command, out: &mut Vec<Vec<String>>| -> Option<()> {
+        let mut operands = Vec::new();
+        for word in &command.words[1..] {
+            match word.pieces.iter().any(is_pattern) {
+                true => operands.push(render(&word.pieces)),
+                false => operands.extend(expand(word, directory, home).ok()?),
+            }
+        }
+        out.push(operands);
+        Some(())
     };
     match node {
         Node::Command(one) => command(one, out),
-        Node::Pipeline(commands) => commands.iter().for_each(|one| command(one, out)),
+        Node::Pipeline(commands) => commands.iter().try_for_each(|one| command(one, out)),
         Node::Join { left, right, .. } => {
-            operands_as_written(left, out);
-            operands_as_written(right, out);
+            unexpanded_operands(left, directory, home, out)?;
+            unexpanded_operands(right, directory, home, out)
         }
-        Node::Group(inner) => operands_as_written(inner, out),
+        Node::Group(inner) => unexpanded_operands(inner, directory, home, out),
+    }
+}
+
+/// Each command's operands, and the files its redirections name, as the line spelled them, in the
+/// order the compiler builds its steps. A redirection that names no file adds nothing to the second
+/// list.
+fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>, targets: &mut Vec<Vec<String>>) {
+    let command =
+        |command: &Command, out: &mut Vec<Vec<String>>, targets: &mut Vec<Vec<String>>| {
+            out.push(
+                command.words[1..]
+                    .iter()
+                    .map(|word| match word.pieces.iter().any(is_pattern) {
+                        true => render(&word.pieces),
+                        false => bravebot_core::command::quoted(&render(&word.pieces)),
+                    })
+                    .collect(),
+            );
+            targets.push(
+                command
+                    .redirections
+                    .iter()
+                    .filter_map(|redirection| match redirection {
+                        Redirection::Stdout { target, .. }
+                        | Redirection::Stdin { target }
+                        | Redirection::Stderr { target, .. }
+                        | Redirection::Both { target } => Some(target),
+                        Redirection::StderrToStdout => None,
+                    })
+                    .map(|target| bravebot_core::command::quoted(&render(&target.pieces)))
+                    .collect(),
+            );
+        };
+    match node {
+        Node::Command(one) => command(one, out, targets),
+        Node::Pipeline(commands) => commands.iter().for_each(|one| command(one, out, targets)),
+        Node::Join { left, right, .. } => {
+            operands_as_written(left, out, targets);
+            operands_as_written(right, out, targets);
+        }
+        Node::Group(inner) => operands_as_written(inner, out, targets),
     }
 }
 
@@ -2042,11 +2473,11 @@ impl Compiler<'_, '_> {
 
         // Before the name is looked up, so that the answer does not depend on whether the editor
         // in question happens to be installed on this machine.
-        if let Some(alternative) = wants_a_terminal(program, command) {
+        if let Some(reason) = wants_a_terminal(program, command) {
             return Err(Refused {
                 span: command.span,
                 text: program.clone(),
-                reason: Reason::Interactive(alternative),
+                reason,
             }
             .into());
         }
@@ -2098,17 +2529,86 @@ impl Compiler<'_, '_> {
             routes.push(self.route(redirection)?);
         }
 
+        let mut environment = Vec::new();
+        let mut expansions = Vec::new();
+        for assignment in &command.assignments {
+            match &assignment.computed {
+                None => environment.push((assignment.name.clone(), assignment.value.clone())),
+                Some(pieces) => expansions.push(self.expansion(assignment, pieces)?),
+            }
+        }
+
         Ok(Step {
             program: program.clone(),
             resolved,
             started_as,
             args,
-            environment: command
-                .assignments
-                .iter()
-                .map(|assignment| (assignment.name.clone(), assignment.value.clone()))
-                .collect(),
+            environment,
+            expansions,
             routes,
+        })
+    }
+
+    /// An assignment whose value is worked out when its step starts, as its source.
+    ///
+    /// A variable the run withholds from programs is refused here, by name. A substitution is
+    /// parsed and compiled as any line is, with its own redirections, rules and program lookup, and
+    /// with expansions refused so that one inside it is the refusal it always was. Its steps run
+    /// before the step that uses it. Nothing here reads a variable or runs anything.
+    fn expansion(
+        &mut self,
+        assignment: &Assignment,
+        pieces: &[Piece],
+    ) -> Result<Expansion, Stopped> {
+        let mut parts: Vec<ValuePart> = Vec::new();
+        for piece in pieces {
+            match piece {
+                Piece::Text(text) => match parts.last_mut() {
+                    Some(ValuePart::Text(last)) => last.push_str(text),
+                    _ => parts.push(ValuePart::Text(text.clone())),
+                },
+                Piece::Variable(name) => {
+                    if bravebot_config::scrub::withheld()
+                        .iter()
+                        .any(|withheld| withheld.eq_ignore_ascii_case(name))
+                    {
+                        return Err(Refused {
+                            span: assignment.span,
+                            text: format!("${name}"),
+                            reason: Reason::WithheldVariable(name.clone()),
+                        }
+                        .into());
+                    }
+                    parts.push(ValuePart::Variable(name.clone()));
+                }
+                Piece::Substitution { source, offset } => {
+                    let node = parse_with(source, Expansions::Refused).map_err(|inner| {
+                        // The inner line's offsets are its own; the outer line's are what a
+                        // reader can point at.
+                        Refused {
+                            span: Span::new(inner.span.start + offset, inner.span.end + offset),
+                            ..inner
+                        }
+                    })?;
+                    let steps = self.node(&node)?;
+                    parts.push(ValuePart::Substitution {
+                        source: source.clone(),
+                        steps: Box::new(steps),
+                    });
+                }
+                _ => {
+                    return Err(Refused {
+                        span: assignment.span,
+                        text: render(pieces),
+                        reason: Reason::AssignmentValue,
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(Expansion {
+            name: assignment.name.clone(),
+            parts,
         })
     }
 
@@ -2190,7 +2690,7 @@ impl Compiler<'_, '_> {
 /// A convenience rather than a guarantee. Something interactive that is not named here reaches
 /// the deadline and comes back with what it printed, which is the same outcome by a slower road,
 /// so this list is allowed to be short and is not a safety property.
-fn wants_a_terminal(program: &str, command: &Command) -> Option<&'static str> {
+fn wants_a_terminal(program: &str, command: &Command) -> Option<Reason> {
     let name = Path::new(program)
         .file_name()?
         .to_string_lossy()
@@ -2201,33 +2701,31 @@ fn wants_a_terminal(program: &str, command: &Command) -> Option<&'static str> {
         .collect();
     match name.as_str() {
         "vi" | "vim" | "nvim" | "emacs" | "nano" | "pico" | "ed" | "micro" | "helix" | "hx"
-        | "kak" => Some(
-            "an editor needs a terminal. Use `edit_file`, or a program that takes what it needs on the command line",
-        ),
-        "less" | "more" | "most" => Some(
+        | "kak" => Some(Reason::Editor),
+        "less" | "more" | "most" => Some(Reason::Interactive(
             "a pager needs a terminal. Narrow the output in the line instead, with `head`, `tail` or `sed -n`",
-        ),
-        "top" | "htop" | "btop" => {
-            Some("this draws over a terminal. Ask for one reading instead, such as `ps`")
-        }
+        )),
+        "top" | "htop" | "btop" => Some(Reason::Interactive(
+            "this draws over a terminal. Ask for one reading instead, such as `ps`",
+        )),
         "git" => git_wants_a_terminal(&args),
         _ => None,
     }
 }
 
-fn git_wants_a_terminal(args: &[String]) -> Option<&'static str> {
+fn git_wants_a_terminal(args: &[String]) -> Option<Reason> {
     let subcommand = args.iter().find(|arg| !arg.starts_with('-'))?;
     let has = |flags: &[&str]| args.iter().any(|arg| flags.contains(&arg.as_str()));
     match subcommand.as_str() {
-        "rebase" if has(&["-i", "--interactive"]) => Some(
+        "rebase" if has(&["-i", "--interactive"]) => Some(Reason::Interactive(
             "`git rebase -i` opens an editor. Name the rewrite outright, with `--onto` or an explicit sequence",
-        ),
-        "add" if has(&["-i", "--interactive", "-p", "--patch"]) => {
-            Some("`git add -i` and `git add -p` need a terminal. Name the paths to stage instead")
-        }
-        "commit" if !carries_a_message(args) => {
-            Some("`git commit` with no message opens an editor. Pass `-m`")
-        }
+        )),
+        "add" if has(&["-i", "--interactive", "-p", "--patch"]) => Some(Reason::Interactive(
+            "`git add -i` and `git add -p` need a terminal. Name the paths to stage instead",
+        )),
+        "commit" if !carries_a_message(args) => Some(Reason::Interactive(
+            "`git commit` with no message opens an editor. Pass `-m`",
+        )),
         _ => None,
     }
 }
@@ -2255,12 +2753,21 @@ fn names_a_terminal(path: &Path) -> bool {
 }
 
 /// Whether a `git commit` was given its message rather than left to ask for one.
+///
+/// A plain `--fixup=<commit>` or `--fixup <commit>` supplies its own message, `fixup! <subject>`,
+/// and opens no editor. `--fixup=amend:<commit>` and `--fixup=reword:<commit>` (and the same
+/// values after a separate `--fixup`) open an editor on the commit's message, so they carry a
+/// message only when another source is given. `--squash` opens an editor and is not counted.
 fn carries_a_message(args: &[String]) -> bool {
-    args.iter().any(|arg| {
+    let plain_fixup =
+        |commit: &str| !commit.starts_with("amend:") && !commit.starts_with("reword:");
+    args.iter().enumerate().any(|(at, arg)| {
         arg == "--no-edit"
             || arg.starts_with("--message")
             || arg.starts_with("--file")
             || arg.starts_with("--reuse-message")
+            || arg.strip_prefix("--fixup=").is_some_and(plain_fixup)
+            || (arg == "--fixup" && args.get(at + 1).is_some_and(|commit| plain_fixup(commit)))
             // A bundled short flag carries its letters, so `-am` is a message as surely as `-m`.
             || (arg.starts_with('-')
                 && !arg.starts_with("--")
@@ -2569,28 +3076,112 @@ mod tests {
     }
 
     /// What follows a `$` still decides: a name, a brace, a parenthesis, a special parameter, or
-    /// outside double quotes a quote, each stays refused, in or out of quotes.
+    /// outside double quotes a quote, each stays refused, in or out of quotes. The reason says which
+    /// of them it was, since what to do instead differs.
     #[test]
     fn a_dollar_that_opens_an_expansion_is_still_refused() {
-        for line in [
-            r#"echo "$HOME""#,
-            r#"echo "a$_b""#,
-            r#"echo "$1""#,
-            r#"echo "$?""#,
-            r#"echo "$@""#,
-            r#"echo "${HOME}""#,
-            r#"echo "$$""#,
-            "echo $'a'",
-            r#"echo $"a""#,
-            "echo $?",
+        for (line, reason) in [
+            (r#"echo "$HOME""#, Reason::Variable),
+            (r#"echo "a$_b""#, Reason::Variable),
+            (r#"echo "$1""#, Reason::Variable),
+            (r#"echo "$?""#, Reason::ExitStatus),
+            (r#"echo "$@""#, Reason::SpecialParameter),
+            (r#"echo "${HOME}""#, Reason::Variable),
+            (r#"echo "$$""#, Reason::SpecialParameter),
+            ("echo $*", Reason::SpecialParameter),
+            ("echo $#", Reason::SpecialParameter),
+            ("echo $-", Reason::SpecialParameter),
+            ("echo $!", Reason::SpecialParameter),
+            ("echo $'a'", Reason::DollarQuote),
+            (r#"echo $"a""#, Reason::DollarQuote),
+            ("echo $?", Reason::ExitStatus),
         ] {
-            assert_eq!(refused(line).reason, Reason::Variable, "{line}");
+            assert_eq!(refused(line).reason, reason, "{line}");
         }
         assert_eq!(
             refused(r#"echo "$(ls)""#).reason,
             Reason::CommandSubstitution
         );
         assert_eq!(refused(r#"echo "$((1))""#).reason, Reason::Arithmetic);
+    }
+
+    /// The exit status is already reported for each step of a run, so the refusal says so instead of
+    /// asking for a value that cannot be written out.
+    #[test]
+    fn the_exit_status_refusal_says_the_run_result_reports_each_steps_status() {
+        for line in ["true; echo $?", r#"echo "exit=$?""#] {
+            let said = refused(line).to_string();
+            assert!(
+                said.starts_with("`$?` at offset ")
+                    && said.ends_with(
+                        ": the exit status of an earlier step is not in the line, so the plan would not be in the line. The result of a run already says how each step ended. To pass the characters `$?` to a program, put them in single quotes"
+                    ),
+                "{line}: {said}"
+            );
+        }
+    }
+
+    /// No shell keeps a parameter between steps, so there is nothing to write out. The text can
+    /// still reach a program as one single-quoted argument.
+    #[test]
+    fn the_special_parameter_refusal_says_no_parameters_are_kept_and_single_quotes_pass_the_text() {
+        for parameter in ["$$", "$@", "$*", "$#", "$-", "$!"] {
+            let said = refused(&format!("echo {parameter}")).to_string();
+            assert_eq!(
+                said,
+                format!(
+                    "`{parameter}` at offset 5: no shell holds parameters between the steps of a line, so there is no value for this to stand for. To pass the text to a program, write it inside single quotes as one argument"
+                )
+            );
+        }
+    }
+
+    /// `$'…'` is a quoting form and holds no missing value, so the refusal says that escapes are
+    /// not read and where a newline comes from, and does not ask for a value.
+    #[test]
+    fn the_dollar_quote_refusal_says_escapes_are_not_read_and_a_newline_comes_from_a_file() {
+        for (line, text) in [
+            (r"echo $'a\nb'", r"$'a\nb'"),
+            (r#"echo $"a b""#, r#"$"a b""#),
+        ] {
+            let said = refused(line).to_string();
+            assert_eq!(
+                said,
+                format!(
+                    "`{text}` at offset 5: a quote after a `$` asks a shell to read escapes in the text, and escapes are not read here. Write the text in plain quotes, and where it holds a newline, take the text from a file or from standard input"
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// The refusal names the whole construct, as it does for `$HOME`, `${HOME}` and `$(ls)`, so the
+    /// reader is pointed at `$?` and not at a dollar sign to go looking for.
+    #[test]
+    fn a_refused_special_parameter_or_quoted_text_is_named_whole() {
+        for (line, text, offset) in [
+            ("echo $?", "$?", 5),
+            ("echo $$", "$$", 5),
+            ("echo $@", "$@", 5),
+            ("echo $*", "$*", 5),
+            ("echo $#", "$#", 5),
+            ("echo $-", "$-", 5),
+            ("echo $!", "$!", 5),
+            (r#"echo "a $? b""#, "$?", 8),
+            (r"echo $'a\nb' c", r"$'a\nb'", 5),
+            (r#"echo $"a b" c"#, r#"$"a b""#, 5),
+            // The quoted text runs to the end of the line where it is never closed, as the other
+            // constructs do.
+            ("echo $'abc", "$'abc", 5),
+            // The parameter ends at its one character, so what follows is not part of the span.
+            ("true; echo $?x", "$?", 11),
+            // A backslash keeps the quote it escapes inside the span.
+            (r"echo $'it\'s' c", r"$'it\'s'", 5),
+        ] {
+            let refusal = refused(line);
+            assert_eq!(refusal.text, text, "{line}");
+            assert_eq!(refusal.span.start, offset, "{line}");
+        }
     }
 
     /// The refusals that remain say how to write a literal `$`, since the planner cannot guess it.
@@ -2697,6 +3288,128 @@ mod tests {
     #[test]
     fn a_word_that_only_looks_like_shell_state_is_not_refused() {
         for line in ["echo cd sub", "cdrecord x", "git -C sub status", "./cd sub"] {
+            parsed(line);
+        }
+    }
+
+    /// A shell builtin has no effect outside the shell that runs it, and a host may ship a program
+    /// of the name (macOS has `/usr/bin/ulimit`) that exits zero and changes nothing. Each word is
+    /// refused in every position a command can stand in, in every form including a read, whether or
+    /// not the host has such a program. An implementation that checks only the first stage of a
+    /// line, or only an unquoted word, or only the forms that set something, fails a row here.
+    #[test]
+    fn a_shell_builtin_is_refused_wherever_it_stands() {
+        for word in SHELL_BUILTINS {
+            for line in [
+                format!("{word} x"),
+                word.to_string(),
+                format!("{word} x && cat a.txt"),
+                format!("{word} x || cat a.txt"),
+                format!("{word} x ; cat a.txt"),
+                format!("cat a.txt && {word} x"),
+                format!("cat a.txt | {word} x"),
+                format!("({word} x && cat a.txt)"),
+                format!("FOO=1 {word} x"),
+                format!("'{word}' x"),
+                format!("\"{word}\" x"),
+            ] {
+                match refused(&line).reason {
+                    Reason::ShellBuiltin(found) => assert_eq!(found, word, "`{line}`"),
+                    other => panic!("`{line}` was refused as {other:?}, not as a shell builtin"),
+                }
+            }
+        }
+        // The read forms are refused as the set forms are.
+        for line in ["ulimit -a", "ulimit -n", "umask", "umask -S"] {
+            assert!(
+                matches!(refused(line).reason, Reason::ShellBuiltin(_)),
+                "`{line}` was not refused"
+            );
+        }
+    }
+
+    /// The reproduction of the report: a limit set in one step and read in the next. The refusal
+    /// names `ulimit`, says the step changes nothing for the steps after it, and says to write the
+    /// whole line as `sh -c`. It gives neither the `directory` argument nor the `NAME=value` advice,
+    /// which are true of `cd` and `export` and not of a limit, and does not blame `$PATH`.
+    #[test]
+    fn the_ulimit_refusal_says_to_put_the_whole_line_in_sh_c() {
+        let said = refused("ulimit -n 100 && sh -c 'ulimit -n'").to_string();
+        for part in [
+            "`ulimit`",
+            "change nothing for the steps after it",
+            "`sh -c '... ulimit ...'`",
+            "approved as one line",
+        ] {
+            assert!(said.contains(part), "the refusal lacks `{part}`: {said}");
+        }
+        for part in ["`directory` argument", "NAME=value", "$PATH"] {
+            assert!(!said.contains(part), "the refusal says `{part}`: {said}");
+        }
+        let again = refused("ulimit -n 10240 && cargo test").to_string();
+        assert!(again.contains("`sh -c '... ulimit ...'`"), "{again}");
+    }
+
+    /// The other builtins get wording that is true of them: a mask is read and set inside `sh -c`
+    /// as a limit is, an alias is not seen by other steps and is not expanded in a script, and the
+    /// rest only mean something inside one shell. None of them is told to set a limit, a directory
+    /// or a variable.
+    #[test]
+    fn the_other_builtin_refusals_say_what_is_true_of_them() {
+        let umask = refused("umask 077 && touch f").to_string();
+        assert!(
+            umask.contains("`umask`")
+                && umask.contains("`sh -c '... umask ...'`")
+                && !umask.contains("ulimit"),
+            "{umask}"
+        );
+        for word in ["alias", "unalias"] {
+            let said = refused(&format!("{word} x && cat a.txt")).to_string();
+            assert!(
+                said.contains(&format!("`{word}`"))
+                    && said.contains("change nothing for the steps after it")
+                    && said.contains("not seen by the other steps")
+                    && said.contains("does not expand aliases in a non-interactive script")
+                    && said.contains("write the command out")
+                    && !said.contains("`sh -c '...'`")
+                    && !said.contains("ulimit")
+                    && !said.contains("`directory` argument")
+                    && !said.contains("NAME=value"),
+                "{said}"
+            );
+        }
+        for word in ["unset", "hash", "wait"] {
+            let said = refused(&format!("{word} x && cat a.txt")).to_string();
+            assert!(
+                said.contains(&format!("`{word}`"))
+                    && said.contains("change nothing for the steps after it")
+                    && said.contains("`sh -c '...'`")
+                    && !said.contains("ulimit")
+                    && !said.contains("`directory` argument")
+                    && !said.contains("NAME=value"),
+                "{said}"
+            );
+        }
+    }
+
+    /// A program that only looks like a builtin, or holds its name as an operand, or is the
+    /// builtin inside `sh -c`, is an ordinary line. An implementation that refuses any word that
+    /// starts with `ulimit` fails on `ulimits`, one that refuses a line holding the word anywhere
+    /// fails on `echo ulimit -n 5` and `ls umask`, one that compares the last path component fails
+    /// on `./ulimit`, and one that refuses `sh -c` lines holding the word fails on the recommended
+    /// spelling.
+    #[test]
+    fn a_word_that_only_looks_like_a_shell_builtin_is_not_refused() {
+        for line in [
+            "echo ulimit -n 5",
+            "ulimits x",
+            "./ulimit -n 5",
+            "ls umask",
+            "git wait",
+            "hashsum x",
+            "sh -c 'ulimit -n 100 && ulimit -n'",
+            "sh -c 'umask 077 && touch f'",
+        ] {
             parsed(line);
         }
     }
@@ -3287,6 +4000,32 @@ mod tests {
         assert_eq!(told, expected);
     }
 
+    /// What the planner is told of a line names the file of each redirection as the line wrote it.
+    /// The plan holds that file joined onto the directory the line landed in, which is where a
+    /// link led, and the person's plan still draws it.
+    ///
+    /// Rejects an implementation that tells the plan's joined path, drops the redirection, or
+    /// pairs a target with the wrong step.
+    #[test]
+    fn a_redirection_is_told_to_the_planner_with_its_file_as_it_was_written() {
+        let tree = Tree::new("told-redirection-as-written");
+        tree.executable("bin/ls").file("a.txt");
+        let line = "./bin/ls a.txt > out.txt 2>&1 && ./bin/ls < a.txt >> 'log file.txt'";
+        let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
+
+        let shown = plan.display();
+        let told = display_as_written(&plan);
+
+        let root = tree.root.display().to_string();
+        assert!(
+            shown.contains(&format!("{root}/out.txt")),
+            "the person's plan lost the landed file: {shown}"
+        );
+        let bin = tree.root.join("bin/ls").display().to_string();
+        let expected = format!("{bin} a.txt > out.txt 2>&1 && {bin} < a.txt >> 'log file.txt'");
+        assert_eq!(told, expected);
+    }
+
     /// A compile with no rules in play, which is what a settings file holding none says.
     ///
     /// Spelled out at every call rather than defaulted, because a compile that could be asked for
@@ -3304,6 +4043,263 @@ mod tests {
         match compile(line, at, None, &mut without_rules).expect_err("should have been refused") {
             Stopped::Compile(refused) => refused,
             Stopped::Rule(denial) => panic!("`{line}` was refused by a rule: {denial}"),
+        }
+    }
+
+    /// A compile as bypass mode does it, where an assignment's value may be worked out at spawn.
+    fn bypass_compile(line: &str, at: &Path) -> Result<Plan, Stopped> {
+        compile_with(line, at, None, &mut without_rules, Expansions::Assignments)
+    }
+
+    fn bypass_compiled(line: &str, at: &Path) -> Plan {
+        bypass_compile(line, at)
+            .unwrap_or_else(|e| panic!("`{line}` should compile in bypass, and was refused: {e}"))
+    }
+
+    fn bypass_refused(line: &str, at: &Path) -> Refused {
+        match bypass_compile(line, at).expect_err("should have been refused in bypass") {
+            Stopped::Compile(refused) => refused,
+            Stopped::Rule(denial) => panic!("`{line}` was refused by a rule: {denial}"),
+        }
+    }
+
+    /// Outside bypass mode every spelling of a computed assignment value is the refusal it always
+    /// was, so the relaxation cannot leak into a mode that has not asked for it.
+    #[test]
+    fn bypass_expansions_are_refused_outside_bypass_mode() {
+        let tree = Tree::new("bypass-off");
+        tree.executable("bin/cmd");
+        for (line, reason) in [
+            ("FOO=$X ./bin/cmd", Reason::Variable),
+            ("FOO=${X} ./bin/cmd", Reason::Variable),
+            (
+                "FOO=\"$(./bin/cmd)\" ./bin/cmd",
+                Reason::CommandSubstitution,
+            ),
+            ("FOO=$(./bin/cmd) ./bin/cmd", Reason::CommandSubstitution),
+        ] {
+            assert_eq!(compile_refused(line, &tree.root).reason, reason, "{line}");
+        }
+    }
+
+    /// The accepted forms keep only the source in the plan: the variable's name or the inner
+    /// command, never a value, in the step, its Debug and its display.
+    #[test]
+    fn bypass_assignment_variables_are_kept_as_source() {
+        let tree = Tree::new("bypass-var");
+        tree.executable("bin/cmd");
+        for line in [
+            "FOO=$X ./bin/cmd",
+            "FOO=${X} ./bin/cmd",
+            "FOO=a-$X-b ./bin/cmd",
+            "FOO=\"a $X b\" ./bin/cmd",
+            "FOO=$X BAR=${Y} ./bin/cmd",
+        ] {
+            let plan = bypass_compiled(line, &tree.root);
+            let steps = plan.steps.steps();
+            assert_eq!(steps.len(), 1, "{line}");
+            assert!(steps[0].environment.is_empty(), "{line}");
+            assert!(!steps[0].expansions.is_empty(), "{line}");
+            let shown = plan.display();
+            assert!(
+                shown.contains("$X") || shown.contains("${X}"),
+                "{line}: {shown}"
+            );
+            assert!(format!("{plan:?}").contains("Variable(\"X\")"), "{line}");
+        }
+        let plan = bypass_compiled("FOO=a-$X-b ./bin/cmd", &tree.root);
+        assert_eq!(
+            plan.steps.steps()[0].expansions[0].parts,
+            [
+                ValuePart::Text("a-".to_string()),
+                ValuePart::Variable("X".to_string()),
+                ValuePart::Text("-b".to_string()),
+            ]
+        );
+        let two = bypass_compiled("FOO=$X BAR=${Y} LIT=plain ./bin/cmd", &tree.root);
+        let step = two.steps.steps()[0];
+        assert_eq!(step.expansions.len(), 2);
+        assert_eq!(step.environment, [("LIT".to_string(), "plain".to_string())]);
+    }
+
+    /// `NAME="$(cmd)"` and `NAME=$(cmd)` compile `cmd` as an earlier stage with the usual
+    /// resolution, so the plan holds its step, ahead of the step that uses it.
+    #[test]
+    fn bypass_assignment_substitution_runs_as_an_earlier_stage() {
+        let tree = Tree::new("bypass-sub");
+        tree.executable("bin/cmd").executable("bin/inner");
+        for line in [
+            "FOO=\"$(./bin/inner a 'b c')\" ./bin/cmd",
+            "FOO=$(./bin/inner a 'b c') ./bin/cmd",
+            "FOO=\"x-$(./bin/inner '(a)')-y\" ./bin/cmd",
+        ] {
+            let plan = bypass_compiled(line, &tree.root);
+            let programs: Vec<&str> = plan
+                .steps
+                .steps()
+                .iter()
+                .map(|step| step.program.as_str())
+                .collect();
+            assert_eq!(programs, ["./bin/inner", "./bin/cmd"], "{line}");
+        }
+        let plan = bypass_compiled("FOO=\"$(./bin/inner a)\" ./bin/cmd", &tree.root);
+        let ValuePart::Substitution { source, .. } = &plan.steps.steps()[1].expansions[0].parts[0]
+        else {
+            panic!("a substitution was expected");
+        };
+        assert_eq!(source, "./bin/inner a");
+        assert!(plan.display().contains("./bin/inner a"));
+    }
+
+    #[test]
+    fn bypass_assignment_may_precede_a_later_pipeline_stage_or_a_second_assignment() {
+        let tree = Tree::new("bypass-stage");
+        tree.executable("bin/a").executable("bin/b");
+        let plan = bypass_compiled("./bin/a | FOO=$X ./bin/b", &tree.root);
+        let steps = plan.steps.steps();
+        assert!(steps[0].expansions.is_empty());
+        assert_eq!(steps[1].expansions.len(), 1);
+        let plan = bypass_compiled("./bin/a && FOO=$X BAR=\"$(./bin/a)\" ./bin/b", &tree.root);
+        assert_eq!(plan.steps.steps().len(), 3);
+    }
+
+    /// Only the value of an assignment in front of a program is relaxed; every other `$` is the
+    /// refusal it was.
+    #[test]
+    fn bypass_leaves_every_other_expansion_refused() {
+        let tree = Tree::new("bypass-other");
+        tree.executable("bin/cmd");
+        for (line, reason) in [
+            ("./bin/cmd $X", Reason::Variable),
+            ("./bin/cmd ${X}", Reason::Variable),
+            ("./bin/cmd $(x)", Reason::CommandSubstitution),
+            ("./bin/cmd \"$X\"", Reason::Variable),
+            ("$X ./bin/cmd", Reason::Variable),
+            ("$(x) ./bin/cmd", Reason::CommandSubstitution),
+            ("FOO=$X $Y", Reason::Variable),
+            ("./bin/cmd FOO=$X", Reason::Variable),
+            ("./bin/cmd > $X", Reason::Variable),
+            ("FOO=$X ./bin/cmd > $Y", Reason::Variable),
+            ("FOO=*.rs ./bin/cmd", Reason::AssignmentValue),
+            ("FOO={a,b}$X ./bin/cmd", Reason::AssignmentValue),
+            ("FOO=$1 ./bin/cmd", Reason::Variable),
+            ("FOO=$? ./bin/cmd", Reason::ExitStatus),
+            ("FOO=$$ ./bin/cmd", Reason::SpecialParameter),
+            ("FOO=${X:-y} ./bin/cmd", Reason::Variable),
+            ("FOO=${#X} ./bin/cmd", Reason::Variable),
+            ("FOO=$((1+1)) ./bin/cmd", Reason::Arithmetic),
+            ("./bin/cmd; ./bin/cmd $X", Reason::Variable),
+        ] {
+            assert_eq!(bypass_refused(line, &tree.root).reason, reason, "{line}");
+        }
+    }
+
+    #[test]
+    fn bypass_refuses_backticks_everywhere_including_an_assignment_value() {
+        let tree = Tree::new("bypass-backtick");
+        tree.executable("bin/cmd");
+        for line in [
+            "FOO=`x` ./bin/cmd",
+            "FOO=\"`x`\" ./bin/cmd",
+            "./bin/cmd `x`",
+            "FOO=\"$(`x`)\" ./bin/cmd",
+        ] {
+            let refused = bypass_refused(line, &tree.root);
+            assert_eq!(refused.reason, Reason::CommandSubstitution, "{line}");
+        }
+    }
+
+    /// A variable the run withholds from programs is refused when the line compiles, by name.
+    #[test]
+    fn bypass_refuses_a_withheld_variable() {
+        let tree = Tree::new("bypass-withheld");
+        tree.executable("bin/cmd");
+        for line in [
+            "FOO=$SERVICES_KEY_AICHAT ./bin/cmd",
+            "FOO=\"${BRAVE_SERVICES_KEY_ID}\" ./bin/cmd",
+            "FOO=x$services_key_aichat ./bin/cmd",
+        ] {
+            let refused = bypass_refused(line, &tree.root);
+            assert!(
+                matches!(refused.reason, Reason::WithheldVariable(_)),
+                "{line}: {refused:?}"
+            );
+            assert!(refused.reason.to_string().contains("withheld"));
+        }
+    }
+
+    /// A substitution inside a substitution is refused, and an inner failure is the inner reason.
+    #[test]
+    fn bypass_substitution_is_one_level_deep_and_inner_refusals_propagate() {
+        let tree = Tree::new("bypass-nested");
+        tree.executable("bin/cmd").executable("bin/inner");
+        let nested = bypass_refused(
+            "FOO=\"$(./bin/inner $(./bin/inner x))\" ./bin/cmd",
+            &tree.root,
+        );
+        assert_eq!(nested.reason, Reason::CommandSubstitution);
+        let variable = bypass_refused("FOO=\"$(./bin/inner $X)\" ./bin/cmd", &tree.root);
+        assert_eq!(variable.reason, Reason::Variable);
+        let inner_assignment =
+            bypass_refused("FOO=\"$(BAR=$X ./bin/inner)\" ./bin/cmd", &tree.root);
+        assert_eq!(inner_assignment.reason, Reason::Variable);
+        let missing = bypass_refused("FOO=\"$(./bin/missing)\" ./bin/cmd", &tree.root);
+        assert_eq!(missing.reason, Reason::NotAtPath);
+        let unclosed = bypass_refused("FOO=\"$(./bin/inner\" ./bin/cmd", &tree.root);
+        assert!(
+            matches!(unclosed.reason, Reason::Unclosed(_)),
+            "{unclosed:?}"
+        );
+    }
+
+    /// A rule that denies the inner command stops the line, as it would for a step of its own.
+    #[test]
+    fn bypass_substitution_is_judged_by_the_rules_like_any_step() {
+        let tree = Tree::new("bypass-rules");
+        tree.executable("bin/cmd").executable("bin/inner");
+        let mut asked = Vec::new();
+        let stopped = compile_with(
+            "FOO=\"$(./bin/inner x)\" ./bin/cmd",
+            &tree.root,
+            None,
+            &mut |program, args| {
+                asked.push((program.to_string(), args.to_vec()));
+                if program == "./bin/inner" {
+                    return Err(bravebot_core::policy::Denial {
+                        principle: bravebot_core::event::Principle::Capability,
+                        message: "a deny rule covers it".to_string(),
+                    });
+                }
+                Ok(())
+            },
+            Expansions::Assignments,
+        )
+        .expect_err("a denied inner command should stop the line");
+        assert!(matches!(stopped, Stopped::Rule(_)), "{stopped:?}");
+        assert_eq!(
+            asked,
+            [
+                ("./bin/cmd".to_string(), Vec::new()),
+                ("./bin/inner".to_string(), vec!["x".to_string()])
+            ],
+            "the using step is asked first, then the inner command with its own argv"
+        );
+    }
+
+    /// Single quotes keep `$` as text in both modes; nothing is expanded.
+    #[test]
+    fn a_single_quoted_dollar_in_an_assignment_is_literal_text() {
+        let tree = Tree::new("bypass-single");
+        tree.executable("bin/cmd");
+        let off = compiled("FOO='$X $(y)' ./bin/cmd", &tree.root);
+        let on = bypass_compiled("FOO='$X $(y)' ./bin/cmd", &tree.root);
+        for plan in [off, on] {
+            let step = plan.steps.steps()[0];
+            assert_eq!(
+                step.environment,
+                [("FOO".to_string(), "$X $(y)".to_string())]
+            );
+            assert!(step.expansions.is_empty());
         }
     }
 
@@ -3342,6 +4338,45 @@ mod tests {
         let plan = compiled("(cat a ; head b) && wc c | cat", &tree.root);
         assert_eq!(plan.steps.steps().len(), 4);
         assert!(matches!(plan.steps, Steps::Join { .. }));
+    }
+
+    /// CMDLINE-17: the command inside `NAME="$(cmd)"` is a step of the plan, so a consumer that
+    /// counts or numbers `steps()` (the prompt's "N steps" and its rows) counts it. The operands
+    /// the planner is told are listed per command of the line and are paired with the commands of
+    /// the plan's shape, which the substituted command is not one of, so the pairing holds and the
+    /// assignment is told from its source. Rejects a pairing that walks `steps()` and so shifts
+    /// the outer command's operands onto the inner step (the told line then falls back to the
+    /// planner's own text or drops a later command's operands).
+    #[test]
+    fn a_plan_holding_a_substituted_command_is_still_paired_with_the_operands_of_the_line() {
+        let tree = Tree::new("told-substitution");
+        tree.executable("bin/cmd").executable("bin/inner");
+        tree.file("a.txt");
+        let bin = tree.root.join("bin/cmd").display().to_string();
+        for (line, expected) in [
+            (
+                "FOO=\"$(./bin/inner a)\" ./bin/cmd 'x y'",
+                format!("FOO=\"$(./bin/inner a)\" {bin} 'x y'"),
+            ),
+            (
+                "./bin/cmd y | FOO=$(./bin/inner a) ./bin/cmd *.txt && ./bin/cmd z",
+                format!("{bin} y | FOO=\"$(./bin/inner a)\" {bin} *.txt && {bin} z"),
+            ),
+        ] {
+            let plan = bypass_compiled(line, &tree.root);
+            assert_eq!(
+                plan.steps.steps().len(),
+                expected.matches(&bin).count() + 1,
+                "{line}"
+            );
+            assert_eq!(display_as_written(&plan), expected, "{line}");
+            let written = plan_as_written(&plan, None).unwrap_or_else(|| panic!("{line}"));
+            assert_eq!(
+                written.steps.steps().len(),
+                plan.steps.steps().len(),
+                "{line}"
+            );
+        }
     }
 
     /// By the time an argument is in a plan the only thing that ever split the line has already
@@ -3596,15 +4631,53 @@ mod tests {
             "git rebase -i HEAD~3",
             "git add -p",
             "git commit",
+            // `amend:` and `reword:` open an editor on the commit's message, and `--squash` does too.
+            "git commit --fixup=amend:HEAD",
+            "git commit --fixup=reword:HEAD",
+            "git commit --fixup amend:HEAD",
+            "git commit --fixup reword:HEAD",
+            "git commit --squash=HEAD",
+            // Nothing follows `--fixup`, so it names no commit and supplies no message.
+            "git commit --fixup",
         ] {
             assert!(
                 matches!(
                     compile_refused(line, &tree.root).reason,
-                    Reason::Interactive(_)
+                    Reason::Interactive(_) | Reason::Editor
                 ),
                 "`{line}` was not refused as interactive"
             );
         }
+    }
+
+    /// TOOL-6. The refusal of an editor names `edit_file` only where the turn's list holds it. A
+    /// list holding it reads the words the refusal always had. The regression it rejects is the
+    /// refusal naming the tool to a turn that was never offered it.
+    #[test]
+    fn the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it() {
+        let tree = Tree::new("editor-list");
+        let refused = compile_refused("vim notes.txt", &tree.root);
+        assert!(matches!(refused.reason, Reason::Editor));
+
+        let with = refused.said(true);
+        assert_eq!(with, refused.to_string(), "a full list reads other words");
+        assert_eq!(
+            with,
+            "`vim` at offset 0: an editor needs a terminal. Use `edit_file`, or a program that \
+             takes what it needs on the command line"
+        );
+
+        let without = refused.said(false);
+        assert!(!without.contains("edit_file"), "{without}");
+        assert_eq!(
+            without,
+            "`vim` at offset 0: an editor needs a terminal. Use a program that takes what it \
+             needs on the command line"
+        );
+
+        // A refusal that is not about an editor reads the same either way.
+        let pager = compile_refused("less notes.txt", &tree.root);
+        assert_eq!(pager.said(false), pager.to_string());
     }
 
     /// Standard input is empty so that a program reading it gets nothing rather than the terminal,
@@ -3660,7 +4733,20 @@ mod tests {
     #[test]
     fn the_same_program_without_the_interactive_part_is_not_refused() {
         let tree = Tree::new("noninteractive");
-        for line in ["git rebase --continue", "git add .", "git commit -m done"] {
+        for line in [
+            "git rebase --continue",
+            "git add .",
+            "git commit -m done",
+            // A plain fixup commit gets the message `fixup! <subject>` from git, in either spelling.
+            "git commit -a --fixup=HEAD",
+            "git commit --fixup HEAD",
+            "git commit -a --fixup=0a1b2c3d",
+            // `amend:` and `reword:` open an editor unless a message source is also given.
+            "git commit --fixup=amend:HEAD -m x",
+            "git commit --fixup=reword:HEAD --no-edit",
+            "git commit --fixup amend:HEAD -m x",
+            "git commit --fixup reword:HEAD --no-edit",
+        ] {
             let refusal = compile(line, &tree.root, None, &mut without_rules);
             let interactive = matches!(
                 refusal.as_ref().err(),

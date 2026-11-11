@@ -261,13 +261,14 @@ settings and the person's answer and never from what a stage wrote or printed:
   as it settles the terminal, with the answer about confined lines where its entry says so;
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
   with no stage keeping the network ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
-  on a platform that holds a `.git` back from every stage, which is macOS and not Linux or Windows
+  on a platform that holds the protected names back from every stage, which is macOS and not Linux or Windows
   ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
 - nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
   or a rule that says ask ([permissions.md](../permissions.md));
-- no stage's program is a file under a directory the plan may write to, and no stage is given such a file
+- no stage's program is a file under a directory the plan may write to, the checkout holding a session
+  directory among them ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), and no stage is given such a file
   as an argument where the file is executable or the stage is an interpreter or wrapper (`sh`, `python3`,
   `node`, `env` and the like, known by the file its program resolved to). An argument is looked up whole,
   since a file name may hold a space or any character a word is cut at, and as the words in it, read with the
@@ -291,7 +292,8 @@ more ([PERM-14](../permissions.md#PERM-14)).
 
 **Why.** Without it, nearly every line in a trusted worktree asks, builds and tests included, though they
 run inside the sandbox and need nothing beyond it. The sandbox is what makes the answer safe to
-give: a confined stage with no network and no way to write a `.git` cannot send what it reads anywhere or
+give: a confined stage with no network and no way to write a `.git`, `.husky`, `.pre-commit-config.yaml` or any other
+protected name ([PERM-9](../permissions.md#PERM-9)) cannot send what it reads anywhere or
 plant a hook that runs unconfined, and a line that asks for more than that is asked about as before.
 The conditions are the ones the paragraph above lists because each is a way a line gets past what the person
 was told, and none can be decided by anything a stage did.
@@ -340,7 +342,9 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::a_plain_line_is_held_only_where_every_condition_of_the_answer_holds`
 `verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
+`verified-by: bravebot_agent::confine::a_program_above_the_session_directory_in_its_checkout_is_not_held`
 `verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::confine::a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given`
 `verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`
 `verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
@@ -516,7 +520,7 @@ A function may read a step field by field for something that is not a key, and t
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
 the words a rule is matched against, which are the program and its arguments and deliberately not the
 whole step. `read_proven` first refuses a step that carries an assignment or
-a route, is started from inside the project, or is started by a name other than its file's. The
+a route, is started from inside the project or the other directories the audited table's proof refuses (see [command-line.md](command-line.md)), or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
 The four in `confine.rs` each answer a question about one step and build nothing that is stored,
@@ -845,7 +849,11 @@ where it also cannot tell success from failure.
 Where the output could not be shown, the planner is also told how to see this result and how to
 stop being asked: it calls `read_output` with the reference, and a person vouching for every stage
 of the exact command makes what it prints visible from then on. It is also pointed at `read_file`
-for a file. Who answers a `read_output` call is a fact about the session, so it is said once, in the
+for a file. Each of these names is said only where the turn's list holds the tool
+([TOOL-6](tool-surface.md#TOOL-6)): `read_output` for the reference, `spawn_processor` for working
+with the output, `read_file` for a file. Where the list holds none of them the planner is told only
+that the quarantine is about the command and not about running programs, and, where it applies, the
+vouching sentence, which names no tool. Who answers a `read_output` call is a fact about the session, so it is said once, in the
 `read_output` description, and not in each result (below). Only where a command produced the result: a quarantined read carries no advice about
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
@@ -856,8 +864,8 @@ request from the session as it stands, so a mode the person changes in the middl
 the next request says, and it is the same words a result would otherwise repeat. Where a person is
 asked, it says the user sees the output and decides, and if they agree it comes back as text the
 planner can read. A result's advice then holds only what is true of that result: the reference, the
-vouching advice where a record does not already stop the asking, that `read: true` was not applied,
-and that git ran. The description is sent with every request, so changing it costs the prompt cache
+vouching advice where a record does not already stop the asking, that `read: true` did not return the
+output, and that git ran. The description is sent with every request, so changing it costs the prompt cache
 the tool block, once, when the mode changes.
 
 Where permissions are bypassed with no screening asked for, nobody is shown what `read_output`
@@ -877,9 +885,10 @@ where permissions are asked and keeps it back where they are bypassed, so `read_
 yes either. The planner is told that `read_output` hands the output back as text it can read, or
 reports that it was kept back, in the description and not in a result, and nothing of what decided
 which, as [CHECK-9](../vetting.md#CHECK-9) requires. The words are the same in every mode, so they
-say nothing of which one it is in. `read` is not applied there ([RUN-22](#RUN-22)), so a run's result for a call
-that passed `read: true` says it was not applied and that `read_output` is the way to see the
-output. A call that did not pass it is told nothing of `read`, and neither is a job's result nor
+say nothing of which one it is in. A `read` is answered there with the same check
+([RUN-22](#RUN-22)): when the word is `safe` the output comes back in the result that ran it, and
+when it is not, or the check could not be made, a run's result for a call that passed `read: true`
+says it did not return the output and that `read_output` is the way to see it. A call that did not pass it is told nothing of `read`, and neither is a job's result nor
 the account the turn gives of an ended job, since `read` is an argument of `run` alone. None of it
 names the mode or a check, and none of it is said to a turn that was not offered `read_output`
 ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7)), which has no such tool to be pointed at.
@@ -899,16 +908,21 @@ that is not `safe`, so the claim is false for every output the check finds nothi
 `read_output` always hands the output back, it is told something false whenever the check objects.
 Saying that the output comes back or is kept back is true on both branches and gives the planner
 nothing about what decided, which is what [CHECK-9](../vetting.md#CHECK-9) keeps from it. A `read`
-that changed nothing and was not remarked on leaves a call that looks like a quarantined result with
+that returned nothing and was not remarked on leaves a call that looks like a quarantined result with
 no explanation, and the planner repeats the call with `read: true` to try to see the output.
 
 **This changes no label.** What is said is what [RUN-7](#RUN-7) already provides for, and saying it
 is not inferring it: the planner still cannot vouch for anything, and a person still answers.
 
+The description of `vet_content` is built the same way, for each request, from the same condition,
+with its own three wordings ([VET-5](vet-content.md#VET-5)).
+
 `verified-by: bravebot_agent::turn::the_read_output_description_says_who_answers_for_the_session`
+`verified-by: bravebot_agent::turn::the_vet_content_description_says_who_answers_for_the_session`
+`verified-by: bravebot_agent::turn::the_vet_content_description_follows_a_mode_changed_between_requests`
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_decides`
-`verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied`
+`verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_objects_is_said_not_to_have_returned_the_output`
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_person_is_still_asked_still_offers_the_vouch`
 `verified-by: bravebot_agent::turn::what_a_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person`
@@ -923,14 +937,23 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_stop_being_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
+`verified-by: bravebot_agent::turn::sentences::a_list_holding_every_tool_reads_the_text_it_always_did`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_pointed_at_it_in_any_arm`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_file_is_not_pointed_at_it`
+`verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and what started it ends it
 
 `background: true` starts the line and does not wait for it, handing back a job name. The name is
 the driver's own, minted here and looked up in this module's own map, so it is trusted and public
-and the planner may use it as routing. `job_output` reports what the job has printed since the last
-look, whether it has ended, and kills it on request.
+and the planner may use it as routing. `job_output` hands back a slice of what the job printed since
+the previous look, with the number of lines of the job's output that begin in the slice, the number the
+first of them has, and the references of the earlier looks,
+says whether the job has ended, and kills it on request.
 
 Every gate is the one a foreground run passes, at the same point and in the same order: the rules,
 the person's approval, and the label the output will carry are all settled before anything starts.
@@ -939,7 +962,9 @@ Being left running is not a reason to ask for less.
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting
 on the part before it, and nothing waits here; a redirection names a destination the background has
 no reader for. Both are refused rather than half-honoured, and so is a redirection that opens no
-file: what a background run cannot honour is a route, whether or not it names one.
+file: what a background run cannot honour is a route, whether or not it names one. A redirection
+inside a `$(...)` assignment value ([CMDLINE-17](command-line.md#CMDLINE-17)) is a route of the line:
+the checks made when a destination is opened are not made for a job, so the line is refused.
 
 **The turn owns it, or the session does.** Dropping the handle stops the pipeline as
 [RUN-11](#RUN-11) stops one at its deadline. A one-shot run, an incognito session and a delegate own
@@ -965,7 +990,18 @@ under which names: names the driver minted and a count of seconds read off a clo
 printed. A job that ended between turns is told as any finish is ([CMDLINE-14](command-line.md#CMDLINE-14)),
 at that same first round. A job's name is never reused within a session. What the planner is told
 when a job starts says which of the two rules holds, so it does not promise a later look it will
-not get.
+not get. It also says that each look returns what arrived since the previous look and that the
+output before it stays in the references of the earlier looks, and the reminder of the jobs still
+running says the same. Lines are counted for the whole life of the job, across every look and the
+account of its end, so the numbering a result states does not restart at each look. A line is counted
+once, by the look that holds its first byte, whatever byte a look happens to cut at: the next look
+begins with the rest of a line the previous one cut and counts no line for it. A result states this
+in the same words for every look and inserts the count of lines that begin in the slice and the number
+the first of them has, so no sentence is chosen by a count or by where a look cut. A last line with no
+newline counts as soon as its first byte
+arrives. Lines are counted in each pipe's own bytes, so the `standard error:` label and the newline
+that joins the two streams are not lines of the job. The count is of lines handed over, and the
+screen's own view of unread output does not move it.
 
 **Known cost: a signal skips the cleanup.** A job is killed by dropping its handle, so a session
 that ends by returning ends its jobs, and one that is killed by a signal does not run the drop. A
@@ -992,8 +1028,9 @@ asked for, before the turn answers ([DELEGATE-17](../delegation.md#DELEGATE-17))
 neither reads one nor stops one. A name that is no job but is the number of a delegate this run
 started is answered as that: the planner is told it named a delegate, and that a message saying the
 delegate has finished or did not finish reaches it on its own. It is also told that with only
-delegates left it ends the round with one line naming what is outstanding, since the turn waits
-and asks it again ([DELEGATE-17](../delegation.md#DELEGATE-17)). The answer is the same whether that
+delegates left it ends the round with one line naming what is outstanding, since the turn asks it
+again when the first report is in, while the other delegates keep working
+([DELEGATE-17](../delegation.md#DELEGATE-17)). The answer is the same whether that
 message has come yet or not, since nothing the tool can see says which. "No such job" would read as
 a fact about the delegate. The name is compared with the numbers the kernel minted, as it is with
 the job names the driver minted.
@@ -1014,22 +1051,36 @@ the job names the driver minted.
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::turn::a_refused_background_run_starts_nothing`
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
 `verified-by: bravebot_agent::turn::a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own`
 `verified-by: bravebot_core::policy::the_delegates_a_run_started_are_the_numbers_it_minted`
+`verified-by: bravebot_agent::tools::a_look_counts_the_lines_the_job_has_handed_over_across_looks`
+`verified-by: bravebot_agent::tools::a_line_cut_between_two_looks_is_counted_once`
+`verified-by: bravebot_agent::tools::the_sentence_beside_a_look_is_the_same_words_for_every_count`
+`verified-by: bravebot_agent::tools::a_look_with_no_trailing_newline_counts_its_last_line_and_the_next_look_does_not_again`
+`verified-by: bravebot_agent::tools::standard_error_between_looks_does_not_shift_the_next_start`
+`verified-by: bravebot_agent::tools::the_notes_that_start_a_job_say_each_look_is_a_slice`
+`verified-by: bravebot_agent::tools::a_look_recorded_against_a_job_that_is_not_held_is_dropped`
 
 <a id="RUN-16"></a>
 ### RUN-16: what a background job printed keeps the label its plan was given
 
 The label is fixed by [RUN-4](#RUN-4) when the job starts and kept with it, rather than worked out
-again when the output is read. Each look reports what is new since the last one, counted in bytes.
+again when the output is read. Each look reports a slice: the bytes the job printed since the
+previous look, with the count of lines that begin in it.
 
 **Why the label is kept rather than recomputed.** What a person has vouched for can change during a
 turn, and a pipeline started before that must not have its output relabelled because of it. A second
 derivation of the same thing is a second answer waiting to disagree with the one the trail recorded.
 
-Reporting only what is new is bookkeeping about how much has been handed over, never a comparison of
+Reporting a slice is bookkeeping about how much has been handed over, never a comparison of
 what was printed: nothing here reads a byte of it.
 
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
@@ -1039,19 +1090,45 @@ what was printed: nothing here reads a byte of it.
 <a id="RUN-17"></a>
 ### RUN-17: a look at a job may wait for it, inside the turn that owns it
 
-`job_output` takes `wait_seconds`, and a call that gives it comes back at the first of four things:
-output arriving that the caller has not been handed, the job ending, the wait running out, or the
-turn being cancelled. Which of the four it was is not reported separately, because the answer already
-says it: how many new lines there are, whether the job has ended, and how long the wait actually
-lasted.
+`job_output` takes `wait_seconds`, and a call that gives it comes back at the first of five things:
+output arriving that the caller has not been handed, the job ending, the wait running out, the turn
+being cancelled, or a line the person typed that the turn is waiting to take. Which of the five it was
+is not reported separately. The answer says how many new lines there are, whether the job has ended,
+and how long the wait actually lasted, so a wait that a line ended reads like a short wait that ran
+out: the job is still running and the time waited is under what was asked for.
+
+**A line the person typed ends a wait.** Every wait `job_output` makes ends within one tick of a line
+being in the turn's queue that the turn may take ([INPUT-10](../terminal-input.md#INPUT-10)), with the
+job left running and the turn not stopped. The round then reaches its boundary, the turn takes the
+line there as it takes any, and the planner's next request holds it. Without this a line typed during
+a ten-minute wait is held for the whole of it and the person has to stop the turn to be heard, which
+ends the wait and the turn together. A line already waiting when the call is made ends the wait at
+its first pass, so each `job_output` call of a round that has a line waiting comes back at once. A
+line that is a command, and every line behind a command, is held back from the turn and does not end
+it. A delegate takes no line, so a line the person types does not end a delegate's wait. The turn
+asks its confirmer once for a handle that says whether such a line is there, as it does to cut a
+request, and the wait reads that flag the way it reads a stop. It is a fact about the queue and never
+about the words typed, which the wait does not see.
 
 **A wait that output does not end.** `job_output` also takes `until_exit`, a boolean that is only
 accepted with `wait_seconds` beside it, which then bounds the wait. A call that gives both comes
-back at the first of four things: the job ending, the wait running out, the turn being cancelled, or
-a stop the person asks for on any job of the turn ([RUN-27](#RUN-27)). Output arriving does not end
+back at the first of five things: the job ending, the wait running out, the turn being cancelled, a
+stop the person asks for on any job of the turn ([RUN-27](#RUN-27)), or a line the person typed, as
+above. Output arriving does not end
 it, including output that is already there, unseen, when the call is made. What it hands back is
-what the job printed since the last look, in one answer, under the label the job has and cut to the
-output cap as any look's is, so output that is quarantined comes back as one reference to all of it.
+what the job printed since the previous look, in one answer, under the label the job has and cut to
+the output cap as any look's is, so output that is quarantined comes back as one reference to that
+slice and not to all the job has printed. The result says the reference holds what the job printed
+since the previous look (since the job started, for the first look), states how many lines of the
+job's whole output begin in the slice and the number the first of them has, says that a line a look
+cuts is counted by the look that holds its first byte and that the next look begins with the rest of
+it (RUN-15 gives the counting rule), and lists every earlier look at the job by its reference, in the
+order they were made, so a line printed before the slice is in one of those. The list is not capped:
+it holds one reference for each earlier look that was kept apart. The first look lists
+none, and a look never lists its own reference. Where the output is shown to the planner as text
+there is no reference to name, so the result lists none. The count, the first number and the list are
+counts and names the driver minted, and nothing the job printed is in them. The words of the sentence
+are the same for every look; only the count, the number of the first line and the references change.
 `until_exit` given as anything but a boolean, as `true` with no `wait_seconds`, or as `true` beside
 `kill` is refused. A flag that is quietly ignored hands back the output-ended wait the caller did
 not ask for, a flag that quietly chose its own bound would hand back a window nobody asked about,
@@ -1109,7 +1186,8 @@ itself. A program does therefore decide when a wait returns by choosing when to 
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
 reach anybody only under the label the plan was given. A wait with `until_exit` does not compare a
 byte count either: it asks which steps have exited and what the clock says, so a program cannot
-end it by printing.
+end it by printing. The flag for a typed line is kept by the queue that holds the lines, and the wait
+reads only whether it is set.
 
 **What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
 stage's standard error, and what a look hands back composes them with the output first. A single
@@ -1146,6 +1224,13 @@ the window.
 `verified-by: bravebot_agent::exec::waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound`
 `verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_more_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_begun_with_a_line_already_waiting_comes_back_at_once`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_is_not_ended_by_a_line_the_turn_may_not_take`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_lasts_its_bound_again_after_the_line_was_taken`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_next_request`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_delegates_job_output_wait_does_not_end_it`
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
@@ -1157,6 +1242,9 @@ the window.
 `verified-by: bravebot_agent::tools::job_output_says_its_wait_stays_inside_the_turn`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
+`verified-by: bravebot_agent::turn::a_look_at_a_job_says_it_is_a_slice_with_its_line_range_and_names_the_earlier_looks`
+`verified-by: bravebot_agent::turn::the_earlier_looks_a_look_lists_are_exactly_the_ones_before_it`
+`verified-by: bravebot_agent::turn::looks_at_a_job_shown_as_text_list_no_earlier_references`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
@@ -1445,9 +1533,11 @@ a directory, so a person working in two clones of one repository answers in each
 begun in a subdirectory is a different
 directory from the one above it. That key is a directory's name with every character outside a small
 set mapped to `-`, which is lossy, so two directories whose names reduce to the same one are answered
-by one record; [sessions.md](../sessions.md) records the same cost of the session store, where it
-takes a person resuming another directory's session to reach it, and here it takes only a session
-begun in either. And a line whose arguments differ every time is not helped at all, which
+by one record. A name longer than 200 bytes is cut and ends in a digest of the path, so two such
+directories are told apart ([TRUST-23](../trust-map.md#TRUST-23)). [sessions.md](../sessions.md)
+records the same cost of the session store, where it takes a person resuming another directory's
+session to reach it, and here it takes only a session begun in either. And a line whose arguments
+differ every time is not helped at all, which
 [RUN-20](#RUN-20) is the answer to.
 
 `verified-by: bravebot_core::remembered::the_line_that_was_recorded_is_covered`
@@ -1725,8 +1815,8 @@ gives of itself, and a `read_output` page of output the planner may read
 ([OUTPUT-4](read-output.md#OUTPUT-4)), because those are the same bytes reaching the same context by
 four routes. It does not bound `read_output`'s release of output nobody vouched for, which hands over
 the whole of the slot it was endorsed for ([OUTPUT-1](read-output.md#OUTPUT-1)). It does bound the
-same release made in a run's own result ([RUN-22](#RUN-22)), which is asked for before the size is
-known.
+same release made in a run's own result ([RUN-22](#RUN-22)), by the mode or by a check, which is asked
+for before the size is known.
 
 A cap of zero is absence rather than a program permitted to say nothing, as is any value that is not
 a whole count. Absence leaves the built-in cap in force, which is what a layer setting the key gets
@@ -1755,6 +1845,18 @@ file would answer differently on a machine whose owner had configured it. A dele
 figure the turn that spawned it holds, since the budget is a person's answer about what output is
 worth and does not stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 
+**What an unfiltered `read_output` costs is said where the size is stated.** `read_output` on
+output nobody vouched for hands back all of the slot, which the cap above does not bound and which
+stays in every later request. Where the size the slot states is above the cap, the advice beside a
+quarantined reference says that `read_output` returns all N bytes, about N/4 tokens, and, in a turn
+offered `run`, that a filter such as `tail -n 100` or `grep` given the reference as `stdin_ref`, with
+`read: true`, reads part of it. That holds for a `job_output` result and for a `run` result that did
+not ask to read, in every mode, and for the refusal of an `offset` or a `pattern` on that output
+([OUTPUT-4](read-output.md#OUTPUT-4), [OUTPUT-5](read-output.md#OUTPUT-5)). The description of
+`read_output` says the same without a size. A run that asked to read is told in the sentence
+[RUN-22](#RUN-22) gives and is not told twice. The driver decides this from the size the slot
+states and from nothing the output holds: a size at or below the cap, or none stated, adds nothing.
+
 `verified-by: bravebot_config::settings::a_settings_file_names_what_a_commands_output_may_spend`
 `verified-by: bravebot_config::settings::a_cap_of_zero_or_of_nonsense_leaves_the_built_in_one`
 `verified-by: bravebot_config::settings::the_nearest_layer_that_named_an_output_cap_wins`
@@ -1764,9 +1866,15 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_look_at_a_background_job_is_cut_to`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to`
+`verified-by: bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
+`verified-by: bravebot_agent::turn::sentences::output_within_the_cap_or_of_no_stated_size_says_nothing_of_its_cost`
+`verified-by: bravebot_agent::turn::sentences::a_run_that_asked_to_read_is_not_told_the_cost_twice`
+`verified-by: bravebot_agent::turn::sentences::the_filter_is_offered_only_where_the_list_holds_run`
+`verified-by: bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`
+`verified-by: bravebot_agent::turn::the_read_output_description_says_what_reading_all_of_a_long_output_costs`
 
 <a id="RUN-22"></a>
-### RUN-22: a run may ask to read what it printed, and gets it in the same result where nobody would be asked
+### RUN-22: a run may ask to read what it printed, and gets it in the same result where the mode or a check answers
 
 `read: true` asks for what the line printed in the result that ran it. Where permissions are
 bypassed with no screening asked for ([MODE-4](../permission-modes.md#MODE-4)), in a turn offered
@@ -1776,18 +1884,50 @@ mode in the entry [OUTPUT-1](read-output.md#OUTPUT-1) writes, and nobody is show
 keeps its name, and the result gives the name beside the text, so the same bytes can still be fed to
 a line or written by reference.
 
+Where screening is asked for ([CHECK-11](../vetting.md#CHECK-11)), in any mode and in a turn offered
+`read_output`, the run makes the check `read_output` would make on that slot, and the output is
+released in the result when its word is `safe`. The release is `read_output`'s: the value is
+`(T,priv)`, the trail credits the check ([CHECK-8](../vetting.md#CHECK-8)), nobody is asked and
+nobody is shown anything. The check is a model call like the one `read_output` makes, so its tokens
+and the time spent waiting on it are the turn's, and it is announced in the same way. Any other word,
+and a check that could not be made, leaves the output behind its reference with nobody asked, in a
+mode that asks as in one that does not: the person is asked when the planner calls `read_output`, as
+it would have been without `read`. The result then says that `read: true` did not return the output
+and that `read_output` is the way to see it ([RUN-14](#RUN-14)), and nothing of the word or the
+reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)). Where the mode is bypass and auto-vetting
+is on, nobody will be asked when the planner calls `read_output`, so the person is also told, as a
+notice of the driver's own and not in the result, that auto-vetting kept the output back and which
+setting lifts that. The notice is drawn from the mode and the setting and never from the word, so a
+word other than `safe` and a check that could not be made read alike. In a mode that asks nothing is
+added.
+
+A check that said `unsafe` is not made again for the same slot in the turn. `read_output` on that
+slot uses the word ([OUTPUT-3](read-output.md#OUTPUT-3), [CHECK-12](../vetting.md#CHECK-12)).
+
+A check the person stops is neither of those ([CHECK-16](../vetting.md#CHECK-16)). The turn ends as
+stopped once the run's result is recorded, the output stays quarantined and is not refused, and
+`read_output` can be called for it in a later turn.
+
 [RUN-21](#RUN-21)'s cap bounds the release, where it does not bound `read_output`. A `read_output`
 call is made by a planner that has seen the reference and the size it states, and `read` is asked
 before there is a size to see. Output longer than the cap stays behind its reference, and the
-result says it was too long for a run's result rather than pointing at `read` again. It says with
-that where the rest is: `read_output` is not held to the cap, and a filter given the reference as
-`stdin_ref` reads part of it without the line being run again. The size is the slot's, as its
+result says it was too long for a run's result rather than pointing at `read` again, whether the
+output was left behind its reference by the mode or by screening. It says with that where the rest
+is: `read_output` is not held to the cap, and a filter given the reference as `stdin_ref` reads part
+of it without the line being run again. The size is tested before any check
+is made, so no model call is spent on output that cannot be returned. The size is the slot's, as its
 reference states it, so no byte the program printed is read to decide.
 
-Everywhere else `read` changes nothing. Where a person or a check answers `read_output`, the output
-is quarantined, nobody is asked and no check is made, since a prompt or a check made here would be
-spent on output the planner has not called `read_output` for. Where a check answers in the person's
-place, the result says that `read` was not applied ([RUN-14](#RUN-14)). Where the turn was not offered
+A slot whose size is 0 is not released and no check is made over it, whether the mode or screening
+would have answered. There is nothing to read and nothing for a check to read, so the run takes
+[RUN-24](#RUN-24)'s route: the result says how the line ended and that it printed nothing, names no
+reference and gives none of [RUN-14](#RUN-14)'s advice. The trail records, under `read_output`, that
+the slot holds 0 bytes and so no check was made and nothing was released, and it names the slot and
+nothing the program printed. No model call is made and nothing is announced as a check.
+
+Everywhere else `read` changes nothing. Where a person answers `read_output` and screening was not
+asked for, the output is quarantined, nobody is asked and no check is made, since a prompt made here
+would be spent on output the planner has not called `read_output` for. Where the turn was not offered
 `read_output`, as a definition may leave it ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7),
 [DELEGATE-4](../delegation.md#DELEGATE-4)), `read` would widen what it was confined to, so it is not
 a release there either. A `read` that is absent or null is a call without it, and one that is
@@ -1797,7 +1937,10 @@ again. `read` beside `background: true` is refused, as `stdin_ref` is ([RUN-3](#
 that starts a job holds nothing the job printed.
 
 **Why.** Under unscreened bypass `read_output` has one answer, so a round spent calling it buys
-nothing but the round: a model call, and the whole conversation sent again. Doing it on request
+nothing but the round: a model call, and the whole conversation sent again. Where a check answers,
+the check is made either way, so a round spent calling `read_output` after it buys nothing but the
+round. A prompt is not drawn at
+the run, because the planner has not seen the size or shape of the output yet. Doing it on request
 rather than for every run keeps output the planner does not want out of its context, where a build
 or test log is often the largest thing a turn produces and is often read only for how it ended,
 which [RUN-13](#RUN-13) already says.
@@ -1810,20 +1953,37 @@ changes what the planner knows to ask for and nothing it may be given.
 
 **This changes no label.** The value and the trail entry are the ones `read_output` makes, a round
 early. What decides whether the release happens is the mode, the tools the turn was offered, the
-slot's size and the planner's own argument. The mode is the person's answer given before the session
-started, and a planner offered `read_output` may call it on any reference it holds, so asking with
-`read` gives it nothing it could not already have. No byte the program printed is read to decide it.
+slot's size, the planner's own argument, and where screening is asked for the check's word. The mode
+is the person's answer given before the session started, the argument was set before the output
+existed, and a planner offered `read_output` may call it on any reference it holds, so asking with
+`read` gives it nothing it could not already have. The only branch on the check is on its word, the
+branch `read_output` makes. No byte the program printed and no reason the check wrote is read to
+decide it.
+
+`fetch_url` and a server's tool take the same argument and release by `vet_content`'s path
+([VET-6](vet-content.md#VET-6)).
 
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
-`verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_it`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
+`verified-by: bravebot_agent::turn::read_output_does_not_check_again_a_slot_the_runs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::read_output_checks_a_slot_the_runs_check_could_not_judge`
+`verified-by: bravebot_agent::turn::a_run_check_the_person_stopped_leaves_nothing_for_read_output_to_reuse`
+`verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_a_person_still_answers_for_it`
 `verified-by: bravebot_agent::turn::a_background_line_cannot_ask_to_read_what_it_printed`
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
 `verified-by: bravebot_agent::turn::asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why`
+`verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 
 <a id="RUN-23"></a>
 ### RUN-23: how long a command may run is configurable
@@ -1904,7 +2064,9 @@ stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 Where what a command printed is quarantined and its slot holds no bytes, the planner is told how
 the run ended ([RUN-13](#RUN-13)) and that it printed nothing, and is handed no reference and none
 of [RUN-14](#RUN-14)'s advice. A look at a job that has printed nothing since it was last looked at
-says it has printed nothing new. The person watching is not told the result was kept from the
+says it has printed nothing new, and lists the references of the earlier looks at the job, since the
+planner has no other way to learn their names. Those are the only references the result names: it
+hands back no reference of its own and none of that advice. The person watching is not told the result was kept from the
 planner, and no quarantined block is drawn for it. The slot is still made and keeps its label, so
 the output view says the planner has not read it, which is true.
 
@@ -1918,8 +2080,16 @@ the reference would have put in front of the planner as `0 bytes`
 ([LABEL-4](../labels.md#LABEL-4)). "It printed nothing" is that same number in other words, and a
 program choosing to print nothing chose what the planner is told no more than it did before.
 
+The same holds where the planner asked to read what it printed. `read: true` on a run whose slot
+holds no bytes gets this result and not a release of nothing ([RUN-22](#RUN-22)), and `read_output`
+on such a slot answers that it printed nothing, with no check and no question to anybody
+([OUTPUT-1](read-output.md#OUTPUT-1)).
+
 `verified-by: bravebot_agent::turn::a_run_that_printed_nothing_says_so_and_hands_back_no_reference`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference`
+`verified-by: bravebot_agent::turn::an_empty_look_after_earlier_looks_lists_them_and_hands_back_no_reference`
 
 <a id="RUN-25"></a>
 ### RUN-25: a person may move a running line to the background, and the turn goes on
@@ -1932,7 +2102,9 @@ nothing else about the line. A prompt the person sends while the line runs makes
 
 **Only a line a job can hold.** One pipeline with no redirection, which is RUN-15's shape and for
 the same reasons: a line with `&&` or `||` waits on its own first part to decide on the second, and
-a route, including `2>&1`, is something the background does not honour. A line fed a reference
+a route, including `2>&1`, is something the background does not honour. A route inside a `$(...)`
+assignment value counts as a route of the line ([CMDLINE-17](command-line.md#CMDLINE-17)), so such
+a line is not offered either. A line fed a reference
 through `stdin_ref` and a delegate's line are not offered either. The first would be writing a value
 into a job nobody waits for, and the second is not the line the screen shows running. Such a line
 is waited for as before, whatever key is pressed.
@@ -1983,6 +2155,8 @@ whenever it guessed wrong.
 `verified-by: bravebot_agent::turn::only_a_line_a_job_can_hold_is_offered_to_be_moved`
 `verified-by: bravebot_agent::turn::a_delegates_line_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::command::only_a_pipeline_without_a_route_is_one_a_job_can_hold`
+`verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
+`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::cancel::a_handoff_requested_on_one_thread_is_seen_on_another`
 `verified-by: bravebot_core::policy::moving_a_command_to_the_background_is_recorded_in_the_audit_trail`
 `verified-by: bravebot_tui::state::a_press_moves_the_turns_command_once`
@@ -2263,3 +2437,24 @@ show that a model follows them.
   ([SANDBOX-24](../sandboxing.md#SANDBOX-24)). A probe refused for either reason fails as a closed
   port does, so the planner then asks about a browser that is listening, and the person answers
   that question.
+- **`read_output` on quarantined run output returns all of it, and the output cap does not bound
+  that.** [RUN-21](#RUN-21)'s cap bounds a run's result, a `job_output` page and a released page, and
+  `read_output` on output nobody vouched for hands back the whole slot, which stays in every later
+  request. The driver's advice states the size (about N/4 tokens) where the slot's stated size is
+  above the cap and names the `stdin_ref` filter that reads part of it, so the cost is told and not
+  removed. A planner that ignores the advice still pays it. Stubbing a large result in the requests
+  after its round ([COMPACT-18](../compaction.md#COMPACT-18)) would bound it and is not built. The
+  advice is pinned by
+  `bravebot_agent::turn::sentences::output_past_the_cap_says_what_read_output_returns_and_how_to_read_part`
+  and `bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`.
+- **`LandlockSandbox::spawn` does not require an absolute program.** A caller that passed a bare
+  name would have it searched on the person's `PATH` after confinement is applied. The agent's own
+  path always passes an absolute one: it starts each step from the absolute path it resolved
+  (`command_for` in `crates/agent/src/exec.rs`), re-checks that path before any step starts, and
+  hands the program and arguments to the Landlock backend byte for byte. The backend
+  (`crates/sandbox/src/linux.rs`, `confining`) spawns that program directly with `Command::args`
+  and `current_dir`, with no wrapper or helper process, so no argument is read as an option and a NUL
+  byte fails the spawn. A step that starts after an earlier step has begun can find the file at its
+  path replaced by that earlier step, when the earlier step can write the directory
+  ([RUN-2](#RUN-2)). The environment a stage inherits, including `LD_PRELOAD`, is the person's own
+  or what the plan assigned ([SANDBOX-30](../sandboxing.md#SANDBOX-30)).

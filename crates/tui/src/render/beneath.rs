@@ -127,7 +127,13 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
 
     let mut lines = Vec::new();
     for (at, waiting) in session.queued.iter().enumerate() {
-        let room = (width as usize).saturating_sub(4);
+        let words = queue_words(width, at, session.queued.len());
+        // The words that act on the line take the right of its first row, and the line is cut to
+        // the room left, with two blanks between.
+        let room = match &words {
+            Some(words) => usize::from(words.first_column()).saturating_sub(4),
+            None => (width as usize).saturating_sub(4),
+        };
         let goes = session.where_it_goes(at);
         let lead = match goes {
             Bound::Run => "! ",
@@ -136,13 +142,31 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             | Bound::IntoTheNextTurn
             | Bound::CarriedOut => "  ",
         };
-        lines.push(Line::from(vec![
-            Span::styled(lead, Style::default().fg(theme::brand_primary())),
-            Span::styled(
-                printable(&head_of(&waiting.prompt, room)),
+        let shown = printable(&head_of(&waiting.prompt, room));
+        let mut row = vec![Span::styled(
+            lead,
+            Style::default().fg(theme::brand_primary()),
+        )];
+        if let Some(words) = &words {
+            let blanks =
+                usize::from(words.first_column()).saturating_sub(2 + wrap::display_width(&shown));
+            row.push(Span::styled(
+                shown,
                 Style::default().fg(theme::brand_primary()),
-            ),
-        ]));
+            ));
+            row.push(Span::raw(" ".repeat(blanks)));
+            if words.clear.is_some() {
+                row.push(Span::styled(t!(queued_clear_all).to_string(), dim()));
+                row.push(Span::raw("  "));
+            }
+            row.push(Span::styled(t!(queued_remove).to_string(), dim()));
+        } else {
+            row.push(Span::styled(
+                shown,
+                Style::default().fg(theme::brand_primary()),
+            ));
+        }
+        lines.push(Line::from(row));
         let mut mark = vec![
             Span::raw("  "),
             Span::styled(
@@ -202,6 +226,51 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
         lines.push(Line::from(mark));
     }
     lines
+}
+
+/// The columns of the words on a waiting line's first row that remove lines from the queue, counted
+/// from the left edge of the rows beneath the box (MOUSE-28).
+pub(super) struct QueueWords {
+    /// The word that removes this line.
+    pub remove: std::ops::Range<u16>,
+    /// The word that removes every line waiting, drawn on the oldest line's row once a second waits.
+    pub clear: Option<std::ops::Range<u16>>,
+}
+
+impl QueueWords {
+    /// The column of the leftmost word.
+    pub fn first_column(&self) -> u16 {
+        self.clear
+            .as_ref()
+            .map_or(self.remove.start, |clear| clear.start)
+    }
+}
+
+/// Where the words that remove lines from the queue are drawn on the first row of the line at
+/// `place`, of `count` waiting, in rows `width` columns wide. The words end one column short of the
+/// edge, and a word that would leave less than a legible few words of the line is left out, the
+/// word for every line before the word for this one.
+pub(super) fn queue_words(width: u16, place: usize, count: usize) -> Option<QueueWords> {
+    /// Enough of the line to recognise it by, and the lead before it. Below this the words go.
+    const LEGIBLE: u16 = 12 + 2;
+    /// The blanks between the line and the words, and between the words.
+    const GAP: u16 = 2;
+
+    let columns = |text: &str| u16::try_from(wrap::display_width(text)).unwrap_or(u16::MAX);
+    let end = width.checked_sub(1)?;
+    let remove = end.checked_sub(columns(t!(queued_remove)))?..end;
+    let fits = |start: u16| start >= LEGIBLE + GAP;
+    if !fits(remove.start) {
+        return None;
+    }
+    let clear = (place == 0 && count > 1)
+        .then(|| {
+            let end = remove.start.checked_sub(GAP)?;
+            let start = end.checked_sub(columns(t!(queued_clear_all)))?;
+            fits(start).then_some(start..end)
+        })
+        .flatten();
+    Some(QueueWords { remove, clear })
 }
 
 /// The row, among those beneath the box, where the first waiting prompt is drawn, where one waits.
@@ -276,27 +345,66 @@ fn offered_lines(
     Some(before..before + items)
 }
 
+/// Cut the rows beneath the box to `room` rows, scrolling the list on offer so the item under the
+/// cursor is one of them (CMD-6). Returns the rows to draw and the item the list now starts at.
+///
+/// What is attached, put away and queued keeps the rows nearest the box, and the list gets what is
+/// left. The list starts where the previous frame left it (`Laid::offered_first`) and moves only as
+/// far as the cursor needs, so a press on a row picks that row without the rows sliding under the
+/// pointer (MOUSE-15), and the wheel and the arrow keys walk the list to its last item (MOUSE-46).
+pub(super) fn fit_to_room(
+    session: &Session,
+    width: u16,
+    offered: &crate::state::Offered,
+    mut lines: Vec<Line<'static>>,
+    room: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let Some(rows) = offered_lines(session, width, offered) else {
+        lines.truncate(room);
+        return (lines, 0);
+    };
+    let (before, items) = (rows.start, rows.len());
+    let space = room.saturating_sub(before);
+    if lines.len() <= room || space == 0 || items == 0 {
+        lines.truncate(room);
+        return (lines, 0);
+    }
+    let cursor = session.completion_cursor().min(items - 1);
+    let mut first = session.laid.offered_first;
+    if cursor < first {
+        first = cursor;
+    } else if cursor >= first + space {
+        first = cursor + 1 - space;
+    }
+    first = first.min(items - space);
+    lines.drain(before..before + first);
+    lines.truncate(room);
+    (lines, first)
+}
+
 /// The rows of a list of what could be typed that a press can take (MOUSE-15), each as the cells of
-/// the row and the item it stands for, in `pane`, which is where [`lines_beneath_the_box`] was drawn.
-/// Only the rows the pane had room for are drawn, so only those are there to press.
+/// the row and the item it stands for, in `pane`, which is where [`lines_beneath_the_box`] was drawn
+/// and [`fit_to_room`] cut it, starting at the item `first`. Only the rows the pane had room for are
+/// drawn, so only those are there to press.
 pub(super) fn offered_picks(
     session: &Session,
     width: u16,
     offered: &crate::state::Offered,
+    first: usize,
     pane: ratatui::layout::Rect,
 ) -> Vec<crate::state::Target> {
     let Some(lines) = offered_lines(session, width, offered) else {
         return Vec::new();
     };
-    lines
-        .zip(0..)
-        .filter_map(|(line, index)| {
-            let line = u16::try_from(line)
+    let before = lines.start;
+    (0..lines.len().saturating_sub(first))
+        .filter_map(|shown| {
+            let line = u16::try_from(before + shown)
                 .ok()
                 .filter(|line| *line < pane.height)?;
             Some(crate::state::Target::on_screen(
                 ratatui::layout::Rect::new(pane.x, pane.y + line, pane.width, 1),
-                crate::state::Hit::Item(index),
+                crate::state::Hit::Item(first + shown),
             ))
         })
         .collect()
@@ -627,6 +735,11 @@ pub(super) fn shortcut_lines(
 /// A directory is dimmer than a file and keeps its trailing slash, because the two are chosen for
 /// different reasons: a file is what a reference ends at, and a directory is somewhere to keep
 /// typing. Nothing here says what a file contains, only that it exists.
+///
+/// Drawn through [`bravebot_agent::confirm::shown_name`], the same marking a vouch prompt gives a
+/// path, so two names that differ only by whitespace or a character that draws as nothing cannot
+/// draw as the same row (NAME-4). A pick still writes `entry.path` itself, unmarked, which is
+/// what NAME-8 governs; only the row drawn here is marked.
 pub(super) fn entry_lines(
     session: &Session,
     offered: &[bravebot_mentions::Entry],
@@ -649,8 +762,17 @@ pub(super) fn entry_lines(
 
             let mut spans = vec![
                 Span::styled(if chosen { "  ❯ " } else { "    " }, style),
-                Span::styled(entry.path.clone(), style),
+                Span::styled(
+                    bravebot_agent::confirm::shown_name(entry.path.trim_end_matches('/')),
+                    style,
+                ),
             ];
+            // A directory's trailing slash is drawn plain, outside whatever quoting marking the
+            // rest of the name added (NAME-4): marking it with the slash still on would put the
+            // slash inside the quotes, where the pick below does not look for it.
+            if entry.is_directory {
+                spans.push(Span::styled("/", style));
+            }
             // A session says what it is, since its name is an id nobody chooses by.
             if let Some(note) = &entry.note {
                 spans.push(Span::styled(format!("  {note}"), dim()));
@@ -658,4 +780,103 @@ pub(super) fn entry_lines(
             Line::from(spans)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Session;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
+
+    /// The row as a terminal actually displays it: one glyph per cell, which is what tells two
+    /// names apart (or fails to) rather than the underlying bytes, which always differ.
+    const WIDTH: u16 = 40;
+
+    fn drawn_row(entry: &bravebot_mentions::Entry) -> String {
+        let session = Session::new("none");
+        let line = entry_lines(&session, std::slice::from_ref(entry))
+            .into_iter()
+            .next()
+            .expect("one row");
+        let area = Rect::new(0, 0, WIDTH, 1);
+        let mut buffer = Buffer::empty(area);
+        line.render(area, &mut buffer);
+        (0..WIDTH)
+            .map(|column| buffer[(column, 0)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    fn file_entry(path: &str) -> bravebot_mentions::Entry {
+        bravebot_mentions::Entry {
+            path: path.to_string(),
+            kind: bravebot_mentions::Kind::File,
+            is_directory: false,
+            note: None,
+            title: None,
+        }
+    }
+
+    fn dir_entry(path: &str) -> bravebot_mentions::Entry {
+        bravebot_mentions::Entry {
+            path: path.to_string(),
+            kind: bravebot_mentions::Kind::Directory,
+            is_directory: true,
+            note: None,
+            title: None,
+        }
+    }
+
+    /// NAME-4: two entries whose names differ only by whitespace or a character that draws as
+    /// nothing must not draw as the same row, the same claim PROMPT-1 already pins for a vouch
+    /// prompt's own use of `shown_name`.
+    #[test]
+    fn two_names_that_differ_only_by_an_invisible_character_draw_differently() {
+        let pairs = [
+            ("ab.md", "a\u{09}b.md"),
+            ("ab.md", "a\u{200b}b.md"),
+            ("a\u{09}b.md", "a\u{200b}b.md"),
+            ("a b.md", "a\u{a0}b.md"),
+            ("a b.md", "a\u{3000}b.md"),
+            ("a b.md", "a\u{202f}b.md"),
+        ];
+        for (one, other) in pairs {
+            assert_ne!(
+                drawn_row(&file_entry(one)),
+                drawn_row(&file_entry(other)),
+                "{one:?} and {other:?} drew the same row"
+            );
+        }
+    }
+
+    /// The common case, a name with nothing to mark, draws exactly as it is typed: this fix must
+    /// not make an ordinary file name unrecognisable.
+    #[test]
+    fn a_plain_name_draws_as_it_is() {
+        assert_eq!(drawn_row(&file_entry("notes.md")), "    notes.md");
+    }
+
+    /// NAME-4: a directory's trailing slash is taken off before marking and put back after,
+    /// outside any quoting, the same as the window's bridge already does
+    /// (`bravebot_ui_bridge::mentions::offer`). Marking the slash along with the rest of the name
+    /// would put it inside the quotes, where a pick looking for it at the end would not find it.
+    #[test]
+    fn a_marked_directorys_trailing_slash_is_drawn_outside_any_quoting() {
+        let marked = bravebot_agent::confirm::shown_name("a\u{200b}b");
+        assert_eq!(
+            drawn_row(&dir_entry("a\u{200b}b/")),
+            format!("    {marked}/"),
+            "the slash was not drawn plain, outside the marked name"
+        );
+    }
+
+    /// The common case for a directory: nothing to mark, the trailing slash stays, unaffected by
+    /// the split that marking a name needs.
+    #[test]
+    fn a_plain_directorys_name_draws_with_its_slash() {
+        assert_eq!(drawn_row(&dir_entry("src/")), "    src/");
+    }
 }

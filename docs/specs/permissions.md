@@ -4,6 +4,7 @@ title: Permission rules
 status: normative
 governs:
   - crates/core/src/permissions.rs
+  - crates/ui-files/src/short_name.rs
   - crates/core/src/spelling.rs
   - crates/core/src/protected.rs
   - crates/config/src/settings.rs
@@ -249,9 +250,17 @@ Whether two spellings that differ only in case are one file is a fact about the 
 is on (the trust map asks it the same way, [trust-map.md](trust-map.md)), so the caller asks the volume and hands the answer to
 the rules, which ask nothing. Where the volume folds case, both the pattern and the path have their
 letter case folded segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which
-opens the same file. Each letter is taken to upper case and then to lower case, so `ſrc` meets the
-`src` APFS opens it as, though `ſ` is its own lower case. A rule in any list is read this way, allow included: there the two spellings name one file,
-so an allow rule covers the same file the deny rule would. Where the volume keeps the spellings apart,
+opens the same file. A rule that restricts, in the `deny` or `ask` list, takes each letter to upper
+case and then to lower case, so `ſrc` meets the `src` APFS opens it as, though `ſ` is its own lower
+case, and `Read(claß.md)` covers `class.md`. An `allow` rule is matched with a letter whose upper or
+lower case is more than one character left as written, so `Edit(claß.md)` covers `claß.md`,
+`CLAß.md` and `claẞ.md` and does not cover `class.md`. NTFS holds `claß.md` and `class.md` apart,
+and a grant must not reach a file that may not be the one approved. The copy of a rule for a
+checkout ([CHECKOUT-9](checkouts.md#CHECKOUT-9)) follows the same split: a `deny` or `ask` rule
+written with `class` is copied under a checkout of `claß`, and an `allow` rule for `class` is not.
+Where a `deny` or `ask` rule and an `allow` rule are copied to one path under the checkout, the
+lists decide as they do under the working directory: the `deny` or `ask` rule wins.
+Where the volume keeps the spellings apart,
 or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
 `docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
 as the narrower one.
@@ -265,7 +274,14 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_a_folding_volume_would_open`
 `verified-by: bravebot_core::permissions::a_tree_rule_covers_the_folded_spelling_of_its_path`
 `verified-by: bravebot_core::permissions::an_allow_rule_covers_the_folded_spelling_on_a_folding_volume`
+`verified-by: bravebot_core::permissions::an_allow_rule_does_not_reach_a_spelling_only_full_case_folding_joins`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_a_spelling_only_full_case_folding_joins`
+`verified-by: bravebot_core::permissions::a_deny_rule_decides_a_spelling_only_full_case_folding_joins_whatever_a_grant_says`
 `verified-by: bravebot_core::permissions::a_rule_does_not_cover_a_case_variant_on_a_volume_that_keeps_them_apart`
+`verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
+`verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
+`verified-by: bravebot_core::permissions::a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused`
+`verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
@@ -343,12 +359,51 @@ lines. A `*` covers any text in every list, spaces and gaps included, so `Bash(l
 `Bash(python3 my script.py)` names three words, and only a `*` in the space's place covers
 `python3 "my script.py"`.
 
+A `deny` or `ask` rule compares the program word without regard to case and as a Windows host
+reads it: without the dots and spaces it drops from the end of a name, without a `::$DATA` stream
+suffix, and with one `.exe`, `.com`, `.cmd` or `.bat` taken off, so `Bash(touch *)` covers
+`TOUCH x`, `Touch x`, `touch.exe x`, `TOUCH.EXE x`, `touch.exe. x`, `touch.exe::$DATA x`,
+`touch.cmd x` and `touch.bat x`. Only one extension is taken off, so `touch.exe.exe` and
+`touch.exe.bak` are other files than `touch`. A rule written `touch.exe` does not cover `touch x`:
+the rule is matched as written against the line, and the line is read both as written and with the
+suffixes off. Every other word is compared as written, so an argument keeps its case. The reading
+is the same on every host, because the rule has to hold for a line whichever machine runs it, and
+a host that folds case, drops a trailing dot or starts a program by a name without its suffix runs
+the respelling as the program the rule names. A program given by a path (`/usr/bin/touch x`) is
+not read this way and is not covered by `Bash(touch *)`. An `allow` rule is matched as written and
+grants none of the respellings.
+
+An 8.3 short name (`POWERS~1`, `POWERS~1.EXE`) names a file that cannot be read off the word, and
+the matcher asks the file system nothing. While a `deny` or `ask` command rule is in force, a stage
+whose program word, or whose program word under a leading wrapper, has that shape is refused at the
+same two gates as a denied program, before the program is looked for. The refusal says the line is
+an 8.3 short name when the program word is one, and says it runs one when the short name is a word
+under a wrapper, without repeating that word, which may be an operand ([CMDLINE-4](tools/command-line.md#CMDLINE-4)).
+The word after a wrapper can be an operand the shell expanded from a glob, so the refusal tells the
+planner one bit about a name in the directory, as a deny rule matched against the same word does.
+With no such rule in force
+nothing is refused, a program given by a path is not read, and the shape is the one a path word is
+refused for on Windows ([PERM-7](#PERM-7)).
+
 **Why.** Matched against the words run together into one line, `"ls /x"` read as `ls` given `/x`,
 so `Bash(ls *)` stopped the prompt and a script nobody had seen ran unasked. The asymmetry is
 [PERM-4](#PERM-4)'s: a rule that restricts covers everything it covered when the words were run
-together, and a rule that grants covers what it names.
+together, and a rule that grants covers what it names. A deny rule that a respelling of the program
+defeats is a statement that is not true, and an answer that depended on the host the rule was
+evaluated on would make the same settings file refuse a line on one machine and run it on another.
 
 `verified-by: bravebot_core::permissions::a_command_pattern_matches_where_the_documented_table_says`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_of_each_documented_shape_reads_only_the_program_word_without_case`
+`verified-by: bravebot_core::permissions::a_restricting_rule_reads_only_the_program_word_without_regard_to_case`
+`verified-by: bravebot_core::permissions::an_allow_rule_matches_the_program_word_as_written`
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_the_names_windows_ignores`
+`verified-by: bravebot_core::permissions::an_allow_rule_grants_none_of_the_names_windows_ignores`
+`verified-by: bravebot_core::permissions::the_fold_leaves_a_name_that_is_not_the_program_alone`
+`verified-by: bravebot_core::permissions::a_short_name_program_is_reported_only_where_a_command_rule_restricts`
+`verified-by: bravebot_core::policy::a_short_name_program_is_refused_at_both_gates_only_under_a_restricting_rule`
+`verified-by: bravebot_core::policy::a_short_name_refusal_names_the_short_name_and_not_the_wrapper_over_it`
+`verified-by: bravebot_core::policy::a_denied_program_respelled_is_refused_at_both_gates`
+`verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_core::permissions::a_trailing_colon_star_is_a_trailing_wildcard_and_a_colon_elsewhere_is_not`
 `verified-by: bravebot_core::permissions::a_space_in_an_allow_rule_covers_only_the_gap_between_two_words`
 `verified-by: bravebot_core::permissions::a_space_in_a_deny_or_ask_rule_covers_a_space_inside_a_word_too`
@@ -411,10 +466,17 @@ it reaches the search cap or cannot list a directory while a `Read` or `Edit` de
 the call is refused. A file under an open directory that is the same directory as another open one
 (a macOS firmlink or a Linux bind mount, once a person has opened it with `/add-dir`) is also judged
 under its name beneath each of them, found by device and inode of the directory. This is on Unix
-only. The second name can add a refusal or a question and never removes one. On Windows a name
+only. The second name can add a refusal or a question and never removes one: a write to a file with
+several links whose other names the walk could not all find asks, since a name it missed may be the
+one a rule is about. The trust map asks
+the same lookup for the other names of a file ([TRUST-4](trust-map.md#TRUST-4)), so the rules and
+the map cannot disagree about which names a file has. On Windows a name
 that reads as something other than the file it spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's. A `run` redirection's
-target, read or written, is held to the same refusal as a file tool's path. A short name is
+target, read or written, is held to the same refusal as a file tool's path, and the refusal is made
+again immediately before the run opens it, under the file the name lands on then and under each other
+name that file has, so a link or hard link an earlier part of the line left at the name is refused as
+the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A short name is
 accepted only in the spelling of the open directory the target lands in, which names that one
 directory; in a target that reaches no open directory through an ancestor of its own it is refused
 wherever it appears.
@@ -508,6 +570,10 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_opens`
 `verified-by: bravebot_agent::turn::a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_hard_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_that_reads_through_a_link_an_earlier_part_made`
+`verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_destination_reopened_after_an_earlier_part_linked_it_to_the_file`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
@@ -517,6 +583,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::a_hard_link_is_found_by_device_and_inode_and_the_walk_gives_up_at_its_cap`
 `verified-by: bravebot_agent::tools::a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule`
+`verified-by: bravebot_agent::tools::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`
 `verified-by: bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_second_path_to_the_tree`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it`
@@ -606,7 +673,8 @@ whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2))
 `.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and
 `.pre-commit-config.yaml`, compared as a volume that folds case and normalizes opens them (`.GIT`,
 `.huſky`) and with a trailing dot or space dropped. The destination is read as named, as it lands after links are followed, and under each other
-name of a file with a hard link (PERM-7).
+name of a file with a hard link (PERM-7). A file with several links whose other names could not all
+be found is protected, since one of them may be a protected path.
 
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
@@ -631,6 +699,7 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::tools::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
 `verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
 `verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
@@ -767,9 +836,11 @@ train the habit of answering without reading, which is the whole of what asking 
 ### PERM-14: only the person's own file may write a rule that grants
 
 An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
-resolves outside the workspace and outside the one the session opened in. An `allow` rule in
+resolves outside the workspace, outside every directory the session has been in, and outside the
+checkout holding each of them. The checkout holding a directory is its nearest ancestor that has a
+`.git`, as [SANDBOX-30](sandboxing.md#SANDBOX-30) finds it for a directory a session opens. An `allow` rule in
 `.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a `--settings` file that resolves
-inside either takes
+inside any of those takes
 effect on being read by nothing: it answers no prompt and permits no fetch. Every one is reported,
 with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
 granted where the person granted it at the question [PERM-15](#PERM-15) puts.
@@ -789,8 +860,15 @@ a host nobody was shown from a refusal into a success. That is the capability
 name in a checkout's file is a request, not a grant. The local layer is the same file under another
 name, since nothing stops one being committed, which is why `vetting` reads the two identically. A
 `--settings` file is a path somebody typed at this invocation, which is their own claim, but the
-flag can name a file inside the checkout and a README saying so would be the same grant by another
-route. Moving out of that checkout with `/cd` does not change who wrote the file. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
+flag can name a file inside the checkout, or inside the checkout above a subdirectory the session
+was begun in, and a README saying so would be the same grant by another
+route. Moving out of that checkout with `/cd` does not change who wrote the file. A `.git` at the
+home directory makes a file under it a checkout's file the same way, so a dotfiles repository there
+refuses a `--settings` file beneath it that is not the home layer. This is a known cost of reading
+the checkout as fail-closed (Known costs below). [SANDBOX-20](sandboxing.md#SANDBOX-20) and
+[SANDBOX-30](sandboxing.md#SANDBOX-30) find the same checkout and leave out one that is or holds
+the home directory, on purpose, because counting it would take the reason from every program the
+account installed under the home. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
 silence reads to whoever wrote it as one in force.
 
 `verified-by: bravebot_config::settings::a_project_layer_allow_rule_is_not_granted`
@@ -802,7 +880,12 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`
 `verified-by: bravebot_config::settings::a_named_layer_inside_the_workspace_is_the_checkouts_file_under_another_name`
 `verified-by: bravebot_config::settings::a_named_layer_inside_where_the_session_began_grants_nothing_after_it_moves`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_the_working_directory_grants_nothing`
+`verified-by: bravebot_config::settings::a_named_layer_in_another_checkout_still_grants`
+`verified-by: bravebot_config::settings::a_named_layer_under_a_dotfiles_repository_at_or_above_home_grants_nothing`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_cannot_open_the_network`
 `verified-by: bravebot_tui::app::a_named_file_in_the_checkout_left_behind_is_still_asked_about_after_moving`
+`verified-by: bravebot_tui::app::a_named_file_in_a_directory_moved_through_is_still_asked_about_after_moving_on`
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
 `verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
@@ -1120,7 +1203,16 @@ word that is not an option is the program they run: `timeout`, `time`, `nice`, `
 `command`, `builtin`, `noglob` and `env`. The table is not configurable, and each entry has the
 options it reads: `timeout` its signal and kill-after options and its duration, `nice` an adjustment,
 `stdbuf` its three buffer options, `command` `-p`, `time` `-p`, `-v`, `-a`, `-f` and `-o`, and `env`
-its `-i`, its `-u`, `NAME=value` words and `--`. A wrapper with an option the table does not list, a
+its options (`-i`, `--ignore-environment`, `-u NAME`, `--unset NAME` and `--unset=NAME`), then an
+optional `--` that ends the options only, then every word containing `=` as an assignment whatever
+its name (`A-B=1`, `1A=x` and `=1` included, and `-X=1` after the `--` or after another
+assignment), then the program. `env` is read as having its options anywhere before the program, so
+an option after an assignment is skipped too, which can only make a deny or ask rule match more. A
+wrapper is named without regard to case and read as the program word is ([PERM-5](#PERM-5)): without
+trailing dots and spaces, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat`, on every
+host, so `TIMEOUT 30 git push`, `env.exe git push` and `timeout.exe. 30 git push` are read as
+`timeout` and `env` are. A wrapper written as an 8.3 short name is refused with the program word
+under [PERM-5](#PERM-5). A wrapper with an option the table does not list, a
 `command -v`, a wrapper with nothing after it to run, a wrapper named by a path, and a program that
 only runs another one by another way (`xargs`, `npx`, `devbox run`, `docker exec`) are left whole,
 so a rule is matched against the words that were written and never against a reading of them.
@@ -1135,13 +1227,56 @@ otherwise. It is [PERM-4](#PERM-4)'s asymmetry: a rule that restricts covers mor
 grants covers what it names, and [RUN-20](tools/run.md#RUN-20) declines the same widening for a
 vouch for the same reason. The decision reads the argv and nothing else.
 
+[CRED-5](credential-protection.md#CRED-5) reads the same table to name the ambient authority of the
+program under a wrapper, and [RUN-5](tools/run.md#RUN-5) reads it to decide whether a program runs
+the file it is handed. The table is one list in `bravebot_core::permissions`. This clause and the
+ambient-authority reading of [CRED-5](credential-protection.md#CRED-5) read the entries whose
+options it describes, and the check on a file a plan wrote ([RUN-5](tools/run.md#RUN-5)) asks the
+entries that run an operand, through `is_wrapper`. `xargs`, `exec`, `setsid` and `busybox` are in
+the table as programs that run an operand and whose options are not read, so a rule is matched
+against them whole. A wrapper added to the table is a decision about both questions.
+
+`verified-by: bravebot_core::permissions::the_wrapper_table_answers_each_question_for_exactly_the_programs_it_lists`
 `verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_however_it_is_cased_or_suffixed`
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_the_names_windows_ignores`
 `verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
 `verified-by: bravebot_core::permissions::a_wrapper_the_table_cannot_read_is_left_whole`
+`verified-by: bravebot_core::permissions::env_reads_no_option_after_a_double_dash`
+`verified-by: bravebot_core::permissions::env_keeps_an_equals_word_after_the_program`
 `verified-by: bravebot_core::permissions::a_rule_naming_the_wrapper_still_matches_the_whole_stage`
 
 ## Known costs
 
+- **A dotfiles repository at the home directory refuses a `--settings` file under it.** PERM-14
+  reads the checkout holding the working directory, and each directory the session has been in, as
+  the nearest ancestor with a `.git`. Where that is the home directory or a directory above it, every
+  file beneath it is the checkout's, so a `--settings` file anywhere under the home other than the
+  home layer grants nothing and its `allow` rules are reported as dropped. This fails closed and is
+  chosen: reading such a repository as not a checkout would let a file it tracks answer a prompt.
+  [SANDBOX-20](sandboxing.md#SANDBOX-20) and [SANDBOX-30](sandboxing.md#SANDBOX-30) read the same
+  checkout and leave out one that is or holds the home directory, because counting it would take
+  the reason from every program the account installed under the home. The two differ on purpose: one
+  decides which files may grant a permission, the other which files count as ones the plan could
+  have written. A person with
+  such a repository keeps the file outside it, or in `~/.bravebot/settings.json`.
+- **A wrapper the table leaves whole is a second rule for the person, which PERM-20's Why says the
+  table exists to avoid.** The Why gives the cost of not looking through a wrapper as a second rule
+  for each one. The text leaves `xargs`, `npx`, `devbox run`, `docker exec`, a wrapper named by a
+  path (`/usr/bin/env git push`), a wrapper with an option the table does not list
+  (`timeout --kill-after-x 1 git push`, `env -S 'git push'`) and `command -v` whole, so
+  `Bash(git push *)` in `deny` does not refuse them. This is chosen because a reading of an option
+  the table does not know could name the wrong program, and a deny rule that matched it would be a
+  guess about a command line. Whether the table should read more (a path-named `env`, `env -S`) is
+  undecided, and so is whether the Why should say "for the wrappers in the table", which is what
+  the behaviour is.
+- **`env` is read with a looser grammar than the program's own.** PERM-20 reads every word of `env`
+  containing `=` as an assignment, so `env =1 git push` is read as `env` running `git push`. BSD
+  `env` on macOS refuses `=1` (`setenv =1: Invalid argument`) and runs nothing. What GNU and uutils
+  `env` do with an empty name is unchecked. The reading names a command that may not be the one
+  that runs. A `deny` or `ask` rule then matches more than the program does, which is the safe
+  direction, and an `allow` rule does not look through a wrapper at all, so no rule is weaker for
+  it.
 - **How many questions a session opens with is the file's to choose.** Every name in
   `additionalDirectories` is one box, so a file naming thirty directories is thirty of them before
   the first prompt can be typed, and the way out of a list somebody does not want to answer is
@@ -1191,13 +1326,39 @@ vouch for the same reason. The decision reads the argv and nothing else.
   somebody who said the tree's content is not theirs is still offered its rules, and may grant them.
   That is the point of asking separately, and it is also the odd case: a person who has just said
   they did not write this code has said something about whoever wrote the rules too.
+- **A program word is read by its typed spelling, which Windows reads more loosely.** The case,
+  a trailing dot or space, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat` of a program
+  word are folded, and an 8.3 short name is refused while a command rule restricts
+  ([PERM-5](#PERM-5)). What `CreateProcessW` and `canonicalize` do with each spelling is read from
+  the code, and no test exercising the fold asserts it. Two tests in
+  `crates/sandbox/tests/windows.rs` start a copy of `whoami.exe` under the spellings and check the
+  platform assumption the fold relies on without calling it.
+  `the_spellings_a_command_rule_folds_start_the_program_they_name` expects `tool.exe.`, `TOOL.EXE`,
+  an 8.3 short name, `t.cmd` and `t.bat` to start the program.
+  `a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing` expects a trailing space
+  and `::$DATA` to start either that program or nothing. Whether each spelling starts the program
+  is therefore not asserted for the fold, and neither is everything those tests do not start:
+  `canonicalize` and the 8.3 short name of a directory. The
+  AppContainer backend refuses a final component that ends in a dot or space or holds a colon
+  ([SANDBOX-4](sandboxing.md#SANDBOX-4)), so only a stage run unconfined is exposed to those
+  spellings. The fold takes off the exact suffix `::$DATA` and no other stream, so a rule such as
+  `Bash(touch *)` does not cover `touch.exe:stream x`, which that backend refuses and an unconfined
+  stage may start as `touch.exe`. The fold covers the spellings the
+  code says Windows ignores, and a spelling it ignores that this list omits is not covered. The
+  `.cmd` and `.bat` forms matter only to a host that runs the stage unconfined or reaches the file
+  by another route, since the AppContainer backend refuses a batch file. The fold is Unicode
+  lowercase, and NTFS folds names by its own table, so a character the two fold differently
+  (`\u{17f}`, `\u{131}`) can name the program in one and not in the other; that is unchecked as well.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
   `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers
   of [PERM-20](#PERM-20) and no further, so `devbox run git push` and `npx git push` are not
-  covered by `Bash(git push *)`. A pattern constraining arguments is weaker
-  than it looks, and a `deny` list is not a sandbox: [sandboxing.md](sandboxing.md) is what
-  confines a process, and the label on a program's output is what holds regardless.
+  covered by `Bash(git push *)`. The program word and the wrapper names are read without regard to
+  case and without the suffixes of [PERM-5](#PERM-5), so `TOUCH x` and `touch.exe x` are covered
+  by `Bash(touch *)`; the form of the path is not read, so `/usr/bin/touch x` is not. A pattern
+  constraining arguments is weaker than it looks, and a `deny` list is not a sandbox:
+  [sandboxing.md](sandboxing.md) is what confines a process, and the label on a program's output is
+  what holds regardless.
 - **A path rule does not reach a program's own file access.** `Read` and `Edit` rules govern the
   tools that read and write files. A program is argv to this agent, so `run cat .env` is checked
   against the `Bash` rules and against the run prompt, not against a `Read` rule covering `.env`.

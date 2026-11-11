@@ -380,6 +380,43 @@ impl SlotStore {
         self.slots.contains_key(id) || self.choices.contains_key(id)
     }
 
+    /// Whether this name holds text. Metadata about a name: a yes or a no, never a byte of what a
+    /// slot holds. A choice is not text, so a tool that reads text finds nothing under its name.
+    pub fn holds_text(&self, id: &SlotId) -> bool {
+        self.slots.contains_key(id)
+    }
+
+    /// The names of the slots holding text, in the order they were minted.
+    ///
+    /// Metadata: the names are the driver's own (`ref:N`), never a byte of what a slot holds or
+    /// of a file name. A choice is left out because no tool reads it as text. Ordered by length and
+    /// then by spelling, which is numeric order for names of one prefix.
+    pub fn text_names(&self) -> Vec<SlotId> {
+        let mut names: Vec<SlotId> = self.slots.keys().cloned().collect();
+        names.sort_by(|a, b| {
+            a.as_str()
+                .len()
+                .cmp(&b.as_str().len())
+                .then_with(|| a.cmp(b))
+        });
+        names
+    }
+
+    /// The names of the choices a processor made, ordered as [`SlotStore::text_names`] is.
+    ///
+    /// Metadata like [`SlotStore::text_names`]: the driver's own `ref:N` names and no digit of
+    /// any choice.
+    pub fn choice_names(&self) -> Vec<SlotId> {
+        let mut names: Vec<SlotId> = self.choices.keys().cloned().collect();
+        names.sort_by(|a, b| {
+            a.as_str()
+                .len()
+                .cmp(&b.as_str().len())
+                .then_with(|| a.cmp(b))
+        });
+        names
+    }
+
     pub fn label_of(&self, id: &SlotId) -> Option<Label> {
         self.slots.get(id).map(Entry::label)
     }
@@ -582,6 +619,31 @@ impl SlotStore {
             Some(Entry::Read { value, .. }) => Ok(value.clone()),
             Some(Entry::Unread(_)) => Err(SlotError::Unread(id.clone())),
             None => Err(SlotError::NotWritten(id.clone())),
+        }
+    }
+
+    /// Whether this slot holds text of 0 bytes.
+    ///
+    /// Metadata: a yes or a no, and no part of the text. It is the one figure of
+    /// [`Measured`] that decides anything, because a slot that states 0 bytes has nothing for a
+    /// check to read or for a person to be shown, and the planner is told the size of any slot it
+    /// may not read. A slot still waiting on its file, and a name that holds nothing, are not
+    /// empty.
+    pub fn holds_no_bytes(&self, id: &SlotId) -> bool {
+        matches!(
+            self.slots.get(id),
+            Some(Entry::Read { value, .. }) if value.shape().bytes == 0
+        )
+    }
+
+    /// The size in bytes this slot states for its reference, where it holds text.
+    ///
+    /// Metadata: the figure the planner is shown beside the reference, and no part of the text. A
+    /// slot still waiting on its file, and a name that holds nothing, state no size.
+    pub fn stated_bytes(&self, id: &SlotId) -> Option<usize> {
+        match self.slots.get(id) {
+            Some(Entry::Read { value, .. }) => Some(value.shape().bytes),
+            _ => None,
         }
     }
 

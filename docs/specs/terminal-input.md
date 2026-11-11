@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/terminal.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/hangup.rs
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
@@ -30,6 +31,7 @@ governs:
   - crates/agent/src/interjections.rs
   - crates/agent/src/turn/cutting.rs
   - ui/src/renderer/interjecting.ts
+  - ui/scripts/interjecting.test.mjs
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md
@@ -509,19 +511,38 @@ for a correction that is not coming. Cut short, the words could say the same wro
 stopping at "into this". The key outranks them on the last row because it is the one way to hurry
 what is waiting, and the rows above it still say where theirs are going.
 
+**The mark does not say that a wait is running.** While a `job_output` wait runs, a line sent is
+marked like any other behind a turn that will take it, into this turn at its next round, because
+that is what happens: the wait comes back within a tick of the line and the turn takes it at the
+boundary after. A mark saying a wait was running would describe something that lasts a tick after
+Enter, and it would need the interface to be told which call is in flight so as to draw it. The mark
+answers whether the line is about to be read, and during a wait it is.
+
 **The turn in flight is the one on the screen.** Work handed out to a delegate is a turn of its own,
 and the person typing may not know one is running at all, so what they send waits for the turn they
 are watching rather than going to the delegate. A delegate does not ask for one either: the queue is
 shared and asking is taking, so a delegate that asked and then declined what it was handed would
 throw the line away, leaving the turn it was aimed at to find nothing waiting. A round a turn spends
-waiting for a delegate is a round of that turn, and the boundary it reaches when the delegate is back
-asks like any other: a turn that answered with nothing in order to wait and then went straight on to
-its next request would put the delegate's report to the planner and nothing of what the person made
-of it.
+waiting for a delegate is a round of that turn, and the boundary it reaches when a delegate is back,
+or when the person's line is waiting, asks like any other. The turn waits for the first delegate to
+end or for a line, whichever comes first ([DELEGATE-17](delegation.md#DELEGATE-17)), so a line
+typed during the wait is read at that wake, while the other delegates still work, and not after
+the last of them has ended. A turn that answered with nothing in order to wait and then went
+straight on to its next request would put the delegate's report to the planner and nothing of what
+the person made of it.
 
 Not mid-round. Every call the planner asked for in a round runs, because a round is a set of calls
 asked for together and answering some while abandoning others leaves calls unanswered. Stopping in
 the middle of one is what the keys in INPUT-4 are for.
+
+**A `job_output` wait ends for a line.** A wait the planner asked for in `job_output` is a call that
+can last ten minutes, so the boundary after it can be that far off. The wait comes back within one
+tick of a line arriving that the turn may take, with the job still running and the turn not stopped,
+and the call is answered as any wait is, so the round is whole and the line is taken at its boundary
+([RUN-17](tools/run.md#RUN-17)). The call is not abandoned. A line that is a command, or is held
+behind one, is not one the turn may take and does not end the wait. A delegate's wait is not ended,
+since a delegate takes no line. The wait reads the same arrival handle that cuts a request, which says
+whether a line is there and nothing of what it says.
 
 **A reply that is only thinking, or a call being written, is cut for it.** While a request is out,
 a prompt sent ends the request when the reply so far is thinking or an open call, and the request
@@ -539,6 +560,13 @@ A reply that is prose is left to finish. From its first words until the model op
 person may be reading it, and cutting it would take away text they are in the middle of. The prompt
 then waits for the next boundary as above, or becomes a turn of its own when the reply ends the
 turn. The sentence before a call does not hold the cut off once the call has opened.
+
+**A request waiting to be sent again is cut for it.** An attempt that failed in transit is thrown
+away, and the request waits out a pause before the next attempt goes out. That request has said
+nothing, so a prompt sent during the pause ends the wait and the request goes out at once with the
+prompt in front of it, as for a reply that is only thinking. The pause a service asked for
+([BACKEND-54](backends.md#BACKEND-54)) is ended the same way as one the client chose. The request
+that replaces it is a call of its own and starts its own attempts.
 
 Stopping the turn ends a request that a prompt could have cut, as INPUT-4 says for any request:
 the request answers to a token of its own, which also reads as cancelled once the turn is. A cut
@@ -650,6 +678,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_reaches_the_planner_on_the_next_round`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`
 `verified-by: bravebot_agent::turn::a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_ends`
 `verified-by: bravebot_tui::state::a_prompt_sent_while_a_turn_runs_waits_for_it`
 `verified-by: bravebot_tui::state::a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence`
 `verified-by: bravebot_tui::state::a_folded_paste_in_a_line_sent_mid_turn_reaches_the_planner_as_its_words`
@@ -667,6 +696,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::render::a_prompt_stops_waiting_once_its_turn_begins`
 `verified-by: bravebot_tui::render::a_prompt_stops_waiting_once_the_running_turn_takes_it`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_a_running_turn_is_said_to_go_into_it`
+`verified-by: bravebot_tui::render::a_prompt_waiting_on_a_job_output_wait_is_said_to_go_into_the_turn`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_an_aside_is_said_to_go_as_its_own_turn`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_a_turn_being_stopped_is_said_to_go_as_its_own_turn`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_the_turn_after_a_stop_is_said_to_go_into_it`
@@ -690,6 +720,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_thinking_is_in_the_next_request_at_once`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_a_call_is_being_written_is_in_the_next_request_at_once`
+`verified-by: bravebot_agent::cutting::a_line_typed_while_a_failed_request_waits_to_be_sent_again_goes_out_at_once`
 `verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_writing_prose_waits_for_the_reply`
 `verified-by: bravebot_agent::cutting::stopping_the_turn_still_ends_a_request_that_a_line_could_have_cut`
 `verified-by: bravebot_agent::cutting::a_cut_that_finds_no_line_is_not_repeated`
@@ -707,6 +738,12 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::interjections::the_arrival_handle_follows_every_way_a_line_enters_or_leaves`
 `verified-by: bravebot_agent::interjections::a_held_line_does_not_read_as_waiting`
 `verified-by: bravebot_agent::interjections::the_handle_is_shared_by_every_clone`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_more_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_is_not_ended_by_a_line_the_turn_may_not_take`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_lasts_its_bound_again_after_the_line_was_taken`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_next_request`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_delegates_job_output_wait_does_not_end_it`
 `verified-by: bravebot_core::cancel::a_child_reads_as_cancelled_once_its_parent_is`
 `verified-by: bravebot_core::cancel::cancelling_a_child_leaves_its_parent_alone`
 `verified-by: bravebot_tui::remote_confirm::the_turns_confirmer_sees_a_line_as_the_terminal_adds_it`
@@ -1044,7 +1081,9 @@ as having done nothing: the line in the box, and the copy arriving at the planne
 Where the turn has taken every waiting prompt, the press leaves the box exactly as it was.
 
 A click on a waiting prompt takes it back with the ones typed after it, so a click on the oldest
-does what the key does ([MOUSE-28](mouse.md#MOUSE-28)).
+does what the key does ([MOUSE-28](mouse.md#MOUSE-28)). The words on the rows of the queue remove
+lines without putting them in the box, one line or all of them, by the same rule about what the turn
+has been given.
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top
@@ -3231,3 +3270,27 @@ reads and edits it, since a rewrite a model wrote is the person's message only o
 `verified-by: bravebot_ui_bridge::enhancing::a_running_turn_refuses_a_rewrite_and_asks_nothing_of_the_service`
 `verified-by: bravebot_ui_bridge::enhancing::cancelling_a_rewrite_that_is_out_ends_it_as_stopped`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/enhancing.test.mjs drives the window's own functions with the bridge's answers: a rewrite replaces only the line it was asked for and keeps that line to put back, a draft typed since is left alone, a second rewrite still puts back the first line, an answer that offers nothing leaves the box and says why, the box is refused for a staged marker, the one refusal the bridge cannot make, and emptying the box ends the rewrite; make check-ui runs the test)`
+
+<a id="INPUT-51"></a>
+### INPUT-51: a session ends when its terminal hangs up
+
+A terminal that closes ends the session by the signal it sends. A session whose terminal is a pty it
+was only handed as standard input and output, as a launcher or a test with no session of its own
+hands one, is sent no signal when that pty closes, and reading the terminal then returns nothing for
+ever. The interface that draws looks at its terminal twice a second, from a thread of its own
+because the thread that reads does not come back from a terminal that has gone, and ends with status
+129, which a shell reports for a program ended by SIGHUP, the first time the other end has closed.
+The look begins before the terminal is taken, so the questions asked of it on the way in are
+covered. A key waiting to be read is not a hangup, and nothing is looked at where standard input is
+not a terminal.
+
+**Why.** crossterm takes a read of nothing for no event yet and reads again, so a session whose
+terminal has gone spins at a core's worth of CPU for as long as it lives, and every other process on
+the machine slows with it. Sessions left behind this way add up, one core each.
+
+**Known costs.** The session ends as the signal ends it, without the cleanup of a normal exit.
+
+`verified-by: bravebot_tui::hangup::a_terminal_that_is_idle_or_has_a_key_waiting_has_not_hung_up`
+`verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
+`verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
+`verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`

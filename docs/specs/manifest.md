@@ -174,6 +174,10 @@ fetch that chose it, not a routing field. That fetch has to be of the same conne
 the act, or the plan is refused, so an act cannot reach an item from anywhere its own locked place
 does not cover.
 
+A search step prints each hit as `path:line:text` and each line of context as `path-line-text`, with
+the text following the separator byte for byte, as the search tool does
+([SEARCH-10](tools/search.md#SEARCH-10)).
+
 `verified-by: bravebot_core::manifest::every_effect_destination_is_named_for_the_routing_lock`
 `verified-by: bravebot_core::manifest::an_omitted_search_directory_is_locked_as_the_workspace`
 `verified-by: bravebot_core::manifest::an_omitted_list_pattern_is_locked_as_no_filter`
@@ -183,6 +187,7 @@ does not cover.
 `verified-by: bravebot_agent::manifest::a_plan_whose_routing_field_is_not_text_is_refused`
 `verified-by: bravebot_agent::manifest::a_write_lands_where_the_plan_said_and_carries_what_it_never_read`
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
+`verified-by: bravebot_agent::manifest::a_search_step_prints_the_line_unchanged_after_path_and_line_number`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`
@@ -258,7 +263,12 @@ directory a search runs in and the glob it filters by, not the pattern alone. A 
 also names where the content it carries came from and where it goes (MANIFEST-14), since approving
 the plan is what releases it, and the text and title the plan wrote for it, the first 200 characters
 of each on one line with control characters escaped. A server call's line names the server, the
-tool and the arguments in full. A file write that carries a slot names where
+tool and the arguments in full. A step that names a file draws the name of that file the way every
+other prompt does ([PROMPT-1](prompting.md#PROMPT-1)), so `note.md ` with a space at its end is
+quoted and does not read as `note.md`. Which fields name a file is the tool's contract, never the
+value: the `path` of a read or a write and the `directory` of a listing or a search. The summary, the
+question and the record show a step through one function and draw it alike. A file write that
+carries a slot names where
 that slot's content came from, in the same words, wherever that is anything but the workspace.
 Declining stops the run, and what was declined comes back with the
 error under MANIFEST-3, so the plan can still be read.
@@ -302,6 +312,11 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_tui::remote_confirm::a_plan_crosses_with_every_step_and_the_answer_comes_back`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
 `verified-by: bravebot_core::manifest::a_described_write_names_where_its_content_came_from_unless_that_is_the_workspace`
+`verified-by: bravebot_core::manifest::a_step_spells_the_fields_the_contract_names_as_paths_and_no_other`
+`verified-by: bravebot_agent::manifest::a_plan_step_draws_a_file_name_spelled`
+`verified-by: bravebot_agent::manifest::the_summary_the_question_and_the_record_spell_a_step_alike`
+`verified-by: bravebot_core::manifest::a_step_keeps_the_white_space_of_a_name_it_drew`
+`verified-by: bravebot_agent::manifest::a_running_step_reports_the_file_it_names_spelled`
 `verified-by: bravebot_agent::manifest::a_fetched_slot_is_written_to_a_file_and_answered_as_it_came`
 `verified-by: bravebot_agent::manifest::a_connector_act_is_sent_to_the_authority_under_bypass_carrying_no_answer`
 `verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
@@ -541,6 +556,10 @@ does not change them. A tool's account of its own failure is drawn in the margin
 client holds none of it, and the step's line says that the call failed and its reply could not be
 used. No word of the reply is in the line or in the record of the run.
 
+A server declared to run in an OpenShell sandbox ([SERVERS-24](mcp-servers.md#SERVERS-24)) is called by
+a plan run and by nothing else: its list is put before the plan as any server's is, and a step calls
+it as above. A turn neither puts that list nor offers its tools.
+
 **Why.** A call to a server is an effect decided by a program the plan does not name, so it is an
 action and it is approved by what a person can decide alone, the alias and the tool, with the
 arguments shown beside them. A plan has read nothing, so every argument is the planner's literal,
@@ -583,6 +602,7 @@ every call in force in a plan without a copy of either here.
 `verified-by: bravebot_ui_bridge::manifest::a_plan_run_after_a_turn_finds_the_servers_the_turn_started`
 `verified-by: bravebot_ui_bridge::manifest::a_plan_run_stopped_at_a_servers_question_starts_nothing_and_the_next_run_asks_again`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls`
 
 ## Known costs
 

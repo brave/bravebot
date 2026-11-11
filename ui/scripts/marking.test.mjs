@@ -233,7 +233,7 @@ const CARDS = {
     marks: 'class="mcp-tool-description"',
   },
   'mcp-call': {
-    entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true }),
+    entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true, askedForPrivateArguments: false, also: [] }),
     marks: 'class="mcp-tool-description"',
   },
   // SERVERS-11: where a redirect pointed is the server's own bytes.
@@ -270,6 +270,13 @@ const CARDS = {
     marks: null,
     // labels.md:355 gives a reply out of a transport the context's label, not the network's.
     why: 'the planner’s questions, which are its words rather than content it read',
+  },
+  'ask-settled': {
+    entry: () => t.askSettled({ rows: [{ question: FORGED_CHROME, outcome: FORGED_CHROME }] }),
+    marks: null,
+    // docs/specs/tools/ask-user.md ASK-13: a row is a question the planner put and the answer a
+    // person gave to it, worded by the catalog, and is for the screen only.
+    why: 'the planner’s questions and what the person answered, picked from its options or typed, which are no content that was read',
   },
   quarantined: { entry: () => confined([FORGED_CHROME, 'api_key = hunter2']), marks: '<pre class="preview">' },
   confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
@@ -336,7 +343,7 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
 const working = (thinking, showThinking, offerThinking = thinking !== '' || showThinking) =>
   renderToStaticMarkup(
     React.createElement(WorkingRow, {
-      bot: null, word: 'Thinking', tokens: 0, turn: null, onAudit() {}, thinking, showThinking, offerThinking, onThinking() {},
+      bot: null, word: () => 'Thinking', tokens: 0, turn: null, onAudit() {}, thinking, showThinking, offerThinking, onThinking() {},
     }),
   )
 
@@ -603,6 +610,8 @@ test('a failure of the ChatGPT account says its sentence with the command drawn 
     /<p>The ChatGPT sign-in has ended, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
     drawn,
   )
+  // The window can start this sign-in itself, so the card offers it beside the command (CHATGPT-15).
+  assert.match(drawn, /<div slot="actions" class="error-actions"><span class="sign-in-ask"><leo-button data-test="sign-in-chatgpt">Sign in<\/leo-button>/, drawn)
   // The category's own advice names a place the account has no credential, so it is not said beside.
   assert.doesNotMatch(drawn, /Agent settings/, drawn)
   assert.doesNotMatch(drawn, /`/, drawn)
@@ -684,7 +693,7 @@ test('a run that failed on the ChatGPT account says the same sentence with the c
  * The picker's warnings are the bridge's sentences, one for each service whose models could not be
  * listed. A warning that names a command has it beside the sentence, in the same order, and it is
  * drawn as code: the picker does not read the sentence to find it, a warning with none is a plain
- * paragraph in the picker's status type, and nothing in either is read as markup.
+ * sentence in the same alert, and nothing in either is read as markup.
  */
 test('a picker warning draws the command it names as code and the rest as text', () => {
   const { ModelWarnings } = load('src/renderer/components/ModelWarnings.tsx')
@@ -696,10 +705,16 @@ test('a picker warning draws the command it names as code and the rest as text',
   const drawn = draw({ warnings: [named, unnamed], commands: [command, null] })
   assert.match(
     drawn,
-    /<p class="model-status">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
+    /<leo-alert data-test="model-warning">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<div slot="actions"><span class="sign-in-ask"><leo-button data-test="sign-in-chatgpt">Sign in<\/leo-button><\/span><\/div><\/leo-alert>/,
     drawn,
   )
-  assert.match(drawn, /<p class="model-status">Could not load models from Down Gateway\. Try again\.<\/p>/, drawn)
+  assert.match(drawn, /<leo-alert data-test="model-warning">Could not load models from Down Gateway\. Try again\.<\/leo-alert>/, drawn)
+  // Each warning is a small warning alert, and only the one with a sign-in has actions.
+  const alerts = ModelWarnings({ warnings: [named, unnamed], commands: [command, null] }).props.children
+  assert.deepEqual(alerts.map((each) => [each.props.type, each.props.size, each.props.className, each.props.hasActions, each.props.isInlineActions]), [
+    ['warning', 'small', 'model-status', true, true],
+    ['warning', 'small', 'model-status', false, true],
+  ])
   assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
   assert.doesNotMatch(drawn, /`/, drawn)
 
@@ -741,7 +756,7 @@ test('the code in a failure card, a narration and a picker warning is set in the
   for (const [file, surface, selector] of [
     ['cards.css', '.error-card', '.error-card p code'],
     ['transcript.css', '.plan-detail', '.plan-ended .plan-detail code'],
-    ['menus.css', '.model-status', '.model-status code'],
+    ['models.css', '.model-status', '.model-status code'],
     ['activity.css', '.narration', '.narration code'],
   ]) {
     const setting = rules.filter((rule) => 'font' in rule.declarations || 'font-family' in rule.declarations || 'font-size' in rule.declarations)

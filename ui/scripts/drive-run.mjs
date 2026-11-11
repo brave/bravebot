@@ -6,7 +6,7 @@
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, TRUST_APPROVE } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, approveTrust, trustQuestion } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -39,7 +39,7 @@ await page.waitForTimeout(1500)
 // A session whose record kept no trust map asks again on open. Trusting is what lets the
 // turn get as far as wanting to run something.
 if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await page.locator(TRUST_APPROVE).click()
+  await approveTrust(trustQuestion(page))
   await page.waitForTimeout(600)
 }
 
@@ -76,7 +76,7 @@ if (await appears(page.locator('.confirm.run'), 120, 'the pipeline is put to the
   )
 
   check(
-    (await card.locator('.confirm-actions button').count()) === 3,
+    (await card.locator(CONFIRM_BUTTON).count()) === 3,
     'three answers: refuse, run once, run and stop asking',
   )
   await page.screenshot({ path: '/tmp/bravebot-ui/13-run-asked.png' })

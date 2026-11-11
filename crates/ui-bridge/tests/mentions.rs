@@ -1,5 +1,7 @@
 //! NAME-9: the window names a file with `@` through the bridge, on the terminal's rules.
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_ui_bridge::bridge::Bridge;
 use bravebot_ui_bridge::protocol::{Event, Request};
 use serde_json::{Value, json};
@@ -223,7 +225,9 @@ fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
     let refusal = call(
         &mut bridge,
         "turn.send",
-        json!({ "session": &project.session, "prompt": "read @../outside.txt" }),
+        message_ids::with_fresh(
+            json!({ "session": &project.session, "prompt": "read @../outside.txt" }),
+        ),
     )
     .expect_err("an outside name");
     assert!(refusal.contains("@../outside.txt"), "{refusal}");
@@ -239,11 +243,11 @@ fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
     let composed = call(
         &mut bridge,
         "turn.send",
-        json!({
+        message_ids::with_fresh(json!({
             "session": &project.session,
             "prompt": "bring your memory up to date, @../outside.txt",
             "composed": "consolidation",
-        }),
+        })),
     );
     assert!(
         !composed

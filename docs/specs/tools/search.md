@@ -93,13 +93,16 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 Otherwise it is quarantined whole. Unlike a listing, a search returns one reference for the whole
 result rather than one per hit, so its hits are not addresses.
 
-The label comes from the paths the walk reached, before any file is opened. What a file holds does
+The label comes from the paths the walk reached, before any file is opened, each asked about under
+every name the file has, as a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). What a file holds does
 not change it: an unvouched file with no matching line, or one that is not valid text, taints the
 result as one full of matches does. The search still compares the pattern against such a file, so
 the file decides the counts the result reports, and [labels.md](../labels.md) records that among its
 known costs, with what an attacker who owns the file gains.
 
 `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is`
+`verified-by: bravebot_agent::workspace::a_search_of_a_hard_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::workspace::a_search_of_a_symbolic_link_to_a_distrusted_file_is_untrusted`
 `verified-by: bravebot_agent::workspace::what_an_unvouched_file_holds_changes_a_searchs_counts_and_not_its_label`
 `verified-by: bravebot_agent::turn::a_search_touching_one_unvouched_file_is_quarantined_whole`
 `verified-by: bravebot_agent::turn::untrusted_search_results_never_reach_the_model`
@@ -368,6 +371,11 @@ cap of its own bounds how many are returned, and one that stopped the lines arou
 being added makes the search incomplete exactly as [SEARCH-3](#SEARCH-3) says of the other caps,
 whether or not the planner may read the result.
 
+A match is printed as `path:line:text` and a context line as `path-line-text`, with the text
+following the separator byte for byte, as `grep -n` and `grep -C` print them. A line that starts
+with one space shows that one space, as `read_file` shows it. Groups of context that are not
+adjacent in the file are divided by a `--` line.
+
 **Why.** Understanding a hit otherwise costs a second call per hit, a round trip and a read of a
 file the search had open. The match cap cannot bound the lines around matches: two hundred matches
 with ten lines either side is four thousand lines, which the planner pays for in every later round,
@@ -379,6 +387,7 @@ though nothing lay near them.
 `verified-by: bravebot_agent::workspace::a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_context_past_the_maximum_is_held_to_it`
 `verified-by: bravebot_agent::turn::a_search_with_context_shows_the_lines_around_each_hit`
+`verified-by: bravebot_agent::turn::a_search_result_keeps_a_lines_indentation_as_read_file_shows_it`
 `verified-by: bravebot_agent::turn::a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete`
 
 <a id="SEARCH-11"></a>

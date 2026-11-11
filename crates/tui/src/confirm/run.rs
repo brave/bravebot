@@ -1185,6 +1185,7 @@ mod tests {
             started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         };
         let mut writing = step("tee", &[]);
@@ -1800,6 +1801,18 @@ mod tests {
         assert!(drawn.contains("not sandboxed"), "{drawn}");
         assert!(drawn.contains("container daemon"), "{drawn}");
         assert!(drawn.contains("as root on this machine"), "{drawn}");
+
+        // The same line under a wrapper is the same grant, and the wrapper's own words are not
+        // the program's.
+        let pipeline = bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+            "timeout",
+            vec!["30".into(), "docker".into(), "ps".into()],
+        )]);
+        let request =
+            RunRequest::from_pipeline(&pipeline, &["/usr/bin/timeout".into()], "/home/someone");
+        let drawn = rendered_run(&request);
+        assert!(drawn.contains("container daemon"), "{drawn}");
+        assert!(drawn.contains("as root on this machine"), "{drawn}");
     }
 
     /// Most lines reach nothing of the sort, and the row is not drawn for them. A sentence that
@@ -1938,6 +1951,7 @@ mod tests {
             started_as: std::path::PathBuf::from("/bin/cat"),
             args: Vec::new(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdin {
                 path: secret.clone(),
             }],
@@ -2058,6 +2072,7 @@ mod tests {
             started_as: std::path::PathBuf::from("/usr/bin/git"),
             args: vec!["log".to_string()],
             environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
+            expansions: Vec::new(),
             routes: Vec::new(),
         };
         RunRequest {
@@ -2224,6 +2239,7 @@ mod tests {
             started_as: std::path::PathBuf::from("/bin/sh"),
             args: vec!["check.sh".to_string()],
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdout {
                 path: destination.clone(),
                 append: false,
@@ -2556,6 +2572,7 @@ mod tests {
                 started_as: "/usr/bin/gh".into(),
                 args: vec!["-R".to_string(), "a/b".to_string(), "pr".to_string()],
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]);
         for request in [

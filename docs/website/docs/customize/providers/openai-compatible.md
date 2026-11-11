@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: An OpenAI-compatible gateway
-description: Name a gateway, the models it offers and where its credential lives, including a local Ollama that wants no key.
+description: Configure OpenAI-compatible gateways, endpoints, headers and credentials, keyless local models, model rosters, context windows, options, variants, thinking and retries.
 ---
 
 # Reaching an OpenAI-compatible gateway
@@ -37,7 +37,8 @@ was, and the conversation budget stays where it was too.
 | | `blacklist` | model ids; of a fetched roster, these are not offered |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
-| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
+| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated, or 5 after a rate limit that named no wait (bravebot's own field) |
+| | `retryWindowMs` | how long after its first failure a request whose connection failed is still sent again, in milliseconds, 300000 where neither this nor `maxRetries` is stated (bravebot's own field) |
 | | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
 | | `setCacheKey` | `true` to send a `prompt_cache_key` in each chat-completions request, the same value for every request of a session and another value in the next session, for a service that routes by it to serve a session's prompt cache. Off where unstated, since it lets the host tie a session's requests together (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
@@ -54,7 +55,7 @@ rather than refused. opencode's `cost`, `modality` and `package` fields do nothi
 **A gateway bravebot already knows an endpoint for needs no `baseURL`.** [`openrouter`](openrouter.md)
 and [`openai`](openai.md) are the names it knows today. Any other id needs one written down, and an entry with neither a known name
 nor a stated endpoint configures no service. A stated `baseURL` always wins, so a known name stays
-usable against a proxy or a private deployment. A known name supplies the endpoint and no credential:
+usable against a proxy or a private deployment. A port is read as digits that fit in 65535 after the host; a `:` followed by anything else, such as `https://gw.example.com:/v1` or `:abc`, leaves the entry out of the gateways, and `bravebot doctor` names it by its id and by the text written where the port belongs, without the rest of the address. A `BRAVE_AI_CHAT_ENDPOINT` written the same way fails the configuration with an error that names that text. A known name supplies the endpoint and no credential:
 the block still says where its credential lives, as [below](#the-credential). What is different at
 `api.openai.com` follows the host a request goes to, whatever the entry is called, and is on the
 [OpenAI page](openai.md).
@@ -120,6 +121,33 @@ models it offers, and how an entry reaches the Responses API.
 [Reaching Google Vertex AI](google-vertex.md) says how an entry keyed `google-vertex`
 reaches Vertex AI with or without a project, and what express mode is.
 
+### Cloudflare
+
+An entry keyed `cloudflare-workers-ai` that states `options.accountId` reaches Cloudflare Workers AI
+at `https://api.cloudflare.com/client/v4/accounts/<accountId>/ai/v1`. An entry keyed
+`cloudflare-ai-gateway` that states `options.accountId` and `options.gatewayId` reaches Cloudflare AI
+Gateway at `https://gateway.ai.cloudflare.com/v1/<accountId>/<gatewayId>/compat`. A model on the
+gateway is named `<provider>/<model>`, as `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, and
+the name is sent as written.
+
+```json
+{
+  "provider": {
+    "cloudflare-ai-gateway": {
+      "options": { "accountId": "abc123", "gatewayId": "my-gateway" }
+    }
+  }
+}
+```
+
+An account id is letters and digits, and a gateway id is letters, digits, `-` and `_`. An entry whose
+id is missing or holds any other character configures no service, and the gateway has no default id.
+Where the entry names no `env`, states no `apiKey` and states no `baseURL`, the key is read from
+`CLOUDFLARE_API_KEY` for Workers AI and `CLOUDFLARE_API_TOKEN` for AI Gateway. The ids are read from
+`options` only, so `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_GATEWAY_ID` are not used. A gateway that
+requires authentication takes its `cf-aig-authorization` header in `options.headers`. A `baseURL` the
+entry states is where its requests go instead of the built address.
+
 ### The credential
 
 Name a variable in `env` and keep the token wherever you already keep secrets. Or store it with
@@ -150,9 +178,15 @@ custody and leaves the token live there.
 **A block naming no credential at all is a different statement, and a supported one.** No `env`, no
 `options.apiKey` and no stored key is you saying this gateway wants none: its requests carry no
 `authorization` header and its roster is asked for without one. `doctor` reports it as needing none
-rather than as missing one. Deciding this by endpoint instead would refuse the same local service reached across a LAN or
-through a reverse proxy, and a dummy `apiKey` would just teach people to write fake credentials into a
+rather than as missing one. A dummy `apiKey` would just teach people to write fake credentials into a
 file they paste into issues.
+
+**One exception: a known name with no `baseURL` of its own.** A block for `openai`, `openrouter` or
+`anthropic` that states no `baseURL` is reached at a service that refuses every request without a key,
+so naming no credential there means one is missing. `bravebot auth status` says it is not signed in,
+`doctor` says none was found, and the request is refused with the remedy named. A block that states
+its own `baseURL`, such as a local service reached under a known name, keeps the reading above. So
+does a block that carries the credential in an `Authorization` header it names in `headers`.
 
 ### A local Ollama, or another gateway that wants no key
 
@@ -194,8 +228,13 @@ answers only where a gateway does not offer the narrower question. Models that c
 left out.
 
 Nothing is capped. Ordering does that work instead: the model a session would use comes first and the
-rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away
-from the rest of the roster.
+rest are sorted by name. A listing that cannot be read contributes nothing and takes nothing away
+from the rest of the roster, and the picker says which gateway's could not be read, by the name its
+block gives it. The terminal says so in a note before the picker is drawn, and adds that one of its
+models can be named as `--model <id>/<model>`. The desktop app shows a warning that names the gateway
+and says to try again. A gateway whose block names a credential nothing holds is not asked and is not
+mentioned in that note, since `bravebot doctor` reports the missing credential. A gateway whose block
+lists its models is not asked.
 
 **`whitelist` and `blacklist` narrow a fetched roster** without listing every model. Each is an array
 of ids as the gateway names them. The whitelist is applied first and the blacklist then removes from
@@ -278,10 +317,19 @@ differently shows nothing. It is not saved to the session and is not sent back i
 
 ### Retries and a reply gone quiet
 
-A request that fails because the connection gave out, or because the service said it was busy, is
-sent again twice, after a pause of one second and then two. A reply that is still arriving is given
-up on when nothing has come for two minutes. Both are figures you can change for one gateway in its
-`options`:
+A request that fails because the connection gave out, because the name of the host did not resolve,
+because the network is down or unreachable, or because the service said it was busy, is sent again
+for five minutes after the first failure. The pause before each attempt doubles from one second and
+stops growing at one minute, so a machine that wakes without a network, a VPN that reconnects or a
+service that recovers within a few minutes is reached without anyone asking again. Typing a message
+while it waits sends that message at once instead of waiting for the next attempt. A mistyped host is
+therefore sent again for those five minutes before the failure is reported, since a name that does
+not exist and a network that is not up yet cannot be told apart by the failure.
+
+A reply that stopped before it was finished, or that the service reported as failing part way
+through, is sent again twice, because each attempt is billed. A reply that is still arriving is
+given up on when nothing has come for two minutes. All three are figures you can change for one
+gateway in its `options`:
 
 ```json
 {
@@ -290,6 +338,7 @@ up on when nothing has come for two minutes. Both are figures you can change for
       "options": {
         "baseURL": "https://gateway.example/v1",
         "maxRetries": 4,
+        "retryWindowMs": 3600000,
         "idleTimeoutMs": 300000
       }
     }
@@ -298,20 +347,30 @@ up on when nothing has come for two minutes. Both are figures you can change for
 ```
 
 `maxRetries` is how many times a request is sent *again*, so `4` is five requests in all and `0`
-sends each one once. It is at most 7. `idleTimeoutMs` is for a model that thinks for longer than two
-minutes before it writes; it is at most 600000, ten minutes. Both are written as numbers: `"0"` in
-quotes, a fraction, a negative figure and a gap of `0` leave the figure at what it was, and a figure
+sends each one once. It is at most 7. `retryWindowMs` is how long after its first failure a request
+whose connection failed, or that the service said to try again later, is still sent again: stated,
+it applies to those failures whatever `maxRetries` says, and it is at most 3600000, one hour. Stating
+`maxRetries` and no window leaves only the count in force, so `maxRetries: 0` still sends each
+request once. `idleTimeoutMs` is for a model that thinks for longer than two minutes before it
+writes; it is at most 600000, ten minutes. All three are written as numbers: `"0"` in quotes, a
+fraction, a negative figure and a window or gap of `0` leave the figure at what it was, and a figure
 above its limit is the limit.
 
-Only the count and the wait change. Which failures are sent again does not: a refused credential or
+Only the count and the waits change. Which failures are sent again does not: a refused credential or
 a model the service does not have is refused the same way each time, whatever count you gave. A wait
 the service asked for with a `Retry-After`, up to two minutes, is taken before each retry in place of
-the pause, so a large count against a service that keeps asking for it is a long wait.
+the pause, so a large count or window against a service that keeps asking for it is a long wait.
+
+A rate limit (HTTP 429) that carries no usable `Retry-After` is sent again up to five times where you
+state no `maxRetries`, after waits of 8, 16, 32, 64 and 120 seconds, 240 seconds in all. A count you
+state replaces that figure as it replaces the two retries of every other failure, so `2` sends a rate
+limit three times and `0` once, and each wait of the schedule is taken before each retry, up to two
+minutes. A count of `7` against a limit that never lifts is held for about eight minutes of waiting.
 
 A gateway on this machine, such as a local Ollama, is waited on through any silence while you can
 stop the turn, so `idleTimeoutMs` does not reach it. `maxRetries` does.
 
-These two are read from your own `settings.json`, from a file `--settings` names, and from the
+These three are read from your own `settings.json`, from a file `--settings` names, and from the
 machine-level file an administrator keeps. A `.bravebot/settings.json` in a checkout cannot set them,
 as it cannot name a gateway: `bravebot doctor` says so when one tries. Brave's own endpoint and the
 models you reach through the Bedrock tier variables alone have no entry to put them in and keep the

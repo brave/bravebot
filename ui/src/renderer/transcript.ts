@@ -14,6 +14,7 @@ import type {
   Activity,
   AskAnswer,
   AskRequest,
+  AskSettled,
   Change,
   ConfirmRequest,
   CutOff,
@@ -58,7 +59,13 @@ export type Entry = (
   | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true }
   | { kind: 'assistant'; id: string; text: string }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
-  | { kind: 'narration'; id: string; text: string; command?: string | null }
+  | { kind: 'narration'; id: string; text: string; command?: string | null; refused?: true }
+  /**
+   * The questions an `ask_user` call put and what became of each, worded by the kernel and drawn
+   * under the call once the series is settled (ASK-13). The words are the kernel's; nothing here
+   * reads a question or an answer to decide how it is drawn.
+   */
+  | { kind: 'ask-settled'; id: string; rows: { question: string; outcome: string }[] }
   /**
    * A file that was put in front of the planner because somebody named it.
    *
@@ -321,6 +328,14 @@ export function summonedAt(entries: Entry[], found: Map<number, string>): Entry[
 }
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
 export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
+export const askSettled = (settled: AskSettled): Entry => ({ kind: 'ask-settled', id: nextId(), rows: settled.rows })
+/** What `/schedule` answered, drawn as a narration: for the person to read and never part of the conversation. */
+export const scheduleAnswered = (answer: { lines: string[]; refused: boolean }): Entry => ({
+  kind: 'narration',
+  id: nextId(),
+  text: answer.lines.join('\n'),
+  ...(answer.refused ? { refused: true as const } : {}),
+})
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
@@ -430,28 +445,35 @@ export function beginTurn(entries: Entry[], number: number): Entry[] {
 /**
  * Attach a finished call to the row it started in.
  *
- * Matched on the last still-running tool row rather than by an id, because the engine
- * does not give calls one: it announces a start and later a finish, and the pairing is
- * positional. A finish with nothing running is appended as its own row rather than
- * dropped — an unexplained line is better than a missing one.
+ * Matched on the call id the start and the finish both carry, never on what the call names: a
+ * call's target can be content from outside, and a delegate's calls arrive between the turn's,
+ * so the latest running row is not always the one a finish ends. A finish for no running row is
+ * appended as its own row rather than dropped, since an unexplained line is better than a missing one.
  */
 export function finish(entries: Entry[], activity: Activity): Entry[] {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (entry?.kind === 'tool' && entry.activity.note === null) {
-      const updated = [...entries]
-      updated[index] = { ...entry, activity }
-      return updated
+  if (activity.call !== null) {
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index]
+      if (entry?.kind === 'tool' && entry.activity.note === null && entry.activity.call === activity.call) {
+        const updated = [...entries]
+        updated[index] = { ...entry, activity }
+        return updated
+      }
     }
   }
   return [...entries, { kind: 'tool', id: nextId(), activity, landing: null }]
 }
 
-/** Where the last finished call's result went. */
-export function land(entries: Entry[], landing: Landing): Entry[] {
+/**
+ * Where a finished call's result went, on the row of the call with that id. A delegate's call can
+ * start between the turn's call and its landing, so the latest row without one is not always the
+ * row the landing is about. A landing with no id, or for a call with no row, is dropped.
+ */
+export function land(entries: Entry[], landing: Landing, call: number | null): Entry[] {
+  if (call === null) return entries
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]
-    if (entry?.kind === 'tool' && entry.landing === null) {
+    if (entry?.kind === 'tool' && entry.landing === null && entry.activity.call === call) {
       const updated = [...entries]
       updated[index] = { ...entry, landing }
       return updated
@@ -664,6 +686,7 @@ export function searchableText(entry: Entry): string {
   switch (entry.kind) {
     case 'turn-start': return ''
     case 'attached': return entry.path
+    case 'ask-settled': return entry.rows.map((row) => `${row.question} ${row.outcome}`).join(' ')
     case 'consolidation': return 'Updating persistent memory'
     case 'tool': return [entry.activity.verb, entry.activity.shownTarget, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')

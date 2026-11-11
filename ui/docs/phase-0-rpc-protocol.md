@@ -610,7 +610,8 @@ confirmation is **refused** (§8.4). Returns `{}` once the worker has joined.
 Puts the session back to where it stood `steps` turns ago, on disk and in the conversation
 together, as the terminal's `/undo` and `/rewind` do (SESSION-19). Each file a rewound turn
 wrote goes back to what it held before the earliest of them, and the conversation, turn count,
-spend, task lists and audit trail go back with it. Refused with `turn_in_flight` while a turn
+spend, task lists and audit trail go back with it. The answers given to the planner's questions
+are forgotten, so a question the planner puts again is sent as an `ask.request`. Refused with `turn_in_flight` while a turn
 runs, and with `bad_request` where the session holds fewer than `steps` points.
 
 ```json
@@ -633,6 +634,8 @@ than patching what it drew.
 
 #### `turn.send`
 
+`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10). A send under an id the session has recorded starts no turn: with the same parameters it is given the first answer again, and with others it is refused with `bad_request`. A refusal is recorded too, so a send after one needs a new id. A session records at most 4096 sends and refuses a new id past that (RPCVIEW-11).
+
 The optional `model` parameter selects a model ID for this and subsequent turns on the
 open session handle. Provider IDs remain qualified (for example,
 `openrouter/anthropic/claude-haiku-4.5`). Omitting it or passing `null` retains the
@@ -654,6 +657,7 @@ with the configured default, or `null` when configuration is unavailable.
 ```json
 { "id": 5, "method": "turn.send",
   "params": { "session": "s1", "prompt": "why does the parser drop trailing commas?",
+              "messageId": "0b6f1c9e-3d2a-4f5e-9a71-2c4d8e6f0a13",
               "files": ["notes.md"], "dropped": ["/Users/me/briefing.md"],
               "attachments": ["/Users/me/Desktop/screenshot.png"],
               "images": [{ "media": "image/png", "data": "iVBORw0KGgo..." }] } }
@@ -763,6 +767,14 @@ keeps the behaviour it had.
 
 **One turn at a time per session.** A second `turn.send` on a session with a turn in
 flight errors `turn_in_flight`. Different sessions run concurrently.
+
+#### `turn.lookup`
+
+```json
+{ "id": 7, "method": "turn.lookup", "params": { "session": "s1", "messageId": "0b6f1c9e-3d2a-4f5e-9a71-2c4d8e6f0a13" } }
+```
+
+Says what the session answered the `turn.send` with that id: `{ "state": "accepted", "turn": 5, "target": 12 }`, `{ "state": "refused", "error": { "code": "turn_in_flight", "message": "..." } }`, or `{ "state": "not_received" }`. It does not depend on the view's rows, and it says whether a turn started, not how it ended. An unknown handle, which is what a session closed or a bridge restarted leaves, is refused with `no_such_session`; a client takes that as unknown, not as not sent (RPCVIEW-11).
 
 #### `turn.cancel`
 
@@ -1022,6 +1034,25 @@ instead. The flag exists so the client can be written once against both.
 version; `home` and `defaultModel` may be null. Sent as the
 `agent.ready` event at startup and also available as a request.
 
+#### `schedule.command`
+
+```json
+{ "id": 12, "method": "schedule.command", "params": { "session": "s1", "argument": "list" } }
+→ { "lines": ["1  0 9 * * *  read  active"], "refused": false, "running": false }
+```
+
+Carries out `/schedule <argument>` for a line a person typed into the composer (CMD-1), with the code
+`bravebot schedule` runs (SCHEDULE-8). The bridge cuts `argument` into words; a quote left open is
+answered with `refused: true` and nothing is run. `lines` is what the command printed, then the
+sentence of a refusal, then a notice, each with control characters pictured. `refused` is the
+command's own outcome. The lines are for the transcript and are never sent to the model. `add` stores
+read mode whatever mode the session is in.
+
+`run-now` answers at once with `running: true` and one line saying the run started. The line the run
+ends with arrives later as a `schedule.ran` event. While a turn runs, `list`, `pending` and
+`history` are answered and every other form fails with `turn_in_flight` and runs nothing (CMD-8). An
+unknown `session` is `no_such_session`.
+
 ### 7.4 Error codes
 
 | code | meaning |
@@ -1048,7 +1079,8 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
-| `phase` | `{ phase }` | `Reporter::phase` |
+| `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
+| `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
 | `narration` | `{ text }`, or `{ text, command }` | `Reporter::narration`, **empty ones dropped**; the bridge's own notices (a summary the ChatGPT account could not make, a move to the fallback model after it failed) carry `command`, the words of `text` that are a command to run, or `null` |
@@ -1059,7 +1091,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `hook.started` | `{ moment, program }` | `Reporter::hook_started` |
 | `hook.finished` | `{}` | `Reporter::hook_finished` |
 | `agents` | `{ agents: [ { id, kind, task, state } ], started, working }`, `id` as the driver spells the number (`d1`, and it may repeat), `state` one of `working`, `finished`, `failed` | `Reporter::delegate_started` and `delegate_finished`, and the end of a turn or run with an agent still working; **nothing the delegate printed, its note and report dropped** (VIEW-35) |
-| `landed` | `{ landing }` | `Reporter::landed` |
+| `landed` | `{ call, landing }`, `call` the id of the call whose result this places, the same as on its `tool.started`, or `null` where no dispatch made the line; a client with no row of that id drops it | `Reporter::landed` |
 | `quarantined` | `Shown` | `Reporter::quarantined` |
 | `todos` | `{ rows: [ { content, status } ] }` | `Reporter::todos` |
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
@@ -1079,7 +1111,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
 | `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
 | `mcp-tools.request` | `{ request, alias, tools, refused, changed, vetting }` | offer a server's tools to the model (SERVERS-8) |
-| `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand }` | call a server's tool (SERVERS-7) |
+| `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand, askedForPrivateArguments, also }` | call a server's tool (SERVERS-7) |
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
 | `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
@@ -1090,7 +1122,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 `Activity` serialises as:
 
 ```json
-{ "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs", "shownFile": "src/main.rs",
+{ "call": 7, "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs", "shownFile": "src/main.rs",
   "why": "see the entry point", "note": "412 lines",
   "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
@@ -1108,6 +1140,8 @@ it is. It equals `shownTarget` where the call names no file.
 `why` is the planner's own line on what the call is for, the same on `tool.started` and
 `tool.finished`, and empty where it gave none. It is released for the screen and read by
 nothing else, so a client draws it beside the call or not at all.
+
+`call` is the id the engine gives a dispatch, taken from a counter and never from the call or the reply. It is the same on a call's `tool.started` and `tool.finished` and unique within the process, so a client pairs a finish with its start by `call` alone, never by `verb` or `target`, which can be content from outside. It is `null` on a line no dispatch made, which no finish ends.
 
 `note: null` means the call is still running — that is what distinguishes an unfinished
 line from one that finished with nothing to say, and the client must render the two
@@ -1697,8 +1731,11 @@ Still open:
   `arguments` (one line each) and `description`, which is the server's own text. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
 - `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
-  `mayStand`, which says whether the third answer can be recorded. A `remember: true` sent
-  where it is false is read as a yes to the one call.
+  `mayStand`, which says whether the third answer can be recorded, and `askedForPrivateArguments`,
+  which says the call is asked because its arguments are private, so `mayStand` is false and the
+  card says no stored answer covers it. `also` lists, as `arguments` does, each later call of the
+  same round to the same tool that the answer covers, and is empty where the call is asked on its
+  own. A `remember: true` sent where `mayStand` is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
   `{ deny, ask, allow, unreadable, proposed, directories, filesystem, filesystemIgnored }`. The first three are the rules in
   force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
@@ -1717,7 +1754,7 @@ Still open:
   others, so a `deny` rule about a server's tool refuses a plan's call to it in every mode, and an
   `allow` rule or a standing answer decides it as it does a turn's call (MANIFEST-15). A `deny` or
   `ask` rule about anything else does not apply to a plan run.
-- `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
+- `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits`, `plan` or `auto`, and answers
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
   only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest
   of that turn (MODE-8).
@@ -1776,8 +1813,7 @@ answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6): `{
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
-or saving succeeded. A gap or lost connection ends the view: version 1 has no reconnect or history
-recovery. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. The view also keeps at most 4 MiB of rows, apart from the rows the latest update sent, so a snapshot can hold fewer than `retainedRows`. Each update carries `omitted` as well; leave out the rows up to it so the view holds what a snapshot would. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
 within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
@@ -1793,7 +1829,8 @@ block. The stdio TypeScript client for it is `packages/agent-client`, which answ
 | `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
 | `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
 | `session.close` | `session` | `{ "state": "closing" }` |
-| `session.attach` | `session` | `{ "version": 1, "sequence": number, "history": "omitted" }` |
+| `session.attach` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
+| `session.view.resync` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 
 `instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
 
@@ -1801,5 +1838,5 @@ A session has one controller, the connection that opened it or took it over, and
 
 A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
 
-`session.attach` sends the connection `session.view.snapshot`, then the answer. The event carries the `session.view.initial` shape with the session's current sequence, turn, target, status and pending question, no rows, and `"history": "omitted"`: the host keeps no transcript for a client that was not there. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+`session.attach` sends the connection `session.view.snapshot`, then the answer. The event is the snapshot `session.view.resync` sends, with the rows produced while no client was connected among the most recent. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
 

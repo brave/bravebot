@@ -25,7 +25,11 @@ person approves a diff of a few lines.
 ### EDIT-1: an edit refuses rather than guesses
 
 It refuses when the passage is missing, when it occurs more than once without `replace_all`, and
-when the file changed since it was read.
+when the file changed since it was read. The file has changed when its bytes differ from the ones
+read, and also when its stamp (revision and number of `run` lines started) is no longer the one
+taken with that read, so an edit answered after a `run` line started while the person was asked
+writes nothing, even where the line left the bytes as they were
+([TRUST-4](../trust-map.md#TRUST-4)). The refusal comes before the endorsement is used.
 
 **Why.** A guess would change bytes nobody reviewed, and a stale diff would not describe what
 actually happens.
@@ -33,6 +37,9 @@ actually happens.
 `verified-by: bravebot_agent::turn::an_ambiguous_edit_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::an_edit_of_a_missing_passage_is_refused`
 `verified-by: bravebot_agent::turn::a_stale_edit_is_refused`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_an_edit_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::an_edit_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::workspace::a_stale_write_does_not_consume_the_endorsement`
 `verified-by: bravebot_agent::turn::an_approved_edit_changes_only_the_matched_passage`
 
 <a id="EDIT-2"></a>
@@ -40,10 +47,28 @@ actually happens.
 
 Locating a passage means comparing text, and a comparison is a decision. On a file nobody vouched
 for that decision would be taken from bytes an attacker may have written, so it is refused rather
-than performed. The route for such a file is a processor and a whole-file write, where nothing is
-located and the body is shown to a person in full.
+than performed. A file a program wrote is in the same state: a `run` line that copied over it or
+redirected into it leaves it labelled as written by a program ([trust-map.md](../trust-map.md)).
+
+The refusal says the file is closed to `edit_file`, prints the label the driver assigned, and says
+that the file is not vouched for or untrusted content was written to it. It then names the routes
+the same turn is offered ([TOOL-6](tool-surface.md#TOOL-6)): a whole-file write with `write_file`,
+where nothing is located and the body is shown to a person in full; an edit through `run`; and
+asking the person to vouch for the path. `write_file` and `run` are named only where the turn is
+offered them, and a turn offered neither is told that only the person can open the file, by
+vouching for the path. The vouch route is named on every turn, a delegate's included, because
+nothing on the turn says it cannot ask a person. The sentence is fixed text about the path's state
+and holds no byte of the file. It does not tell the planner to use a reference, because `edit_file`
+takes none.
+
+The refusal of an empty `old_text` says what the text to replace must be and, only where the turn
+is offered `write_file`, that `write_file` creates or replaces a whole file.
 
 `verified-by: bravebot_agent::turn::editing_an_untrusted_file_is_refused`
+`verified-by: bravebot_agent::turn::editing_a_file_a_program_wrote_is_refused`
+`verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
+`verified-by: bravebot_agent::tools::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 
 <a id="EDIT-3"></a>
 ### EDIT-3: an edit is approved as a diff, and cannot leave the workspace
@@ -53,6 +78,16 @@ file whose two sides cannot be matched line by line within the bound [`read_git`
 states for `diff` is shown as a notice that the change is too large to show, with no changes
 listed.
 
+A run that holds no writing, such as a reader or a checker delegate, is refused before the path is
+read and before anybody is asked, whatever form the edit takes
+([DELEGATE-31](../delegation.md#DELEGATE-31)).
+
+**What the planner is told.** The description says an edit inside a directory the user vouched for
+is applied without a prompt ([TRUST-4](../trust-map.md#TRUST-4)), and that elsewhere the user
+approves each edit as a diff unless a permission rule or mode answers for them. It does not say
+every edit is put to the user.
+
+`verified-by: bravebot_agent::tools::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
 `verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
 `verified-by: bravebot_agent::turn::edits_far_apart_in_a_long_file_are_approved_as_two_changes`

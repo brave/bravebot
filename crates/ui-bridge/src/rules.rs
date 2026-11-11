@@ -222,7 +222,12 @@ fn filesystem(
                 &bravebot_config::Managed::load(),
             )
         });
-    let rules = resolve(&settled.lists, profile, workspace);
+    let rules = resolve(
+        &settled.lists,
+        profile,
+        bravebot_agent::home::directory().as_deref(),
+        workspace,
+    );
     let backend = bravebot_sandbox::for_current_platform().ok();
     let capabilities = backend.as_ref().map(|backend| backend.capabilities());
     bravebot_agent::permissions::filesystem_standing(&rules, workspace, capabilities.as_ref())

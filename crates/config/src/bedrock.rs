@@ -185,6 +185,11 @@ pub struct Bedrock {
     /// Nothing stated for an account reached through the tier variables, which have no block to
     /// state it in.
     patience: Patience,
+    /// Whether a `provider` block named this account, as against the tier variables.
+    ///
+    /// The block is where `maxRetries` is stated, so a failure line names that setting only for an
+    /// account that has one ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    named_by_block: bool,
 }
 
 /// The context window a Bedrock model is assumed to have, in prompt tokens.
@@ -225,7 +230,64 @@ pub const OUTPUT_LIMIT_FALLBACK: u64 = 8_192;
 
 const _: () = assert!(OUTPUT_LIMIT_FALLBACK < OUTPUT_LIMIT);
 
+/// A region value refused because it is not spelled as one (`is_region`).
+///
+/// What a report names so the person can find the line: the value as it was written, trimmed the
+/// way it was read. Never anything else the entry holds ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionFault {
+    /// The text written where the region belongs.
+    pub region: String,
+}
+
+/// Where a refused region was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionSource {
+    /// `AWS_REGION` exported in the environment the program started in.
+    Exported,
+    /// `AWS_REGION` in the `env` block of a settings file.
+    EnvBlock,
+    /// `AWS_REGION` pinned by the machine-level file, which outranks every other layer.
+    Managed,
+    /// `options.region` of the `amazon-bedrock` entry under `provider`.
+    ProviderEntry,
+}
+
+/// A region that was refused for what it holds, with where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusedRegion {
+    /// The refused value.
+    pub fault: RegionFault,
+    /// Where `AWS_REGION` came from.
+    pub source: RegionSource,
+    /// The settings file whose `env` block wrote the value, where `source` is
+    /// [`RegionSource::EnvBlock`] and the layers kept which file stated it. `None` for every other
+    /// source.
+    pub file: Option<std::path::PathBuf>,
+}
+
+/// Whether the switch that turns Bedrock on is set in `lookup`.
+fn enabled(lookup: &impl Fn(&str) -> Option<String>) -> bool {
+    lookup(env_var::USE_BEDROCK)
+        .map(|value| value.trim() == "1")
+        .unwrap_or(false)
+}
+
 impl Bedrock {
+    /// The region [`Bedrock::from_lookup`] refuses, where the switch is on and a region is named
+    /// that is not spelled as one, and `None` otherwise.
+    ///
+    /// With the switch off nothing is refused, because nothing was asked for. A blank region is
+    /// absence rather than a refusal, as it is for `from_lookup`.
+    pub fn refused_region(lookup: impl Fn(&str) -> Option<String>) -> Option<RegionFault> {
+        if !enabled(&lookup) {
+            return None;
+        }
+        trimmed(lookup(env_var::AWS_REGION))
+            .filter(|region| !is_region(region))
+            .map(|region| RegionFault { region })
+    }
+
     /// Read Bedrock configuration from a lookup, or `None` if this build is not pointed at it.
     ///
     /// The switch alone is not enough. Without a region there is nothing to sign for and no host to
@@ -234,10 +296,7 @@ impl Bedrock {
     /// requests that fail somewhere far from the mistake. A value that is not spelled as a region
     /// (`is_region`) is no region.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let enabled = lookup(env_var::USE_BEDROCK)
-            .map(|value| value.trim() == "1")
-            .unwrap_or(false);
-        if !enabled {
+        if !enabled(&lookup) {
             return None;
         }
 
@@ -256,6 +315,7 @@ impl Bedrock {
             output_budget: None,
             cache_ttl: None,
             patience: Patience::default(),
+            named_by_block: false,
         })
     }
 
@@ -306,7 +366,14 @@ impl Bedrock {
             output_budget: None,
             cache_ttl: None,
             patience: Patience::default(),
+            named_by_block: true,
         })
+    }
+
+    /// Whether a `provider` block named this account rather than the tier variables, which have no
+    /// block to state `maxRetries` in.
+    pub fn named_by_block(&self) -> bool {
+        self.named_by_block
     }
 
     /// The same account with an exported reply ceiling applied to every model it reaches.
@@ -407,7 +474,7 @@ impl Bedrock {
 /// other character is refused: `/`, `@`, `?`, `#`, `:` and `.` each end that name or add to it, and
 /// the host would then be one the value chose. A Google location is held to the same characters
 /// ([BACKEND-49](../../../docs/specs/backends.md#BACKEND-49)).
-fn is_region(region: &str) -> bool {
+pub(crate) fn is_region(region: &str) -> bool {
     region.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && region
             .chars()
@@ -458,6 +525,23 @@ mod tests {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.clone())
         })
+    }
+
+    /// `options.maxRetries` has a place to be stated only where a `provider` block named the
+    /// account. The tier variables have none, so a rate-limited failure to them is not told to raise
+    /// a count it cannot set. The fault this rejects: the flag true for both, or false for both.
+    #[test]
+    fn only_an_account_a_block_named_has_a_place_for_max_retries() {
+        let tiers = configured(&[
+            (env_var::USE_BEDROCK, "1"),
+            (env_var::AWS_REGION, "us-west-2"),
+        ])
+        .expect("configured");
+        assert!(!tiers.named_by_block());
+
+        let block =
+            Bedrock::from_provider("us-west-2".to_string(), None, Vec::new()).expect("a region");
+        assert!(block.named_by_block());
     }
 
     /// The common case: the switch, a region, and the three tiers.
@@ -529,6 +613,35 @@ mod tests {
                 "region {region:?} was accepted"
             );
         }
+    }
+
+    /// The refusal is reported with the value as written, for every value `from_lookup` refuses,
+    /// and for nothing else: a blank region is absence, a spelled region is accepted, and a switch
+    /// that is off asked for nothing to refuse.
+    #[test]
+    fn a_region_from_lookup_refuses_is_the_one_refused_region_reports() {
+        for &region in REGIONS_THAT_WOULD_MOVE_THE_REQUEST {
+            let refused = Bedrock::refused_region(|name| match name {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some(region.into()),
+                _ => None,
+            });
+            assert_eq!(
+                refused.map(|fault| fault.region),
+                Some(region.trim().to_string()),
+                "region {region:?} was not reported"
+            );
+        }
+        let lookup = |region: &'static str, switch: &'static str| {
+            move |name: &str| match name {
+                env_var::USE_BEDROCK => Some(switch.to_string()),
+                env_var::AWS_REGION => Some(region.to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(Bedrock::refused_region(lookup("us-east-1", "1")), None);
+        assert_eq!(Bedrock::refused_region(lookup("   ", "1")), None);
+        assert_eq!(Bedrock::refused_region(lookup("a.b", "0")), None);
     }
 
     /// An account a `provider` block names is checked by the rule the tier variables are, since the

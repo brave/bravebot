@@ -31,13 +31,17 @@ first. A promotion records the label it decided and nothing about where the path
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
 reference, the path otherwise. A path inside the workspace that is refused for not being named
-relative to its root is recorded with the remedy of naming it relative to the workspace root
-([TRUST-10](trust-map.md#TRUST-10)). A write call the permission mode refuses before the tool runs
+relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
+relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
+write call the permission mode refuses before the tool runs
 ([MODE-3](permission-modes.md#MODE-3)), and a planned run it refuses from its plan, are recorded as
 refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode. The
 sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded the same way, under
 `sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
-that writes, and a `run` line it refuses for redirecting output into a file.
+that writes, and a `run` line it refuses for redirecting output into a file. A write call by a run
+that holds no `file_write` capability ([DELEGATE-31](delegation.md#DELEGATE-31)) is recorded once
+as a refusal under `capability`, naming the tool and saying that the run holds no `file_write`
+capability, so nothing was written and nobody was asked.
 
 The first reach of the file tools into a directory outside the workspace that the permission mode
 gave ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is recorded as a `path_reach` permission naming
@@ -90,6 +94,11 @@ put to a person and is recorded under `mcp_call` alone. A delegate's call to a s
 under `approval` as well, naming the call the same way and saying the delegate is not asked and the
 server was not called.
 
+A call to a server's tool that an earlier question of the same round already answered, because that
+question listed it ([SERVERS-7](mcp-servers.md#SERVERS-7)), is not recorded as asking. A yes is one
+entry under `approval` naming the call as `alias:tool` and saying an earlier answer covered it and
+nobody was asked, and a no is the refusal above.
+
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
 only by what the driver called it, never by what it held:
@@ -108,6 +117,14 @@ only by what the driver called it, never by what it held:
 
 A question whose answer is already recorded, such as a path's reach or a host's grant, is not
 among them.
+
+A slot a run printed that holds no bytes is neither checked, released nor put to anybody
+([RUN-24](tools/run.md#RUN-24), [OUTPUT-1](tools/read-output.md#OUTPUT-1)), and the trail says so
+as a pass under `read_output`. The same holds for a page `fetch_url` returned or a reply a server's
+tool returned when the call asked to read it ([VET-6](tools/vet-content.md#VET-6)). The entry is
+fixed words naming the call, `run`, `read_output` or `vet_content`, and the reference, `ref:N`, and
+says the slot holds 0 bytes, so no check was made and nothing was released. The size is the one the
+slot states for its reference.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -159,12 +176,17 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_core::policy::a_delegates_call_to_a_server_asked_every_call_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::mcp::a_call_covered_by_an_earlier_answer_is_not_recorded_as_asking`
+`verified-by: bravebot_core::policy::an_mcp_call_covered_by_an_earlier_answer_is_recorded_as_covered_not_as_asking`
 `verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
 `verified-by: bravebot_core::policy::a_question_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::turn::a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
 `verified-by: bravebot_agent::mcp::a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals`
 `verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -312,8 +334,16 @@ is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
 A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
 `approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
-being asked about, since the policy decides nothing about one. Other prompts a mode answers, such
-as a fetch, are not named here.
+being asked about, since the policy decides nothing about one. A flagged read the bypassing mode lets through
+([CRED-15](credential-protection.md#CRED-15)) is one entry under `approval` that names the mode and the path
+and says nobody was asked; a person's yes to the same question is recorded as the user having agreed. The
+offer to vouch for a quarantined file ([TRUST-8](trust-map.md#TRUST-8)) that the bypassing mode answers is
+one entry under `approval` that names the mode and the path and says nobody was asked, and one entry under
+`trust` that names the mode and says the user did not name the file. No entry says the user was offered the
+chance, and no `display` entry says the head of the file was shown, since nobody was shown it. A person's yes
+is recorded as the user having been offered the chance, the head of the file shown to them, and the user
+having named the file. A yes that arrives after the file changed writes no trust entry crediting the mode
+or the user, in either case. Other prompts a mode answers, such as a fetch, are not named here.
 
 Each question put to the auto mode's classifier ([AUTO-8](auto-mode.md#AUTO-8)) is one entry under
 `auto_mode`, written before the question is answered. It names the model, the kind of question
@@ -338,6 +368,16 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::turn::auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
 `verified-by: bravebot_agent::turn::auto_answers_a_fetch_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
+`verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_flagged_read_a_person_agrees_to_is_recorded_as_the_user_agreeing`
+`verified-by: bravebot_core::policy::the_trail_says_who_answered_for_a_flagged_read`
+`verified-by: bravebot_agent::turn::a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_vouch_a_person_agrees_to_is_recorded_as_the_user_naming_the_file`
+`verified-by: bravebot_agent::turn::a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line`
+`verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_core::policy::the_trail_says_who_answered_the_offer_to_vouch`
+`verified-by: bravebot_core::policy::deciding_to_offer_a_vouch_writes_nothing_and_asks_once`
+`verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why
@@ -356,8 +396,10 @@ ok      delegate: d2: ended after 1559.0s and 37 of 120 rounds: it did not finis
 
 The cause comes from which way the result came back, the run's round count and the failure's
 category. None of it is text a service or a tool produced, so the entry holds no content (TRACE-2).
-The note the person sees when the delegate finishes names the same cause. The planner is still told
-only that the delegate did not finish ([BACKEND-37](backends.md#BACKEND-37)).
+The note the person sees when the delegate finishes names the same cause. The planner is told only
+that the delegate did not finish, except for a rate-limited or unavailable ending, which it is told
+by name and with the sentence that starting the same delegate again meets the same limit
+([BACKEND-37](backends.md#BACKEND-37), [DELEGATE-26](delegation.md#DELEGATE-26)).
 
 **Why.** Without it, a delegate that ran for 26 minutes and then did not finish leaves the reader of
 the trail unable to tell whether it ran out of rounds, lost its backend or was stopped. Each calls
@@ -368,6 +410,7 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
 `verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
 
 <a id="TRACE-9"></a>
 ### TRACE-9: `/request` shows the request already built, each span with where its words came from
@@ -462,15 +505,60 @@ The same holds for the other words a run writes to stderr that can name a file o
 checkout holds: each notice, the plan or the steps of a manifest run that stopped or was traced, the
 model line, and the progress line of each call with its reason and note. The names listed for an
 agent setting that does not resolve, the sign-in lines and a sign-in failure, and the complaint that
-a reply is off its schema are drawn the same way. The model a stored pick names and the reason it was
+a reply is off its schema are drawn the same way. The model and the refusing file that `doctor`, a
+one-shot run and the start of a session name when the managed layer refuses a model, and the model
+names `doctor` reports on its model line, are drawn the same way. The model an output-schema refusal
+names is drawn on stderr and keeps its text in the `--json` object. The sentence that refuses a
+definition's model, a turn's failure said beside a reply, the configuration complaint of the
+sign-in commands, and the directory `sessions import` was told to read are drawn on stderr the same
+way. The model a stored pick names and the reason it was
 refused, the model the opening line of a session in lines names, the model a service reported
 serving instead of the one asked for, the report of a stored manifest run that `--resume` or
-`--fork` names, and the directories a kept answer or a resume hint names are drawn the same way. The
-line breaks those sentences run over are kept and every other control character is pictured. The
-trail Ctrl-T shows in the terminal and the audit
+`--fork` names, and the directories a kept answer or a resume hint names are drawn the same way.
+So are the settings, managed, key and certificate files and the state directory that `doctor`,
+the sign-in commands and the `mcp` commands name, the AWS profiles and the failure the AWS CLI
+gave, the names and paths the `mcp` commands print, the settings file a question about starting
+connectors names, the ids a stored key is held for, the start of a session id and the name and
+directory in a `sessions` row, and what `sessions import` prints about a session another program
+wrote. The file a ChatGPT sign-in was stored in, the settings files a refused sandbox mode names,
+the paths and the platform's detail in the sandbox check of `doctor` are drawn the same way. So is
+the directory named in the note that a local connector was not started because a directory of its
+own could not be made, which is under the state directory or the system temporary directory the
+environment chose. A path
+the person's environment chose is drawn like one a checkout chose, so no site decides by where a
+path came from.
+
+The managed file's path is fixed for the platform when bravebot is built, so neither a checkout nor
+the environment chooses it. The `bravebot` command line draws it anyway where it names it
+(`auth.rs` `managed_path`, `doctor.rs` `managed_layer`, `import.rs` `pinned_lines`, and the
+sandbox refusal). Other places name it as it is: the managed-layer refusal of a connector,
+built by `bravebot_agent::mcp::managed_refusal`, which the `mcp` commands of the command line print
+unchanged; the terminal client's `/sandbox` refusal and its network status line; and the text the
+desktop bridge sends to the window.
+
+Five texts are not drawn because nothing a checkout, a file or the environment can choose reaches
+them:
+
+- the alias in the notes about a connector that was not started, declined or asked about by
+  nobody. `settle` reaches those notes only for an alias that `is_alias` accepted (letters,
+  digits, `-` and `_`); any other alias is a declaration problem drawn by `shown`;
+- the instant an account list line says its access token expires, which is formatted from a stored
+  integer;
+- the text of the operating system's error when a key cannot be read from the terminal, which
+  `auth` and `brave` print;
+- the operating system's error that the `mcp` commands print beside a path they could not write,
+  which is the system's wording for the failed call and names no path;
+- the operating system's error that the sandbox check of `doctor` prints when it cannot make or use
+  its test directory, which names no path either.
+
+The line breaks those sentences run over are kept and every other control character is pictured.
+The `bravebot` command line draws with `progress::printable`, which also spells a bidirectional
+control and a zero-width character as `‹U+XXXX›`, so every existing caller of it draws them that
+way as well as the control characters. The terminal client draws only control characters in notes;
+that is tracked in brave/bravebot#3829. The trail Ctrl-T shows in the terminal and the audit
 inspector in the desktop window draw the same text the same way, so a control character is shown as
 a picture and is not dropped by the screen or the page. The desktop bridge sends, beside each audit
-event, the words `bravebot_approval::printable` makes of each string field of the event, and the
+event, the words `bravebot_agent::confirm::printable` makes of each string field of the event, and the
 inspector draws the sentence from those words, so the window holds no list of the characters to
 picture. The inspector leaves the recorded evidence beside it as the audit file holds it.
 
@@ -489,6 +577,36 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_cli::main::the_complaint_about_a_model_not_served_draws_the_served_name_as_pictures`
 `verified-by: bravebot_cli::plain::the_opening_lines_draw_a_model_name_and_a_refusal_as_pictures`
 `verified-by: bravebot_cli::plain::the_kept_answer_line_draws_the_paths_it_names_as_pictures`
+`verified-by: bravebot_cli::running::the_refusal_of_a_definitions_model_draws_the_definitions_name_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_model_the_settings_name_as_pictures`
+`verified-by: bravebot_cli::model::the_managed_refusal_draws_the_model_and_the_file_as_pictures`
+`verified-by: bravebot_cli::running::the_output_schema_refusal_draws_the_model_it_names_as_pictures`
+`verified-by: bravebot_cli::running::the_off_schema_complaint_draws_the_property_it_names_as_pictures`
+`verified-by: bravebot_cli::running::a_sign_in_that_cannot_be_forgotten_draws_its_path_as_pictures`
+`verified-by: bravebot_cli::auth::the_aws_failure_a_sign_in_prints_is_drawn`
+`verified-by: bravebot_cli::auth::a_key_file_path_with_control_characters_is_drawn_where_it_is_named`
+`verified-by: bravebot_cli::auth::the_path_named_when_a_kept_key_cannot_be_read_again_is_drawn`
+`verified-by: bravebot_cli::auth::the_ids_a_stored_key_is_held_for_are_drawn_on_the_list_of_ways`
+`verified-by: bravebot_cli::auth::a_row_is_worded_with_what_a_checkout_chose_drawn`
+`verified-by: bravebot_cli::doctor::the_aws_profiles_the_cli_lists_are_drawn_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_managed_files_path_as_pictures`
+`verified-by: bravebot_cli::doctor::doctor_draws_the_state_directory_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_a_checkouts_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_the_home_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_state_directory_and_key_files_the_environment_names_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_client_certificate_paths_the_environment_names_as_pictures`
+`verified-by: bravebot_cli::background::the_start_of_an_id_a_line_shows_is_drawn`
+`verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row`
+`verified-by: bravebot_agent::servers::the_settings_file_a_question_names_is_drawn_when_a_link_leads_to_an_odd_name`
+`verified-by: bravebot_agent::servers::the_path_in_a_note_about_a_server_directory_that_could_not_be_made_is_drawn`
+`verified-by: bravebot_cli::running::what_sessions_import_prints_about_a_foreign_session_is_drawn_as_pictures`
+`verified-by: bravebot_cli::session_import::the_title_and_id_of_a_session_another_program_wrote_are_drawn_as_pictures`
+`verified-by: bravebot_cli::mcp::a_control_character_in_a_name_an_mcp_command_prints_is_drawn_as_its_picture`
+`verified-by: bravebot_cli::background::a_bidirectional_control_in_a_session_name_or_directory_is_written_out`
+`verified-by: bravebot_cli::running::the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures`
+`verified-by: bravebot_cli::running::the_refusal_of_a_directory_that_is_a_file_draws_its_name_as_pictures`
+`verified-by: bravebot_cli::plain::a_turn_that_could_not_run_is_said_beside_the_reply_drawn_as_pictures`
 `verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`

@@ -53,11 +53,28 @@ choosing where an effect lands.
 
 A write needs a person's approval, which mints a single-use endorsement bound to that exact path,
 so it cannot be replayed or redirected. Where nobody can be asked, writes are refused rather than
-applied unseen. A path the workspace does not reach is refused before anybody is asked, since no
-answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
+applied unseen. A run that reads input lines and was started with `--approve-input-lines` puts each
+write to the program sending them, which approves that one write
+([cli.md](../cli.md#CLI-36)). A path the workspace does not reach is refused before anybody is
+asked, since no answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)). A run that holds
+no writing, such as a reader or a checker delegate, is refused before the path is read and before
+anybody is asked ([DELEGATE-31](../delegation.md#DELEGATE-31)).
 
 **Why.** The wrong file destroys work rather than wasting a step.
 
+**What the planner is told.** The description says a write inside a directory the user vouched
+for is applied without a prompt ([TRUST-4](../trust-map.md#TRUST-4): trusted data to a trusted
+path), and that elsewhere the user approves each write unless a permission rule or mode answers for
+them. It does not say every write is put to the user, which is untrue in a vouched directory. It
+also says that a write to a path that already holds a file replaces it whole, and that the path is
+read or listed first when the file may exist, since a replacement made without a prompt is the only
+moment the old contents could have been seen. `edit_file` says the same of its edits
+([EDIT-3](edit-file.md#EDIT-3)). The planner's system prompt says the same of writes in general:
+a write inside a directory the user vouched for is applied without a prompt, and any other write
+is shown to the user for approval first.
+
+`verified-by: bravebot_agent::tools::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
+`verified-by: bravebot_agent::turn::prompts::the_planner_is_told_when_a_write_is_shown_and_when_it_is_applied_unasked`
 `verified-by: bravebot_agent::turn::an_approved_write_is_recorded_as_endorsed`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_refused_overwrite_leaves_the_original`
@@ -101,6 +118,29 @@ form that names its destination. Any line started since the read therefore ends 
 every slot read earlier, including a line that wrote nothing. The cost is one question about a
 write-back that would have changed nothing, after a `run` line, and the count moves no revision,
 so the output of other running commands keeps its label.
+
+**The approval of a write that is asked about.** The approval is bound to the path's stamp (its
+revision and the number of `run` lines started), taken in the same capture that drew the preview
+and compared whole when the write enters, as [TRUST-4](../trust-map.md#TRUST-4) says. It applies
+to a write of `contents`, to a write through a reference, to a picture or a PDF
+([WRITE-9](#WRITE-9)), and to the write steps of a manifest run; `edit_file`
+([EDIT-1](edit-file.md#EDIT-1)) and `download_url` ([DOWNLOAD-2](download-url.md#DOWNLOAD-2)) do
+the same through the same comparison. If the file was written, or a `run` line started, after the
+preview was drawn, a yes writes nothing and leaves the file as it was. The planner is told that the
+path may have changed while the user was being asked, so nothing was written, and to read it again
+if its contents matter and repeat the call. The cost is one more question or one refused write after
+any `run` line that started while the question was open, even one that wrote nothing, as for the
+exception above. No byte of the file is read for the comparison.
+
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_picture_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::turn::a_picture_is_written_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::manifest::a_run_that_started_while_a_planned_write_was_being_asked_voids_the_yes`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_agent::workspace::an_endorsed_write_is_refused_when_a_program_started_after_the_read`
+`verified-by: bravebot_agent::workspace::an_endorsed_write_proceeds_when_no_program_started_after_the_read`
+`verified-by: bravebot_agent::workspace::a_program_started_before_the_read_does_not_void_the_write`
 
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing`
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it`

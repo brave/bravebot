@@ -10,6 +10,8 @@
 export interface MentionEntry {
   /** Project-relative, with a trailing slash for a directory so it reads as one. */
   path: string
+  /** `path` drawn so a character that reads as whitespace or as nothing is visible (NAME-4). From the bridge. */
+  shownPath: string
   /** The path as it is written in a line: each whitespace character and backslash behind a backslash (NAME-8). From the bridge. */
   written: string
   directory: boolean

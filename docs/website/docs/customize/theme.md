@@ -1,7 +1,7 @@
 ---
 sidebar_position: 13
 title: Choosing a theme
-description: Pick a theme with /theme, write one of your own, and where the choice is kept.
+description: Choose and persist a theme with /theme, define custom palettes and configure light and dark variants.
 ---
 
 # Choosing a theme

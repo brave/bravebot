@@ -127,8 +127,8 @@ fn every_other_report_is_passed_through_unfiltered() {
     reporter.phase(Phase::Planning);
     reporter.tool_started(Activity::running("read", "a.rs"));
     reporter.tool_finished(Activity::running("read", "a.rs").done("2 lines"));
-    reporter.landed(Landing::Quarantined);
-    reporter.landed(Landing::Quarantined);
+    reporter.landed(None, Landing::Quarantined);
+    reporter.landed(None, Landing::Quarantined);
 
     assert_eq!(
         names(&events),
@@ -141,6 +141,49 @@ fn every_other_report_is_passed_through_unfiltered() {
             "landed"
         ],
         "repeats here are real repeats"
+    );
+}
+
+/// BACKEND-55: a request waiting to be sent again crosses with the time to the next attempt and to
+/// giving up, in milliseconds from the event, and the attempt that follows crosses with none. The
+/// window cannot add them to a clock it shares with the bridge, so a value that is not relative, or
+/// a phase that dropped them, leaves it counting down from nothing.
+#[test]
+fn a_request_waiting_to_be_sent_again_crosses_with_its_times() {
+    use bravebot_agent::report::Retry;
+    use std::time::Duration;
+
+    let (mut reporter, events) = harness();
+
+    reporter.phase(Phase::Reconnecting(Some(Retry {
+        attempt: 4,
+        pause: Duration::from_millis(38_000),
+        gives_up_in: Some(Duration::from_secs(3130)),
+    })));
+    reporter.phase(Phase::Reconnecting(Some(Retry {
+        attempt: 2,
+        pause: Duration::from_secs(1),
+        gives_up_in: None,
+    })));
+    reporter.phase(Phase::Reconnecting(None));
+    reporter.phase(Phase::Thinking);
+
+    let events = events.lock().expect("not poisoned");
+    let sent: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e.name == "phase")
+        .map(|e| &e.data)
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            &serde_json::json!({"phase": "reconnecting",
+                "retry": {"attempt": 4, "in_ms": 38_000, "gives_up_in_ms": 3_130_000}}),
+            &serde_json::json!({"phase": "reconnecting",
+                "retry": {"attempt": 2, "in_ms": 1_000, "gives_up_in_ms": null}}),
+            &serde_json::json!({"phase": "reconnecting", "retry": null}),
+            &serde_json::json!({"phase": "thinking", "retry": null}),
+        ]
     );
 }
 
@@ -525,4 +568,20 @@ fn the_list_lasts_across_the_reporters_of_a_session() {
     );
     assert_eq!(last["started"], 2);
     assert_eq!(last["working"], 1);
+}
+
+/// A window places a landing on the row of the call it is about, so the event names the call the
+/// engine gave it, and a landing no dispatch made names none.
+#[test]
+fn a_landing_names_the_call_it_is_about() {
+    let (mut reporter, events) = harness();
+    let call = bravebot_agent::report::CallId::next();
+
+    reporter.landed(Some(call), Landing::Context);
+    reporter.landed(None, Landing::Reserved);
+
+    let events = events.lock().expect("not poisoned");
+    assert_eq!(events[0].data["call"], serde_json::json!(call.get()));
+    assert_eq!(events[0].data["landing"], "context");
+    assert!(events[1].data["call"].is_null());
 }

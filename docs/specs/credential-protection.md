@@ -120,7 +120,7 @@ features anything here implements.
 
 | Group | Where it lives |
 | --- | --- |
-| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/gateway-keys.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/brave-key.json`, kept the same way, the key `bravebot auth login brave` stored for Brave's premium service, sent as a bearer token to Brave's premium host alone ([PREM-2](premium-credentials.md#PREM-2), [PREM-14](premium-credentials.md#PREM-14)); `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)); `~/.bravebot/xai-account.json`, kept the same way, the access token and refresh token `bravebot auth login xai` stored for an xAI account ([XAI-5](xai-sign-in.md#XAI-5)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
+| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/gateway-keys.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the gateway keys `bravebot auth login gateway` or the desktop window's key window stored, one per provider id; `~/.bravebot/brave-key.json`, kept the same way, the key `bravebot auth login brave` or the desktop window's key window stored for Brave's premium service, sent as a bearer token to Brave's premium host alone ([PREM-2](premium-credentials.md#PREM-2), [PREM-14](premium-credentials.md#PREM-14)); `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` or the desktop window's own sign-in stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)); `~/.bravebot/xai-account.json`, kept the same way, the access token and refresh token `bravebot auth login xai` or the desktop window's own sign-in stored for an xAI account ([XAI-5](xai-sign-in.md#XAI-5)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
 | What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown until nothing has written the record for the retention period, 30 days where none is stated ([state-directory.md](state-directory.md#STATE-4)); `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix (values for an HTTP server's headers are read from the environment at launch and never stored); `/export`, which writes a transcript as markdown inside the working directory |
 | Its own project settings | `.bravebot/settings.json` and `.bravebot/settings.local.json` in a checkout, a layer over the one at home, which on some machines carries credentials |
 | Minted access, by a turn | `~/.ssh/`, then deploy key or `authorized_keys`; `gh auth login`, `~/.config/gh/hosts.yml`; `aws iam create-access-key` → `~/.aws/credentials`; `gcloud iam service-accounts keys create`; `az ad sp create-for-rbac`; `npm token create`, `docker login`, `helm registry login` |
@@ -141,7 +141,7 @@ Everything outside the working tree has it already: `read_file`, `write_file`, `
 covers what the agent authenticates with, `~/.bravebot/gateway-keys.json`,
 `~/.bravebot/brave-key.json`, `~/.bravebot/chatgpt-account.json`, `~/.bravebot/xai-account.json`, a
 `~/.bravebot/leo-premium.json` that an earlier version left, and the credentials that sign or authorise a model request, which CRED-14 puts
-out of reach of every program, prompt and record with no legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
+out of reach of every program, prompt and record with no legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere) as
 it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), except `~/.bravebot/sessions`,
 which it reads and never writes, as it reads `~/.ssh/config`. No `allowRead` or `allowWrite`
 row, scope variable or `/reach` grant lifts the rest, and none grants a write there. Two things get past it: a command a turn runs
@@ -342,12 +342,25 @@ be argued upward is a tier that will be.
 Where nothing is handed over and nobody can refuse a use, the credential is on no tier. It is named
 where the capability is granted and recorded when it is used.
 
+A program run under one of the wrappers a deny or ask rule looks through (see
+[permissions.md](permissions.md#PERM-20)) is read as it is without one: `timeout 30 docker ps` and
+`env git push` name the container daemon and the logged-in `git` that `docker ps` and `git push`
+do. Each program the wrappers leave is read with the arguments it is given, so the words of the
+wrapper do not decide whether a tool is spent. The wrapper table is the one that rule matches
+through, read case-insensitively and as the permission rules read a program word
+([PERM-5](permissions.md#PERM-5)): without trailing dots and spaces, a `::$DATA` suffix and one
+`.exe`, `.com`, `.cmd` or `.bat`, on the wrapper names and on the program word alike.
+
 **Why.** A logged-in tool, a live socket and a metadata endpoint have no custody to rank and no
 bound to enforce, so placing them on the scale would put unbounded authority at the top of it. The
 one thing available before confinement is that nobody grants it thinking they granted less.
 
 `verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
 `verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
+`verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_named_as_it_is_without_one`
+`verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_judged_by_its_own_arguments`
+`verified-by: bravebot_core::ambient::a_wrapper_is_read_in_any_case_and_with_an_extension`
+`verified-by: bravebot_core::ambient::a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them`
 `verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`
@@ -643,7 +656,7 @@ command that stores it says the file and never the key, and `auth status` and `d
 out of the environment of a program.
 
 **The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
-the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
+the session was opened on is, holds or lies inside `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), since the grant would hand a
 program the gateway keys and `settings.json` and a Windows container cannot be refused a path
 inside it ([SANDBOX-18](sandboxing.md#SANDBOX-18)). Linux and macOS refuse the directory inside
 the grant ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
@@ -724,6 +737,20 @@ does a session carrying on in a copy with `/branch` ([SESSION-31](sessions.md#SE
 
 `verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_live_exposure_answers`
 `verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
+
+**What the trail records about the answer.** A yes writes one `approval` entry naming the path, on
+`read_file`, on `edit_file` and on `read_git` alike. Where a person answered, it says the user agreed
+to the planner being given the file. Where the bypassing mode answered in their place
+([MODE-4](permission-modes.md#MODE-4)), it names the mode and says nobody was asked, so a trail
+reader does not take a flag for a person's agreement ([TRACE-7](trace.md#TRACE-7)). A delegate's
+read is answered and recorded the same way ([MODE-9](permission-modes.md#MODE-9)). The entry holds
+the path and the mode's name and no finding.
+
+`verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_flagged_read_a_person_agrees_to_is_recorded_as_the_user_agreeing`
+`verified-by: bravebot_agent::turn::a_flagged_file_bypass_mode_let_through_is_recorded_once_per_session`
+`verified-by: bravebot_agent::turn::a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_core::policy::the_trail_says_who_answered_for_a_flagged_read`
 
 **Why the person is asked rather than the read refused.** The rarity layer is a guess, and a tree
 holds development passwords, test fixtures and inline manifests as readily as it holds keys. A gate
@@ -1100,7 +1127,9 @@ access key it started from.
 No credential, and nothing derived from one that would authenticate in its place, is passed to a
 program as an argument. Where a program must receive one, it arrives by environment, on a file
 descriptor, or in a file the program is told to read; where the authority can perform the action,
-none of those is needed.
+none of those is needed. A key typed in the desktop window's key window goes from its main process
+to the bridge on the bridge's standard input, in a request no client of the bridge but the main
+process may send, and is never an argument of the bridge or of anything it starts.
 
 **Why.** A command line is world-readable while the process lives: `/proc/<pid>/cmdline` on Linux,
 and `ps` on every platform. The environment is covered by [RUN-12](tools/run.md#RUN-12) because a
@@ -1109,6 +1138,9 @@ approving it prevents nothing, because the disclosure is to every other account 
 rather than to the program. It needs no attacker and no mistake by the model.
 
 `verified-by: bravebot_cli::credential_arguments::no_file_that_starts_a_process_reads_a_credential`
+`verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
+`verified-by: bravebot_ui_bridge::accounts::no_client_of_the_host_is_offered_the_accounts_methods`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
 
 <a id="CRED-25"></a>
 ### CRED-25: every held credential names what would end it
@@ -1237,6 +1269,13 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   writes, so a client nobody listed is granted with only the blanket line about confinement said
   of it. Nothing is refused on the list, so what a gap costs is a sentence rather than a boundary,
   and the direction to be wrong in is naming something a line was not going to spend.
+
+- **A wrapper the table does not read hides the program under it from CRED-5.** The ambient reading
+  looks through the wrappers in the table and no further. A wrapper named by a path
+  (`/usr/bin/timeout 30 docker ps`) is not looked through, the file a wrapper resolved to is not
+  looked through, and `xargs` and `npx` are read by their own names alone, so `xargs docker ps`
+  names no container daemon. The line is granted with only the blanket sentence about confinement
+  said of it.
 
 - **The scan misses things, and silence proves nothing.** The rarity layer is advisory, history
   beyond the working tree is off by default, and a credential nobody has a pattern for is a

@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON, TRUST_APPROVE } from './drive-support.mjs'
+import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON, TRUST_APPROVE, approveTrust, trustQuestion } from './drive-support.mjs'
 
 /**
  * Where the app keeps what it remembers, asked of the app rather than composed here: `userData`
@@ -70,9 +70,10 @@ export function scratchCheckout(name) {
 /**
  * Remove the records the agent wrote for a scratch checkout. Sessions are kept per checkout under
  * a directory named by mangling its path (every character outside `[A-Za-z0-9._]` becomes a dash),
- * so the scratch checkout has one of its own and nothing else is in it. Without this, every run of
- * a driver leaves a session in the list the other drivers read, pointing at a folder that is
- * now gone.
+ * so the scratch checkout has one of its own and nothing else is in it. A scratch path is far
+ * under the 200 bytes after which the agent cuts the name and ends it in a digest. Without this,
+ * every run of a driver leaves a session in the list the other drivers read, pointing at a folder
+ * that is now gone.
  */
 export function forgetCheckoutSessions(checkout) {
   rmSync(join(homedir(), '.bravebot', 'sessions', checkout.replace(/[^A-Za-z0-9._]/g, '-')), {
@@ -97,8 +98,7 @@ export async function openBot(page, { name, row, purpose, check }) {
   check((await mine.count()) === 1, 'the bot is in the list')
   await mine.locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-greeting"]').waitFor()
-  const trust = page.locator(TRUST_APPROVE)
-  if (await trust.isVisible().catch(() => false)) await trust.click()
+  if (await page.locator(TRUST_APPROVE).isVisible().catch(() => false)) await approveTrust(trustQuestion(page))
   await page.waitForTimeout(400)
   return made?.home
 }

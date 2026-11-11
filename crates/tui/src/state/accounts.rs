@@ -159,15 +159,14 @@ impl Session {
         self.split
     }
 
-    /// Record how a charge divides: of `tokens`, already added to the total, the model wrote
-    /// `written`.
+    /// Record how a charge divides: of the tokens already added to the total, how many the model
+    /// read and wrote, and how many of those read the service's cache served or was written.
     ///
     /// Apart from the charge because most of the places that charge a session know a total and no
     /// more. A charge nobody reports the split for stays in the total alone, which is what the
     /// split's readers expect of it ([`bravebot_session::sessions::Split`]).
-    pub fn charged_split(&mut self, tokens: u64, written: u64) {
-        self.split
-            .add(bravebot_session::sessions::Split::of(tokens, written));
+    pub fn charged_split(&mut self, split: bravebot_session::sessions::Split) {
+        self.split.add(split);
     }
 
     /// What each turn cost, by turn number.
@@ -217,7 +216,7 @@ impl Session {
     pub(super) fn charge_progress(&mut self) -> u64 {
         let spent = std::mem::take(&mut self.progress);
         self.charge(spent.tokens);
-        self.charged_split(spent.tokens, spent.output_tokens);
+        self.charged_split(bravebot_session::sessions::Split::of_spent(spent));
         self.spent_time(spent.timing);
         // A turn that ended before any request completed reports nothing (BACKEND-31), which is
         // neither a zero drawn over the session's figures nor the turn before it left on the panel.

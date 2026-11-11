@@ -10,9 +10,10 @@
 //! environment and the user's own settings file before any turn starts, and nothing a model says can
 //! reach it.
 
-use crate::outcome::{Category, Diagnosis};
+use crate::outcome::{BackendKind, Category, Diagnosis};
 use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
+use bravebot_aichat::call::Conceded;
 use bravebot_aichat::generate_content::GenerateContentClient;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::responses::ResponsesClient;
@@ -21,6 +22,7 @@ use bravebot_aichat::{
     Subscription, XaiFailure,
 };
 pub use bravebot_bedrock::credentials::CredentialError;
+pub use bravebot_bedrock::credentials::{Stop as AwsStop, Stopped as AwsStopped};
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
@@ -56,12 +58,26 @@ pub enum BackendError {
     /// The Google Cloud CLI gave no access token for a Vertex AI project that takes no key
     /// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)).
     GoogleCloud(crate::gcloud::GcloudError),
+    /// A refused credential on a request that carried the stored premium key, which lets a front
+    /// end word it as the key's own sentence
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)). Added by the caller of the client
+    /// from whether the client attached the key, and never from a reply.
+    PremiumKey(Box<BackendError>),
     /// The failure and the number of requests handed to egress, including probes.
     /// Zero means preparation failed before egress; a policy refusal still counts as an attempt.
     Attempted {
         attempts: u32,
         usage: Option<Usage>,
         context_tokens: Option<u64>,
+        /// The request fields the call left out after the service refused the request, in the
+        /// order it gave them up ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+        conceded: Conceded,
+        /// The backend that sent the requests, where the caller said so.
+        backend: Option<BackendKind>,
+        /// Whether the backend that sent the requests has a `provider` entry to state `maxRetries`
+        /// in, set from the variant that sent them and never from a reply
+        /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+        retry_setting: bool,
         cause: Box<BackendError>,
     },
 }
@@ -82,6 +98,7 @@ impl fmt::Display for BackendError {
                  or `options.apiKey` in its settings block"
             ),
             Self::GoogleCloud(e) => write!(f, "{e}"),
+            Self::PremiumKey(cause) => write!(f, "{cause}"),
             // Counts belong to structured diagnostics; preserve the underlying error's display.
             Self::Attempted { cause, .. } => write!(f, "{cause}"),
         }
@@ -110,7 +127,7 @@ impl BackendError {
     pub fn is_cancelled(&self) -> bool {
         match self {
             Self::Aichat(ChatError::Cancelled) | Self::Bedrock(BedrockError::Cancelled) => true,
-            Self::Attempted { cause, .. } => cause.is_cancelled(),
+            Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.is_cancelled(),
             _ => false,
         }
     }
@@ -123,11 +140,17 @@ impl BackendError {
                 attempts,
                 usage,
                 context_tokens,
+                conceded,
+                backend,
+                retry_setting,
                 cause,
             } => Self::Attempted {
                 attempts: attempts.saturating_add(earlier),
                 usage,
                 context_tokens,
+                conceded,
+                backend,
+                retry_setting,
                 cause,
             },
             other => other.counted(earlier, None, None),
@@ -145,7 +168,87 @@ impl BackendError {
             attempts,
             usage,
             context_tokens,
+            conceded: Conceded::default(),
+            backend: None,
+            retry_setting: false,
             cause: Box::new(self),
+        }
+    }
+
+    /// This failure with the request fields the call gave up after refusals. A failure that
+    /// counted no requests has none to record and is returned as it was.
+    pub(crate) fn conceding(self, given_up: Conceded) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                backend,
+                retry_setting,
+                cause,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded: given_up,
+                backend,
+                retry_setting,
+                cause,
+            },
+            other => other,
+        }
+    }
+
+    /// This failure marked as sent by `kind`, which is the variant of [`Backend`] that made the
+    /// request and never anything a reply or an address said.
+    pub(crate) fn sent_by(self, kind: BackendKind) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                cause,
+                retry_setting,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend: Some(kind),
+                retry_setting,
+                cause,
+            },
+            other => other,
+        }
+    }
+
+    /// This failure marked with whether the backend that sent the requests has a `provider` entry to
+    /// state `maxRetries` in, which is a fact about the variant and its configuration and never
+    /// anything a reply or an address said. A failure that counted no requests is returned as it
+    /// was.
+    pub(crate) fn with_retry_setting(self, entry: bool) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend,
+                cause,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend,
+                retry_setting: entry,
+                cause,
+            },
+            other => other,
         }
     }
 
@@ -169,8 +272,25 @@ impl BackendError {
     pub fn diagnosis(&self) -> Diagnosis {
         let category = match self {
             Self::Attempted {
-                attempts, cause, ..
-            } => return cause.diagnosis().after(*attempts),
+                attempts,
+                conceded,
+                backend,
+                retry_setting,
+                cause,
+                ..
+            } => {
+                let diagnosis = cause.diagnosis().after(*attempts).with_conceded(*conceded);
+                let diagnosis = if *retry_setting {
+                    diagnosis.with_retry_setting()
+                } else {
+                    diagnosis
+                };
+                return match backend {
+                    Some(kind) => diagnosis.on_backend(*kind),
+                    None => diagnosis,
+                };
+            }
+            Self::PremiumKey(cause) => return cause.diagnosis().with_premium_key(),
             Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
             // A missing CLI is a machine that is not set up, as a missing token variable is. A CLI
             // that gave no token is a sign-in that is missing or ended.
@@ -181,37 +301,12 @@ impl BackendError {
             Self::Aichat(error) => match error {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
-                ChatError::Subscription(_) => Category::Unauthorized,
-                ChatError::Account(failure) => match failure {
-                    AccountFailure::NotSignedIn
-                    | AccountFailure::Ended
-                    | AccountFailure::Refused
-                    | AccountFailure::Unusable => Category::Unauthorized,
-                    // The service answered and said the account has reached a limit or may not be
-                    // used this way, which a new sign-in does not change, so it is no failure of the
-                    // credential. A refusal is a category no fallback model is used for, and the
-                    // account answers for every model it serves.
-                    AccountFailure::Named { .. } => Category::Refused,
-                    // The service answered and said the account does not offer this model, which
-                    // a new sign-in or another request does not change, so it is no failure of
-                    // the credential.
-                    AccountFailure::ModelNotOffered => Category::Refused,
-                    AccountFailure::Renewal(class) => category_of_renewal(*class),
-                    // The sign-in is what failed or what the service refused, which signing in again
-                    // mends, except for the renewal that was refused or could not be made, which is
-                    // told as the class of the request, as the ChatGPT account's is.
-                    AccountFailure::Xai(failure) => match failure {
-                        XaiFailure::NotSignedIn
-                        | XaiFailure::Ended
-                        | XaiFailure::Rejected
-                        | XaiFailure::Unusable => Category::Unauthorized,
-                        // The host answered and refused the request for this account, which a new
-                        // sign-in does not change, so it is no failure of the credential and no
-                        // fallback model answers for it, as for a refusal the ChatGPT account names.
-                        XaiFailure::NotPermitted => Category::Refused,
-                        XaiFailure::Renewal(class) => category_of_renewal(*class),
-                    },
-                },
+                ChatError::Subscription(_) => {
+                    // The key could not be presented, so the person is sent to the key's own
+                    // commands (PREM-10) rather than told only that credentials were refused.
+                    return Diagnosis::of(Category::Unauthorized).with_premium_key();
+                }
+                ChatError::Account(failure) => category_of_account(failure),
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
                 ChatError::Incomplete => Category::Incomplete,
                 ChatError::Reported { failure } => match failure {
@@ -225,8 +320,10 @@ impl BackendError {
                     }
                     Failure::RateLimit => Category::RateLimited,
                     Failure::Api | Failure::Overloaded | Failure::Timeout => Category::Unavailable,
-                    // Unknown protocol names must not enter the diagnosis.
-                    Failure::Unknown => Category::Incomplete,
+                    // The fallback of the closed list of codes: a failure the service reported
+                    // and this build cannot name. Its own category, since it is not a reply that
+                    // stopped. The service's name for it never enters the diagnosis.
+                    Failure::Unknown => Category::Unrecognised,
                 },
                 ChatError::TooLong(cut_off) => {
                     return Diagnosis::of(Category::TooLong).at_ceiling(cut_off.ceiling);
@@ -294,7 +391,7 @@ impl BackendError {
             | Self::Bedrock(BedrockError::Egress(bravebot_net::EgressError::Transport {
                 ..
             })) => true,
-            Self::Attempted { cause, .. } => cause.is_unreachable(),
+            Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.is_unreachable(),
             _ => false,
         }
     }
@@ -307,7 +404,7 @@ impl BackendError {
         match self {
             Self::Bedrock(BedrockError::TooLong(cut_off))
             | Self::Aichat(ChatError::TooLong(cut_off)) => Some(cut_off),
-            Self::Attempted { cause, .. } => cause.cut_off(),
+            Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.cut_off(),
             _ => None,
         }
     }
@@ -333,7 +430,7 @@ impl BackendError {
             Self::Aichat(ChatError::Reported {
                 failure: Failure::ContextFull,
             }) => true,
-            Self::Attempted { cause, .. } => cause.refused_the_body(),
+            Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.refused_the_body(),
             _ => false,
         }
     }
@@ -346,7 +443,7 @@ impl BackendError {
     pub fn is_empty_reply(&self) -> bool {
         match self {
             Self::Aichat(ChatError::NoContent) | Self::Bedrock(BedrockError::NoContent) => true,
-            Self::Attempted { cause, .. } => cause.is_empty_reply(),
+            Self::Attempted { cause, .. } | Self::PremiumKey(cause) => cause.is_empty_reply(),
             _ => false,
         }
     }
@@ -446,7 +543,7 @@ pub(crate) mod scripted {
                 thinking: Labelled::new(&piece, Label::untrusted_public()),
                 counted_by_server: false,
                 prose: false,
-                attempt: 1,
+                ..Progress::quiet(1)
             });
         }
     }
@@ -477,6 +574,40 @@ pub(crate) mod scripted {
             });
             Some(reply)
         })
+    }
+}
+
+/// The category of an account's failure: a sign-in that failed or ended, a refusal the service
+/// named, or a renewal that failed.
+fn category_of_account(failure: &AccountFailure) -> Category {
+    match failure {
+        AccountFailure::NotSignedIn
+        | AccountFailure::Ended
+        | AccountFailure::Refused
+        | AccountFailure::Unusable => Category::Unauthorized,
+        // The service answered and said the account has reached a limit or may not be used this
+        // way, which a new sign-in does not change, so it is no failure of the credential. A
+        // refusal is a category no fallback model is used for, and the account answers for every
+        // model it serves.
+        AccountFailure::Named { .. } => Category::Refused,
+        // The service answered and said the account does not offer this model, which a new
+        // sign-in or another request does not change, so it is no failure of the credential.
+        AccountFailure::ModelNotOffered => Category::Refused,
+        AccountFailure::Renewal(class) => category_of_renewal(*class),
+        // The sign-in is what failed or what the service refused, which signing in again mends,
+        // except for the renewal that was refused or could not be made, which is told as the
+        // class of the request, as the ChatGPT account's is.
+        AccountFailure::Xai(failure) => match failure {
+            XaiFailure::NotSignedIn
+            | XaiFailure::Ended
+            | XaiFailure::Rejected
+            | XaiFailure::Unusable => Category::Unauthorized,
+            // The host answered and refused the request for this account, which a new sign-in
+            // does not change, so it is no failure of the credential and no fallback model
+            // answers for it, as for a refusal the ChatGPT account names.
+            XaiFailure::NotPermitted => Category::Refused,
+            XaiFailure::Renewal(class) => category_of_renewal(*class),
+        },
     }
 }
 
@@ -969,15 +1100,36 @@ fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
     gives_way && default() == Serving::Configured
 }
 
+/// The failure of a call to the aichat endpoint, marked as one of the premium key where the client
+/// attached it, with the requests it took and what they cost.
+fn counted_aichat(client: &AichatClient<'_>, error: ChatError) -> BackendError {
+    let error = BackendError::from(error);
+    let error = if client.presented_a_premium_key() {
+        BackendError::PremiumKey(Box::new(error))
+    } else {
+        error
+    };
+    error
+        .counted(
+            client.attempts(),
+            client.completed_usage(),
+            client.last_request_tokens(),
+        )
+        .conceding(client.conceded())
+        .sent_by(BackendKind::Aichat)
+}
+
 /// The failure of a call to `client`, with the requests it took and what they cost.
 macro_rules! counted {
     ($client:expr, $result:expr) => {
         $result.map_err(|error| {
-            BackendError::from(error).counted(
-                $client.attempts(),
-                $client.completed_usage(),
-                $client.last_request_tokens(),
-            )
+            BackendError::from(error)
+                .counted(
+                    $client.attempts(),
+                    $client.completed_usage(),
+                    $client.last_request_tokens(),
+                )
+                .conceding($client.conceded())
         })
     };
 }
@@ -1096,6 +1248,20 @@ impl<'a> Backend<'a> {
     ) -> Result<(), BackendError> {
         bravebot_bedrock::credentials::sign_in_if_needed(bedrock.profile.as_deref(), say)
             .map_err(|failure| BedrockError::Credentials(failure).into())
+    }
+
+    /// [`Backend::sign_in_to`], ended early where `stop` is stopped, for a window that has no
+    /// Ctrl-C for the AWS CLI it started.
+    pub fn sign_in_to_until(
+        bedrock: &bravebot_config::bedrock::Bedrock,
+        say: impl FnMut(String),
+        stop: &AwsStop,
+    ) -> Result<(), AwsStopped> {
+        bravebot_bedrock::credentials::sign_in_if_needed_until(
+            bedrock.profile.as_deref(),
+            say,
+            stop,
+        )
     }
 
     /// Whether one AWS account has a usable session, without signing in to it.
@@ -1258,8 +1424,45 @@ impl<'a> Backend<'a> {
         self
     }
 
+    /// Which backend this is, as the closed word a failure line names it
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    fn kind(&self) -> BackendKind {
+        match self {
+            Self::Aichat { .. } => BackendKind::Aichat,
+            Self::Bedrock { .. } => BackendKind::Bedrock,
+            Self::Gateway { .. } => BackendKind::Gateway,
+            Self::Account { .. } => BackendKind::Chatgpt,
+            Self::XaiAccount { .. } => BackendKind::Xai,
+        }
+    }
+
+    /// Whether this backend is reached through a `provider` entry, which is where `maxRetries` is
+    /// stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    ///
+    /// Read from the configuration the backend was selected with. The Brave endpoint, a tier-variable
+    /// Bedrock account, the Vertex service the environment names and the two sign-in accounts have no
+    /// entry to put it in.
+    fn has_retry_setting(&self) -> bool {
+        match self {
+            Self::Bedrock { config, .. } => config.named_by_block(),
+            Self::Gateway { provider, .. } => provider.written_in_entry(),
+            Self::Aichat { .. } | Self::Account { .. } | Self::XaiAccount { .. } => false,
+        }
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        request: &ChatRequest,
+    ) -> Result<Completion, BackendError> {
+        let kind = self.kind();
+        let entry = self.has_retry_setting();
+        self.send(policy, request)
+            .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
+    }
+
+    fn send<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
@@ -1273,7 +1476,9 @@ impl<'a> Backend<'a> {
             } => {
                 let mut client =
                     aichat_client(config, egress, subscription.as_mut(), cancel.as_ref());
-                counted!(client, client.complete(policy, request))
+                client
+                    .complete(policy, request)
+                    .map_err(|error| counted_aichat(&client, error))
             }
             Self::Bedrock {
                 config,
@@ -1333,6 +1538,18 @@ impl<'a> Backend<'a> {
         request: &ChatRequest,
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
+        let kind = self.kind();
+        let entry = self.has_retry_setting();
+        self.send_streaming(policy, request, progress)
+            .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
+    }
+
+    fn send_streaming<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        request: &ChatRequest,
+        progress: impl FnMut(Progress),
+    ) -> Result<Completion, BackendError> {
         #[cfg(test)]
         if let Some(reply) = scripted::next(
             request,
@@ -1360,7 +1577,9 @@ impl<'a> Backend<'a> {
             } => {
                 let mut client =
                     aichat_client(config, egress, subscription.as_mut(), cancel.as_ref());
-                counted!(client, client.complete_streaming(policy, request, progress))
+                client
+                    .complete_streaming(policy, request, progress)
+                    .map_err(|error| counted_aichat(&client, error))
             }
             Self::Bedrock {
                 config,
@@ -2329,6 +2548,36 @@ mod tests {
             Backend::select(&with_a_gateway(), &egress, "z-ai/glm-4.6"),
             Backend::Gateway { .. }
         ));
+    }
+
+    /// BACKEND-37: only a backend reached through a `provider` entry has a `maxRetries` to raise,
+    /// so only it is told to raise one. A gateway entry and an AWS entry have one; Brave's endpoint
+    /// and an AWS account reached through the tier variables have none.
+    ///
+    /// The faults this rejects: the flag true for every backend, false for every backend, and
+    /// decided by the variant alone, which would treat the two kinds of AWS account alike.
+    #[test]
+    fn only_a_backend_reached_through_a_provider_entry_has_a_retry_setting() {
+        let mut config = with_a_gateway();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "sso"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config
+            .providers
+            .extend(bravebot_config::provider::Provider::all(&root));
+        let egress = Egress::new();
+        let has = |model: &str| Backend::select(&config, &egress, model).has_retry_setting();
+
+        assert!(has("z-ai/glm-4.6"), "a gateway entry");
+        assert!(has("openai.gpt-5.6-sol"), "an AWS entry");
+        assert!(!has("opus-arn"), "an AWS account the tier variables name");
+        assert!(!has(DEFAULT_MODEL), "Brave's endpoint");
     }
 
     /// A `provider` block naming AWS reaches Bedrock, which signs, rather than the gateway client,
@@ -3951,6 +4200,15 @@ mod tests {
         reply: &'static str,
         content_type: &'static str,
     ) -> (String, std::sync::mpsc::Receiver<Received>) {
+        answer_once_with_status("200 OK", reply, content_type)
+    }
+
+    /// `answer_once`, with the status line the server answers with.
+    fn answer_once_with_status(
+        status: &'static str,
+        reply: &'static str,
+        content_type: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<Received>) {
         use std::io::{BufRead, BufReader, Read, Write};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -3980,7 +4238,7 @@ mod tests {
             let _ = sender.send((line.trim().to_string(), headers));
             let _ = stream.write_all(
                 format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                     reply.len()
                 )
                 .as_bytes(),
@@ -4663,6 +4921,9 @@ mod tests {
                 attempts,
                 usage,
                 context_tokens,
+                conceded: _,
+                backend: _,
+                retry_setting: _,
                 cause,
             } = &error
             else {
@@ -4707,6 +4968,9 @@ mod tests {
                 attempts,
                 usage,
                 context_tokens,
+                conceded: _,
+                backend: _,
+                retry_setting: _,
                 cause,
             } = &error
             else {
@@ -4785,6 +5049,9 @@ mod tests {
                 attempts,
                 usage,
                 context_tokens,
+                conceded: _,
+                backend: _,
+                retry_setting: _,
                 cause,
             } = &error
             else {
@@ -4812,7 +5079,7 @@ mod tests {
             .expect("refused");
         assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
         assert!(
-            format!("{failure}").contains("openrouter"),
+            format!("{failure}").contains("OpenRouter"),
             "the failure does not say which gateway: {failure}"
         );
         // The remedy, not only the diagnosis: both places a credential can be named.
@@ -5319,6 +5586,146 @@ mod tests {
         );
     }
 
+    /// BACKEND-37: a refusal of a request that carried the premium key is marked as the key's, and
+    /// the mark survives the count of attempts that wraps it. A refusal with a 401 or a 403 of any
+    /// other request is not marked. A premium key that could not be produced is marked too.
+    ///
+    /// The regressions it rejects are a mark lost when the failure is counted, a mark set on every
+    /// unauthorized failure, and a premium key that could not be produced told in the generic
+    /// sentence.
+    #[test]
+    fn a_refusal_of_the_premium_key_is_marked_through_the_count_of_attempts() {
+        let status = |code: u16| {
+            ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://example.test/v1/chat".into(),
+                status: code,
+                retry_after: None,
+                body: None,
+            })
+        };
+        for code in [401, 403] {
+            let marked = BackendError::PremiumKey(Box::new(BackendError::from(status(code))))
+                .counted(2, None, None)
+                .diagnosis();
+            assert_eq!(marked.category, Category::Unauthorized, "{code}");
+            assert_eq!(marked.status, Some(code));
+            assert_eq!(marked.attempts, Some(2));
+            assert!(marked.premium_key, "{code}: the mark was lost");
+
+            let unmarked = BackendError::from(status(code))
+                .counted(2, None, None)
+                .diagnosis();
+            assert_eq!(unmarked.category, Category::Unauthorized, "{code}");
+            assert!(!unmarked.premium_key, "{code}: marked without the key");
+        }
+        let other = BackendError::PremiumKey(Box::new(BackendError::from(status(503))))
+            .counted(1, None, None)
+            .diagnosis();
+        assert_eq!(other.category, Category::Unavailable);
+        let unusable = BackendError::from(ChatError::Subscription("not held".into()))
+            .counted(0, None, None)
+            .diagnosis();
+        assert_eq!(unusable.category, Category::Unauthorized);
+        assert!(unusable.premium_key);
+    }
+
+    /// BACKEND-37, PREM-10: the mark on a refused premium key is set where the backend makes the
+    /// call, from whether the client attached the key. A 401 from the premium host answering a
+    /// request that carried the key is marked, whole or streamed, and a 401 from the free endpoint
+    /// answering one that carried none is not, with a key lent or not.
+    ///
+    /// The regressions it rejects are the failure counted without the client being asked, which
+    /// leaves every refused key unmarked, and a mark set whenever a source was lent.
+    #[test]
+    fn a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend() {
+        struct Lent;
+        impl Subscription for Lent {
+            fn next_credential(
+                &mut self,
+            ) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+                Ok(bravebot_aichat::SubscriptionCredential {
+                    key: bravebot_config::Secret::new("a-key"),
+                })
+            }
+        }
+
+        const REFUSED: &str = r#"{"error":"unauthorized"}"#;
+        let egress = Egress::new();
+        let request = ChatRequest::new(
+            DEFAULT_MODEL,
+            vec![bravebot_aichat::protocol::Message::user("hi")],
+        );
+        // Each case is a premium host and a free endpoint, each answering 401, and whether a
+        // source is lent. Only the request that goes to the premium host carries the key.
+        for (lent, premium_host, expected) in [
+            (true, true, true),
+            (true, false, false),
+            (false, true, false),
+        ] {
+            for streamed in [false, true] {
+                let (free, free_received) =
+                    answer_once_with_status("401 Unauthorized", REFUSED, "application/json");
+                let (premium, premium_received) =
+                    answer_once_with_status("401 Unauthorized", REFUSED, "application/json");
+                let mut config = Config::from_lookup(|key| match key {
+                    env_var::ENDPOINT => Some(free.clone()),
+                    other => aichat_only(other),
+                })
+                .expect("configured");
+                // The compiled-in premium host is Brave's, so a case with none clears it rather than
+                // leaving a request able to leave the machine.
+                config.premium_endpoint = premium_host.then(|| premium.clone());
+                let mut sink = bravebot_core::event::RecordingSink::new();
+                let mut policy = bravebot_core::policy::Policy::begin(
+                    {
+                        let mut routing = bravebot_core::policy::Routing::new();
+                        routing.insert_trusted("task", "say hello");
+                        routing
+                    },
+                    bravebot_core::policy::ReleasePlan::new(),
+                    bravebot_core::capability::CapabilitySet::from_iter([
+                        bravebot_core::capability::Capability::WebFetch,
+                    ]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut source = Lent;
+                let mut backend = Backend::select(&config, &egress, DEFAULT_MODEL);
+                if lent {
+                    backend = backend.with_subscription(&mut source);
+                }
+                let failure = if streamed {
+                    backend.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    backend.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused the credentials");
+
+                let why = failure.diagnosis();
+                let case = format!("lent {lent}, premium host {premium_host}, streamed {streamed}");
+                assert_eq!(why.category, Category::Unauthorized, "{case}");
+                assert_eq!(why.status, Some(401), "{case}");
+                assert_eq!(why.premium_key, expected, "{case}");
+                // The request went where the case says, so the mark follows the key.
+                let (answering, silent) = if expected {
+                    (premium_received, free_received)
+                } else {
+                    (free_received, premium_received)
+                };
+                let received = answering.recv().expect("the request arrived");
+                assert_eq!(
+                    header(&received, "authorization").is_some_and(|value| value == "Bearer a-key"),
+                    expected,
+                    "{case}"
+                );
+                assert!(
+                    silent.try_recv().is_err(),
+                    "{case}: the other host was asked"
+                );
+            }
+        }
+    }
+
     /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
     /// and an unusable premium key by unsetting it, and a person shown the wrong one is sent to
     /// fix something that is not broken.
@@ -5387,6 +5794,55 @@ mod tests {
             why.status, None,
             "a status was reported for a request that was never signed: {why:?}"
         );
+    }
+
+    /// BACKEND-37: every source of a refused credential is diagnosed as unauthorized, which is the
+    /// category the remedy sentence is chosen by, and none of them is marked as the premium key's
+    /// except the key itself. A source left at another category would show the person a line
+    /// naming no command.
+    ///
+    /// The regressions it rejects are a source falling to a category the remedy is not chosen
+    /// for, and a credential of another backend marked as the premium key.
+    #[test]
+    fn each_source_of_a_refused_credential_is_diagnosed_as_unauthorized() {
+        let refused_token = BackendError::GoogleCloud(crate::gcloud::GcloudError::Refused {
+            detail: "no application default credentials".into(),
+        });
+        let bedrock_sign_in = BackendError::from(BedrockError::Credentials(
+            bravebot_bedrock::credentials::CredentialError::Refused {
+                detail: "the session has expired".into(),
+            },
+        ));
+        let bedrock_status =
+            BackendError::from(BedrockError::Egress(bravebot_net::EgressError::Status {
+                url: "https://bedrock-runtime.example/model/invoke".into(),
+                status: 401,
+                retry_after: None,
+                body: None,
+            }));
+        let mut sources = vec![
+            ("google cloud token", refused_token),
+            ("bedrock sign-in", bedrock_sign_in),
+            ("bedrock status", bedrock_status),
+        ];
+        for failure in [
+            Failure::Authentication,
+            Failure::Permission,
+            Failure::Billing,
+        ] {
+            sources.push((
+                "reported by the service",
+                BackendError::from(ChatError::Reported { failure }),
+            ));
+        }
+        for (source, error) in sources {
+            let why = error.counted(2, None, None).diagnosis();
+            assert_eq!(why.category, Category::Unauthorized, "{source}: {why:?}");
+            assert!(!why.premium_key, "{source} was marked as the premium key");
+        }
+        // A missing gcloud is a machine not set up, and is told as that.
+        let missing = BackendError::GoogleCloud(crate::gcloud::GcloudError::NotInstalled);
+        assert_eq!(missing.diagnosis().category, Category::Unconfigured);
     }
 
     /// What a service asked for and what went wrong with the connection are different things to
@@ -5511,6 +5967,43 @@ mod tests {
         );
         assert_eq!(failure.diagnosis().category, Category::Transport);
         assert_eq!(failure.diagnosis().attempts, Some(3));
+    }
+
+    /// BACKEND-37: the fields a call gave up and the backend that sent the requests reach the
+    /// diagnosis from the failure's own record, and a failure that counted no requests carries
+    /// neither. The regressions it rejects are a diagnosis that drops either field, and a backend
+    /// word set on an error that was never counted.
+    #[test]
+    fn the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure() {
+        use bravebot_aichat::call::Concession;
+        let status = || bravebot_net::EgressError::Status {
+            url: "https://service.example/v1".to_string(),
+            status: 400,
+            retry_after: None,
+            body: None,
+        };
+        let mut given = Conceded::default();
+        given.push(Concession::Effort);
+        given.push(Concession::Ceiling);
+        let failure = BackendError::from(ChatError::Egress(status()))
+            .counted(3, None, None)
+            .conceding(given)
+            .sent_by(BackendKind::Bedrock);
+        let diagnosis = failure.diagnosis();
+        assert_eq!(diagnosis.category, Category::Refused);
+        assert_eq!(diagnosis.attempts, Some(3));
+        assert_eq!(diagnosis.backend, Some(BackendKind::Bedrock));
+        assert_eq!(
+            diagnosis.conceded.in_order().collect::<Vec<_>>(),
+            [Concession::Effort, Concession::Ceiling]
+        );
+
+        let uncounted = BackendError::from(ChatError::Egress(status()))
+            .conceding(given)
+            .sent_by(BackendKind::Bedrock)
+            .diagnosis();
+        assert_eq!(uncounted.backend, None);
+        assert!(uncounted.conceded.is_empty());
     }
 
     /// COMPACT-14: only 400 and 422 say the body was refused, on either backend and through the

@@ -31,7 +31,36 @@ pub(crate) use bravebot_approval::QUARANTINE_BAR;
 /// to make. Eighty is the width assumed of a terminal that has not said otherwise.
 const BLOCK_WIDTH: usize = 80;
 
-pub(crate) use bravebot_approval::printable;
+/// Text a checkout or an environment chose, as it can be shown: control characters pictured, and
+/// each character that draws as nothing (a bidirectional control, a zero-width character, a
+/// variation selector, a tag character) written out as `‹U+XXXX›`. A bidirectional control is not
+/// a control character, so a name holding one would otherwise reorder the text around it on the
+/// terminal (LAYER-3).
+///
+/// A map from characters to characters: no branch is taken on the text.
+pub(crate) fn printable(text: &str) -> String {
+    bravebot_core::invisible::spelled(bravebot_agent::confirm::printable(text)).text
+}
+
+/// The lines a session opened with `--dangerously-skip-permissions` says before its first prompt,
+/// each already wrapped as a notice.
+///
+/// The flag is always said. Where auto-vetting is also on, a second line says that bypass asks
+/// nobody, so content a check objects to or cannot assess is refused and not asked about. Both the
+/// session in lines and a one-shot run print these, so they cannot disagree about what is said.
+pub(crate) fn bypass_notices(skip_permissions: bool, auto_vetting: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if skip_permissions {
+        lines.push(t!(cli_notice, notice = t!(session_permissions_skipped)));
+        if auto_vetting {
+            lines.push(t!(
+                cli_notice,
+                notice = bravebot_agent::report::vetting_in_bypass()
+            ));
+        }
+    }
+    lines
+}
 
 /// A file's path as [`printable`] draws it.
 pub(crate) fn printable_path(path: &std::path::Path) -> String {
@@ -293,6 +322,7 @@ impl<W: Write> Reporter for Progress<W> {
             let call = Call {
                 tool: activity.tool.clone(),
                 target: activity.target.clone(),
+                skill: activity.skill.clone(),
                 refused: activity.failed,
             };
             if let Some(stream) = self.stream.as_mut() {
@@ -417,6 +447,34 @@ impl<W: Write> Progress<W> {
 mod tests {
     use super::*;
     use bravebot_agent::report::Reach;
+
+    /// A session opened with the bypass flag and auto-vetting on says what bypass refuses, after the
+    /// line about the flag. Rejects a client that prints only the flag's line, which leaves the
+    /// transcript showing a refusal with no stated cause. Both clients print what this returns.
+    #[test]
+    fn bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line() {
+        let said = bypass_notices(true, true);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said[0].contains(t!(session_permissions_skipped)),
+            "{said:?}"
+        );
+        assert!(
+            said[1].contains(&bravebot_agent::report::vetting_in_bypass()),
+            "{said:?}"
+        );
+    }
+
+    /// Without auto-vetting a check refuses nothing, so only the flag's line is said, and without
+    /// the flag nothing is said whatever the setting. Rejects a line printed on the setting alone.
+    #[test]
+    fn bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra() {
+        let said = bypass_notices(true, false);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(!said[0].contains(&bravebot_agent::report::vetting_in_bypass()));
+        assert!(bypass_notices(false, true).is_empty());
+        assert!(bypass_notices(false, false).is_empty());
+    }
 
     fn log(run: impl FnOnce(&mut Progress<&mut Vec<u8>>)) -> String {
         let mut buffer = Vec::new();

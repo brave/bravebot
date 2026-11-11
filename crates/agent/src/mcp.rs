@@ -15,7 +15,7 @@ use crate::confirm::{
     CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,
 };
 use crate::processor::Chat;
-use crate::report::Reporter;
+use crate::report::{IgnoreReports, Reporter};
 use crate::scratch::SessionScratch;
 use crate::servers::EffectivePolicy;
 use bravebot_aichat::protocol::{Tool, Usage};
@@ -25,11 +25,11 @@ use bravebot_config::mcp::{
 };
 use bravebot_config::{Managed, Refusal, Rule};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
-use bravebot_core::event::Sink;
+use bravebot_core::event::{RecordingSink, Sink};
 use bravebot_core::policy::{McpStanding, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::value::Labelled;
-use bravebot_core::vetting::{Endorsed, Verdict};
+use bravebot_core::vetting::{Endorsed, Verdict, VettingSpec};
 use bravebot_i18n::t;
 use bravebot_mcp::protocol::{WIRE_PREFIX, WIRE_SEPARATOR, choice_key, with_choice};
 use bravebot_mcp::{
@@ -47,6 +47,53 @@ pub enum Connection {
     Stdio(StdioServer),
     /// A remote server, every request to which goes through the egress gate.
     Http(HttpServer),
+}
+
+/// The OpenShell sandbox a server runs in, as `/status` says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sandboxed {
+    /// The sandbox's name, as `openshell sandbox list` shows it.
+    pub name: String,
+    /// The image it was made from.
+    pub image: String,
+    /// The hosts its program may reach, and no other; none where it reaches nothing.
+    pub hosts: Vec<String>,
+}
+
+impl Sandboxed {
+    /// The sandbox as lines of a label and what it says, as [`crate::servers::EffectivePolicy`]
+    /// says a confined server's policy: the sandbox and its image, what it may reach, what it
+    /// reads, and where its tools are offered.
+    pub fn described(&self) -> Vec<(String, String)> {
+        vec![
+            (
+                t!(status_server_openshell).to_string(),
+                t!(
+                    status_server_openshell_sandbox,
+                    name = &self.name,
+                    image = &self.image
+                )
+                .to_string(),
+            ),
+            (
+                t!(status_server_policy_egress).to_string(),
+                match self.hosts.as_slice() {
+                    [] => t!(status_server_policy_egress_closed).to_string(),
+                    hosts => {
+                        t!(status_server_openshell_hosts, hosts = hosts.join(", ")).to_string()
+                    }
+                },
+            ),
+            (
+                t!(status_server_policy_read).to_string(),
+                t!(status_server_openshell_image_only).to_string(),
+            ),
+            (
+                t!(status_server_openshell_offered).to_string(),
+                t!(status_server_openshell_manifest_runs).to_string(),
+            ),
+        ]
+    }
 }
 
 /// A server that completed its handshake and answered for its tools, with the declaration it was
@@ -67,6 +114,15 @@ pub struct Reached {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The headers and bearer token the declaration names, as the environment gave them when the
+    /// server was started, which a server moved during a turn is reached with (SERVERS-18).
+    headers: Vec<(String, String)>,
+    /// The OpenShell sandbox the server runs in, where it runs in one. Only a manifest run offers
+    /// such a server's tools while that backend is offered to manifest runs alone.
+    sandboxed: Option<Sandboxed>,
+    /// The sandbox itself, where it runs in one bravebot made for it, held so the
+    /// sandbox is removed once the server has stopped and not before.
+    sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl Reached {
@@ -86,7 +142,30 @@ impl Reached {
             exclude_tools: Vec::new(),
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            headers: Vec::new(),
+            sandboxed: None,
+            sandbox: None,
         }
+    }
+
+    /// The same server, offered to manifest runs only, holding the sandbox it runs in and what that
+    /// sandbox is, as `/status` says it.
+    pub fn in_a_sandbox_for_manifest_runs(
+        mut self,
+        sandbox: Box<dyn std::any::Any + Send + Sync>,
+        shown: Sandboxed,
+    ) -> Self {
+        self.sandboxed = Some(shown);
+        self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// The same server, with the headers its connection sends, which the connection it is moved to
+    /// sends as well (SERVERS-11, SERVERS-18). The values are secrets: they are held and sent, and
+    /// nothing reads or shows them.
+    pub fn sending(mut self, headers: Vec<(String, String)>) -> Self {
+        self.headers = headers;
+        self
     }
 
     /// The same server, with whether its declaration says every call to it is asked about, which
@@ -115,6 +194,12 @@ impl Reached {
     #[cfg(test)]
     pub(crate) fn filters(&self) -> (&[String], &[String]) {
         (&self.tools, &self.exclude_tools)
+    }
+
+    /// The headers [`Reached::sending`] holds.
+    #[cfg(test)]
+    pub(crate) fn sent_headers(&self) -> &[(String, String)] {
+        &self.headers
     }
 
     /// The same server, with the policy its process was started under (SERVERS-20). A server with
@@ -274,8 +359,16 @@ struct Server {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The headers and bearer token its first connection sent, which a move sends to the new
+    /// destination as well (SERVERS-18).
+    headers: Vec<(String, String)>,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
+    /// The OpenShell sandbox it runs in, where it runs in one; only a manifest run calls such a
+    /// server ([`Session::in_a_turn`]).
+    sandboxed: Option<Sandboxed>,
+    /// After `connection` for the same reason: the sandbox is removed once the server has stopped.
+    _sandbox: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 struct Shared {
@@ -350,6 +443,11 @@ impl<R: Reporter> Said<'_, R> {
     }
 }
 
+/// The most checks of tool lists made at the same time, the figure the reads of one round are
+/// held to (TURN-10). A session with more servers than this starts the next check as each one
+/// before it is joined, in server order.
+const CHECKS_AT_ONCE: usize = crate::tools::READS_AT_ONCE;
+
 fn stopped(chat: &Chat<'_>) -> bool {
     chat.cancel.is_some_and(|cancel| cancel.is_cancelled())
 }
@@ -382,7 +480,10 @@ impl Session {
                     exclude_tools: reached.exclude_tools,
                     ask_every_call: reached.ask_every_call,
                     choice_arguments: reached.choice_arguments,
+                    headers: reached.headers,
                     _home: reached.home,
+                    sandboxed: reached.sandboxed,
+                    _sandbox: reached.sandbox,
                 })
             })
             .collect();
@@ -451,6 +552,20 @@ impl Session {
             .collect()
     }
 
+    /// `held` less the grant for each server a manifest run alone calls, such as one running in an
+    /// OpenShell sandbox: a turn neither puts that server's list to the person nor offers its tools.
+    pub fn in_a_turn(&self, mut held: CapabilitySet) -> CapabilitySet {
+        for server in self
+            .0
+            .servers
+            .iter()
+            .filter(|server| server.sandboxed.is_some())
+        {
+            held.revoke_mcp_call(&ServerAlias::new(server.alias.as_str()));
+        }
+        held
+    }
+
     /// One grant for each server reached, naming it and no other (SERVERS-9).
     pub fn grants(&self) -> Vec<ServerAlias> {
         self.0
@@ -472,6 +587,15 @@ impl Session {
             .servers
             .iter()
             .filter_map(|server| Some((server.alias.clone(), server.policy.clone()?)))
+            .collect()
+    }
+
+    /// The OpenShell sandbox each server that runs in one was started in, in order.
+    pub fn sandboxed(&self) -> Vec<(String, Sandboxed)> {
+        self.0
+            .servers
+            .iter()
+            .filter_map(|server| Some((server.alias.clone(), server.sandboxed.clone()?)))
             .collect()
     }
 
@@ -499,7 +623,13 @@ impl Session {
     /// reads and nothing is decided from it here.
     pub fn prompts<S: Sink>(&self, policy: &mut Policy<'_, S>) -> Vec<ListedPrompt> {
         let mut listed = Vec::new();
-        for server in &self.0.servers {
+        // A server only a manifest run calls offers a turn nothing, prompts included.
+        for server in self
+            .0
+            .servers
+            .iter()
+            .filter(|server| server.sandboxed.is_none())
+        {
             if server.prompts.offered() == 0 {
                 continue;
             }
@@ -544,6 +674,9 @@ impl Session {
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let (named, typed) = rest.split_at(end);
         let mut matched = self.0.servers.iter().filter_map(|server| {
+            if server.sandboxed.is_some() {
+                return None;
+            }
             let word = named
                 .strip_prefix(server.alias.as_str())?
                 .strip_prefix(WIRE_SEPARATOR)?;
@@ -572,6 +705,17 @@ impl Session {
     /// of the session, and a turn stopped at the question leaves it unasked. Settled at the start
     /// of a turn a person asked for, and of a plan run, since that is where there is somebody to put
     /// the question to.
+    ///
+    /// The checks of every list to be put are made at the same time, each on a thread of its own
+    /// under a branch of the policy, at most [`CHECKS_AT_ONCE`] of them, and the questions are
+    /// drawn in server order as each check returns (SERVERS-8). A turn that has a subscription to
+    /// spend makes them one after another, because the credential is lent to one request at a
+    /// time. Which lists are checked and which thread runs which check depend on the servers and
+    /// the mode only, never on what a list or a reply says.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the checks are specified, run and drawn in server order, each step depending on the one before"
+    )]
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -582,6 +726,8 @@ impl Session {
         holding: &CapabilitySet,
     ) -> Settled {
         let mut settled = Settled::default();
+        // Every list to be put, in server order, taken out before any is checked.
+        let mut pending: Vec<(&Server, Listing)> = Vec::new();
         for server in &self.0.servers {
             if stopped(chat) {
                 break;
@@ -610,15 +756,125 @@ impl Session {
                     }
                 }
             };
-            let mut said = Said {
-                reporter: &mut *reporter,
-                notices: &mut settled.notices,
-            };
-            let (now, usage) =
-                self.settle_one(policy, chat, confirmer, &mut said, mode, server, listing);
-            settled.usage.add(usage);
-            *held(&server.state) = now;
+            pending.push((server.as_ref(), listing));
         }
+
+        // Not made where every check is being bypassed, for the reason a vouch makes none there:
+        // the mode answers this question yes, so nobody would read the word.
+        let checking = mode != crate::PermissionMode::Bypass;
+        let specs: Vec<Option<VettingSpec>> = pending
+            .iter()
+            .map(|(server, listing)| {
+                checking.then(|| {
+                    policy.before_vetting_a_tool_list(&server.alias, listing.list().clone())
+                })
+            })
+            .collect();
+        let together = checking && pending.len() > 1 && chat.subscription.is_none();
+
+        // What a thread needs to make a check of its own. The turn's chat is not lent to a thread,
+        // since it may hold a credential that only one request can use at a time.
+        let (config, egress, model, cancel) = (chat.config, chat.egress, chat.model, chat.cancel);
+        let account = chat.session.clone();
+        let mut base = RecordingSink::new();
+        let branchable = policy.branch(&mut base);
+
+        std::thread::scope(|scope| {
+            // The check of the list at `index` on a thread of its own, where checks are made at
+            // the same time. Which index is begun when depends on the number of servers alone.
+            let start = |index: usize| {
+                let spec = specs[index].as_ref().filter(|_| together)?;
+                let branchable = &branchable;
+                let account = &account;
+                Some(scope.spawn(move || {
+                    let mut record = RecordingSink::new();
+                    let mut branch = branchable.branch(&mut record);
+                    let mut chat = Chat::new(config, egress, account).on(model);
+                    if let Some(cancel) = cancel {
+                        chat = chat.stoppable_by(cancel);
+                    }
+                    let checked = crate::vet::run(&mut branch, &mut chat, &mut IgnoreReports, spec);
+                    drop(branch);
+                    (checked, record)
+                }))
+            };
+            let mut started = specs.len().min(CHECKS_AT_ONCE);
+            let mut running: Vec<Option<_>> = (0..specs.len())
+                .map(|index| if index < started { start(index) } else { None })
+                .collect();
+
+            for (index, ((server, listing), spec)) in pending.into_iter().zip(&specs).enumerate() {
+                if stopped(chat) {
+                    // Not asked, so the next turn asks. A check that was already made is still
+                    // recorded and still charged.
+                    if let Some(handle) = running[index].take() {
+                        let (checked, record) = handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                        policy.rejoin(record);
+                        settled.usage.add(match checked {
+                            Ok(checked) => checked.usage,
+                            Err(stopped) => stopped.usage,
+                        });
+                    }
+                    *held(&server.state) = State::Unasked(listing);
+                    continue;
+                }
+                let checked = match (spec, running[index].take()) {
+                    (None, _) => (
+                        Verdict::Inconclusive("the check was not made"),
+                        None,
+                        Usage::default(),
+                    ),
+                    (Some(spec), handle) => {
+                        let checked = match handle {
+                            // Said around the wait, so the screen names the check the question
+                            // below is waiting on and has stopped saying so before it is drawn.
+                            Some(handle) => {
+                                reporter.check_started(spec.checking());
+                                let finished = handle.join();
+                                reporter.check_finished();
+                                let (checked, record) = finished
+                                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                                policy.rejoin(record);
+                                // A place is free, so the next list in server order is checked.
+                                if started < specs.len() && !stopped(chat) {
+                                    running[started] = start(started);
+                                    started += 1;
+                                }
+                                checked
+                            }
+                            None => crate::vet::run(policy, chat, &mut *reporter, spec),
+                        };
+                        // A stop is not a verdict: nobody is asked about the list, it stays
+                        // unasked so the next turn asks, and what the attempts cost is charged.
+                        let checked = match checked {
+                            Ok(checked) => checked,
+                            Err(stopped) => {
+                                settled.usage.add(stopped.usage);
+                                *held(&server.state) = State::Unasked(listing);
+                                continue;
+                            }
+                        };
+                        let reason = checked.reason.map(|reason| {
+                            let proof =
+                                policy.authorise_display_release("what a check said about content");
+                            reason.declassify(&proof)
+                        });
+                        (checked.verdict, reason, checked.usage)
+                    }
+                };
+                let mut said = Said {
+                    reporter: &mut *reporter,
+                    notices: &mut settled.notices,
+                };
+                let (now, usage) = self.settle_one(
+                    policy, chat, confirmer, &mut said, mode, server, listing, checked,
+                );
+                settled.usage.add(usage);
+                *held(&server.state) = now;
+            }
+        });
         settled
     }
 
@@ -676,30 +932,12 @@ impl Session {
         mode: crate::PermissionMode,
         server: &Server,
         listing: Listing,
+        (verdict, reason, usage): (Verdict, Option<String>, Usage),
     ) -> (State, Usage) {
         let alias = server.alias.as_str();
         let refused = listing.refused();
         let withheld = listing.withheld();
         let list = listing.list().clone();
-
-        // Not made where every check is being bypassed, for the reason a vouch makes none there:
-        // the mode answers this question yes, so nobody would read the word.
-        let (verdict, reason, usage) = match mode != crate::PermissionMode::Bypass {
-            true => {
-                let spec = policy.before_vetting_a_tool_list(alias, list.clone());
-                let checked = crate::vet::run(policy, chat, &mut *said.reporter, &spec);
-                let reason = checked.reason.map(|reason| {
-                    let proof = policy.authorise_display_release("what a check said about content");
-                    reason.declassify(&proof)
-                });
-                (checked.verdict, reason, checked.usage)
-            }
-            false => (
-                Verdict::Inconclusive("the check was not made"),
-                None,
-                Usage::default(),
-            ),
-        };
 
         let shaped = policy.render_in_place("mcp_tools", &list, |text| listed(alias, &text));
         let tools = {
@@ -760,7 +998,7 @@ impl Session {
         (state, usage)
     }
 
-    /// The tools this turn may offer: every tool on every list somebody vouched for.
+    /// The tools a manifest run may offer: every tool on every list somebody vouched for.
     pub fn offer(&self) -> Offer {
         let mut tools: Vec<Offered> = Vec::new();
         for server in &self.0.servers {
@@ -782,8 +1020,10 @@ impl Session {
         Offer {
             session: self.clone(),
             tools,
+            round: Round::default(),
             deferred: false,
             loaded: Vec::new(),
+            reading: false,
         }
     }
 
@@ -863,6 +1103,11 @@ impl Session {
         arguments: &[(String, String)],
     ) -> McpResult<Labelled<String>> {
         let server = self.reached(alias)?;
+        if server.sandboxed.is_some() {
+            return Err(McpError::Transport(format!(
+                "{alias} is called by manifest runs alone"
+            )));
+        }
         match &mut *held(&server.connection) {
             Connection::Stdio(server) => server.get_prompt(policy, name, arguments),
             Connection::Http(server) => server.get_prompt(policy, egress, name, arguments),
@@ -943,7 +1188,9 @@ impl Session {
             return false;
         }
 
-        let mut moved = HttpServer::new(alias, url.as_str()).starting_within(startup);
+        let mut moved = HttpServer::new(alias, url.as_str())
+            .with_headers(server.headers.clone())
+            .starting_within(startup);
         if let Err(error) = moved.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))
         {
             match policy.take_server_hop() {
@@ -1370,19 +1617,165 @@ pub struct CallableArgument {
     pub required: bool,
 }
 
+/// The calls to a server's tool that the round now running holds, and the answers one question
+/// already gave about them (SERVERS-7).
+///
+/// The calls are the planner's own words, taken from the round before the first of them runs, each
+/// under its position in the round. A question about one lists the later calls to the same tool,
+/// and a yes or a no to it covers those calls and only those: a later call is covered when its
+/// position is one the person was shown and the label of its arguments is the one they were asked
+/// under. Nothing here compares an argument's value with anything, since a value the planner wrote
+/// may derive from private content (LABEL-5). A clone starts empty, so a delegate's turn never
+/// reads the round of the turn that started it.
+#[derive(Debug, Default)]
+pub struct Round(Mutex<RoundCalls>);
+
+#[derive(Debug, Default)]
+struct RoundCalls {
+    /// The position in the round of the call now being dispatched, where it is a call to a tool of
+    /// a server.
+    current: Option<usize>,
+    upcoming: Vec<Upcoming>,
+    covered: Vec<Covered>,
+}
+
+#[derive(Debug)]
+struct Upcoming {
+    index: usize,
+    alias: String,
+    tool: String,
+    arguments: Value,
+}
+
+#[derive(Debug)]
+struct Covered {
+    index: usize,
+    private: bool,
+    approved: bool,
+}
+
+impl Clone for Round {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Round {
+    /// The calls this round holds to a server's tool, in order, replacing whatever the last round
+    /// held.
+    fn begin(&self, calls: Vec<(usize, String, String, Value)>) {
+        let mut held = held(&self.0);
+        held.current = None;
+        held.covered.clear();
+        held.upcoming = calls
+            .into_iter()
+            .map(|(index, alias, tool, arguments)| Upcoming {
+                index,
+                alias,
+                tool,
+                arguments,
+            })
+            .collect();
+    }
+
+    /// Names the position in the round of the call about to be dispatched, or none once it has
+    /// been.
+    fn at(&self, index: Option<usize>) {
+        held(&self.0).current = index;
+    }
+
+    /// The positions and arguments of the later calls of the round to the same tool as the call
+    /// being dispatched. Found by position and by the alias and word of the tool, never by an
+    /// argument.
+    fn later(&self, alias: &str, tool: &str) -> Vec<(usize, Value)> {
+        let held = held(&self.0);
+        let Some(now) = held.current else {
+            return Vec::new();
+        };
+        let here = held
+            .upcoming
+            .iter()
+            .any(|call| call.index == now && call.alias == alias && call.tool == tool);
+        if !here {
+            return Vec::new();
+        }
+        held.upcoming
+            .iter()
+            .filter(|call| call.index > now && call.alias == alias && call.tool == tool)
+            .map(|call| (call.index, call.arguments.clone()))
+            .collect()
+    }
+
+    /// Records the answer to a question that listed the calls at these positions.
+    fn cover(&self, listed: &[usize], private: bool, approved: bool) {
+        held(&self.0)
+            .covered
+            .extend(listed.iter().map(|index| Covered {
+                index: *index,
+                private,
+                approved,
+            }));
+    }
+
+    /// What an earlier question in this round answered for the call being dispatched, once.
+    fn answered(&self, private: bool) -> Option<bool> {
+        let mut held = held(&self.0);
+        let now = held.current?;
+        let at = held
+            .covered
+            .iter()
+            .position(|call| call.index == now && call.private == private)?;
+        Some(held.covered.remove(at).approved)
+    }
+}
+
 /// The tools one turn offers, and the session they are called through.
 #[derive(Debug, Clone)]
 pub struct Offer {
     session: Session,
     tools: Vec<Offered>,
+    /// What the round now running holds for the tools of servers.
+    round: Round,
     /// Whether the tools are offered by name only until one is loaded (SERVERS-16).
     deferred: bool,
     /// The wire names loaded so far this turn, in the order they were loaded. Always names this
     /// offer holds, since [`Offer::load`] takes a name only by finding it in `tools`.
     loaded: Vec<String>,
+    /// Whether each tool is offered a `read` argument, which asks for what the call returns to be
+    /// checked and released in its result. Set where `vet_content` is on the turn's list, since
+    /// that is the release the argument asks for a round early.
+    reading: bool,
 }
 
+/// The name of the argument that asks for what a call returned to be read in its result.
+pub const READ_ARGUMENT: &str = "read";
+
 impl Offer {
+    /// This offer with each tool given a `read` argument, or without one.
+    pub fn reading(mut self, reading: bool) -> Self {
+        self.reading = reading;
+        self
+    }
+
+    /// Whether the call to the tool `tool` of the server `alias` takes a `read` argument of this
+    /// process's own: the offer gives tools one, and the server did not list an argument of that
+    /// name itself. A server's own `read` is the server's, and a call that gives it is sent as
+    /// written.
+    pub fn takes_read(&self, alias: &str, tool: &str) -> bool {
+        self.reading
+            && self
+                .tools
+                .iter()
+                .find(|offered| offered.alias == alias && offered.drawn.name == tool)
+                .is_some_and(|offered| {
+                    !offered
+                        .drawn
+                        .arguments
+                        .iter()
+                        .any(|argument| argument.name == READ_ARGUMENT)
+                })
+    }
+
     /// The functions a backend is sent, one per tool.
     ///
     /// The description is the server's words, which a person read and let through, so it is sent
@@ -1431,6 +1824,21 @@ impl Offer {
                                  made, in place of {argument}. Give {argument} or this, not both. \
                                  The user is shown the number and asked before the call is made."
                             ),
+                        }),
+                    );
+                }
+                if self.takes_read(&tool.alias, &tool.drawn.name) {
+                    properties.insert(
+                        READ_ARGUMENT.to_string(),
+                        json!({
+                            "type": "boolean",
+                            "description": "Ask to have what this call returns checked and \
+                                            released in this result, as vet_content would, so \
+                                            there is no vet_content call to make. Where it \
+                                            would be kept back, or the content is too long \
+                                            for one result, it still comes back as a \
+                                            reference. Not sent to the server. Defaults to \
+                                            false.",
                         }),
                     );
                 }
@@ -1496,6 +1904,28 @@ impl Offer {
             .iter()
             .find(|tool| format!("{}:{}", tool.alias, tool.drawn.name) == name)
             .map(|tool| (tool.wire.as_str(), self.loaded.contains(&tool.wire)))
+    }
+
+    /// Takes the calls of the round about to run, by their position in the round, the wire name and
+    /// the arguments the planner wrote, so a question about one call can list the later calls to
+    /// the same tool.
+    pub fn begin_round<'c>(&self, calls: impl IntoIterator<Item = (usize, &'c str, Value)>) {
+        self.round.begin(
+            calls
+                .into_iter()
+                .filter_map(|(index, wire, arguments)| {
+                    self.find(wire).map(|(alias, tool)| {
+                        (index, alias.to_string(), tool.to_string(), arguments)
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    /// Names the position in the round of the call about to be dispatched, and none once it has
+    /// been, so the call is found by its position and not by what it says.
+    pub fn dispatching(&self, index: Option<usize>) {
+        self.round.at(index);
     }
 
     /// Whether a deferred offer holds the tool under this wire name without having loaded it.
@@ -1617,8 +2047,10 @@ pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
                 },
             })
             .collect(),
+        round: Round::default(),
         deferred: false,
         loaded: Vec::new(),
+        reading: false,
     }
 }
 
@@ -1636,6 +2068,22 @@ pub(crate) enum Called {
     /// The call was refused, declined or not asked about, was not made, or no reply to it arrived.
     /// The sentence is this process's own.
     Problem(String),
+}
+
+/// Where the planner is told a server's reply came from, which is also what the screen draws
+/// beside it (MCP-15).
+///
+/// Built from the alias and the word the person read on the tool's list and from which arm of
+/// [`Called`] the call ended in, which the transport settles from the protocol's own `isError`
+/// field. Nothing the server wrote is in it. An answered call says the server reported no failure,
+/// so a planner can tell a call the server completed from one it did not without reading the reply.
+/// It says that and no more: it is the server's report and not a check that the effect happened.
+pub(crate) fn origin_of_reply(name: &str, failed: bool) -> String {
+    if failed {
+        format!("what {name} said about its failure")
+    } else {
+        format!("what {name} returned with no failure reported")
+    }
 }
 
 /// The argument of a call that the planner filled from a choice a processor made (MCP-14).
@@ -1717,9 +2165,14 @@ fn fill_from_a_choice<'a, S: Sink>(
         reference.to_string(),
         bravebot_core::label::Label::untrusted_public(),
     );
-    let slot = policy
-        .accept_reference("mcp_call", &key, &named)
-        .map_err(|denial| format!("refused: {denial}"))?;
+    let slot = crate::tools::accept_named_reference(
+        policy,
+        slots,
+        "mcp_call",
+        &key,
+        &named,
+        crate::tools::NamesToList::Choices,
+    )?;
     Ok(Some(Filling {
         argument,
         key,
@@ -1770,6 +2223,8 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
             "error: the arguments to {name} must be a JSON object"
         ));
     };
+    // The later calls of this round to this tool, listed in the one question about this call.
+    let later = offer.round.later(alias, tool);
 
     // The planner's own words, read as such: shown to the person and sent to the server, and
     // refused both where the context they were written in has met untrusted content.
@@ -1797,7 +2252,32 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     } else {
         McpStanding::Nothing
     };
-    if policy.mcp_call_needs_approval(alias, tool, labelled.label(), standing) {
+    // The label of the arguments and nothing of their bytes. A call asked because they are
+    // private is not covered by any stored answer, so answer 2 would never stop the questions.
+    let private = !labelled.label().is_public();
+    // A call that names a choice, or that is asked whatever was said, is asked on its own.
+    let batched = filling.is_none() && !every_call;
+    // An earlier question of this round listed this call and was answered for it (SERVERS-7).
+    // That is read first so the trail does not say a call was asked that nobody was asked about.
+    let covered = match batched {
+        true => offer.round.answered(private),
+        false => None,
+    };
+    let asked = match covered {
+        Some(approved) => {
+            policy.record_covered_mcp_call(alias, tool, approved);
+            true
+        }
+        None => policy.mcp_call_needs_approval(alias, tool, labelled.label(), standing),
+    };
+    if covered == Some(false) {
+        policy.refuse_unapproved_call(alias, tool);
+        return Called::Problem(format!(
+            "refused: the user did not approve calling {name}. Do not retry the same \
+             call; ask what they would prefer."
+        ));
+    }
+    if asked && covered.is_none() {
         let mut shown: Vec<(String, String)> = pairs
             .iter()
             .map(|(key, value)| (key.clone(), value.to_string()))
@@ -1811,15 +2291,50 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
                 Err(refusal) => return Called::Problem(refusal),
             }
         }
+        // The later calls of this round to this tool that this question also covers.
+        let listed: Vec<(usize, &Value)> = match batched {
+            true => later
+                .iter()
+                .filter(|(_, other)| {
+                    other.as_object().is_some_and(|object| {
+                        !offer
+                            .choosable(alias, tool)
+                            .iter()
+                            .any(|argument| object.contains_key(&choice_key(argument)))
+                    })
+                })
+                .map(|(index, other)| (*index, other))
+                .collect(),
+            false => Vec::new(),
+        };
+        let also: Vec<Vec<(String, String)>> = listed
+            .iter()
+            .filter_map(|(_, other)| other.as_object())
+            .map(|object| {
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.to_string()))
+                    .collect()
+            })
+            .collect();
         let request = McpCallRequest {
             alias: alias.to_string(),
             tool: tool.to_string(),
             arguments: shown,
+            also,
             description: offer.description(alias, tool),
-            may_stand: session.may_stand() && !every_call,
+            may_stand: session.may_stand() && !every_call && !private,
+            asked_for_private_arguments: private && !every_call,
             asked_every_call: every_call,
         };
         let answer = confirmer.confirm_mcp_call(&request);
+        if !answer.unasked {
+            offer.round.cover(
+                &listed.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+                private,
+                answer.decision == Decision::Approve,
+            );
+        }
         crate::tools::keep_the_note(
             policy,
             "call_server_tool",
@@ -1905,6 +2420,85 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server only a manifest run calls is never asked for a prompt by a turn: the request is
+    /// refused before anything is sent. The server's address answers nothing, so a request that
+    /// went out would fail on the connection, with other words.
+    #[test]
+    fn a_prompt_of_a_server_only_a_manifest_run_calls_is_refused_before_it_is_sent() {
+        let listing = bravebot_mcp::protocol::listed_or_none(
+            "boxed",
+            Err(McpError::Server {
+                code: -32601,
+                method: "tools/list".to_string(),
+            }),
+        )
+        .expect("an empty listing");
+        let reached = Reached::new(
+            Connection::Http(bravebot_mcp::HttpServer::new(
+                "boxed",
+                "http://127.0.0.1:9/mcp",
+            )),
+            listing,
+            Digest::parse(&"d".repeat(64)).expect("a digest"),
+        )
+        .in_a_sandbox_for_manifest_runs(
+            Box::new(()),
+            Sandboxed {
+                name: "bb-aaaaaaaaaaaa".into(),
+                image: "python:3.13-slim".into(),
+                hosts: Vec::new(),
+            },
+        );
+        let session = Session::new(
+            vec![reached],
+            std::path::PathBuf::new(),
+            None,
+            false,
+            Managed::default(),
+        );
+        let mut sink = RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "use a prompt");
+        let mut policy = Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("boxed"))]),
+            &mut sink,
+        )
+        .expect("policy");
+        let refused = session.prompt(
+            &mut policy,
+            &bravebot_net::Egress::new(),
+            "boxed",
+            "summarise",
+            &[],
+        );
+        match refused {
+            Err(McpError::Transport(said)) => {
+                assert!(said.contains("manifest runs alone"), "{said}");
+            }
+            other => panic!("a turn's prompt reached a manifest-only server: {other:?}"),
+        }
+    }
+
+    /// MCP-15: a reply the server did not report as failed says so, in the driver's own words, and
+    /// a reply it reported as failed does not. The origin is built from the name alone, so it holds
+    /// nothing the server wrote.
+    #[test]
+    fn a_reply_with_no_failure_reported_says_so_and_a_failed_one_does_not() {
+        let answered = origin_of_reply("weather:get_forecast", false);
+        assert_eq!(
+            answered,
+            "what weather:get_forecast returned with no failure reported"
+        );
+        let failed = origin_of_reply("weather:get_forecast", true);
+        assert_eq!(failed, "what weather:get_forecast said about its failure");
+        assert!(
+            !failed.contains("no failure reported"),
+            "a failed call was described as reporting no failure: {failed}"
+        );
+    }
 
     fn pairs(typed: &str) -> Vec<(String, String)> {
         arguments_of(typed).unwrap_or_else(|why| panic!("{typed:?} did not parse: {why:?}"))

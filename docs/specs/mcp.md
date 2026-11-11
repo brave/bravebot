@@ -198,17 +198,17 @@ process's words. A tool's account is kept, under a label, because a tool failure
 explanation is usually a person's own server and there is a person on the screen to read it.
 
 What a stdio server writes to its standard error is neither a failure nor a reply, and it goes
-where the caller launching the server sends it: to the terminal a plain session or a one-shot run
-writes to, where the person watching reads it, and nowhere under the full-screen interface, where it
-would draw over the screen. It is never read by this process, so it reaches no message the planner
-is sent. The two streams the protocol runs over are pipes whatever the caller chose.
+where the caller launching the server sends it. Every front end sends it nowhere
+([SERVERS-25](mcp-servers.md#SERVERS-25)), because a terminal acts on the escape sequences in it. It
+is never read by this process, so it reaches no message the planner is sent. The two streams the
+protocol runs over are pipes whatever the caller chose.
 
 **A known cost.** A server that fails for a reason only its own sentence gives reports a code and
 a method and nothing else, and a reply this client rejects reports which kind of malformed it was
 and not where. Carrying either under a label instead would put it behind the release a tool
-result's account is behind, where nobody is watching a handshake or a tool listing. Under the
-full-screen interface a server's own diagnostics are discarded as well, so a server that fails
-there says only what its failure's code and method say.
+result's account is behind, where nobody is watching a handshake or a tool listing. A server's own
+diagnostics are discarded as well, so a server that fails says only what its failure's code and
+method say.
 
 `verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
 `verified-by: bravebot_mcp::lib::a_server_failure_reports_the_method_and_the_code`
@@ -441,3 +441,59 @@ place that fills an argument from a choice is a moved count or a line in a diff.
 `verified-by: bravebot_agent::browser_group_servers::a_delegate_is_refused_a_call_with_a_choice_with_nobody_asked`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
 `verified-by: by-construction (Carried implements no comparison, Hash, Display, conversion to an integer, Deref or AsRef and shows only that a number is there in Debug, so the one thing a caller can do with it is move it into bravebot_mcp::protocol::with_choice; the compile_fail doctests on Carried in crates/core/src/policy.rs pin each of them, and labels.md pins the uses of Carried::into_wire, one of them outside the policy layer, in with_choice)`
+
+<a id="MCP-15"></a>
+### MCP-15: a reply the server did not report as failed is described as having reported no failure
+
+The sentence the planner reads beside a quarantined reply to a tool call, and the origin drawn beside
+it on the screen and in a plan run, says `what <alias>:<tool> returned with no failure reported` where
+the call ended in an answer, and `what <alias>:<tool> said about its failure` where the server marked
+the result as an error ([MCP-5](#MCP-5)). It is built from the alias and the tool name the person
+read on the list ([SERVERS-7](mcp-servers.md#SERVERS-7)) and from which of the two the transport
+settled from the protocol's own error flag. Nothing the server wrote is in it, and the two readings
+are the existing split of the call's outcome, so no branch is added on the bytes of a reply.
+
+It says the server reported no failure. It does not say the effect happened, because the flag is the
+only fact the driver has about the call. A reply that could not be used, and a call that got no reply,
+are described by the driver's own sentences ([MCP-8](#MCP-8)).
+
+**Why.** A planner that makes several writes cannot tell a completed call from a failed one without
+reading the reply, and a reply is not read unless a person or a check lets it through.
+
+`verified-by: bravebot_agent::mcp::a_reply_with_no_failure_reported_says_so_and_a_failed_one_does_not`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::browser_group_servers::what_a_tool_of_input_answers_is_a_reference_and_the_planner_never_holds_it`
+
+<a id="MCP-16"></a>
+### MCP-16: a server's tool is offered a boolean `read`, which is the planner's and is never sent to the server
+
+A turn whose tool list holds `vet_content` is offered `read`, a boolean, beside the arguments each
+server tool lists, and asks with `read: true` for the reply in the result of the call
+([VET-6](tools/vet-content.md#VET-6)). A turn whose list does not hold `vet_content` is not offered
+it, as a delegate is not, and a `read` that a call gives there is sent to the server as written.
+A plan is offered the tool's own arguments and no `read`
+([MANIFEST-15](manifest.md#MANIFEST-15)).
+
+The argument is removed from the call before it reaches the server, so a server never receives a
+`read` the planner wrote for the driver. Where the server lists an argument named `read` itself, the
+argument is the server's: the tool is offered it as the server listed it, it is not offered as a
+request to release the reply, a call that gives it is sent as written, and the reply stays behind its
+reference as [MCP-1](#MCP-1) has it. That is the same rule [MCP-14](#MCP-14) applies to a name the
+server listed for itself, for the same reason: the name is the server's to define. A `read` that is
+neither `true` nor `false` is refused before the call is made, nobody is asked, and nothing is
+sent. Absent and null are `false`.
+
+Whether the reply is released in the result, and what the result holds where it is not, are
+[VET-6](tools/vet-content.md#VET-6)'s. A reply the server marked as a failure ([MCP-5](#MCP-5)) is
+released the same way, and a picture is not ([VET-4](tools/vet-content.md#VET-4)).
+
+**Why.** A name the planner writes for the driver must not be mistaken for an argument of the
+server, and an argument the server defined must not be taken from it. The manifest path
+(`crates/agent/src/server_calls.rs`) presents no reply to the planner, so it takes no `read`.
+
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_read_in_bypass_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
+`verified-by: bravebot_agent::mcp::a_servers_own_read_argument_is_the_servers_and_asks_for_nothing_to_be_released`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_with_a_read_that_is_not_a_boolean_is_refused_before_the_server_is_called`
+`verified-by: bravebot_agent::mcp::a_servers_failed_result_called_with_read_in_bypass_is_answered_in_the_same_result`
+`verified-by: bravebot_agent::mcp::a_turn_without_vet_content_is_offered_no_read_on_a_servers_tool`

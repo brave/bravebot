@@ -52,6 +52,11 @@ pub const OFFERED: &[Operation] = &[
         method: "session.view.start",
         fields: &["session", "version"],
     },
+    // A new snapshot of a session's view, for a client that missed an update.
+    Operation {
+        method: "session.view.resync",
+        fields: &["session"],
+    },
     Operation {
         method: "session.close",
         fields: &["session"],
@@ -72,7 +77,11 @@ pub const OFFERED: &[Operation] = &[
     },
     Operation {
         method: "turn.send",
-        fields: &["session", "prompt"],
+        fields: &["session", "prompt", "messageId"],
+    },
+    Operation {
+        method: "turn.lookup",
+        fields: &["session", "messageId"],
     },
     Operation {
         method: "turn.cancel",
@@ -142,6 +151,9 @@ pub const DENIED: &[&str] = &[
     "hooks.inspect",
     "language.get",
     "language.set",
+    // The machine's recorded effort level, which the terminal shares.
+    "effort.get",
+    "effort.set",
     "connectors.list",
     "connectors.preview",
     "connectors.connect",
@@ -159,6 +171,15 @@ pub const DENIED: &[&str] = &[
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
     "update.status",
+    // The machine's sign-ins, which are its person's and not a workspace's, and the sign-in the
+    // window starts only after its main process asked that person.
+    "accounts.list",
+    "accounts.signOut",
+    "accounts.signIn",
+    "accounts.cancelSignIn",
+    // A key typed in the window's own key window, which only its main process reads.
+    "accounts.keyBefore",
+    "accounts.storeKey",
     // The host's own person's agreement to keep its computer awake (CMD-12).
     "caffeinate.confirmed",
     "caffeinate.confirm",
@@ -172,6 +193,10 @@ pub const DENIED: &[&str] = &[
     "watches.add",
     "watches.stop",
     "watches.poll",
+    // Lists and changes the schedule entries kept on this machine, for a line a person typed into
+    // the window's own composer (CMD-1). A client of the host is a program, and a program never
+    // types that line.
+    "schedule.command",
     "manifest.run",
     "manifest.read",
     "manifest.reply",
@@ -241,7 +266,10 @@ mod tests {
 
     #[test]
     fn an_offered_method_with_its_own_parameters_is_accepted() {
-        let asked = request("turn.send", json!({"session": "s1", "prompt": "hi"}));
+        let asked = request(
+            "turn.send",
+            json!({"session": "s1", "prompt": "hi", "messageId": "m1"}),
+        );
         assert_eq!(check(&asked).expect("offered").method, "turn.send");
     }
 
@@ -296,6 +324,20 @@ mod tests {
             answerable(),
             [Kind::Write, Kind::Run, Kind::Fetch, Kind::Ask]
         );
+    }
+
+    /// Rejects an offer of `schedule.command` to a client of the host: a program never types the
+    /// line (CMD-1), so the method is the window's alone.
+    #[test]
+    fn schedule_command_is_denied_to_a_client_of_the_host() {
+        assert!(DENIED.contains(&"schedule.command"));
+        let failure = check(&request(
+            "schedule.command",
+            json!({"session": "s1", "argument": "list"}),
+        ))
+        .err()
+        .expect("refused");
+        assert_eq!(failure.code, ErrorCode::NotAllowed);
     }
 
     #[test]

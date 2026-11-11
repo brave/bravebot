@@ -22,9 +22,9 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key,
-    log_retry, pause_before_retry, read_in_background, refuses_the_body, remember, remembered,
-    reply_bound, worth_another_attempt_or_report,
+    BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key, log_retry,
+    pause_before_retry, read_in_background, refuses_the_body, remember, remembered, reply_bound,
+    worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -112,7 +112,15 @@ impl Driven for GenerateContentClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
-        worth_another_attempt_or_report(self.attempts_allowed(), attempt, error)
+        worth_another_attempt_or_report(self.provider.patience, attempt, error)
+    }
+
+    fn retry_window(&self) -> Option<Duration> {
+        self.provider.patience.retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        crate::failed_connection(error)
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
@@ -153,6 +161,11 @@ impl<'a> GenerateContentClient<'a> {
         self.spent.attempts
     }
 
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> crate::call::Conceded {
+        self.spent.conceded
+    }
+
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
@@ -187,12 +200,6 @@ impl<'a> GenerateContentClient<'a> {
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.pace.backoff = backoff;
         self
-    }
-
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the entry's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.provider.patience.attempts(ATTEMPTS)
     }
 
     /// What a refusal is remembered against: the service, and the name the model goes out under.
@@ -413,18 +420,10 @@ impl<'a> GenerateContentClient<'a> {
             plan,
             &mut progress,
             |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
-            |progress, attempt| {
+            |progress, retry| {
                 // Announced before the wait rather than after it, so the pause is explained
                 // while it is happening. Reply progress resets; completed costs remain charged.
-                progress(Progress {
-                    written: Labelled::new("", Label::untrusted_public()),
-                    output_tokens: 0,
-                    calling: None,
-                    thinking: Labelled::new("", Label::untrusted_public()),
-                    counted_by_server: false,
-                    prose: false,
-                    attempt,
-                });
+                progress(Progress::announcing(retry));
             },
         )
     }
@@ -522,7 +521,7 @@ impl<'a> GenerateContentClient<'a> {
                 thinking: Labelled::new("", label),
                 counted_by_server: reply.counted,
                 prose: Progress::has_prose(&reply.text),
-                attempt,
+                ..Progress::quiet(attempt)
             });
         }
 

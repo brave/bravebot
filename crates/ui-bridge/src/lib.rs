@@ -29,7 +29,12 @@
     )
 )]
 
+#[cfg(test)]
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
+
 mod account_words;
+mod accounts;
 pub mod acp;
 pub mod acp_loop;
 pub mod allowlist;
@@ -45,6 +50,7 @@ pub mod connectors;
 #[doc(hidden)]
 pub mod control_link;
 pub mod definitions;
+pub mod effort;
 pub mod emit;
 pub mod enhance;
 pub mod fork;
@@ -52,6 +58,7 @@ pub mod help;
 pub mod hooks;
 #[cfg(unix)]
 pub mod host;
+mod key_entry;
 pub mod language;
 pub mod manifest;
 pub mod mentions;
@@ -59,6 +66,8 @@ pub mod models;
 pub mod protocol;
 pub mod rules;
 pub mod running;
+mod schedule_command;
+mod sends;
 pub mod settings;
 pub mod store;
 pub mod turn;

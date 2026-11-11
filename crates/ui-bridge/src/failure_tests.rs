@@ -129,6 +129,9 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         attempts: 2,
         usage: None,
         context_tokens: None,
+        conceded: Default::default(),
+        backend: None,
+        retry_setting: false,
         cause: Box::new(BackendError::from(ChatError::Account(
             AccountFailure::Ended,
         ))),
@@ -238,6 +241,65 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
     assert_eq!(workspace["account"], Value::Null, "{workspace}");
     assert_eq!(workspace["accountMessage"], Value::Null, "{workspace}");
     assert_eq!(workspace["accountCommand"], Value::Null, "{workspace}");
+}
+
+/// NAME-13: a turn that ended on the read of a named file is sent to the window as the workspace
+/// failure it always was, with the category's name and no file name. The window refuses a send that
+/// names an unreadable file before the turn starts (NAME-12), so it has no use for the name here.
+///
+/// The fault this rejects is the name or the reason's sentence being added to the fields sent, or
+/// the kind changing for the named case.
+#[test]
+fn a_failure_on_a_named_file_is_sent_as_the_workspace_kind_with_no_name() {
+    let named = TurnError::of_a_named_read(
+        "typed-sentinel.txt",
+        bravebot_agent::WorkspaceError::NotUtf8 {
+            path: "typed-sentinel.txt".to_string(),
+        },
+    );
+    assert!(named.named_file().is_some(), "{named}");
+    let unnamed = TurnError::Workspace(bravebot_agent::WorkspaceError::NotUtf8 {
+        path: "typed-sentinel.txt".to_string(),
+    });
+    let sent = failure_fields(&named, &configured(), "stub-model");
+    assert_eq!(sent["kind"], "workspace", "{sent}");
+    assert_eq!(sent["category"], "workspace", "{sent}");
+    assert!(!sent.to_string().contains("sentinel"), "{sent}");
+    assert_eq!(
+        sent,
+        failure_fields(&unnamed, &configured(), "stub-model"),
+        "the fields differ from those of a plain workspace failure"
+    );
+}
+
+/// BACKEND-37: the window words an unauthorized failure from its category and sends nothing of
+/// the terminal's commands, which a window has no place to run, so a refusal of the premium key
+/// is sent as every other unauthorized failure is, with its status and no account.
+///
+/// The faults this rejects: a premium key changing the category the window titles the card by,
+/// and the flag the terminal words its commands from being sent as a field of its own.
+#[test]
+fn a_refused_premium_key_is_sent_as_any_other_unauthorized_failure() {
+    let refused = || {
+        ChatError::Egress(bravebot_net::EgressError::Status {
+            url: "https://premium.example.invalid/v1/chat".to_string(),
+            status: 401,
+            retry_after: None,
+            body: None,
+        })
+    };
+    let marked = failed_with(BackendError::PremiumKey(Box::new(BackendError::from(
+        refused(),
+    ))));
+    let plain = failed_with(BackendError::from(refused()));
+    assert_eq!(marked, plain, "{marked}");
+    assert_eq!(marked["category"], "unauthorized", "{marked}");
+    assert_eq!(marked["status"], 401, "{marked}");
+    assert_eq!(marked["account"], Value::Null, "{marked}");
+
+    let unusable = failed_with(ChatError::Subscription("not held".to_string()));
+    assert_eq!(unusable["category"], "unauthorized", "{unusable}");
+    assert_eq!(unusable["accountMessage"], Value::Null, "{unusable}");
 }
 
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a

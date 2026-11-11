@@ -4,6 +4,7 @@ import { receiveTurn } from './turn-details'
 import type { Live } from './live'
 import { leftOver, taken } from './interjecting'
 import { keepEnd } from './thinking'
+import { retryDue } from './retry'
 
 /** Fold one event into the live session. */
 export function apply(
@@ -23,6 +24,8 @@ export function apply(
     switch (message.event) {
       case 'watch.fired':
         return { ...old, entries: [...old.entries, t.watchFired(message.data.number, message.data.path)] }
+      case 'schedule.ran':
+        return { ...old, entries: [...old.entries, t.scheduleAnswered(message.data)] }
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
@@ -37,8 +40,10 @@ export function apply(
       case 'audit':
         return old
       // A phase opens a round, so a call written, and a thought had, in the last one are over.
+      // The wait of a request that failed in transit is counted from now: the bridge sends spans
+      // and the two ends share no clock (VIEW-43). Every phase sets it, so it never outlives its wait.
       case 'phase':
-        return { ...old, phase: message.data.phase, composing: null, thinking: '' }
+        return { ...old, phase: message.data.phase, retry: retryDue(message.data.retry, Date.now()), composing: null, thinking: '' }
       case 'composing':
         return { ...old, composing: message.data.call }
       case 'thinking':
@@ -65,7 +70,7 @@ export function apply(
       case 'tool.finished':
         return { ...old, entries: t.finish(old.entries, message.data) }
       case 'landed':
-        return { ...old, entries: t.land(old.entries, message.data.landing) }
+        return { ...old, entries: t.land(old.entries, message.data.landing, message.data.call) }
       case 'quarantined':
         return {
           ...old,
@@ -122,6 +127,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':
         return { ...old, entries: [...old.entries, t.askedQuestions(message.data)] }
+      case 'ask.settled':
+        return { ...old, entries: [...old.entries, t.askSettled(message.data)] }
       case 'turn.done': {
         refresh()
         // A rise means compaction summarised part of this conversation away, and what it takes it

@@ -86,6 +86,10 @@ pub(crate) const MCP_RECONNECT: &str = "reconnect";
 /// The word after `/mcp` that turns the server named after it off for the session.
 pub(crate) const MCP_DISABLE: &str = "disable";
 
+/// The word after `/mcp` that removes the server named after it: its declaration, its approval and
+/// every request for it, so that no session starts it.
+pub(crate) const MCP_REMOVE: &str = "remove";
+
 /// The line that reports the sandbox mode, or sets it (SANDBOX-22).
 ///
 /// Typed while a turn runs, every word is carried out as typed, and the turn follows the mode from
@@ -201,6 +205,12 @@ pub(crate) const THINKING_COMMAND: &str = "/thinking";
 ///
 /// A checkout something was done in outlives its delegate, and nothing else removes it.
 pub(crate) const CHECKOUTS_COMMAND: &str = "/checkouts";
+
+/// The line that runs the `bravebot schedule` subcommands from a session: list, add, pause, resume,
+/// remove, pending, clear, history and run-now.
+///
+/// Only a line a person typed reaches it (CMD-1), and an entry added here can only read.
+pub(crate) const SCHEDULE_COMMAND: &str = "/schedule";
 
 /// The one line that ends the session instead of starting a turn.
 pub(crate) const EXIT_COMMAND: &str = "/exit";
@@ -675,6 +685,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Waits,
         },
         Command {
+            name: SCHEDULE_COMMAND,
+            argument: "<subcommand> [options]",
+            description: t!(command_schedule),
+            mid_turn: MidTurn::RunsUnlessItStarts,
+        },
+        Command {
             name: PLAN_COMMAND,
             argument: "[task]",
             description: t!(command_plan),
@@ -766,7 +782,7 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: MCP_COMMAND,
-            argument: "[reconnect | disable] [alias]",
+            argument: "[reconnect | disable | remove]",
             description: t!(command_mcp),
             mid_turn: MidTurn::Waits,
         },
@@ -829,6 +845,13 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         return complete_word(EFFORT_COMMAND, typed, &effort_words());
+    }
+    if let Some(typed) = line.strip_prefix(SCHEDULE_COMMAND) {
+        return complete_word(
+            SCHEDULE_COMMAND,
+            typed,
+            &bravebot_schedule::words::SUBCOMMANDS,
+        );
     }
     let typed = line.strip_prefix(SANDBOX_COMMAND)?;
     complete_word(SANDBOX_COMMAND, typed, &sandbox_words())
@@ -928,6 +951,7 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
                 GOAL_COMMAND => {
                     !matches!(crate::goals::parse(argument), crate::goals::Asked::Set(_))
                 }
+                SCHEDULE_COMMAND => bravebot_schedule::words::reads_only(argument),
                 _ => false,
             }
         }
@@ -1317,6 +1341,50 @@ mod tests {
         }
     }
 
+    /// The words Tab completes after `/schedule` are the subcommands `bravebot schedule` takes, in
+    /// the shared crate's order. Rejects a command table that completes none, or a word list
+    /// written out again here that drifts from the shared one. A start that fits one word becomes
+    /// it, a start that fits several is carried as far as they agree, and a word after the first
+    /// is left alone.
+    #[test]
+    fn tab_completes_the_schedule_subcommands() {
+        for word in bravebot_schedule::words::SUBCOMMANDS {
+            let started = &word[..word.len() - 1];
+            let completed = complete_argument(&format!("/schedule {started}"), &[]);
+            // `pause` and `pending` share `pe`/`p`, so a start that fits several stops where they
+            // stop agreeing.
+            let fits: Vec<&str> = bravebot_schedule::words::SUBCOMMANDS
+                .iter()
+                .copied()
+                .filter(|other| other.starts_with(started))
+                .collect();
+            if fits.len() == 1 {
+                assert_eq!(completed, Some(format!("/schedule {word}")), "{word}");
+            }
+        }
+        assert_eq!(
+            complete_argument("/schedule ru", &[]),
+            Some("/schedule run-now".to_string())
+        );
+        assert_eq!(
+            complete_argument("/schedule r", &[]),
+            None,
+            "remove, resume and run-now agree only on `r`, which is typed"
+        );
+        assert_eq!(
+            complete_argument("/schedule re", &[]),
+            None,
+            "remove and resume agree only on `re`, which is typed"
+        );
+        assert_eq!(
+            complete_argument("/schedule p", &[]),
+            None,
+            "pause and pending agree only on `p`"
+        );
+        assert_eq!(complete_argument("/schedule remove 1", &[]), None);
+        assert_eq!(complete_argument("/schedule add --cron", &[]), None);
+    }
+
     /// Every command that can wait is placed against what a waiting line could change in the commands
     /// that act on a record's link, on the choice a request is built with and on the notes and the
     /// name a record holds (CMD-8). The three rules
@@ -1347,6 +1415,7 @@ mod tests {
             (BACKGROUND_COMMAND, true, true, true, true, true),
             (REACH_COMMAND, false, false, false, true, false),
             (CHECKOUTS_COMMAND, false, true, true, true, true),
+            (SCHEDULE_COMMAND, false, true, true, true, true),
             (PLAN_COMMAND, false, true, true, true, true),
             (MANIFEST_COMMAND, false, true, true, true, true),
             (AGENT_COMMAND, false, true, true, true, true),

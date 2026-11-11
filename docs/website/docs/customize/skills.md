@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Skills
-description: Package a repeatable piece of know-how as a SKILL.md the planner loads when the task calls for it.
+description: Create SKILL.md files, describe and load skills, invoke them with slash commands, keep a skill applied, choose its model, include sibling files, evaluate skills and control trust.
 ---
 
 # Skills
@@ -28,7 +28,9 @@ missing either is skipped with a note saying so. `argument-hint` is drawn after 
 in the box to say what it takes, as in `argument-hint: '[low|high] <pr#>'`, and is never shown to
 the planner. A key nothing here reads stops nothing, so a skill written for another agent works
 here; `bravebot doctor` lists such keys, so a line you expected to do something and that does
-nothing is somewhere you can find it. A file with no front matter is not a skill.
+nothing is somewhere you can find it. A file with no front matter is not a skill. The file must be
+spelled exactly `SKILL.md`: on a volume that does not tell upper and lower case apart, a directory
+holding `skill.md` is still not a skill, and it is not listed or loaded.
 
 A value may wrap over the lines indented beneath it, however the file spells the wrap: folded or
 literal with `>` or `|`, quoted and carried over, or plain text continued. A folded value is
@@ -105,7 +107,8 @@ count of how many are, never which ones.
 Type `/` and the skills this session has are listed beneath the commands, each with its description
 and where it was found: `(project)`, `(user)` or `(built-in)`. After other words, as in
 `this is /release-no`, the list holds skills alone. Tab takes the highlighted one and writes
-`/release-notes ` into the line. A word that is already a command in full still lists the skills
+`/release-notes ` into the line. Enter on a half-typed name does the same. Enter on a name typed in full
+sends the line, unless you moved onto another row with the arrows first. A word that is already a command in full still lists the skills
 whose names extend it, so `/pr` shows `pr-fix` as well as the `/pr` command.
 
 A name typed in full is drawn in the prompt's colour, so you can see it was recognised. With a space
@@ -180,6 +183,40 @@ never a path: a name holding `../` or an absolute path matches nothing and the c
 there is no lookup for it to reach. A name merely close to a real one is refused too rather than
 guessed at, because guessing would load instructions nobody asked for.
 
+## Built-in help sections
+
+`bravebot-help` carries the documentation of the running version. Loading it returns an index with
+one line per page: its exact name, title, topics and size. Sizes count Unicode scalar values in the
+whole page body, including whitespace and Markdown but excluding frontmatter and the tool-result
+wrapper. They are not byte or token counts; a combined visible character may contain more than one
+scalar value. For a page of more than 12000 characters the size is more than its bare name loads,
+and the index also gives the number of its sections.
+
+There are two routes to part of a page. The bare page name decides the first. A page of 12000
+characters or fewer loads whole. A longer page loads as an outline: its opening text and one line
+per section with the section's size and its name, `<page>#<section>`. The section name is the
+heading lowercased, with each run of characters other than letters and digits written as one
+hyphen and `-2`, `-3` added to a heading that repeats, as in
+`bravebot-help/reference/commands#request`. A section is a `##` heading, or a `###` heading where
+the page has no `##` heading, with everything under it up to the next one. Loading that name
+returns the section alone. A section is not split further, so one of more than 12000 characters
+loads whole.
+
+The second route works for any page. The planner loads a page's headings, for example
+`bravebot-help/using/sessions::headings`, then copies an exact section name from the result into
+`load_skill`. Section names have the form `<page>::section:<number>:<heading>`. The number is the
+heading's one-based position in the whole page, so headings with the same text have different
+names. The number and heading must both match, including case and inline Markdown; a near match
+is refused. Heading lists omit fenced examples and indented code. This route reaches headings at
+any level, including those nested inside a section of the outline.
+
+A section keeps its literal Markdown, its nested headings and examples, and ends before the next
+heading at the same or higher level. These selectors
+work only for published built-in help pages, not skills you write or the spec pages: load
+`bravebot-help/specs` and a listed spec page for clause headings, without clause bodies. Replacing
+`bravebot-help` with a skill of your own removes all the built-in page and section routes too.
+Loading built-in help grants no access to files or directories.
+
 ## Files beside the skill
 
 A skill is a directory, so it can keep a `reference.md` or a `scripts/` folder next to its
@@ -199,6 +236,43 @@ vouched for is not named, and one a `deny` rule covers is not named either. A li
 directory is never listed. Directories that are generated (`__pycache__`, `node_modules`) and compiled
 `.pyc` files are left out of the list too, so a skill whose scripts have been run still names its real
 files. Running a script kept there is not part of this; `run` has its own gate.
+
+## Evaluating a skill
+
+`bravebot skill eval <name>` gives a skill a number. It runs the skill's saved cases with the skill
+and again with the skill taken out of the catalogue, grades both, and prints `WITH`, `W/OUT` and the
+difference. Run it before and after changing a description or a body to see whether the change
+helped, and read the counts under each case to see whether the planner searched for the skill and
+loaded it. A skill nobody finds shows as runs that never loaded it.
+
+A case is a JSON file in an `evals` directory beside the `SKILL.md`:
+
+```json
+{
+  "prompt": "Sort the imports in src/main.rs",
+  "repeats": 3,
+  "graders": [
+    { "check": { "tool_called": "edit_file" }, "weight": 2 },
+    { "check": { "tool_not_called": "run" } },
+    { "check": { "rounds_at_most": 8 } },
+    { "check": { "skill_loaded": true } }
+  ]
+}
+```
+
+`repeats` is 3 where left out and at most 20. `weight` is 1 where left out. A key that is not
+listed here makes the file refused, so a misspelt grader cannot leave a case that checks nothing. A
+run scores the weight of the graders that passed over the weight of all of them, and a case is the
+mean over its runs. The checks read what bravebot recorded of the run, the tools it called and the
+rounds it made, and never the reply. A `rubric` check gives a model with no tools the run and your
+text and asks it three times; it passes when two answers say it is met. An answer is counted only
+where bravebot may read it. A run whose conversation holds untrusted content has no score for that
+check, and the report says how many runs were left out that way.
+
+The cases are read with the trust of the skill: a case file in a project you have not vouched for is
+counted and never read. A skill only you can load is refused, since both arms would be the same. A
+skill in a plugin is not evaluated. The reference for the command is
+[`skill eval`](../reference/cli.md#skill-eval).
 
 ## Trust
 
@@ -247,9 +321,10 @@ no directory behind them. They are the least specific source, so a skill of your
 name shadows one. The skill that tells a
 [`/loop`](../reference/commands.md#loop-interval-prompt) tick how to pace itself is one,
 and `bravebot-help` is another: it carries these documentation pages, so asking how to use bravebot
-is answered from the version you are running. Its pages are loaded one at a time, only the ones the
-question needs. It also carries the heading of every clause of the specifications, one page for each
-spec, for a question about exactly what bravebot does.
+is answered from the version you are running. Its index describes each page's topics and size;
+the planner loads headings and then only the sections the question needs. It also carries the
+heading of every clause of the specifications, one page for each spec, for a question about exactly
+what bravebot does.
 [`/help <question>`](../reference/commands.md#help-question) asks for it by name.
 
 :::caution

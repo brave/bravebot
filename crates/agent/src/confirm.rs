@@ -618,6 +618,7 @@ impl RunRequest {
                 started_as: std::path::PathBuf::from(path),
                 args: stage.args.clone(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             })
             .collect();
@@ -1127,13 +1128,17 @@ impl ServerRequest {
 /// A file name as a person is shown it, so a name that would draw as nothing, or as another name,
 /// is drawn as what it is.
 ///
-/// A name that is empty, has a space at either end of it or of a directory in it, or holds a
+/// A name that is empty, has a space at either end of it or of a directory in it, holds a
 /// character that draws as nothing (a zero-width character, a bidirectional control, a tag
-/// character, a no-break space) or as a blank cell (the blank braille pattern) comes back quoted
-/// with each such character spelled `\u{..}`, a space at an edge as `␣`, and a control character
-/// as its picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged,
-/// so the plain case reads as it always did. Every front end that names a path in a prompt draws
-/// it through this, so the three cannot disagree about which names are marked.
+/// character, a no-break space) or as a blank cell (the blank braille pattern), or holds a literal
+/// `"` or a literal character from the Control Pictures block (U+2400 to U+243F), comes back
+/// quoted: each invisible character or literal Control Pictures character spelled `\u{..}`, a
+/// space at an edge as `␣`, a control character as its picture (DEL as its own, a C1 control as
+/// `\u{..}`), and a literal `"` or `\` escaped (PROMPT-1: a name holding the literal spelling this
+/// marking would produce for a different name must not be drawn the same). Any other name,
+/// including one holding a plain `\` such as a Windows path, comes back unchanged, so the plain
+/// case reads as it always did. Every front end that names a path in a prompt draws it through
+/// this, so the three cannot disagree about which names are marked.
 pub fn shown_name(name: &str) -> String {
     shown(&name.chars().map(Piece::Char).collect::<Vec<_>>(), true)
 }
@@ -1145,6 +1150,43 @@ pub fn shown_name(name: &str) -> String {
 /// quoted only where it holds a character that draws as nothing, as a blank cell or as a control.
 pub fn shown_text(text: &str) -> String {
     shown(&text.chars().map(Piece::Char).collect::<Vec<_>>(), false)
+}
+
+/// Replace control characters, so shown text cannot move the cursor or recolour the screen.
+///
+/// The one implementation behind every `printable` a front end draws through. The margin in front
+/// of a row is written by the caller, and an escape sequence in the content would let the content
+/// write one instead, so each control character becomes its Unicode picture (an escape reads as
+/// `␛`) and is not dropped: a character silently removed is one nobody can tell was ever there.
+/// A tab is kept, for a surface that lays it out as indentation (a diff body in `--plain` or in an
+/// editor). [`printable_with_tab_pictured`] pictures it as well, for the terminal interface, whose
+/// drawing library drops a tab without drawing anything.
+///
+/// A map from characters to characters: no branch is taken on what the text says.
+pub fn printable(text: &str) -> String {
+    pictured(text, true)
+}
+
+/// [`printable`] with a tab pictured (`␉`) like every other control character.
+///
+/// For the terminal interface. A caller that lays a tab out as width does so before this.
+pub fn printable_with_tab_pictured(text: &str) -> String {
+    pictured(text, false)
+}
+
+fn pictured(text: &str, keep_tab: bool) -> String {
+    if !text.chars().any(char::is_control) {
+        return text.to_string();
+    }
+    text.chars()
+        .map(|c| {
+            if !c.is_control() || (keep_tab && c == '\t') {
+                c
+            } else {
+                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
+            }
+        })
+        .collect()
 }
 
 /// One argument of a call to a server's tool, as the rows a person reads it in (SERVERS-7).
@@ -1243,6 +1285,7 @@ pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
         started_as,
         args: _,
         environment: _,
+        expansions: _,
         routes: _,
     } = step;
     shown_through(started_as, resolved)
@@ -1282,6 +1325,15 @@ fn shown(pieces: &[Piece], names: bool) -> String {
             || bravebot_core::invisible::draws_as_nothing(c)
             || bravebot_core::invisible::draws_as_blank(c)
     };
+    // A literal `"` is what the quoting below starts and ends with, and a literal character in the
+    // Control Pictures block (U+2400 to U+243F) is what a real control character is drawn as below.
+    // Marked the same way those are marked, rather than drawn as themselves, so a name holding
+    // either as ordinary text cannot be drawn the same as a different name whose marking produced
+    // that spelling (PROMPT-1). Not a literal `\`: on its own, nothing above ever draws a bare `\`
+    // as part of marking a *different* character, so a plain name holding one, such as a Windows
+    // path, is not confusable with anything and stays unquoted. A `\` only has to be escaped once a
+    // name is already quoted for some other reason, which the quoting loop below does unconditionally.
+    let confusable_with_marking = |c: char| c == '"' || (0x2400..=0x243f).contains(&(c as u32));
     // The start and end of the name and of each directory in it, which is where a space stops
     // being between two words and becomes part of what a name ends in.
     let edge = |at: Option<usize>| match at.and_then(|at| pieces.get(at)) {
@@ -1294,7 +1346,7 @@ fn shown(pieces: &[Piece], names: bool) -> String {
         && !pieces.iter().enumerate().any(|(at, piece)| match *piece {
             Piece::Byte(_) => true,
             Piece::Char(' ') => spaced_at_an_edge(at),
-            Piece::Char(c) => invisible(c),
+            Piece::Char(c) => invisible(c) || confusable_with_marking(c),
         });
     let mut out = String::new();
     if plain {
@@ -1311,11 +1363,14 @@ fn shown(pieces: &[Piece], names: bool) -> String {
             Piece::Byte(byte) => out.push_str(&format!("\\x{byte:02x}")),
             Piece::Char(' ') if spaced_at_an_edge(at) => out.push('\u{2423}'),
             Piece::Char('"') => out.push_str("\\\""),
+            Piece::Char('\\') => out.push_str("\\\\"),
             Piece::Char('\u{7f}') => out.push('\u{2421}'),
             Piece::Char(c) if (c as u32) < 0x20 => {
                 out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
             }
-            Piece::Char(c) if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            Piece::Char(c) if invisible(c) || confusable_with_marking(c) => {
+                out.push_str(&format!("\\u{{{:x}}}", c as u32));
+            }
             Piece::Char(c) => out.push(c),
         }
     }
@@ -1465,11 +1520,19 @@ pub struct McpCallRequest {
     pub tool: String,
     /// Each argument the planner wrote, as its name and its value in JSON.
     pub arguments: Vec<(String, String)>,
+    /// The arguments of the later calls of the same round to the same tool that this question also
+    /// covers, each as the planner wrote it (SERVERS-7). Empty where the call is asked on its own.
+    pub also: Vec<Vec<(String, String)>>,
     /// The description of the tool on the list the person vouched for.
     pub description: Option<String>,
     /// Whether answer 2 can be recorded, which it cannot where there is no state directory to
-    /// write it into, the session writes nothing, or the server is declared to ask every call.
+    /// write it into, the session writes nothing, the server is declared to ask every call, or the
+    /// call is asked because its arguments are private.
     pub may_stand: bool,
+    /// Whether the call is asked because its arguments are private, which no stored answer and no
+    /// rule covers (SERVERS-7). The prompt says so and offers no answer that lasts. False where
+    /// the server's declaration asks every call, since that reason holds for every later call.
+    pub asked_for_private_arguments: bool,
     /// Whether the server's declaration says every call is asked about (SERVERS-21). The prompt
     /// says so and offers no answer that lasts, and the permission mode that answers every other
     /// call unasked does not answer this one.
@@ -2125,6 +2188,19 @@ pub trait Confirmer {
     /// and the verdict travels with it for the same reason it travels with the other two.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision;
 
+    /// [`Confirmer::confirm_vouch`], and with the answer the name of the mode that gave it where a
+    /// mode approved the vouch without asking anybody (MODE-4, TRACE-7).
+    ///
+    /// One call rather than a question and then a query about it, so the name is the mode in force
+    /// when the question was answered and not at a later read (MODE-8). A confirmer that is not a
+    /// mode, and a wrapper that does not forward this, answers `None`, which the trail reads as a
+    /// person having been offered the chance and agreed.
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_vouch(request), None)
+    }
     /// Ask whether the planner may be given a vouched file the scan found a credential in.
     /// Implementations must default to refusal when they cannot ask.
     ///
@@ -2137,6 +2213,20 @@ pub trait Confirmer {
     /// planner is told the file was held back and why, so it can work without it or say what it
     /// needed it for.
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision;
+
+    /// [`Confirmer::confirm_exposing_read`], and with the answer the name of the mode that gave it
+    /// where a mode approved the read without asking anybody (MODE-4, TRACE-7).
+    ///
+    /// One call rather than a question and then a query about it, so the name is the mode in force
+    /// when the question was answered and not at a later read (MODE-8). A confirmer that is not a
+    /// mode, and a wrapper that does not forward this, answers `None`, which the trail reads as a
+    /// person having agreed.
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_exposing_read(request), None)
+    }
 
     /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
     /// must default to refusal when they cannot ask.
@@ -2218,8 +2308,9 @@ pub trait Confirmer {
     ///
     /// For a turn that is waiting on a model and so cannot poll between rounds. It is how a line
     /// typed during the wait ends the wait early when the reply is no more than thinking or a call
-    /// being written (INPUT-10). The answer is only about whether a line is there: reading it
-    /// changes nothing, and the line itself still comes from [`Confirmer::interjection`].
+    /// being written (INPUT-10), and it ends a `job_output` wait the same way (RUN-17). The answer
+    /// is only about whether a line is there: reading it changes nothing, and the line itself still
+    /// comes from [`Confirmer::interjection`].
     ///
     /// A confirmer nobody types into has none, which is what the default says.
     fn arrival(&self) -> crate::interjections::Arrival {
@@ -3136,8 +3227,22 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
         self.timing(|inner| inner.confirm_vouch(request))
     }
 
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_vouch_noting_the_mode(request))
+    }
+
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
         self.timing(|inner| inner.confirm_exposing_read(request))
+    }
+
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_exposing_read_noting_the_mode(request))
     }
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
@@ -3370,6 +3475,44 @@ mod tests {
         }
     }
 
+    /// LAYER-3: every control character is drawn as its picture and none is dropped. A string with
+    /// none comes back as it was, so text that needs no change is not altered.
+    #[test]
+    fn a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged() {
+        for plain in [
+            "",
+            "note.md",
+            "two words.md",
+            "caf\u{e9} \u{1f600} \u{202e}",
+        ] {
+            assert_eq!(printable(plain), plain, "{plain:?}");
+            assert_eq!(printable_with_tab_pictured(plain), plain, "{plain:?}");
+        }
+        for (text, drawn) in [
+            ("a\u{1b}b", "a\u{241b}b"),
+            ("a\u{7}b", "a\u{2407}b"),
+            ("a\u{0}b", "a\u{2400}b"),
+            ("a\u{1f}b", "a\u{241f}b"),
+            ("a\u{1b}[31mred", "a\u{241b}[31mred"),
+        ] {
+            assert_eq!(printable(text), drawn, "{text:?}");
+            assert_eq!(printable_with_tab_pictured(text), drawn, "{text:?}");
+        }
+    }
+
+    /// LAYER-3: the terminal interface pictures a tab, because its drawing library drops one, and
+    /// the approval text keeps it as indentation. The two differ in nothing else.
+    #[test]
+    fn a_tab_is_kept_by_printable_and_pictured_by_the_terminal_variant() {
+        assert_eq!(printable("\tindented\tcode"), "\tindented\tcode");
+        assert_eq!(
+            printable_with_tab_pictured("\tindented\tcode"),
+            "\u{2409}indented\u{2409}code"
+        );
+        assert_eq!(printable("\t\u{1b}"), "\t\u{241b}");
+        assert_eq!(printable_with_tab_pictured("\t\u{1b}"), "\u{2409}\u{241b}");
+    }
+
     /// PROMPT-1: a name that would draw as nothing, or as another name, is drawn as what it is,
     /// and a name that is fine is left alone. One row per way a name goes unseen.
     #[test]
@@ -3402,6 +3545,30 @@ mod tests {
             assert_eq!(shown_name(name), shown, "{name:?}");
         }
         assert_ne!(shown_name("note.md "), shown_name("note.md"));
+    }
+
+    /// PROMPT-1, #2895: a name holding the literal spelling marking would give a different name
+    /// is not drawn the same as that other name. A literal `"` and a literal character from the
+    /// Control Pictures block (U+2400 to U+243F) trigger quoting for the same reason an invisible
+    /// character does: left alone, either reads back as part of the marking syntax itself (the
+    /// quotes a marked name is wrapped in, or the picture a real control character is drawn as),
+    /// so a name spelling it collides with whatever name the marking was drawing. A literal `\` is
+    /// escaped once a name is quoted for any of these reasons, but does not by itself trigger
+    /// quoting, since a plain name holding one, such as a Windows path, is not confusable with
+    /// anything on its own and must keep reading as it did before this fix.
+    #[test]
+    fn a_name_that_spells_the_marking_is_not_drawn_the_same_as_what_the_marking_draws() {
+        for (marked, literal) in [
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+            ("a\u{9}\u{200b}", "a\u{2409}\u{200b}"),
+            ("a\u{200b}b ", "a\\u{200b}b "),
+        ] {
+            assert_ne!(
+                shown_name(marked),
+                shown_name(literal),
+                "{marked:?} and {literal:?}"
+            );
+        }
     }
 
     /// PROMPT-1: the one-line description of a write and of a credential read names the file the
@@ -3465,6 +3632,20 @@ mod tests {
         );
     }
 
+    /// PROMPT-1, #2895's own regression: the host's path separator, repeated, is not by itself a
+    /// reason to quote a path. On Windows that separator is `\`, the same character an escape
+    /// below starts with, and a fix that quoted on any literal `\` would wrap every Windows path
+    /// in quotes and double every separator, which is not the collision PROMPT-1 is against.
+    #[test]
+    fn a_path_holding_only_the_hosts_own_separator_is_shown_unquoted() {
+        // `/` and `\` explicitly, so this fails on every host under the fault it rejects, and
+        // `MAIN_SEPARATOR` besides, so whichever one this host actually uses is covered too.
+        for sep in ['/', '\\', std::path::MAIN_SEPARATOR] {
+            let path = format!("C:{sep}Users{sep}x");
+            assert_eq!(shown_path(std::path::Path::new(&path)), path, "{path:?}");
+        }
+    }
+
     /// PROMPT-1: a space at the end of a directory inside a path is spelled as one at the end of the
     /// whole name is, so `/work/state /file` cannot read as `/work/state/file`. A space between two
     /// words, and a name with no space at an edge, is left as it is.
@@ -3489,7 +3670,9 @@ mod tests {
     }
 
     /// PROMPT-1: a backslash is a directory separator only where the host says it is, so a Unix
-    /// name that holds one is not marked for the space after it.
+    /// name that holds one is not marked for the space after it, and a lone backslash is not by
+    /// itself a reason to mark anything (#2895): on a host where it is the separator, such as
+    /// Windows, a path holding only ordinary ones must keep reading as it did before this fix.
     #[cfg(unix)]
     #[test]
     fn a_space_after_a_backslash_is_part_of_the_name_where_a_backslash_is_not_a_separator() {
@@ -3652,6 +3835,7 @@ mod tests {
                 started_as: std::path::PathBuf::from("/usr/bin/gh"),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             writes: Vec::new(),
@@ -4296,6 +4480,30 @@ mod tests {
     #[test]
     fn a_refusal_never_vouches_for_anything() {
         assert!(!RunDecision::reject().remember);
+    }
+
+    /// CMDLINE-17: the command inside `NAME="$(cmd)"` is a step that runs, so the prompt counts it
+    /// with the rest and the number agrees with the rows the prompt draws. Rejects a count taken
+    /// from the outer commands alone, which would tell a person one step where two run.
+    #[test]
+    fn a_summary_counts_the_command_inside_a_substitution() {
+        let mut request = a_run();
+        let inner = request.plan.steps.steps()[0].clone();
+        let mut outer = inner.clone();
+        outer.program = "curl".to_string();
+        outer.expansions = vec![bravebot_core::command::Expansion {
+            name: "TOKEN".to_string(),
+            parts: vec![bravebot_core::command::ValuePart::Substitution {
+                source: "git log".to_string(),
+                steps: Box::new(bravebot_core::command::Steps::Pipeline(vec![inner])),
+            }],
+        }];
+        request.plan.steps = bravebot_core::command::Steps::Pipeline(vec![outer]);
+        assert!(
+            request.summary().starts_with("run 2 steps in "),
+            "{}",
+            request.summary()
+        );
     }
 
     /// Approving once is not approving always: the two answers are different and the difference is

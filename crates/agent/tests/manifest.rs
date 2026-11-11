@@ -1212,6 +1212,95 @@ fn a_write_step_carries_its_counts_and_the_file_it_landed_on() {
     assert!(counted[0].landed.ends_with("in.md"), "{:?}", counted[0]);
 }
 
+/// MANIFEST-10, PROMPT-1: the line a step shows while it runs spells the file it names as the
+/// summary, the question and the record do, and is not marked as a file name a second time.
+#[test]
+fn a_running_step_reports_the_file_it_names_spelled() {
+    let scratch = Scratch::new("running-step-spelled");
+    std::fs::write(scratch.path.join("note.md "), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "note.md ", "out_slot": "raw"}},
+            {"capability": "ANSWER", "args": {"from_slot": "raw"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read note.md").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+            false,
+        ),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let reading = &reporter.started[0];
+    let spelled = bravebot_agent::confirm::shown_name("note.md ");
+    assert!(spelled.contains("\"note.md"), "{spelled}");
+    assert_eq!(reading.target, format!("read {spelled} into raw"));
+    assert!(!reading.names_a_file);
+    assert_eq!(reading.shown_target(), reading.target);
+}
+
+/// A step's finish carries the id its start did, and no two steps share one, so a window that
+/// pairs a finish with its start by that id closes the right row.
+#[test]
+fn each_step_finishes_under_the_id_it_started_with() {
+    let scratch = Scratch::new("step-call-ids");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("shout in.md"),
+        skipping_permissions!(),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let ids = |lines: &[bravebot_agent::report::Activity]| {
+        lines.iter().map(|line| line.call).collect::<Vec<_>>()
+    };
+    let started = ids(&reporter.started);
+    assert_eq!(started.len(), 3, "{:?}", reporter.started);
+    assert!(started.iter().all(Option::is_some), "{started:?}");
+    assert_eq!(ids(&reporter.finished), started);
+    let distinct: std::collections::HashSet<_> = started.iter().collect();
+    assert_eq!(distinct.len(), started.len(), "{started:?}");
+}
+
 /// A page a plan reads goes into a slot that a later step writes. Latin-1 text decoded for the
 /// planner has U+FFFD where a byte was, so writing it would put a replacement character in a copy
 /// of the file that the file never held. The page is read as the file's own UTF-8 or the step
@@ -3381,6 +3470,40 @@ fn a_listing_with_no_pattern_lists_the_tree() {
     let shown = outcome.reply_for_display();
     assert!(shown.contains("a.md"), "a.md was omitted: {shown}");
     assert!(shown.contains("b.md"), "b.md was omitted: {shown}");
+}
+
+/// A search step prints a hit as `path:line:text` with the text unchanged, as the search tool does
+/// (SEARCH-10), so the one space that indents the line stays after the colon.
+#[test]
+fn a_search_step_prints_the_line_unchanged_after_path_and_line_number() {
+    let scratch = Scratch::new("search-step-format");
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "alpha\n - beta item\ngamma\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_SEARCH", "args": {"pattern": "beta", "out_slot": "hits"}},
+            {"capability": "ANSWER", "args": {"from_slot": "hits"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "find beta", &mut sink).expect("runs");
+    let shown = outcome.reply_for_display();
+    assert!(
+        shown.contains("notes.md:2: - beta item"),
+        "the line was not printed as path:line:text: {shown}"
+    );
+    assert!(
+        !shown.contains("notes.md:2:  - beta item"),
+        "the indentation gained a space: {shown}"
+    );
 }
 
 /// A plan that parsed but failed the schema is the case where the goal and the proposal

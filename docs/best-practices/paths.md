@@ -8,7 +8,9 @@ text sits on a display or on a decision. Most of the `to_string_lossy` calls in 
 display, which is correct, so a lint cannot tell the two apart. The same reviewer checks that a fix
 to a name that got past a rule accounts for the other names the file has. It also checks that a
 program bravebot starts itself is tested for the names it starts, and that a fix to one such program
-accounts for the others [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) lists.
+accounts for the others [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) lists. For a program
+bravebot starts for itself with the person's environment, it checks that each variable the program
+reads to choose code to run is removed unless its value is a safe file, directory or program name.
 
 ---
 
@@ -121,7 +123,8 @@ as the program, the test that shows the same for a name the program itself start
 program is given, and whether `own_credentials()` is removed from its environment
 ([CRED-14](../specs/credential-protection.md#CRED-14)).** `clippy.toml` refuses every call the
 tree starts a program with, and a start goes through `bravebot_sandbox::programs::start`, which takes
-a `Resolved`, what the program inherits and the `PATH` it is given. A reviewer reads what neither
+a `Resolved`, what the program inherits, the `PATH` it is given and whether its code-selecting
+variables are checked ([PATH-008](#PATH-008)). A reviewer reads what neither
 can decide: that the constructor in the diff (`own_executable`, `written_in_source`,
 `named_by_person`, `found_earlier`, `to_confine`) names who chose the program truthfully, and what
 the program itself starts by name (SANDBOX-30).
@@ -158,7 +161,9 @@ leaves is recorded as [GAP-001](gaps.md#GAP-001) says. [PATH-004](#PATH-004) sta
 for the spellings of a path.
 
 **Why:** the programs on the list are started from different code, so a fix at one start does not
-reach the others unless it is made in code they share.
+reach the others unless it is made in code they share. `may_be_run`, `Names` and the generic
+`CODE_SELECTORS` table are in `crates/sandbox/src/programs.rs` for that reason, and a start states
+its own names to `start` and does not copy the check.
 
 ---
 
@@ -179,3 +184,112 @@ host does not hold.
 **Why:** a table of the names one file has cannot show a step that merges two files, because every
 row in it is a pair the volume already opens as one. Each such step was found by a report after it
 shipped, and an extra rule about the wrong file decides what the person never agreed to.
+
+---
+
+<a id="PATH-008"></a>
+
+## A program's code-selecting variables are removed unless they name a safe file
+
+**A diff that adds or changes the start of a program bravebot starts for itself, with the
+person's environment, passes `CodeSelectors::Checked` with every variable the program's launcher
+reads to choose code to run, or `CodeSelectors::Kept` with the reason.** A checked start removes
+each such variable unless the value passes a check. The value passes when it is an absolute path
+that exists outside every stage-writable directory, links followed, or, for a variable that names a
+program, a bare program name, which the program finds on the reduced `PATH`. A variable that holds
+a list of directories, such as `PYTHONPATH`, passes when every entry does, and one that holds
+options for an interpreter, such as `CLOUDSDK_PYTHON_ARGS`, is removed whatever it holds. A start
+may also remove a variable whatever it holds when no value of it is safe to keep, such as
+`GIT_TEMPLATE_DIR` or `DEVELOPER_DIR` for the sandbox usability suite
+([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21)), and a prefix of such variables, such as
+`DYLD_` and `LD_` for the `gh` that reads the stored login. A variable that only carries a
+credential the program reads as data, such as `AWS_PROFILE` or an API token, stays. A file that can
+name a command to run, such as `GOOGLE_APPLICATION_CREDENTIALS` for `gcloud`, whose
+`external_account` type runs one, does not only carry a credential and is removed unless it
+passes. A variable that names a directory the program reads configuration from counts as code when
+the program runs files from that directory, even though the directory also holds
+credentials ([BACKEND-65](../specs/backends.md#BACKEND-65)).
+
+A program bravebot starts for itself is one the person and the project did not ask to run. A `run`
+stage, a `run` command in the background, a hook, a language server and a line typed at the `!`
+prompt run commands the person or the project chose, so they are kept starts. A start of
+bravebot's own executable is not a start of another program, so it is kept too. A reviewer decides
+the rest from what the start is for, and the diff says which it is when that is not plain. This
+entry does not say that a start the diff does not touch complies. The generic table
+(`CODE_SELECTORS` in `crates/sandbox/src/programs.rs`) is applied to every checked start, and a
+program's own names are the `CODE_SELECTORS` list in `crates/agent/src/gcloud.rs`,
+`crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
+`crates/tui/src/opener.rs`, `crates/tui/src/powershell.rs` (which also holds `osascript`'s
+`OSASCRIPT_CODE_SELECTORS`, `systemd-inhibit`'s `SYSTEMD_INHIBIT_CODE_SELECTORS` and `wl-copy`'s
+`WL_COPY_CODE_SELECTORS`) or `crates/schedule/src/schedule.rs` (`SYSTEMCTL_CODE_SELECTORS`), so a diff that adds a start lists only the names its program reads that
+the table does not hold, or passes `Checked(&[])` and records the gap as
+[GAP-001](gaps.md#GAP-001) asks. A launcher that takes its handler from a list of commands, such as
+`BROWSER`, is listed as `Names::Commands`: every entry must be one program, alone or followed by
+` %s`, so a value with arguments or a second command is removed.
+
+In a diff that adds or changes the start of a program bravebot starts for itself, a reviewer reads
+the program's launcher and documentation for every variable that names an interpreter, a plugin or
+module directory, a configuration directory it runs files from, or a wrapper to run first. Each one
+is either in the generic table, listed in the start's own names with tests, or the diff says why the
+program never reads it. A program that is a script found under another program's name (an asdf or pyenv
+shim, an `aws` from pip or Homebrew) is a bash or Python program, so the names of the interpreter
+and of the shell are in the generic table. Which names a program reads is recorded in SANDBOX-30 as
+run or as read from source, with the version, and a name read from source alone is not described as run. A variable the launcher reads that is in neither breaks the rule. A
+program's names are passed to `start` and the check stays in shared code ([PATH-006](#PATH-006)).
+
+`make check-code-selectors` confirms that every call of `start` and `start_against` states
+`CodeSelectors::Kept` with a comment or `CodeSelectors::Checked`, that a start passing
+`CodeSelectors::Checked(&[])` has a comment and a row in the table of empty-list starts in
+SANDBOX-30, and that every name in a
+`CODE_SELECTORS` list (in `crates/sandbox/src/programs.rs`, `crates/agent/src/gcloud.rs`,
+`crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
+`crates/tui/src/opener.rs`, `crates/tui/src/powershell.rs` and `crates/schedule/src/schedule.rs`) has one test that removes
+a value and one that keeps a value (an options variable needs only the first). It also reads
+`LOADER_PREFIXES` and `HOST_VARIABLES` ([checks.md](../development/checks.md)) and applies the
+loader prefixes to no other start. A reviewer confirms
+the rest of these, and that the list is complete:
+
+- A value inside a stage-writable directory is removed.
+- A link from outside to inside such a directory is removed.
+- A relative path and a path that does not exist are removed, except that a variable that names a
+  program keeps a bare program name.
+- An absolute path that exists outside every stage-writable directory is kept.
+- A value that is not UTF-8 is judged as the bytes it is ([PATH-003](#PATH-003)).
+- A variable the launcher does not read to choose code is left as set.
+
+The variables of the five programs the sandbox usability suite starts (`make`, `cargo`, `npm`, `go`
+and `python3`) are covered by a run of the real program with a planted helper. SANDBOX-30 records
+the versions, the names that ran a helper and the names that did not. The run covers the names
+found by reading each program's documentation and trying them on one macOS host. A name whose
+SANDBOX-30 text says it was read from documentation or source alone, such as `FFLAGS`,
+`CGO_FFLAGS`, `GCC_EXEC_PREFIX` and `OPENSSL_ENGINES`, was not run, and a name that exists only on
+Linux or Windows is listed from source without a run only where the text says so. The run does not
+show that no other name or version selects code, so a reviewer still reads the launcher for each
+change to the list.
+
+```rust
+// Wrong: the variables are inherited as the person set them, so a value naming a file a stage
+// wrote is run outside confinement.
+bravebot_sandbox::programs::start(
+    &Resolved::found_earlier(program),
+    Inherits::Without(&own_credentials()),
+    SearchPath::Reduced,
+    CodeSelectors::Kept,
+)
+
+// Right: the same start, with each listed variable removed unless its value passes the check.
+// `OWN` is the program's own `CODE_SELECTORS` list, such as the one `gcloud.rs` passes; the generic
+// table is removed as well, by `programs::withhold_code_selectors_with`.
+bravebot_sandbox::programs::start(
+    &Resolved::found_earlier(program),
+    Inherits::Without(&own_credentials()),
+    SearchPath::Reduced,
+    CodeSelectors::Checked(&OWN),
+)
+```
+
+**Why:** the sandbox confines what a stage runs. A program started outside it runs, with the
+person's authority, whatever file a variable names as its interpreter or as a directory it sources
+scripts from. The names are read from the program, so a reviewer who does not read the
+launcher cannot tell that one is missing.
+

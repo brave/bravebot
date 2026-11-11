@@ -11,6 +11,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_agent::turn::MAX_TOOL_ROUNDS;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -234,7 +236,7 @@ fn a_desktop_turn_is_not_cut_off_at_the_bound_an_unwatched_run_carries() {
         &mut child,
         3,
         "turn.send",
-        json!({"session": session, "prompt": "keep looking"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "keep looking"})),
     );
     let ended = until(&said, |message| {
         message["event"] == "turn.done" || message["event"] == "turn.error"

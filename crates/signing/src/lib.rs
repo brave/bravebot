@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod sigv4;
+pub mod webhook;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;

@@ -1,0 +1,92 @@
+/* The main process's small windows, the sign-in window and the key window: the service's mark and the
+   title, then one column of what to read, copy or type, then Cancel beside the primary action.
+   The page is drawn at its own height, which the window is sized to; past the window's most it scrolls. */
+
+.small-window {
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--surface-panel);
+}
+.small-window-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.small-window-head {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xl);
+  padding: var(--leo-spacing-3xl);
+  --leo-icon-size: var(--icon-hero);
+}
+.small-window-head leo-icon { flex-shrink: 0; }
+.small-window-head h1 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: var(--type-heading);
+  color: var(--ink-primary);
+  text-wrap: balance;
+}
+
+.small-window-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xl);
+  padding: 0 var(--leo-spacing-3xl);
+}
+.small-window-body p {
+  margin: 0;
+  font: var(--type-body);
+  color: var(--ink-primary);
+  text-wrap: pretty;
+}
+.small-window-body p.small-window-note { color: var(--ink-secondary); }
+.small-window-body code { font: var(--type-code-body); }
+
+.small-window-field {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-xl);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-field);
+  background: var(--surface-app);
+}
+.small-window-field code {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-primary);
+  user-select: text;
+}
+.small-window-field leo-button { flex-shrink: 0; }
+.small-window-field code.small-window-code {
+  font-size: 2em;
+  overflow-wrap: anywhere;
+}
+/* At most two lines from its start, so the origin is what shows; Copy takes the whole address. */
+.small-window-field code.small-window-url {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Copy and Copied share one cell, so the button is as wide as the longer word either way. */
+.small-window-copy-label { display: inline-grid; }
+.small-window-copy-label > span { grid-area: 1 / 1; }
+.small-window-copy-label[data-copied='false'] > span:last-child,
+.small-window-copy-label[data-copied='true'] > span:first-child { visibility: hidden; }
+
+.small-window-input {
+  display: block;
+  width: 100%;
+}
+
+.small-window-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-3xl);
+}

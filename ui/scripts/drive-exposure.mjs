@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON, approveTrust } from './drive-support.mjs'
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE'
 
@@ -32,7 +32,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
   const trustIt = async () => {
-    await trust.locator(TRUST_APPROVE).click()
+    await approveTrust(trust)
     await trust.waitFor({ state: 'hidden' })
   }
   await openProject(page, app, project)
@@ -59,7 +59,7 @@ try {
   assert.match(findings[0], /an AWS access key id/)
   assert.match(findings[0], /\.env:1/)
   assert.match(await card.locator('.warn').innerText(), /Sending the file discloses that value/)
-  assert.deepEqual(await card.locator('.confirm-actions button').allInnerTexts(), ['Keep it back', 'Send it anyway'])
+  assert.deepEqual(await card.locator(CONFIRM_BUTTON).allInnerTexts(), ['Keep it back', 'Send it anyway'])
   assert.match(await page.locator('.pending-jump').innerText(), /Approval needed/)
   assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the file with a credential')
   assert.equal(rounds.length, 1, 'no model was asked again before the answer')
@@ -91,7 +91,7 @@ try {
   await ask('What is in .env?')
   const second = cards.first()
   await second.waitFor()
-  assert.equal(await second.locator('.confirm-actions button').count(), 2, 'a new conversation asked for itself')
+  assert.equal(await second.locator(CONFIRM_BUTTON).count(), 2, 'a new conversation asked for itself')
   await second.getByRole('button', { name: 'Keep it back', exact: true }).click()
   await second.locator('.decided.reject').waitFor()
   assert.match(await second.locator('.decided').innerText(), /You kept this file back/)

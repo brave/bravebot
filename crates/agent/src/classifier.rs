@@ -20,6 +20,16 @@
 //! is one the driver may read. This is how the goal judge's verdict is read (GOAL-5): a model shown
 //! only what the planner was shown writes text as trustworthy as that context, and a context that
 //! has met something untrusted makes the reply quarantined, which is read as a refusal to allow.
+//!
+//! # Why a private context is consulted
+//!
+//! The request goes to the model the planner is running on, with the planner's own subscription
+//! (`Chat::on` the turn's model), so a line the planner wrote from private content reaches no
+//! party the planner's context had not reached. Refusing a private context would end the
+//! classifier's use for the rest of a session as soon as the planner read one command's output,
+//! because `read_output` makes what the planner writes private from then on and a resumed context
+//! cannot be made public again. The advisor is refused a private question (ADVISOR-3) because it
+//! is another model; this is not.
 
 use bravebot_aichat::protocol::{ChatRequest, Message};
 use bravebot_core::event::Sink;
@@ -137,7 +147,7 @@ pub(crate) fn read(reply: &str) -> Classified {
 /// Put `question` to the classifier and bring back its word.
 ///
 /// [`Classified::NotAsked`] when it must not be consulted: the planner's context holds something
-/// untrusted or private, or the machine's settings refuse the model. Anything that goes wrong
+/// untrusted, or the machine's settings refuse the model. Anything that goes wrong
 /// after the request is sent is [`Classified::NotAllowed`], so a failure can only leave the
 /// question with the person (AUTO-6). The trail records the model, the kind of question and the
 /// word, and none of what the classifier was given or wrote (AUTO-8).
@@ -147,11 +157,11 @@ pub fn consult<S: Sink>(
     classifying: &Classifying<'_>,
     question: &Question<'_>,
 ) -> Classified {
-    // Private text is not sent to another model (ADVISOR-3), and a context that has met something
-    // untrusted would only make the reply unreadable. Asked before the model is, so neither costs
-    // a request.
+    // A context that has met something untrusted would only make the reply unreadable. Asked
+    // before the model is, so it costs no request. A private context is consulted: the request
+    // goes to the planner's own model, which that content was already read to (AUTO-6).
     let context = policy.context_label();
-    if !context.is_public() || !context.is_trusted() || classifying.typed.is_empty() {
+    if !context.is_trusted() || classifying.typed.is_empty() {
         return Classified::NotAsked;
     }
     let model = chat.model.unwrap_or(&chat.config.default_model).to_string();
@@ -214,7 +224,66 @@ fn answered<S: Sink>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bravebot_aichat::protocol::Role;
+    use crate::backend::{BackendError, scripted};
+    use bravebot_aichat::Completion;
+    use bravebot_aichat::protocol::{Role, Usage};
+    use bravebot_core::capability::CapabilitySet;
+    use bravebot_core::event::RecordingSink;
+    use bravebot_core::label::{Confidentiality, Integrity, Label};
+    use bravebot_core::policy::{ReleasePlan, Routing};
+    use bravebot_core::value::Labelled;
+    use bravebot_net::Egress;
+
+    /// A reply to the classifier that is `word`, as a transport labels it.
+    fn replying(word: &str) -> Result<Completion, BackendError> {
+        Ok(Completion {
+            content: Labelled::new(word.to_string(), Label::untrusted_public()),
+            model: "test-model".into(),
+            calls: Vec::new(),
+            context_tokens: 100,
+            usage: Usage {
+                prompt_tokens: 100,
+                completion_tokens: 10,
+                ..Usage::default()
+            },
+            cut_off: None,
+        })
+    }
+
+    /// Put a run to the classifier from a context that has met `met` and holds `held`, with the
+    /// model answering `reply`. The backend is scripted, so what it was sent is read back with
+    /// [`scripted::asked`].
+    fn consulted_from(met: Integrity, held: Confidentiality, reply: &str) -> Classified {
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .expect("configured");
+        let egress = Egress::new();
+        let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin());
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "build it");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("a policy")
+        .resuming(met)
+        .holding(held);
+        scripted::script(vec![replying(reply)]);
+        let typed = vec!["build it".to_string()];
+        consult(
+            &mut policy,
+            &mut chat,
+            &Classifying { typed: &typed },
+            &a_run(),
+        )
+    }
 
     fn a_run() -> Question<'static> {
         Question::Run {
@@ -294,6 +363,48 @@ mod tests {
         let cut = cut(&long);
         assert!(cut.len() <= LINE_BYTES);
         assert!(long.starts_with(cut));
+    }
+
+    /// AUTO-6: a context that has met something untrusted is not put to the classifier, whatever
+    /// else it holds, and no request is sent. Reached directly because a turn never gets this far:
+    /// the argument gate refuses a `run.command` written in such a context first, so only this
+    /// guard stands between a model that was shown an attacker's text and a word that answers a
+    /// question. The regression it rejects: a guard that looks at confidentiality alone, which
+    /// would consult a `(U,priv)` context, or none, which would send the request and read it.
+    #[test]
+    fn a_context_that_has_met_something_untrusted_is_not_consulted() {
+        for held in [Confidentiality::Public, Confidentiality::Private] {
+            let word = consulted_from(Integrity::Untrusted, held, "allow");
+            assert_eq!(word, Classified::NotAsked, "{held:?}");
+            assert!(
+                scripted::asked().is_empty(),
+                "{held:?}: a request was sent from an untrusted context"
+            );
+        }
+        scripted::clear();
+    }
+
+    /// AUTO-6: a trusted context is consulted whether or not it holds private content, and its
+    /// reply is read as one. The regression it rejects: the context being private ending the
+    /// classifier's use, which the planner's reading one command's output does for the rest of the
+    /// session, or a private reply being read as a refusal because it carries the context's label.
+    #[test]
+    fn a_trusted_context_is_consulted_whether_or_not_it_holds_private_content() {
+        for (held, reply, expected) in [
+            (Confidentiality::Public, "allow", Classified::Allowed),
+            (Confidentiality::Private, "allow", Classified::Allowed),
+            (Confidentiality::Private, "deny", Classified::NotAllowed),
+        ] {
+            let word = consulted_from(Integrity::Trusted, held, reply);
+            assert_eq!(word, expected, "{held:?} {reply}");
+            let asked = scripted::asked();
+            assert_eq!(asked.len(), 1, "{held:?} {reply}: {asked:?}");
+            assert!(
+                asked[0].contains("cargo test -p bravebot-core"),
+                "{held:?} {reply}: the action was not sent"
+            );
+        }
+        scripted::clear();
     }
 
     /// AUTO-5: the two kinds of question name only what the classifier needs, and the trail's name

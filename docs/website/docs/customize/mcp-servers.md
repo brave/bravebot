@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: MCP servers
-description: Declare a Model Context Protocol server, approve it, have a checkout ask for it, and see what a session started.
+description: Declare and approve MCP servers, filter tools, configure credentials and confinement, run server prompts, handle calls and failures, inspect connections, and reconnect, disable or remove servers.
 ---
 
 # MCP servers
@@ -66,6 +66,7 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `--http <url>` | a service at this url; takes neither `-e` nor `--dir` |
 | `--bearer-env <name>` | with `--http`: send `Authorization: Bearer` followed by the value of this variable in your environment |
 | `--header-env <header>=<name>...` | with `--http`: send this header with the value of that variable in your environment; repeatable |
+| `--allowed-hosts <list>` | with a program: the only hosts it may reach, host names or `*.` domains separated by commas; see [Limiting the hosts a program reaches](#limiting-the-hosts-a-program-reaches) |
 | `--tools <list>` | offer only these tools of the server; names separated by commas, or by spaces up to the next flag. `--tools=a,b` also works |
 | `--exclude-tools <list>` | never offer these tools, written the same way |
 | `--ask-every-call` | put every call to this server to you, whatever a rule, an earlier answer or `--dangerously-skip-permissions` says, and keep no answer to one; see [Servers that ask every call](#servers-that-ask-every-call) |
@@ -86,6 +87,56 @@ A tool on the `--exclude-tools` list is withheld, and so is a tool missing from 
 `--tools` list. When both name a tool, the exclusion wins. A withheld tool is not offered to the
 model and cannot be called, and the model is told there is no such tool. In `mcp.json` the lists are
 the keys `tools` and `exclude_tools`; a value that is not a list of tool names is refused.
+
+### Limiting the hosts a program reaches
+
+`--allowed-hosts` gives a program its own list of hosts, such as `api.example.com,*.cdn.example.com`,
+where `--allowed-hosts=a,b` also works. The server is held to the proxy that applies the list, as
+`sandbox.network.allowedHosts` holds it, and reaches no other host. An entry that is not a host name
+or a `*.` domain is refused, and so is a list with no entry. A service declared with `--http` takes
+no list. In `mcp.json` the key is `allowed_hosts`.
+
+```sh
+bravebot mcp add weather --allowed-hosts api.weather.example -- npx -y @dangahagan/weather-mcp@latest
+```
+
+The list can narrow what the session allows and never widen it. Where `sandbox.network.allowedHosts`
+is set, an entry of the server's that the session's list does not cover is dropped. A `*.` wildcard
+is covered only by a wildcard on the same domain or on a domain above it. The session's denied hosts
+still apply. The list is part of what your approval binds to, so adding, changing or emptying it asks
+again, and the question shows it as `may reach only:` followed by the hosts, or `may reach no host`
+for an empty list in `mcp.json`. A platform that cannot hold a program to the proxy does not start
+the server, and the note names `allowed_hosts`.
+
+### Running a server in an OpenShell sandbox
+
+`--openshell <image>` runs a local server inside an [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
+sandbox made from a container image, so the server's filesystem is the image and nothing of your
+machine. Its tools are offered to [plan-first runs](../using/manifest-mode.md) only: a turn neither
+asks about its tools nor offers them.
+
+```sh
+bravebot mcp add fetcher --openshell python:3.13-slim --allowed-hosts example.com -- python3 -u server.py
+```
+
+The program is looked for inside the image. `add` asks the image's registry for the image the tag
+names now and writes it with its digest, as `python:3.13-slim@sha256:…`, so your approval covers that
+exact image and not whatever the tag names later. A private image, or a registry that cannot be
+reached, stops the add: give the image with its digest yourself. Nothing of your machine is passed
+in yet, so `--env`, a stored value and `--dir` are refused beside it, and so is `--http`. In
+`mcp.json` the keys are `"backend": "openshell"` and `"image"`, and a session starts the server only
+where the image carries its digest, so one written by hand with a tag is refused until it is added
+again with `mcp add`.
+
+The sandbox is made when a session starts the server, reaches only the hosts `--allowed-hosts` names
+(within the session's own list), and is deleted when the session ends. One left by a session that was
+killed is deleted by the next one. `/status` shows the sandbox, its image and its hosts, and `bravebot
+doctor` checks that OpenShell 0.1.7 or later is installed and its gateway is connected.
+
+OpenShell decrypts the HTTPS a sandboxed program sends, through a certificate authority the sandbox
+trusts, which is how its rules see each request's host. A program that pins certificates fails to
+connect. On macOS with Docker Desktop, the gateway's `supervisor_network_mode` has to be `"bridge"`,
+or creating a sandbox fails with "failed to connect to OpenShell server".
 
 ### Headers for a service
 
@@ -125,7 +176,8 @@ A word `-e` cannot read is refused by its place and not repeated, since it may b
 `-e WEATHER_TOKEN sk-live` stores nothing, and the refusal says a name alone is read from your
 environment only as the one word its `-e` takes. So is an `-e` before the alias, a `NAME=value`
 typed where the alias, `-s` or `--dir` expects its word, and a name given twice. A url carrying a
-user or a password is refused as well.
+user or a password is refused as well, and so is one with a `:` after the host that is not followed by a
+port, which is a number up to 65535.
 
 ## Approving one
 
@@ -164,7 +216,15 @@ reconnect` starts every one that is not running, and `/mcp reconnect weather` st
 start reads the declaration again and asks what a session asks as it opens: a server you approved
 starts without a question, and one whose declaration changed is put to you again. `/mcp disable
 weather` stops the server and drops its grant for this session. Nothing is written, so the next
-session starts it as before. Typed during a turn, the command waits for the turn to end.
+session starts it as before. `/mcp remove weather` is the permanent version: it runs `bravebot mcp
+disable weather` and then `bravebot mcp remove weather` for you, so no later session starts the
+server or asks about it, and stops it in this session. The list `/mcp` prints, which is also what a
+click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the
+command waits for the turn to end.
+
+The info panel lists a server only while its tools are offered to the model. If you answer no when
+you are asked whether to offer a server's tools, the server keeps running for the session, is left
+out of the panel, and is still named by `/mcp` and `/status`.
 
 ### An approval is of what you were shown
 
@@ -324,8 +384,12 @@ the server's allow or deny list", or "N tools were withheld by the server's allo
 Each tool is `alias:tool`, then its arguments, then every row of what the server says about it
 behind the `┃` margin, none of it cut: a yes puts exactly this text in front of the model, and
 the margin marks the words that are the server's. A [check](../security/vetting.md) reads the list
-first, as it reads anything else about to be believed, and its verdict is drawn above it. `↑↓`
-scrolls a list longer than the screen.
+first, as it reads anything else about to be believed, and its verdict is drawn above it. With
+several servers the checks of their lists are made at the same time, no more than eight at once,
+so the wait before the first question is about one check's. The questions come one at a time in the
+order the servers are declared, and the time you take over them is counted as time spent waiting on
+you, which the checks are not. When the session spends a Premium subscription, the checks are made
+one after another instead. `↑↓` scrolls a list longer than the screen.
 
 | Answer | What happens |
 |---|---|
@@ -386,7 +450,12 @@ what it was called with. Where nothing can be written, as in an incognito sessio
 not offered.
 
 What the server returns is untrusted and private. You see it behind the margin; the model is handed
-a reference to it and the word that it is quarantined, and none of what it says. It is private
+a reference to it and the word that it is quarantined, and none of what it says. A call can ask for the
+reply in the same result with `read: true`, where permissions are bypassed with no screening or an
+auto-vetting check says it is safe. Anything else keeps the reference. A tool that lists an argument
+named `read` of its own keeps it, and `read` is not offered at all to a session without `vet_content`.
+See [Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
+It is private
 because what a server read may be your own mail or calendar, so a command fed that reference is put
 to you whatever you [vouched for](../security/permissions.md#vouching-for-a-command), as one fed a
 file is. The words a server describes its tools with stay public, since it hands the same list to
@@ -405,6 +474,15 @@ repeat it. Every later call to a server is then put to you with its arguments, w
 a rule says, and a resumed session keeps asking. Undoing the turn that let it out stops it. A file
 the model reads in your project does not start it. A session saved by an earlier version is read as
 having let something private out, so every call in it asks.
+
+A call asked for that reason is drawn without answer 2, which is shown as not offered with the
+reason that no stored answer covers a call whose arguments are private. Typing 2 anyway answers yes
+to that one call and records nothing, so the next call asks again.
+
+When the model makes several calls to the same tool in one round, you are asked once. The question
+for the first call lists the arguments of each later call to that tool under a line saying your
+answer also covers them. Yes makes all of them and no refuses all of them. A call to a server that
+asks every call, and a call that names a choice, are asked on their own and never listed.
 
 ### Servers that ask every call
 
@@ -453,8 +531,8 @@ call failed. The model is never sent the server's account of the failure.
 Every other failure is reported in bravebot's own words, which name the tool, the protocol method
 and the code the server answered with, and nothing the server wrote. A server that fails for a
 reason only its own sentence gives, or a reply bravebot cannot parse, therefore shows a code and a
-method and nothing more. A server's own error output is shown in `--plain` and a one-shot run and
-not in the full-screen interface, so to read it run the server by hand.
+method and nothing more. A server's own error output is discarded in every interface, so to read
+it run the server by hand.
 
 ### Asking again
 
@@ -582,7 +660,7 @@ files are not started. It gets:
   unconfined the next time you run git there. On macOS the server cannot write a `.git` anywhere;
 - the network by IP address, unless the session closes the network or limits it to a list of hosts.
   Where the sandbox network is closed (the `read-only` mode, for one), the server gets no network at
-  all, a runner's fetch of its own package included. Where `sandbox.network.allowedHosts` is set, the
+  all, a runner's fetch of its own package included. Where `sandbox.network.allowedHosts` is set, or the server's declaration has an `allowed_hosts` list, the
   server is held to the proxy that applies the list, plus the registry hosts of its toolchain. A
   platform that can apply neither does not start the server, and the note names the setting. The
   server also gets the machine's own system directories. A local socket, such as
@@ -599,8 +677,13 @@ session names the server and each path left out. A program named without a path 
 only in the `PATH` you gave: without `-e PATH` it is not found, and the session says to name it
 or give the program's full path.
 
+A program kept in a directory a local server may write, such as the one you gave with `--dir`, is not
+found when bravebot looks a program up by name for something else, such as an editor, a hook or a
+clipboard tool. A program named by its full path is started as before.
+
 A service server is reached through the same network gate as everything else the session sends. A
-redirect off the host and port you declared is not followed. Nothing is sent there, and you are
+redirect off the scheme, host and port you declared is not followed, so a redirect from `http` to
+`https` on the same port is asked about too. Nothing is sent there, and you are
 asked whether the server moved:
 
 ```
@@ -662,7 +745,7 @@ against:
   egress         any address
   subprocesses   allowed
   starts in      /Users/you/work
-  .git           not written under a write row
+  protected names  not written under a write row
   read           /usr/lib
   read           /usr/bin
   read, write    /dev/null
@@ -672,7 +755,7 @@ against:
   read, write    /Users/you/work
 ```
 
-On Linux the `.git` line is absent, and the base lists the system directories of that platform.
+On Linux the `protected names` line is absent, and the base lists the system directories of that platform.
 `left out` heads the paths that were wanted for the server and are not on disk, on a platform that
 grants no path that is not, with the reason beside it. A server reached over HTTP runs no process
 here and has no such lines.
@@ -703,7 +786,9 @@ for a session at a terminal. Where nobody can be asked, a server that would be a
 started. A server a file here asks for and nobody declared is a row of its own, ending with the
 command that declares it. An entry that cannot be used, because it was edited by hand into
 something a declaration cannot be, is listed with what is wrong with it, and the list then fails so
-that a script notices.
+that a script notices. A url with a `:` and no port, written into the file by an earlier version, is
+treated the same way: it is kept as it was written and listed as unusable, and editing the url in the
+file is the way to fix it.
 
 `bravebot doctor` prints the same rows and fails where `list` does.
 
@@ -741,7 +826,8 @@ bravebot mcp remove docs
 
 Removes the declaration and its approval together. An approval another declaration still resolves
 to is kept. A settings file that asks for it still does, and is reported as asking for a server
-nobody declared: `bravebot mcp disable docs` takes that out.
+nobody declared: `bravebot mcp disable docs` takes that out. In the full-screen interface,
+`/mcp remove docs` does both.
 
 ## Refused by an administrator
 
@@ -819,8 +905,9 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **A toolchain that loads from elsewhere in your home directory does not start.** A version
   manager's shim that hands over to a program somewhere else in your home is not given that
   somewhere.
-- **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
-  run pass it through to stderr.
+- **No interface shows a server's own error output.** `--plain` draws its questions on the stream
+  the output would share, and a terminal acts on escape sequences in it, so a server's bytes could
+  rewrite a question. A one-shot run discards it for the same reason.
 - **A directory holding checkouts is not refused.** Only the directories above `--dir` are searched
   for a repository, so a server given one above your projects may write their files. Give a server
   a directory of its own.
@@ -852,6 +939,8 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.
   The same is true of a list you said yes to and a tool you stopped the asking for.
 - **`--plain` cannot stop asking for a tool.** Its call question has room for one answer.
+- **A call with private arguments cannot be stopped from asking.** Answer 2 is not offered for it, because no stored answer covers it.
+- **One answer covers several calls in a round.** Calls to the same tool made in one round are listed in one question, so a yes also makes the later ones.
 - **What the model has read can leave in a URL or a command.** Once you let a result out of
   quarantine, every call to a server is put to you, but a fetch to a host an `allow` rule covers is
   not, and nor is a command a rule allows: a URL and a command line are not held back as private.

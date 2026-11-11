@@ -17,6 +17,10 @@ workspace = true
 # nothing to the tree.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+# Whether the process that made an OpenShell sandbox is still running, and this machine's name,
+# asked without unsafe code. A crate already in the tree, so the lockfile gains only this crate's
+# edge to it.
+rustix = { workspace = true, features = ["process", "system"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { workspace = true }

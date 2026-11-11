@@ -58,8 +58,10 @@
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
 use crate::confine::Confinement;
+use crate::interjections::Arrival;
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
-use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
+use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, ValuePart, is_the_null_device};
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -182,6 +184,65 @@ pub const WAIT_FLOOR: Duration = Duration::from_secs(1);
 /// See [`WAIT_FLOOR`].
 pub const WAIT_CEILING: Duration = Duration::from_secs(600);
 
+/// A worked-out value of an assignment, which may be a secret.
+///
+/// Held from the moment it is worked out until it is handed to a process, and printed nowhere:
+/// its `Debug` says only that it is redacted, so no struct holding one can leak it by derive.
+///
+/// An `OsString`, so the bytes a substitution printed reach the environment as they are and the
+/// driver decodes none of them.
+struct Secret(OsString);
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// The bytes a substitution printed, as the value of a variable.
+///
+/// Looks at none of them. On Unix an environment value is a byte string, so they pass unchanged.
+/// Elsewhere it is text, and the bytes are read as UTF-8 with each sequence that is not replaced
+/// by U+FFFD: a transformation of the value, where a refusal would be a decision taken from what
+/// an unvouched program printed (CMDLINE-17, LAYER-2).
+fn environment_value(bytes: Vec<u8>) -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// The value of `$name` in the environment bravebot runs in.
+///
+/// A variable withheld from programs is refused here as it is at compile time: the final
+/// environment is stripped of it again, but a value assembled into another variable would route
+/// around that. Names the variable and the problem, never anything it holds.
+fn variable_value(name: &str) -> Result<String, ExecError> {
+    let refuse = |problem| ExecError::Variable {
+        name: name.to_string(),
+        problem,
+    };
+    if bravebot_config::scrub::withheld()
+        .iter()
+        .any(|withheld| withheld.eq_ignore_ascii_case(name))
+    {
+        return Err(refuse(VariableProblem::Withheld));
+    }
+    let value = std::env::var_os(name).ok_or_else(|| refuse(VariableProblem::Unset))?;
+    let value = value
+        .into_string()
+        .map_err(|_| refuse(VariableProblem::NotUnicode))?;
+    if value.contains('\0') {
+        return Err(refuse(VariableProblem::NotUnicode));
+    }
+    Ok(value)
+}
+
 /// How often the wait loop looks up to see whether it should stop.
 const TICK: Duration = Duration::from_millis(50);
 
@@ -292,8 +353,10 @@ pub enum ExecError {
     /// The directory the line was to run in no longer exists, so the pipeline was not started.
     ///
     /// Checked immediately before the first stage is spawned, since an approval can wait for
-    /// hours. The directory is the one the person was shown and approved.
-    DirectoryGone { directory: String },
+    /// hours. Names no path: the directory is the one the person was shown and approved, and the
+    /// line it belongs to is told with the directory the planner typed, where a path here would be
+    /// where a link led.
+    DirectoryGone,
     /// The platform could not confine the program, so it was not started.
     ///
     /// A program a person approved runs under its profile or not at all, so this is a refusal and
@@ -307,6 +370,59 @@ pub enum ExecError {
     Io(String),
     /// A redirection's file could not be opened.
     Redirection { path: String, detail: String },
+    /// A redirection's file could not be opened, with the path exec tried, kept as a path until it
+    /// is shown so that a caller can decide on it ([PATH-001]).
+    ///
+    /// [PATH-001]: ../../../docs/best-practices/paths.md
+    Unopened {
+        path: std::path::PathBuf,
+        detail: String,
+    },
+    /// A `$VAR` in an assignment could not be used. Names the variable and nothing it holds.
+    Variable {
+        name: String,
+        problem: VariableProblem,
+    },
+    /// A `$(source)` in an assignment did not produce a value. Carries the source the planner
+    /// typed and how it ended, and never a byte of what it printed: that is the value, or part of
+    /// it, and may be a secret.
+    Substitution {
+        source: String,
+        failure: SubstitutionFailure,
+    },
+}
+
+/// How a `$(source)` ended without a value.
+#[derive(Debug)]
+pub enum SubstitutionFailure {
+    /// It ran and ended: the exit status, a signal, the clock. The words are the driver's own.
+    Ended(String),
+    /// The run of the substitution's own line failed, and the error is kept whole instead of as
+    /// text, so that a caller can decide on the paths it holds before the planner is told
+    /// ([PATH-001]).
+    ///
+    /// [PATH-001]: ../../../docs/best-practices/paths.md
+    Inside(Box<ExecError>),
+}
+
+impl fmt::Display for SubstitutionFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ended(words) => f.write_str(words),
+            Self::Inside(error) => error.fmt(f),
+        }
+    }
+}
+
+/// Why a variable named in an assignment was not expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariableProblem {
+    /// It is one of the variables [`bravebot_config::scrub::withheld`] holds back from programs.
+    Withheld,
+    /// The environment bravebot runs in does not set it.
+    Unset,
+    /// It is set to something that is not text.
+    NotUnicode,
 }
 
 impl fmt::Display for ExecError {
@@ -315,9 +431,7 @@ impl fmt::Display for ExecError {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
             }
-            Self::DirectoryGone { directory } => {
-                write!(f, "the directory '{directory}' no longer exists")
-            }
+            Self::DirectoryGone => f.write_str("the directory it was to run in no longer exists"),
             Self::NotConfined { program, detail } => {
                 write!(
                     f,
@@ -328,6 +442,23 @@ impl fmt::Display for ExecError {
             Self::Io(detail) => write!(f, "the pipeline could not be run: {detail}"),
             Self::Redirection { path, detail } => {
                 write!(f, "'{path}' could not be opened: {detail}")
+            }
+            Self::Unopened { path, detail } => {
+                write!(f, "'{}' could not be opened: {detail}", path.display())
+            }
+            Self::Variable { name, problem } => {
+                let problem = match problem {
+                    VariableProblem::Withheld => "it is withheld from programs",
+                    VariableProblem::Unset => "it is not set",
+                    VariableProblem::NotUnicode => "it is not valid text",
+                };
+                write!(f, "the variable '{name}' cannot be expanded: {problem}")
+            }
+            Self::Substitution { source, failure } => {
+                write!(
+                    f,
+                    "the command substitution '$({source})' did not produce a value: {failure}"
+                )
             }
         }
     }
@@ -490,6 +621,10 @@ struct Running<'a> {
     started: Instant,
     limit: Duration,
     stdout: String,
+    /// The last stage's standard output as the bytes the pipe delivered, kept only where the caller
+    /// has to decide from them before they are decoded: a substitution, whose value must reach a
+    /// program exactly as printed or not at all. `None` for every other run.
+    raw_stdout: Option<Vec<u8>>,
     stderr: String,
     codes: Vec<Option<i32>>,
     stopped: Option<Duration>,
@@ -538,6 +673,7 @@ impl<'a> Running<'a> {
             started: Instant::now(),
             limit,
             stdout: String::new(),
+            raw_stdout: None,
             stderr: String::new(),
             codes: Vec::new(),
             stopped: None,
@@ -562,6 +698,92 @@ impl<'a> Running<'a> {
             stopped: self.stopped,
             ended_well,
         }
+    }
+
+    /// Work out the assignments of every step of one pipeline, in step order.
+    ///
+    /// Done for the whole pipeline before its first step starts, and by the steps the plan holds:
+    /// a substitution runs as a nested line with this run's directory, deadline, cancellation,
+    /// scratch directory, confinement and notification hooks, and the same scrubbed environment as
+    /// any step, with nothing on standard input. The values go to the caller and are never kept
+    /// here.
+    fn expand_all(&mut self, steps: &[Step]) -> Result<Vec<Vec<(String, Secret)>>, ExecError> {
+        let mut all = Vec::with_capacity(steps.len());
+        for step in steps {
+            let mut values = Vec::with_capacity(step.expansions.len());
+            for expansion in &step.expansions {
+                let mut value = OsString::new();
+                for part in &expansion.parts {
+                    match part {
+                        ValuePart::Text(text) => value.push(text),
+                        ValuePart::Variable(name) => value.push(variable_value(name)?),
+                        ValuePart::Substitution { source, steps } => {
+                            value.push(self.substitute(source, steps)?.0);
+                        }
+                    }
+                }
+                values.push((expansion.name.clone(), Secret(value)));
+            }
+            all.push(values);
+        }
+        Ok(all)
+    }
+
+    /// Run `steps`, the compiled form of `$(source)`, and hand back what they printed with the
+    /// trailing newlines trimmed.
+    ///
+    /// Every way this fails says the source and how the line ended, and nothing it printed on
+    /// either stream: the output is the value, or part of it. The line ends here only by the exit
+    /// status, the clock, the cancellation or an error of the run itself, never by what was
+    /// printed: the value is untrusted output, and its length and its encoding decide nothing.
+    fn substitute(&mut self, source: &str, steps: &Steps) -> Result<Secret, ExecError> {
+        let failed = |failure: SubstitutionFailure| ExecError::Substitution {
+            source: source.to_string(),
+            failure,
+        };
+        let ended_in = |words: &str| failed(SubstitutionFailure::Ended(words.to_string()));
+        let remaining = self.limit.saturating_sub(self.started.elapsed());
+        let mut inner = Running::new(self.directory, self.cancel, remaining, self.scratch, None);
+        inner.raw_stdout = Some(Vec::new());
+        inner.confinement = self.confinement;
+        inner.entering = self.entering.take();
+        inner.reading = self.reading.take();
+        let ended = inner.run(steps);
+        self.entering = inner.entering.take();
+        self.reading = inner.reading.take();
+        let well = match ended {
+            Ok(well) => well,
+            Err(ExecError::Cancelled) => return Err(ExecError::Cancelled),
+            Err(other) => return Err(failed(SubstitutionFailure::Inside(Box::new(other)))),
+        };
+        if inner.stopped.is_some() {
+            return Err(ended_in("it ran out of time"));
+        }
+        if !well {
+            let detail = match inner.codes.iter().rev().find(|code| **code != Some(0)) {
+                Some(Some(code)) => format!("it exited with status {code}"),
+                Some(None) => "it was ended by a signal".to_string(),
+                None => "it failed".to_string(),
+            };
+            return Err(ended_in(&detail));
+        }
+        // The bytes the pipe delivered, not the text `Drain::text` makes of them: that is lossy, so
+        // a program printing `\xff` would otherwise hand the next program U+FFFD and the line would
+        // run on a value nobody printed.
+        let mut raw = inner.raw_stdout.take().unwrap_or_default();
+        // Only the line ends are cut, as a shell does. The cut changes the value and decides
+        // nothing: every output, whatever it holds, goes on to the step that uses it.
+        while raw.last() == Some(&b'\n') {
+            raw.pop();
+            if raw.last() == Some(&b'\r') {
+                raw.pop();
+            }
+        }
+        // Neither a NUL nor a size the operating system refuses is looked for: `Command::env`
+        // cannot hold the first and the system's limit on an environment decides the second, so
+        // the step that would receive the value fails to start, and that error names the program
+        // and the operating system's words, never the value.
+        Ok(Secret(environment_value(raw)))
     }
 
     /// Run one shape of a plan, and say whether it ended well.
@@ -597,6 +819,11 @@ impl<'a> Running<'a> {
         }
         the_directory_exists(self.directory)?;
         still_approved(steps)?;
+        // Every step's assignments are worked out before anything in this pipeline starts, so a
+        // variable that is unset or withheld, or a substitution that fails, refuses the pipeline
+        // with nothing of it running. The values live in `expanded` and reach `command_for` and
+        // nothing else.
+        let expanded = self.expand_all(steps)?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
@@ -628,7 +855,7 @@ impl<'a> Running<'a> {
         let last = steps.len() - 1;
 
         for (index, step) in steps.iter().enumerate() {
-            let command = command_for(step, self.directory, self.scratch);
+            let command = command_for(step, self.directory, self.scratch, &expanded[index]);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
@@ -769,6 +996,9 @@ impl<'a> Running<'a> {
         }
 
         if let Some(tail) = &tail {
+            if let Some(raw) = self.raw_stdout.as_mut() {
+                raw.extend_from_slice(&tail.bytes());
+            }
             self.stdout.push_str(&tail.text());
         }
         for drain in &draining {
@@ -1060,8 +1290,8 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
         .append(append)
         .truncate(!append)
         .open(path)
-        .map_err(|e| ExecError::Redirection {
-            path: path.display().to_string(),
+        .map_err(|e| ExecError::Unopened {
+            path: path.to_path_buf(),
             detail: e.to_string(),
         })
 }
@@ -1092,8 +1322,8 @@ fn feed(bytes: &str) -> Result<Handle, ExecError> {
 
 /// A redirection's source, opened to be read.
 fn for_reading(path: &std::path::Path) -> Result<std::fs::File, ExecError> {
-    std::fs::File::open(path).map_err(|e| ExecError::Redirection {
-        path: path.display().to_string(),
+    std::fs::File::open(path).map_err(|e| ExecError::Unopened {
+        path: path.to_path_buf(),
         detail: e.to_string(),
     })
 }
@@ -1148,6 +1378,11 @@ impl Drain {
         String::from_utf8_lossy(&read).into_owned()
     }
 
+    /// The bytes the pipe has delivered so far, undecoded.
+    fn bytes(&self) -> Vec<u8> {
+        self.read.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// How many bytes the pipe has delivered so far.
     ///
     /// The buffer's length, which is not the length of what [`Drain::text`] returns: that is taken
@@ -1166,7 +1401,7 @@ impl Drain {
     /// lossily. Decoding a half-arrived character now would hand back U+FFFD and move the offset
     /// past it, so the character that is on its way would never be handed to anybody. Bytes that
     /// are not the start of a character are not waited for: they are not going to become valid.
-    fn since(&self, seen: &mut Mark) -> String {
+    fn since(&self, seen: &mut Mark) -> (String, Counted) {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
         let rest = &read[seen.handed.min(read.len())..];
         let take = match std::str::from_utf8(rest) {
@@ -1178,8 +1413,23 @@ impl Drain {
         // Taken under the same lock as the bytes, so what was looked at is exactly what had arrived
         // when they were taken, and nothing landing after this is counted as looked at.
         seen.looked = read.len();
-        String::from_utf8_lossy(&rest[..take]).into_owned()
+        let counted = seen.count(&rest[..take]);
+        (String::from_utf8_lossy(&rest[..take]).into_owned(), counted)
     }
+}
+
+/// How many lines one delivery from a job completed, counted from the pipes' own bytes.
+///
+/// A count of line starts, never a look at what the bytes spell. Taken from the pipes and not from
+/// the composed text, so the `standard error:` label and the newline [`both_streams`] puts between
+/// the two streams are not lines of the job.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Counted {
+    /// The lines that begin in this delivery. A line is counted once, by the delivery that holds
+    /// its first byte, so a line cut between two deliveries is counted by the earlier one and the
+    /// later one adds nothing for the rest of it. A last line with no newline counts as soon as
+    /// its first byte arrives.
+    pub lines: usize,
 }
 
 /// How much of one pipe a caller has been handed, and how much of it had arrived at that look.
@@ -1192,6 +1442,30 @@ struct Mark {
     handed: usize,
     /// Bytes the pipe had delivered when the caller last looked.
     looked: usize,
+    /// Whether the bytes handed end in the middle of a line, so the next byte continues it.
+    mid_line: bool,
+}
+
+impl Mark {
+    /// Count the lines that begin in `taken`, and remember whether it ends inside one.
+    ///
+    /// A line begins at the first byte of the pipe and after each newline. It is counted where its
+    /// first byte is handed over, so the count does not depend on where a look happens to cut the
+    /// bytes: a cut inside a line neither counts it twice nor leaves it uncounted. The count is a
+    /// number the caller carries into a sentence whose words do not depend on it.
+    fn count(&mut self, taken: &[u8]) -> Counted {
+        let mut lines = 0;
+        for byte in taken {
+            if !self.mid_line {
+                lines += 1;
+                self.mid_line = true;
+            }
+            if *byte == b'\n' {
+                self.mid_line = false;
+            }
+        }
+        Counted { lines }
+    }
 }
 
 /// How much of each of a job's pipes a caller has already been handed.
@@ -1258,9 +1532,7 @@ fn the_directory_exists(directory: &std::path::Path) -> Result<(), ExecError> {
     if directory.is_dir() {
         return Ok(());
     }
-    Err(ExecError::DirectoryGone {
-        directory: directory.display().to_string(),
-    })
+    Err(ExecError::DirectoryGone)
 }
 
 /// Refuse the pipeline unless every step's start path still leads to the file that was approved.
@@ -1281,6 +1553,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
             started_as,
             args: _,
             environment: _,
+            expansions: _,
             routes: _,
         } = step;
         if started_as.canonicalize().ok().as_ref() != Some(resolved) {
@@ -1404,11 +1677,20 @@ impl Background {
     /// Each delivery that carries standard error carries the label with it, so a reader of a later
     /// delivery, which holds none of the earlier ones, can still tell the stream apart (CMDLINE-10).
     pub fn since(&self, seen: &mut Seen) -> String {
+        self.take(seen).0
+    }
+
+    /// What [`Background::since`] returns, with the lines that begin in it counted per pipe.
+    ///
+    /// The count is of the pipes' bytes, so the label and the newline joining the streams are not
+    /// in it.
+    pub fn take(&self, seen: &mut Seen) -> (String, Counted) {
         seen.stderr.resize(self.stderr.len(), Mark::default());
-        let stdout = self.stdout.since(&mut seen.stdout);
+        let (stdout, mut counted) = self.stdout.since(&mut seen.stdout);
         let mut errored = String::new();
         for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
-            let text = drain.since(seen);
+            let (text, more) = drain.since(seen);
+            counted.lines += more.lines;
             if text.is_empty() {
                 continue;
             }
@@ -1417,7 +1699,7 @@ impl Background {
             }
             errored.push_str(&text);
         }
-        both_streams(&stdout, &errored)
+        (both_streams(&stdout, &errored), counted)
     }
 
     /// Whether any pipe has delivered anything since the caller last looked.
@@ -1464,13 +1746,14 @@ impl Background {
         );
     }
 
-    /// Wait for something to happen, and return at the first of five things.
+    /// Wait for something to happen, and return at the first of six things.
     ///
     /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
-    /// being set, and one of `stops` being set. `seen` is where the caller's last look left off, so output
-    /// that arrived after that look and before this call ends the wait at once. Which it was is not
-    /// reported, because the caller then takes the account [`Background::ended`] and
-    /// [`Background::printed`] give and that account says it.
+    /// being set, one of `stops` being set, and `arrival` reporting a line the turn may take.
+    /// `seen` is where the caller's last look left off, so output that arrived after that look and
+    /// before this call ends the wait at once. Which it was is not reported, because the caller
+    /// then takes the account [`Background::ended`] and [`Background::printed`] give and that
+    /// account says it.
     ///
     /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
     /// pipeline it started: how many bytes each pipe has delivered against how many the caller has
@@ -1494,32 +1777,54 @@ impl Background {
         bound: Duration,
         cancel: &Cancel,
         stops: &[JobStop],
+        arrival: &Arrival,
     ) {
-        self.wait(Some(seen), bound, cancel, stops);
+        self.wait(Some(seen), bound, cancel, stops, arrival);
     }
 
-    /// Wait for the job to end, and return at the first of four things.
+    /// Wait for the job to end, and return at the first of five things.
     ///
-    /// Every step having exited, `bound` running out, `cancel` being set, and one of `stops` being
-    /// set. Output arriving ends none of it, whether it arrives during the wait or was already
-    /// there, unseen, when the wait began: that is the difference from [`Background::wait_for_more`],
-    /// whose caller gets back at the next line from a job that prints more often than a round takes.
+    /// Every step having exited, `bound` running out, `cancel` being set, one of `stops` being
+    /// set, and `arrival` reporting a line the turn may take. Output arriving ends none of it,
+    /// whether it arrives during the wait or was already there, unseen, when the wait began: that is
+    /// the difference from [`Background::wait_for_more`], whose caller gets back at the next line
+    /// from a job that prints more often than a round takes.
     ///
     /// Of the output this asks for nothing at all, not even a byte count, so it decides on which
     /// steps have exited and on the clock alone. What was printed is taken by the caller afterwards,
     /// the same way [`Background::wait_for_more`]'s is, and is all of what the job printed since the
     /// caller's last look.
-    pub fn wait_for_exit(&mut self, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
-        self.wait(None, bound, cancel, stops);
+    pub fn wait_for_exit(
+        &mut self,
+        bound: Duration,
+        cancel: &Cancel,
+        stops: &[JobStop],
+        arrival: &Arrival,
+    ) {
+        self.wait(None, bound, cancel, stops, arrival);
     }
 
     /// The loop both waits share. `seen` is where the caller's last look left off for a wait that
-    /// output ends, and `None` for one that only an exit, the bound, the token or a stop does.
-    fn wait(&mut self, seen: Option<&Seen>, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
+    /// output ends, and `None` for one that only an exit, the bound, the token, a stop or a line
+    /// does.
+    ///
+    /// `arrival` is read the way a stop is: a flag the buffer keeps about whether it holds a line
+    /// the turn may take, never the line. A line already waiting when the wait begins ends it at
+    /// the first pass. A held line, which the turn may not take, does not count, and a handle from
+    /// no buffer ([`Arrival::never`]) never ends it.
+    fn wait(
+        &mut self,
+        seen: Option<&Seen>,
+        bound: Duration,
+        cancel: &Cancel,
+        stops: &[JobStop],
+        arrival: &Arrival,
+    ) {
         let until = Instant::now() + bound;
         loop {
             if cancel.is_cancelled()
                 || stops.iter().any(JobStop::is_requested)
+                || arrival.is_waiting()
                 || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
             {
@@ -1557,6 +1862,7 @@ fn command_for(
     step: &Step,
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
+    expanded: &[(String, Secret)],
 ) -> Command {
     // Exhaustive so that a field added to `Step` stops the build here. This is where a step
     // becomes a real process, so a field this applies that no standing answer's key holds
@@ -1569,6 +1875,9 @@ fn command_for(
         started_as,
         args: _,
         environment: _,
+        // Their values are `expanded`, worked out by the caller for the whole pipeline before its
+        // first step starts.
+        expansions: _,
         routes: _,
     } = step;
     // Started by the path the name was found by, which some programs read
@@ -1584,6 +1893,8 @@ fn command_for(
         &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
         inherits,
         bravebot_sandbox::programs::SearchPath::Inherited,
+        // The line is the person's, run in the confinement chosen for it (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     // The vector, never a string. Nothing here builds a command line, so nothing has to
     // unbuild one.
@@ -1604,6 +1915,10 @@ fn command_for(
     for (name, value) in &step.environment {
         command.env(name, value);
     }
+    // After the literal ones, and the only place a worked-out value is handed to anything.
+    for (name, value) in expanded {
+        command.env(name, &value.0);
+    }
     // Withheld again, since the line is the planner's and a name it assigns is not the
     // person's own: `run.scrubEnv` lists what their commands may not be handed.
     inherits.withhold(&mut command);
@@ -1618,18 +1933,48 @@ fn command_for(
 /// is what [`crate::tools`] refuses anything else for. Every step's own environment is applied, as
 /// it is in the foreground, and so is the session's own directory: a program left running is one
 /// with more reason to want somewhere to write, not less.
+///
+/// For a caller with no turn behind it: a substitution in a step's assignments runs under the
+/// built-in [`LIMIT`] and a token nobody holds. The `run` tool calls [`start_steps_within`].
 pub fn start_steps(
     steps: &[Step],
     directory: &std::path::Path,
     scratch: Option<&std::path::Path>,
     confinement: Option<&Confinement>,
 ) -> Result<Background, ExecError> {
+    start_steps_within(
+        steps,
+        directory,
+        scratch,
+        confinement,
+        &Cancel::new(),
+        LIMIT,
+    )
+}
+
+/// [`start_steps`] with the call's own cancellation and deadline for the substitutions in the
+/// steps' assignments, which are run before the first step starts and so while the call is still
+/// in progress. A cancelled call ends the substitution and starts nothing; one that outlasts
+/// `limit` is refused with its source and no output. The job that is started is not bound by
+/// `limit`: it outlives the call.
+pub fn start_steps_within(
+    steps: &[Step],
+    directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
+    confinement: Option<&Confinement>,
+    cancel: &Cancel,
+    limit: Duration,
+) -> Result<Background, ExecError> {
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
     the_directory_exists(directory)?;
     still_approved(steps)?;
-
+    // Worked out before the first step starts, as in the foreground, under the caller's
+    // cancellation and deadline.
+    let mut resolving = Running::new(directory, cancel, limit, scratch, None);
+    resolving.confinement = confinement;
+    let expanded = resolving.expand_all(steps)?;
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());
     let mut upstream: Option<Handle> = None;
     let mut tail: Option<Drain> = None;
@@ -1637,7 +1982,7 @@ pub fn start_steps(
     let last = steps.len() - 1;
 
     for (index, step) in steps.iter().enumerate() {
-        let command = command_for(step, directory, scratch);
+        let command = command_for(step, directory, scratch, &expanded[index]);
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {

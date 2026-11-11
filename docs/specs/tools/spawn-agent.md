@@ -31,15 +31,36 @@ wrote rather than anything the call describes. That is what a person could appro
 that a delegate may read, or read and run, or read and run and write. A name matching nothing in
 the list is refused and reaches no capability set.
 
+The list offered to a run is narrowed by the capabilities that run holds: a run that cannot write
+is not offered the kind that writes ([DELEGATE-32](../delegation.md#DELEGATE-32)). The offer is
+advisory, and a name outside the resolved set is refused ([DELEGATE-3](../delegation.md#DELEGATE-3)).
+
+The description says that a delegate started after the planner was shown private content cannot run
+processors, and that a task needing a picture or a file looked at goes first or to the person. It
+also says that a delegate cannot call `vet_content`, `ask_user`, `fetch_url` or `download_url`, so
+work that needs one of them is done by the planner before it delegates or instead of delegating, and
+that a reference which has to be read whole is read by the planner with `vet_content`
+([DELEGATE-12](../delegation.md#DELEGATE-12), [VET-2](vet-content.md#VET-2)). Each of the four is
+named only where the turn's list holds it, and the sentence is left out of a list that holds none of
+them, which a delegate's list does ([TOOL-6](tool-surface.md#TOOL-6)). The `kind` parameter's lines
+do not repeat it: a kind is what a delegate may hold, and these four are left out of every kind. The
+`reader` kind text does not promise processors without condition
+([DELEGATE-8](../delegation.md#DELEGATE-8)).
+
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
+`verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
+`verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
 
 <a id="AGENT-2"></a>
 ### AGENT-2: `task` is the whole of what the delegate is told, and it may not be private
 
 It is the only thing steering the call, and it comes from a context holding nothing an attacker
 wrote. The delegate cannot see the conversation it came from, so a task that leaves something out
-is a delegate that never learns it.
+is a delegate that never learns it. A compaction of the delegate's conversation sends the task
+again after the summary ([COMPACT-19](../compaction.md#COMPACT-19)).
 
 `verified-by: bravebot_core::policy::a_private_task_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::a_run_that_has_met_something_untrusted_cannot_delegate`
@@ -51,13 +72,28 @@ The call answers with the delegate's number as soon as the kernel has approved o
 planner has its round back. What the delegate says arrives as a message of its own, before the
 planner is next asked what to do.
 
+Where the kernel started the delegate without a capability its definition asked for, because the
+run that started it does not hold the capability, the result names what it was started without in
+one sentence of the driver's ([DELEGATE-33](../delegation.md#DELEGATE-33)). In a fan-out the
+sentence is said once for the call.
+
 Not as the result of this call. A result answers a call once, and by the time a delegate has
 anything to say the call it came from was answered rounds earlier. A call that waited for the
 report would hold the turn still until the delegate finished, so a turn could have one delegate
 working and no more.
 
+When the planner ends a round with a delegate working, the turn asks it again as soon as the first
+delegate ends, with that report, and does not hold the report for the others
+([DELEGATE-17](../delegation.md#DELEGATE-17)). The call has no field choosing between that and
+waiting for every delegate of a batch, so nothing about it is for a person to approve.
+
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
+`verified-by: bravebot_agent::turn::the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest`
+`verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
+`verified-by: bravebot_agent::tools::the_start_message_names_what_a_delegate_was_started_without`
+`verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
+`verified-by: bravebot_agent::turn::a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_without_writing`
 
 <a id="AGENT-4"></a>
 ### AGENT-4: what shape the report takes is not the tool's to decide
@@ -76,7 +112,9 @@ from the label the delegate's own context earned.
 `each` names one delegate per entry. Each is told the shared `task` followed by its own entry,
 and is otherwise a delegate like any other: it passes the same gate, takes its own number, and
 holds its own copy of what a person has vouched for. A call naming more than eight, or naming
-none, is refused and starts nothing. A call that meets the turn's ceiling on delegates
+none, is refused and starts nothing. The text of `each` says that one call starts at most that
+many and that a further call with the same `task` starts more, and takes the figure from the one
+the refusal enforces. A call that meets the turn's ceiling on delegates
 ([DELEGATE-7](../delegation.md#DELEGATE-7)) part-way starts the ones that fit and says how many did
 not start, and why.
 
@@ -95,6 +133,7 @@ field turning one sentence into an unbounded number of runs at once is worth a b
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 `verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
+`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
 
 <a id="AGENT-6"></a>
 ### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away
@@ -147,7 +186,9 @@ definition's `budget:` ([DELEGATE-29](../delegation.md#DELEGATE-29)), and of wha
 left under its own, so a call without the field leaves the definition's in force and a figure above
 the definition's changes nothing. In a fan-out the figure applies to each delegate separately, and
 one delegate's spend is not another's. A delegate that spends it loses its tools and answers with
-what it has, and the planner is told so beside the report.
+what it has, and the planner is told so beside the report. Every request counts the whole
+conversation so far, so a figure buys a few dozen requests and not a few dozen thousand tokens of
+reading, and the field's description says so.
 
 A value that is not a count of tokens above zero is refused with what the field takes, and nothing
 starts. The figure must be public and is read only after the integrity gate has passed, as `kind`
@@ -163,3 +204,24 @@ round bound out of the call because a larger figure would be authority; a smalle
 `verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`
 `verified-by: bravebot_agent::turn::a_call_budget_stops_a_delegate_and_cannot_raise_the_definitions`
+
+<a id="AGENT-8"></a>
+### AGENT-8: the text of `kind` names the round limit of each kind it lists
+
+Each line of the `kind` parameter's description ends with the number of rounds a delegate of that
+kind makes before it loses its tools, and what a round is: one reply with its tool calls. The
+number is [`Kind::rounds`](../delegation.md#DELEGATE-6) of the line's kind. A line for a definition
+carries its kind's number, not the definition's own `rounds:` and not the kind's ceiling.
+
+**Why.** The planner writes the task and has no other way to learn how much work fits in a
+delegate. A task sized to a figure it was never given ends with the delegate's tools removed part
+way through.
+
+**Why only the parameter text.** The tool's description names neither of the bounds on the tree
+([DELEGATE-7](../delegation.md#DELEGATE-7)), and a delegate's own rounds are not one of them. The
+most one call starts ([AGENT-5](#AGENT-5)) is a limit on a call and not a bound on the tree, and is
+stated in the text of `each`.
+
+`verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
+`verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`

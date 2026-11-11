@@ -25,10 +25,9 @@ guards:
   - symbol: Policy::compose_vetting_input
   - symbol: Policy::vetting_verdict
   - symbol: Policy::vetting_did_not_complete
-  - symbol: Policy::promote_vetted
+  - symbol: Policy::vetting_stopped
   - symbol: Policy::before_promoting
   - symbol: Policy::compose_vetting_picture
-  - symbol: Policy::promote_vetted_picture
   - symbol: Policy::attach_vetted_picture
   - symbol: Policy::authorise_a_copy_of_a_picture
 documented-by: docs/website/docs/security/vetting.md
@@ -130,12 +129,13 @@ A check over a picture has no string to encode: the picture goes in a part of it
 `verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
 
 <a id="CHECK-3"></a>
-### CHECK-3: what the planner says it expects is a prompt, must not be private, and is often absent
+### CHECK-3: what the planner says it expects is a prompt, may be private, and is often absent
 
 The planner says what it thinks the slot holds, and the check is told. Those are the planner's own
 words on the footing a processor's instruction sits on: not content anybody read, but the sentence
-the driver is about to send. Private is refused, since the user's own data must not become another
-model's prompt.
+the driver is about to send. A private sentence is sent like a public one. The check is a request
+to the model the session runs on, and the slot it is shown whole is the private content, so the
+sentence adds nothing to what that model is sent.
 
 Only the planner asking for a check carries one. A check run before a prompt the planner did not
 ask for has nowhere to get an expectation from: it asked to read a file, or to be shown what a
@@ -143,7 +143,7 @@ command printed, and said nothing about the contents. There the key is **left ou
 entirely** rather than written empty, because an empty string would tell the reader the planner
 expected nothing, where the truth is that nothing claimed anything.
 
-`verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
+`verified-by: bravebot_core::policy::a_private_expectation_is_put_to_the_check`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 
 <a id="CHECK-4"></a>
@@ -153,14 +153,17 @@ A reply states its verdict as `safe` or `unsafe`, compared after trimming and lo
 after nothing else. Any other word, a reply that states no verdict, a truncated reply, a timeout
 and a backend error are all **inconclusive**, which says nothing about the content.
 
+A stop is not among them. When the person stops the turn while the request is in flight, the check
+ends with no verdict at all, inconclusive included, and [CHECK-16](#CHECK-16) says what follows.
+
 Where a reply holds more than one candidate answer, the last is read: that is the one a model
 writes after reasoning, and reading the first would let its worked example outrank its conclusion.
 A reply that leaves an object open at its end is a truncated reply, and an earlier complete object
 does not speak for it.
 
-**Why.** Fails closed on every path. The only reply that can reduce a warning is one that answered
-in the form it was asked for, so a check that half worked lands where a check that did not run
-lands.
+**Why.** Fails closed on every path that ends in a verdict. The only reply that can reduce a
+warning is one that answered in the form it was asked for, so a check that half worked lands where
+a check that did not run lands.
 
 `verified-by: bravebot_core::vetting::a_stated_verdict_is_read_with_its_reason`
 `verified-by: bravebot_core::vetting::a_verdict_inside_prose_is_found`
@@ -176,6 +179,7 @@ lands.
 `verified-by: bravebot_core::vetting::a_complete_object_followed_by_a_truncated_one_is_inconclusive`
 `verified-by: bravebot_core::vetting::a_reply_holding_characters_outside_ascii_is_read`
 `verified-by: bravebot_agent::turn::a_check_that_could_not_be_made_falls_back_to_the_question`
+`verified-by: bravebot_agent::turn::a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_refused`
 
 <a id="CHECK-5"></a>
 ### CHECK-5: a verdict is advice, and while auto-vetting is off the only thing it decides is which prompt is drawn
@@ -297,7 +301,20 @@ The audit trail records the word and never the sentence: a trail is read by peop
 assume the driver is talking. Where the word is `inconclusive` the driver's own account of why is
 recorded with it, that account being the driver's sentence and not the check's, so a refusal on a
 check that objected and a refusal on a check that could not be read are told apart afterwards by
-somebody who was never asked either question.
+somebody who was never asked either question. A check the person stopped has no word, so its trail
+line records none ([CHECK-16](#CHECK-16)).
+
+**A read kept back under bypass tells the person what kept it, and the planner reads what it
+always did.** The sentence the planner is given for a read that was kept back is the same in every
+mode and says nothing about what decided. Where the mode is bypass and auto-vetting is on, nobody
+was asked and a check's word answered, so the person is also told, beside the refusal, that
+auto-vetting kept the read back, that bypass refuses what a check objects to or cannot assess, and
+which setting lifts it (`off` in `~/.bravebot/vetting`, with `--vet` not passed). This is said for a
+`vet_content` refusal, a `read_output` refusal and a `run` that passed `read: true` and was not
+handed its output ([RUN-22](tools/run.md#RUN-22)). The condition is the mode and the setting the
+session started with, never the word, the sentence or a byte of the content, so an unsafe word and
+a check that could not be made read alike, and the line is for the person only: it is in no tool
+result. Where a person was asked and said no, nothing is added.
 
 `verified-by: bravebot_core::policy::what_a_check_says_is_as_untrusted_as_what_it_read`
 `verified-by: bravebot_core::policy::the_trail_records_the_verdict_and_never_the_reason`
@@ -406,6 +423,16 @@ prompt appearing has to be readable at the moment they wonder why. That is the r
 [permission-modes.md](permission-modes.md)'s own modes follow, and a session that is asking says
 nothing, since a line reporting the ordinary state is a line people learn to skim.
 
+**Entering bypass with the mode on says what bypass refuses.** Bypass puts no prompt to anybody, so
+with the mode on a read a check does not pass is refused and never asked about
+([CHECK-12](#CHECK-12)), and the line above says only that a check that finds nothing reads without
+asking. One more line says so, with the same wording on every surface: in the terminal when the key
+steps from another mode into bypass, and at the top of a session that opened in bypass with
+`--dangerously-skip-permissions`; in the plain client and on the other command-line path, after
+the notice that permissions are skipped ([CLI-15](cli.md#CLI-15)). It is not said on the other steps
+of the key, on leaving bypass, or with the mode off, and the desktop window has no line because it
+cannot enter bypass. The condition is the mode and the setting, which are the person's own choices.
+
 **The settings key is read from the home layer and no other.** A project `.bravebot/settings.json`
 naming it, a machine-local one, and a file the command line named are each reported by `doctor` and
 not obeyed. Every other name in those files configures where a request goes or how the interface
@@ -442,6 +469,13 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 `verified-by: bravebot_ui_bridge::vetting::a_session_says_auto_vetting_is_off_when_nobody_turned_it_on`
 `verified-by: bravebot_ui_bridge::vetting::a_checkout_cannot_have_a_session_open_with_auto_vetting_on`
 `verified-by: bravebot_ui_bridge::vetting::auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_on_says_what_bypass_refuses`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_off_says_nothing_extra`
+`verified-by: bravebot_tui::state::leaving_bypass_and_other_steps_say_nothing_about_vetting`
+`verified-by: bravebot_tui::state::a_session_opened_in_bypass_with_auto_vetting_says_what_bypass_refuses`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 
 <a id="CHECK-12"></a>
 ### CHECK-12: with it on, a safe verdict promotes one slot, and nothing else does
@@ -454,11 +488,39 @@ apart on the screen, because the reason for asking is different in the two cases
 
 A picture is answered the same way, on the first of the routes in the table below.
 
+**A run that asks to read is a third route.** A `run` that passes `read: true` ([RUN-22](tools/run.md#RUN-22))
+where screening is asked for makes the check `read_output` would make on its slot, in any mode, and a
+`safe` word releases the output in the result that ran it. It is the `read_output` promotion made a
+round early, so it is not a fourth kind of grant. Any other word, and a check that could not be made,
+keep the output back with no prompt drawn in any mode, including one that asks: the person is asked when
+the planner calls `read_output`. The planner is told that `read: true` did not return the output and
+nothing of the word. Under bypass nobody will be asked, so there the person is also told that
+auto-vetting kept the output back ([CHECK-9](#CHECK-9)); in a mode that asks, they are asked later
+and nothing is added.
+
+**An `unsafe` word is kept for the rest of the turn.** The turn keeps the slot of a check that said
+`unsafe`, and the `read_output` or `vet_content` that follows on that slot uses the word instead of
+making a second check ([OUTPUT-3](tools/read-output.md#OUTPUT-3), [VET-6](tools/vet-content.md#VET-6)).
+Where a person is asked, the prompt is drawn with the word and no sentence, because the reason a check
+wrote is never kept ([CHECK-9](#CHECK-9)). Where nobody is asked, the output stays refused as it would
+have after a second check. The trail says the word was reused, naming the slot and nothing the check
+wrote. A `safe` word is not kept, because the output was released with it. A check that could not be
+made and a check the person stopped are not kept either, because neither says anything about the
+content, so the next call makes its own check. The kept slots end with the turn.
+
+No check is made over a slot that holds no bytes, by this route or by
+`read_output`: there is nothing for a check to read, and the result says the run printed nothing
+([RUN-24](tools/run.md#RUN-24)). A check the person stopped is neither a word nor a check that could
+not be made: the turn ends as stopped with the output left quarantined and not refused
+([CHECK-16](#CHECK-16)).
+
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
 nothing to hand the question to. The bytes are kept back rather than promoted with a warning drawn on
 a screen nobody is reading, and the planner is told the slot was kept from it and nothing more. The
-same two prompts and no others: a vouch offer is not one of them here either.
+person is told what the planner is not: that auto-vetting kept it back and which setting lifts that
+([CHECK-9](#CHECK-9)), because the transcript would otherwise show a refusal with no sign of what
+made it. The same two prompts and no others: a vouch offer is not one of them here either.
 
 **It covers the promotions and not the rule.** The four prompts a check runs for divide two to two:
 
@@ -493,8 +555,9 @@ for did, it reads `1 line, read without asking or checking`. A person's answer l
 was, `1 line, read`. The trail tells the same three apart ([CHECK-8](#CHECK-8)), but only for
 somebody who opens it after the fact. The words on the row are the driver's, picked by which of the
 three answered, and nothing the check wrote is among them. A run that is handed what it printed in
-its own result ([RUN-22](tools/run.md#RUN-22)) makes no such call and leaves only its own row; the
-mode is the one thing that releases output there.
+its own result ([RUN-22](tools/run.md#RUN-22)) leaves its own row. Where the mode released the
+output no check is made. Where a check released it, the check is made at the run and announced as
+`read_output` announces it, and the trail credits the check ([CHECK-8](#CHECK-8)).
 
 What the mode never decides is anything but who answers. The slot is the planner's choice either
 way, the label is `(T,priv)` either way ([CHECK-7](#CHECK-7)), the endorsement is single-use either
@@ -527,6 +590,16 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
 `verified-by: bravebot_agent::turn::the_row_for_a_slot_a_person_let_through_names_no_check`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
+`verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
+`verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_for_no_verdict_says_the_same_to_the_person`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
+`verified-by: bravebot_agent::turn::read_output_does_not_check_again_a_slot_the_runs_read_found_unsafe`
+`verified-by: bravebot_agent::turn::read_output_checks_a_slot_the_runs_check_could_not_judge`
+`verified-by: bravebot_agent::turn::vet_content_does_not_check_again_a_page_the_fetchs_read_found_unsafe`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer
@@ -580,6 +653,11 @@ rather than as one: the round's phase does not change while a check runs, so it 
 the screen that is not what the session is waiting on, and it is what the surface goes back to
 saying once the check is over. A surface that is handed the pair and draws neither half leaves the
 finished-looking row that made the pair necessary.
+
+Where several checks are made at the same time, as the checks of a session's MCP tool lists are
+([SERVERS-8](mcp-servers.md#SERVERS-8)), the pair is still announced one check at a time: a check
+is announced as the turn begins to wait on it, in the order the questions are drawn, and announced
+as over when that wait ends.
 
 **Why.** A whole model call runs inside a tool call, and the verb already on the screen names the
 thing that has not happened yet: somebody watching `Read output` cannot tell a check that is working
@@ -671,6 +749,47 @@ What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.
 `verified-by: bravebot_agent::turn::a_pdf_a_person_lets_through_is_attached_as_a_file`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
 
+<a id="CHECK-16"></a>
+### CHECK-16: a check the person stopped gave no verdict, and nothing is decided about the content
+
+When the person stops the turn while a check's request is in flight, the check ends with no verdict.
+It is not inconclusive ([CHECK-4](#CHECK-4)): an inconclusive check is a failure to learn anything
+that still has to be answered, and a stop is the person ending the turn. This holds for every caller
+of a check, and what each does is the same:
+
+| The caller | What a stop does |
+|---|---|
+| `vet_content` and `read_output` | the call returns a result saying the turn was stopped before the check on that reference finished, so nothing was decided about it, and that it was not refused and can be asked for again |
+| the vouch offer in a read of a file | nobody is asked to vouch, no rule is written, and the next read of the file asks about it again |
+| a `run` that passes `read: true` ([RUN-22](tools/run.md#RUN-22)) | the output is left quarantined, nothing is returned from it, and the turn ends as stopped |
+| a server's tool list | the list is left unasked, and the next turn that lists the server asks about it again |
+
+In every row:
+
+- The trail records one line at the `vetting` gate saying the check was stopped before it finished
+  and gave no verdict. The line holds no verdict word, so a reader does not take it for a check that
+  objected or one that could not be made.
+- No prompt is put to the person, since the turn is over.
+- No refusal is recorded for the slot, the file or the list. The next turn can ask for the same
+  reference again, and the check is made again.
+- The turn ends as stopped, as it does for a stop at any other point.
+
+Only a stop the person made is treated this way. It is told apart from a failure by what the request
+ended with, which is the person's own action. A timeout, a backend error and a reply that cannot be
+read are still inconclusive and still fail closed.
+
+**Why.** Recording a stop as inconclusive would put a refusal on a slot the person never got to
+answer about, in a run where nobody is asked, and the reference would read as kept back for good. A
+stopped turn that still prompted would put a question to a person who had just ended the work.
+Neither branch reads a byte of the content or of the reply: what decides it is whether the request
+ended with the person's stop.
+
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_command_output_is_not_a_refusal`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_content_is_not_a_refusal`
+`verified-by: bravebot_agent::turn::a_stop_during_a_vouch_check_asks_nobody`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_during_the_check_on_the_list_leaves_it_to_be_asked_again`
+
 ## Known costs
 
 - **A quarantined slot's contents reach the backend, a second time.** A check is a model call, so
@@ -684,7 +803,9 @@ What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.
   in the confined conversation even where the person then says no, and the refusal keeps the bytes
   out of the planner rather than off the wire. That is a real widening of what a `read_file` on a
   quarantined path does, and it is the price of the person being told something before they answer.
-  It is bounded by the offer being made once per path per turn, by never being made for a picture
+  It is bounded by the offer being made once per path per turn (again after an answer thrown away
+  because the file changed or a program started while the question was open; each repeat is
+  answered by the person, or by the mode under bypass), by never being made for a picture
   or a directory, and by the confined conversation holding no tools, no memory and no destination.
 
 - **The check is a model, so it is wrong sometimes, in both directions.** A safe verdict on

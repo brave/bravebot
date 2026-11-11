@@ -955,6 +955,15 @@ pub fn put(
 
     let fresh = ask(settled.outstanding());
     session.note_closed_on_the_clock(&fresh);
+    // Drawn from what was put and what came back, and only where something came back: an
+    // interface that returned nothing could not ask (ASK-7), and a row saying every question was
+    // skipped would read as the person's choice (ASK-13).
+    if !fresh.is_empty() {
+        session.returned(bravebot_agent::settled::returned(
+            settled.outstanding(),
+            &fresh,
+        ));
+    }
 
     settled.finish(&mut session.answers, fresh)
 }

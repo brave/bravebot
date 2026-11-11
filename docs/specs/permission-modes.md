@@ -234,6 +234,11 @@ in the terminal ([CRED-13](credential-protection.md#CRED-13)). The yes writes no
 neither of the longer answers a person is offered is recorded by the mode. A value that declared
 itself is refused before the mode is reached, here as everywhere.
 
+**A read the credential scan flagged is answered too.** The question put before a flagged file
+reaches the planner ([credential-protection.md](credential-protection.md)) is answered yes here, and
+the trail names this mode as what answered it rather than recording a person's agreement
+([TRACE-7](trace.md#TRACE-7)).
+
 The two prompts that promote one slot's bytes are answered yes unless the run also asked for
 auto-vetting ([CHECK-11](vetting.md#CHECK-11)). Where it did, the check's word is what answers in the
 absent person's place, and a word that is not `safe` refuses: the alternative is promoting content a
@@ -241,7 +246,11 @@ check objected to, which is the one thing the screening was asked for to stop. R
 a check that did not complete gets as well as one that objected, because content has some influence
 over the call that reads it and an answer that promoted on a failure is an answer an attacker can
 reach. The planner is told the bytes were kept back and is told nothing about what decided that, as
-[CHECK-9](vetting.md#CHECK-9) requires of every route.
+[CHECK-9](vetting.md#CHECK-9) requires of every route. The person is told, beside the refusal, that
+auto-vetting kept it back, since in this mode nobody was asked and the transcript would otherwise
+show only the planner's sentence. That line is drawn from the mode and the setting and never from
+the word, so an unsafe word and a check that could not be made read alike; it is for the person
+only ([CHECK-9](vetting.md#CHECK-9)).
 
 **A release this mode made is recorded as this mode's.** The two promotions are the only answers
 here that are written into the audit trail as somebody's word about bytes, and where nothing
@@ -259,8 +268,8 @@ The two about trust are the ones that cost the most. Vouching is what lets a fil
 shown to the planner rather than held behind a reference, so in this mode every file the planner
 asks to read is shown to it, and the startup question grants that over the whole tree at once
 rather than a file at a time. A command's output still goes behind a reference, since a run approved
-here vouches for nothing, and where no screening was asked for a run that asks with `read` has it
-released in its own result ([RUN-22](tools/run.md#RUN-22)).
+here vouches for nothing, and a run that asks with `read` has it released in its own result where no
+screening was asked for, or where the check made for it finds nothing ([RUN-22](tools/run.md#RUN-22)).
 
 A run approved this way vouches for no program. The list of commands a person said to stop asking
 about is written into the session record and outlives the mode, and a record claiming somebody
@@ -276,6 +285,14 @@ filled in is the one that claims nothing. Where it asked for screening, the word
 promotion prompts, so the check is made there; the vouch offer and a server's list read no word in
 this mode whatever was asked for, so no check is made before either. This is the only exemption
 from that clause.
+
+**The trail names the mode for the vouch offer.** The bypassing mode answers the offer to vouch for a
+file without showing the person anything, so the trail records the mode's answer and not a person's
+([TRACE-7](trace.md#TRACE-7)): one `approval` entry that names the mode and says nobody was asked,
+and a `trust` entry that says the mode answered and the user did not name the file. No entry says the
+user was offered the chance, and none says the head of the file was shown. The mode reports its name
+with the answer, so the entry is written for the answer that was given, and a delegate lent the
+session's confirmer is recorded the same way ([MODE-9](#MODE-9)).
 
 **Why.** The mode is for a place where the blast radius is bounded by something other than these
 prompts, which in practice means a container with no network and nothing in it worth losing. It is
@@ -309,6 +326,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_for_no_verdict_says_the_same_to_the_person`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
@@ -325,6 +345,12 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
 `verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
 `verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
+`verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_a_flagged_read_and_no_other_mode_does`
+`verified-by: bravebot_agent::turn::a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_the_offer_to_vouch_and_no_other_mode_does`
 
 ## Choosing one
 
@@ -335,7 +361,11 @@ The key walks asking, accepting edits, planning, auto and bypassing, in that ord
 in every session. `--dangerously-skip-permissions` does not put the mode on the ladder; it opens the
 session in it. Without the flag a session opens asking and reaches bypass by pressing the key four
 times. Nothing is asked when it gets there: the line under the input box draws the mode in colour
-([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice.
+([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice, except where auto-vetting is
+on: the step that enters bypass then adds one line to the transcript, that a read a check does not
+pass is refused and not asked about ([CHECK-11](vetting.md#CHECK-11)). A session opened in bypass
+by the flag says the same line at its top when auto-vetting is on, and the plain and one-shot
+clients print it after the notice that permissions are skipped.
 
 The flag is taken out of the arguments before anything dispatches on it, so it composes with a
 bare invocation, `-p`, `--resume`, `--continue`, `--mode` and `--incognito` alike, and repeating it
@@ -368,7 +398,8 @@ Where the flag was given, moving the key off bypass does not leave the screen bl
 the input box and `/status` name asking, which they do for no session started without the flag: there
 asking is what has always happened, and here it is the answer to whether the session stopped skipping
 permissions. A session that reached bypass with the key draws nothing when it leaves, as it drew
-nothing before it entered. Leaving the mode prints nothing in the transcript.
+nothing before it entered, except the line above where auto-vetting was on. Leaving the mode prints
+nothing in the transcript, and neither does any other step of the key.
 
 **Why.** The key is pressed by a person looking at the line that draws the mode, so it is as much a
 choice as the flag is. Gating the key behind the flag would make a person who decides mid-session to
@@ -384,6 +415,13 @@ read and where the key is read, so the two cannot disagree about whether the mod
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::the_key_reaches_bypass_without_the_flag`
 `verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_on_says_what_bypass_refuses`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_off_says_nothing_extra`
+`verified-by: bravebot_tui::state::leaving_bypass_and_other_steps_say_nothing_about_vetting`
+`verified-by: bravebot_tui::state::a_session_opened_in_bypass_with_auto_vetting_says_what_bypass_refuses`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 `verified-by: bravebot_tui::app::a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away`
 `verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
 `verified-by: bravebot_tui::app::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`
@@ -428,9 +466,20 @@ The mode is the session's, and a turn reads it again at each decision rather tha
 prompt is sent. A mode chosen while a turn runs governs every question and every refusal the turn
 reaches after that, and the planner is told when the change matters to it: a change into plan mode
 repeats the plan-mode instruction, and a change out of it says the refusal has ended. A change
-between the other modes says nothing, as MODE-1 says nothing of them. An answer is credited in the
-trail to the mode the question was put in, so a mode chosen over a prompt already on screen does not
-take credit for the answer given to it.
+between the other modes says nothing, as MODE-1 says nothing of them. The system prompt of a turn
+says nothing for a mode other than plan, and a notice stays in the conversation after the turn that
+pushed it. The driver tags each such notice with whether it says plan mode is on, and the
+conversation reads whether plan mode was last told from the newest tagged notice still in its
+request, never from the words of a message. The first request of a later turn is compared against
+that: a turn that starts outside plan mode says the refusal has ended, and a turn that starts in
+plan mode says nothing more, since its system prompt says it. A notice that leaves the request takes
+what it said with it, so a compaction that moves it to the archive, a rewind to before it and a fork
+cut in front of it leave a turn with nothing to retract, and a cut that keeps a plan-on notice the
+parent later retracted leaves the child to retract it. The notices are part of the stored messages,
+so a resumed session is told the same; a record written before the tag existed has no tagged notice
+and carries the flag it stored. An answer is credited in the trail to the mode the question was put
+in, so a mode chosen over a prompt already on screen does not take credit for the answer given to
+it.
 
 **Why.** A person who presses the key while a turn runs is telling the session what they want from
 then on. A turn that kept the mode it began with would go on writing after the person pressed the
@@ -443,6 +492,25 @@ withdraw it.
 `verified-by: bravebot_agent::turn::an_answer_given_over_a_mode_change_is_not_credited_to_the_new_mode`
 `verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_out_of_plan_mode_is_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_started_outside_plan_mode_after_a_stopped_one_in_plan_mode_is_told_it_ended`
+`verified-by: bravebot_agent::turn::a_turn_started_outside_plan_mode_after_a_finished_one_in_plan_mode_is_told_it_ended`
+`verified-by: bravebot_agent::turn::plan_mode_ending_is_said_to_the_planner_once`
+`verified-by: bravebot_agent::turn::a_turn_started_in_plan_mode_after_a_notice_of_plan_mode_is_told_nothing_more`
+`verified-by: bravebot_agent::turn::a_turn_started_in_another_mode_than_the_last_one_outside_plan_mode_is_told_nothing`
+`verified-by: bravebot_agent::turn::a_turn_after_a_compaction_that_removed_the_plan_notice_is_not_told_it_ended`
+`verified-by: bravebot_agent::turn::a_turn_after_a_compaction_that_kept_the_plan_notice_is_told_it_ended`
+`verified-by: bravebot_ui_bridge::fork::a_cut_leaves_the_child_recording_that_its_last_plan_mode_notice_said_plan_mode_is_on`
+`verified-by: bravebot_ui_bridge::fork::a_cut_that_takes_the_plan_mode_notice_away_leaves_the_child_with_nothing_to_retract`
+`verified-by: bravebot_ui_bridge::fork::a_cut_that_keeps_a_plan_mode_notice_the_parent_later_retracted_leaves_the_child_to_retract_it`
+`verified-by: bravebot_ui_bridge::fork::a_cut_inside_the_archive_reads_the_notices_it_puts_back`
+`verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_that_its_last_notice_said_plan_mode_is_on`
+`verified-by: bravebot_agent::conversation::a_tagged_notice_outranks_the_flag_an_untagged_record_stored`
+`verified-by: bravebot_agent::conversation::compacting_away_the_plan_mode_notice_leaves_nothing_to_retract`
+`verified-by: bravebot_agent::conversation::compacting_around_the_plan_mode_notice_keeps_it_to_be_retracted`
+`verified-by: bravebot_agent::conversation::the_newest_mode_notice_decides_whether_plan_mode_is_on`
+`verified-by: bravebot_agent::conversation::restoring_an_earlier_snapshot_reports_what_its_messages_said`
+`verified-by: bravebot_agent::conversation::taking_a_turn_back_leaves_the_plan_mode_notice_and_what_it_said`
+`verified-by: bravebot_tui::undo_tests::undoing_a_turn_that_went_into_plan_mode_leaves_no_plan_mode_to_retract`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
 `verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
@@ -507,12 +575,12 @@ directories that sitting held, since the mode answered for them ([TRUST-6](trust
 `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
 
 <a id="MODE-11"></a>
-### MODE-11: the desktop offers asking, accepting edits and planning, one mode per open session
+### MODE-11: the desktop offers asking, accepting edits, planning and auto, one mode per open session
 
-The desktop window offers three of the five modes: asking, accepting edits and planning. Auto and
-bypassing are not among them and no request reaches either. The window has no command line for the
-flag in MODE-5 to be given on, so a request naming either is refused rather than read as another
-mode.
+The desktop window offers four of the five modes: asking, accepting edits, planning and auto
+([AUTO-1](auto-mode.md#AUTO-1)). Bypassing is not among them and no request reaches it. The window
+has no command line for the flag in MODE-5 to be given on, so a request naming it is refused rather
+than read as another mode.
 
 The mode belongs to one open session, and every session opens asking, a resumed session and a fork
 included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
@@ -527,6 +595,7 @@ again.
 
 `verified-by: bravebot_ui_bridge::permission_mode::every_way_of_opening_a_session_opens_asking`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_cannot_choose_to_bypass_every_check`
+`verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::planning_writes_nothing_and_asks_nothing_about_a_write`
 `verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`

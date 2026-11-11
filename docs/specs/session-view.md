@@ -22,7 +22,8 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 ## Scope
 
 The opt-in Rust display view for fresh local bridge sessions, and the standalone TypeScript client
-that applies it over stdio. The view has no listener, native binding, recovery, or controller
+that applies it over stdio, or in development over the loopback relay that
+[local-host.md](local-host.md) describes. The view has no listener, native binding, recovery, or controller
 model. The view does not grant authority. Exact action targets (RPCVIEW-6) apply to every client of
 the bridge, and RPCVIEW-8 states what the local channel they arrive on is. A client that names no
 turn in a cancel stops whatever is running.
@@ -34,7 +35,7 @@ turn in a cancel stops whatever is running.
 
 `agent.info` and `agent.ready` advertise `capabilities.sessionView`: version 1, the
 `session.view.start` operation, `fresh_session` scope, the four supported approval kinds
-(`confirm`, `run`, `fetch`, `ask`), and `reconnect: false`. A client requiring the view checks this
+(`confirm`, `run`, `fetch`, `ask`), `resync: "session.view.resync"` and `retainedRows` (RPCVIEW-9). A runtime from before RPCVIEW-9 advertises `reconnect: false` in place of the last two. A client requiring the view checks this
 field and refuses an absent or unsupported version; it must not infer the view from legacy events.
 
 `session.view.start` requires a session handle and version 1. It works once, before a fresh
@@ -72,7 +73,7 @@ use the same tag-only projection as saved history. Narration, quarantined previe
 and finishes, approvals, and terminal replies/errors produce rows. Other legacy events, including
 audit, token counts, todos and phases, are outside version 1's transcript.
 
-The engine gives a call no identity, so a tool finish replaces the row of the latest call still running, keeping its ID and position, and a call is one row. No content of a call decides which row that is, because a call's target can be content from outside. Two calls in flight therefore pair by arrival order, and a finish that is not for the latest call lands on the wrong row. A finish with no call running produces a row of its own. A turn's end forgets the calls it left running.
+The engine gives each dispatch an id, `call`, from a counter, carried on both its start and its finish ([phase-0 Activity](../../ui/docs/phase-0-rpc-protocol.md)). A tool finish replaces the row of the running call with the same id, keeping its ID and position, so a call is one row in whichever order overlapping calls finish. No content of a call decides which row that is, because a call's target can be content from outside. A finish whose id names no running call, or that has no id, produces a row of its own. A turn's end forgets the calls it left running.
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Terminal updates clear pending approvals. Completion publication and next-turn
@@ -80,13 +81,14 @@ eligibility share the emitter lock, so the next turn cannot publish ahead of the
 Closing a session detaches and removes its view; `detached` says nothing about worker termination,
 save success, or rollback. EOF retains the existing process-ending behavior.
 
-The bridge retains only current view metadata and the pending payload. Clients retain transcript rows. There is no history snapshot, late subscription, reconnect, or resynchronization operation on the stdio transports. Connection loss or a sequence gap ends the view; a client must not claim recovered history. The local host's `session.attach` ([HOST-11](local-host.md#HOST-11)) gives a client that takes a session over its current status with no rows and says the history is omitted.
+The bridge retains current view metadata, the pending payload and the most recent rows (RPCVIEW-9). A snapshot of them is sent on request and to a client that takes a session over with the local host's `session.attach` ([HOST-11](local-host.md#HOST-11)). There is no incremental replay or late subscription. Connection loss ends the view, and a client must not claim recovered history.
 
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
 `verified-by: bravebot_ui_bridge::emit::completion_is_eligible_before_publication_and_precedes_the_next_turn`
 `verified-by: bravebot_ui_bridge::view::failures_have_authoritative_terminal_status`
 `verified-by: bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends`
+`verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_under_an_id_of_its_own`
 `verified-by: bravebot_ui_bridge::wire::accepted_composed_prompts_cross_without_their_text`
 `verified-by: bravebot_ui_bridge::view::a_terminal_update_clears_the_question_still_waiting`
 
@@ -173,14 +175,13 @@ repeated trust answer, and a client talking to one must not claim the stronger p
 <a id="RPCVIEW-5"></a>
 ### RPCVIEW-5: the TypeScript client applies the view and decides nothing
 
-`packages/agent-client` is the stdio client. Its wire types are checked against the Rust types
+`packages/agent-client` is the stdio client. Its `./dev-relay` export carries the same client over the development relay that [local-host.md](local-host.md) describes, and these rules hold there too. Its wire types are checked against the Rust types
 through a contract file that a Rust test writes and compares. The client requires the advertised
 capability and refuses a runtime that lacks version 1, before it creates a session. It starts the
 view itself and never builds one from legacy events.
 
 It applies each update by replacing the listed rows at their positions and replacing every status
-field. A sequence that is not the next one, a malformed update, or the end of the connection ends
-that view at its last received state; it claims no recovery. It reports a close as a detached view
+field. A sequence that is not the next one asks for a snapshot (RPCVIEW-9) when the runtime offers one. Until the snapshot arrives, the view keeps its last received state, ignores updates, and refuses replies and sends without sending them. A gap the runtime cannot resynchronize, a refused resync, a resync answered before its snapshot, a malformed update, or the end of the connection ends that view at its last received state; it claims no recovery. It keeps at most `retainedRows` rows, the most recent, and counts the rest as omitted, as a snapshot does. It also leaves out the rows an update's `omitted` counts, and a lower count than it holds brings none back. It reports a close as a detached view
 with worker termination and save success unknown. A failed close keeps the session registered for
 view updates and connection-loss reporting, unless the bridge reports that the session is gone. Sessions open only in configured workspace ids, and a
 request unanswered past its deadline ends the connection with its outcome unknown. A failed request
@@ -223,7 +224,7 @@ The launcher takes the program and its arguments from the person's own configura
 
 The bridge starts hooks, the `run` tool, shell-mode commands, language servers, the AWS CLI and its probes with null, piped or file standard streams, so none hands a program it starts the channel. A descriptor of the channel that reached a tool would let it read what the person sends or put lines into what the person reads, and is a defect.
 
-Three limits belong to the launcher and the bridge. First, creating a socket pair is not one atomic step on every system: macOS marks the descriptors close-on-exec in a second step, so a process another thread starts in between inherits them and the bridge hands them on to its tools. The creation of a channel (`bravebot_sandbox::process::creating_a_channel`) and every start of a program by a crate the bridge links (`starting_a_program`) therefore take one gate, one at a time: a start creates the pipes of its own standard streams inside `spawn`, so two starts overlapping could leave one holding the other's pipe ends. The gate is held until the program has started, because the standard library offers no narrower point. It is not reentrant, and entering it again panics. The pipes the agent makes for a stage's standard streams are made under the same gate. A host that starts programs another way takes it too. A descriptor the process was started with and that is not close-on-exec, such as a socket a CI runner leaves open, reaches every program it starts. Descriptors made in two steps outside the gate, such as the TCP and TLS sockets to a model endpoint, are not covered: a program started in the window can inherit one, and because the non-dumpable mark does not survive `execve`, a tool holding a leaked descriptor can be inspected. Second, on Linux a pipe can be reopened by path through `/proc/<pid>/fd` by the same user and a socket cannot, so a launcher uses a socket pair, as the child processes of Node do. Third, on Linux a process of the same user can copy a descriptor out of the bridge with `pidfd_getfd`, or attach with `ptrace`, when the kernel's ptrace policy allows it, so each binary that speaks over its own standard input and output (`bravebot-rpc` and `bravebot-acp`) marks itself non-dumpable at startup (`inspection::refuse_same_user_inspection`) and says on standard error when that fails. The protection takes effect when `main` begins, so a process already positioned to act before that is outside the claim. A host that enables control of real sessions reads that outcome and treats a failure to set the mark on Linux as the channel not being safe. The mark also stops the developer who started the bridge from attaching `strace` or `gdb` to it and makes its `/proc/<pid>` entries belong to root; a debugger has to be started with the bridge, or run with `CAP_SYS_PTRACE`. A debugger on macOS, or a process with the same user's rights to read another process's memory by other means, is outside this clause. Windows is not covered. The `pidfd_getfd` attack counts only where it also works against a process of the same user that did not refuse it and that, like the bridge, is not a descendant of the attacker. Elsewhere the test says the attack was not exercised, and passes.
+Three limits belong to the launcher and the bridge. First, creating a socket pair is not one atomic step on every system: macOS marks the descriptors close-on-exec in a second step, so a process another thread starts in between inherits them and the bridge hands them on to its tools. The creation of a channel (`bravebot_sandbox::process::creating_a_channel`) and every start of a program by a crate the bridge links (`starting_a_program`) therefore take one gate, one at a time: a start creates the pipes of its own standard streams inside `spawn`, so two starts overlapping could leave one holding the other's pipe ends. The gate is held until the program has started, because the standard library offers no narrower point. It is not reentrant, and entering it again panics. The pipes the agent makes for a stage's standard streams are made under the same gate. A host that starts programs another way takes it too. A descriptor the process was started with and that is not close-on-exec, such as a socket a CI runner leaves open, reaches every program it starts. Descriptors made in two steps outside the gate, such as the TCP and TLS sockets to a model endpoint, are not covered: a program started in the window can inherit one, and because the non-dumpable mark does not survive `execve`, a tool holding a leaked descriptor can be inspected. Second, on Linux a pipe can be reopened by path through `/proc/<pid>/fd` by the same user and a socket cannot, so a launcher uses a socket pair, as the child processes of Node do. Third, on Linux a process of the same user can copy a descriptor out of the bridge with `pidfd_getfd`, or attach with `ptrace`, when the kernel's ptrace policy allows it, so each binary that speaks over its own standard input and output (`bravebot-rpc` and `bravebot-acp`) marks itself non-dumpable at startup (`inspection::refuse_same_user_inspection`) and says on standard error when that fails. The protection takes effect when `main` begins, so a process already positioned to act before that is outside the claim. A host that enables control of real sessions reads that outcome and treats a failure to set the mark on Linux as the channel not being safe. The mark also stops the developer who started the bridge from attaching `strace` or `gdb` to it and makes its `/proc/<pid>` entries belong to root; a debugger has to be started with the bridge, or run with `CAP_SYS_PTRACE`. A debugger on macOS, or a process with the same user's rights to read another process's memory by other means, is outside this clause. Windows is not covered. The `pidfd_getfd` attack counts only where it also works against a process of the same user that did not refuse it and that, like the bridge, is not a descendant of the attacker. Where the kernel's ptrace policy refuses it against every such process (Yama `ptrace_scope` 1 or above), the test says the attack was not exercised, and passes. Where it does not (`ptrace_scope` 0, or no Yama), the test fails unless an attacker a hook started copied from that process and nothing from the bridge. An attacker an approved command started is confined, and on Linux the confinement refuses `pidfd_getfd` against every process, so its run is not held to this.
 
 `verified-by: bravebot_ui_bridge::control_boundary::a_program_a_hook_leaves_running_cannot_reach_the_channel`
 `verified-by: bravebot_ui_bridge::control_boundary::a_program_an_approved_command_leaves_running_cannot_reach_the_channel`
@@ -246,4 +247,51 @@ Three limits belong to the launcher and the bridge. First, creating a socket pai
 `verified-by: bravebot_agent::spawn_gate::a_usability_stage_waits_for_a_channel_being_created`
 `verified-by: bravebot_agent::spawn_gate::the_login_probe_waits_for_a_channel_being_created`
 `verified-by: bravebot_ui_bridge::control_boundary::copying_nothing_out_of_the_bridge_proves_nothing_where_the_attack_never_worked`
+`verified-by: bravebot_ui_bridge::control_boundary::the_attack_must_work_where_the_kernel_lets_a_process_reach_its_peers`
 `verified-by: bravebot_sandbox::inspection::a_failed_remedy_is_said_with_its_error`
+
+<a id="RPCVIEW-9"></a>
+### RPCVIEW-9: a snapshot holds the most recent rows and says how many it leaves out
+
+The view keeps its current state and its most recent rows, at most `retainedRows` (256) and at most 4 MiB of them as serialized JSON. A row an update sends is kept whatever its length unless the rows kept that the update does not send already exceed 4 MiB, so a client keeps a long row it is sent, and one that asks straight after a long reply is sent it. A sent row that is older than more than 4 MiB of other rows is dropped with them and counted in `omitted`. The rows kept are therefore never more than 4 MiB and the rows of the latest update. Only each row's serialized length is measured: no payload is read, compared or altered to decide what is kept, and the length decides only how many of the oldest rows are dropped. Each update carries `omitted`, the count of rows from the first that the view no longer keeps, and a client leaves those out too, so it holds what a snapshot at the same sequence holds without measuring anything. A row that falls out of the bound is not kept again when it changes. The update that changes it is still sent, with its id. The pending question is kept whole outside the rows, so a question whose row has fallen out can still be shown and answered. Approval resolutions are kept as rows with `resolved` set, under the same bound.
+
+`session.view.resync` takes a session handle and answers `{ "version": 1, "sequence": n, "omitted": k }` for an open session that has a view, after sending `session.view.snapshot`. A snapshot has the shape of an update, with the retained rows in id order, and `omitted`, how many rows before the first it leaves out. Because row ids count from 1, those are ids 1 to `omitted`. The snapshot is written under the lock every update takes, so each later update has the next sequence after the snapshot's, and applying them leaves a client holding what a later snapshot holds. A session whose startup question is unanswered sends `trust.request` again after the snapshot. A resync grants nothing and answers nothing: a question is answered only by its reply.
+
+`verified-by: bravebot_ui_bridge::view::a_snapshot_keeps_the_most_recent_rows_and_the_question_waiting`
+`verified-by: bravebot_ui_bridge::view::a_view_keeps_its_most_recent_rows_within_a_byte_budget_and_says_how_many_it_left_out`
+`verified-by: bravebot_ui_bridge::view::a_row_larger_than_the_byte_budget_is_kept_only_while_it_is_the_newest`
+`verified-by: bravebot_ui_bridge::view::a_row_larger_than_the_byte_budget_is_dropped_by_an_update_that_does_not_send_it`
+`verified-by: bravebot_ui_bridge::view::a_row_replaced_by_a_later_state_counts_once_toward_the_byte_budget`
+`verified-by: bravebot_ui_bridge::view::a_long_later_state_of_an_older_row_is_kept_by_the_update_that_sends_it`
+`verified-by: bravebot_ui_bridge::view::rows_kept_stay_within_the_byte_budget_and_the_latest_update`
+`verified-by: bravebot_ui_bridge::control_tests::a_client_that_applies_the_updates_after_a_snapshot_holds_what_a_later_snapshot_holds`
+`verified-by: bravebot_ui_bridge::host_process::a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them`
+`verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
+`verified-by: by-construction (packages/agent-client/tests/client.test.ts recovers a missed update from a snapshot, refuses actions while one is awaited, and ends the view when a resync is refused or the runtime offers none; tests/view.test.ts bounds the rows, leaves out changes to omitted rows, and follows the omitted count an update carries; tests/wire.test.ts refuses one that is not a count)`
+
+<a id="RPCVIEW-10"></a>
+### RPCVIEW-10: every send carries a message id its client gave it
+
+`turn.send` takes a required `messageId`: 1 to 64 ASCII letters, digits, `-` or `_`. A request without one, or with any other value, is refused with `bad_request` before a turn starts, and the model is sent nothing. A client gives each Send action a new id. An id needs to be new only within its session handle: the ACP adapter numbers each session's prompts from `acp-1`, and a new handle starts again. The desktop window, the desktop's own bot and summoned turns, and the TypeScript client generate random ids. The local host offers `messageId` on `turn.send`. A turn a watch starts has no client and carries no id. What the bridge does with an id it has been sent before is RPCVIEW-11.
+
+`verified-by: bravebot_ui_bridge::host_process::a_send_without_a_message_id_is_refused_before_a_turn_starts`
+`verified-by: bravebot_ui_bridge::wire::a_message_id_is_a_short_ascii_word_and_is_required`
+`verified-by: by-construction (packages/agent-client/tests/client.test.ts checks that two sends carry two ids of the accepted shape; ui/scripts/summons.test.mjs checks the same for a summoned turn and ui/scripts/sanitise.test.mjs that a window's id reaches the agent unchanged; the ACP suite sends every prompt through the bridge, which refuses one without an id)`
+
+<a id="RPCVIEW-11"></a>
+### RPCVIEW-11: a send repeated under its id is given the first answer, and a lookup says what that was
+
+The bridge records each `turn.send` of an open session under its `messageId`, with a SHA-256 digest of the request's parameters and the answer it was given: the `turn` and `target` it started, or the error that refused it. A send whose id is recorded starts no turn. When its parameters have the recorded digest it is given the recorded answer again, and when they differ it is refused with `bad_request`. A refusal is recorded as an acceptance is, `turn_in_flight` included, so a client that sends again after one gives the new send a new id. A send refused before its session is found, for a `messageId` that is not one or a handle the bridge does not have, is not recorded. Every refusal after that is recorded, except the refusal of other parameters under a recorded id and the refusal at the limit below, which leave the record as it was. Only the digest is kept, so a long prompt or a pasted picture holds no memory in the record. The parameters are the request the person's own client sent, the bytes the turn would start from, so comparing their digest is not a decision taken from untrusted content.
+
+A session records at most 4096 sends. A send with a new id past that is refused with `bad_request` before a turn starts, and no record is dropped to make room, so an id a client may send again is never forgotten. A lookup of an id refused at the limit answers `not_received`. Records last while the session is open and are not saved: a resume or a fork is a new handle with none. A rewind keeps the handle and its records, so a lookup can answer with a turn number the rewind has since given to a later turn. Its `target` is never given out twice.
+
+`turn.lookup` takes `session` and `messageId`. It answers `{ "state": "accepted", "turn": n, "target": t }`, `{ "state": "refused", "error": { "code": c, "message": m } }`, or `{ "state": "not_received" }` when the session has no record of the id. The answer does not depend on the view's rows, so a send whose row has been dropped is still found. It says whether a turn started, not how the turn ended, which the view and the turn's events say. A handle the bridge does not have is refused with `no_such_session`, which is what a lookup gets after the bridge restarts or the session closes, so a client takes that as unknown and never as not sent. The bridge serves one request at a time and records a send before its answer is written, so no lookup finds a send part-way through. A send still on its way when a lookup answers `not_received` is answered from the record of the retry that follows. The local host offers `turn.lookup` to the client that controls the session.
+
+`verified-by: bravebot_ui_bridge::host_process::a_send_repeated_under_its_id_runs_one_turn_and_a_lookup_says_what_it_was_given`
+`verified-by: bravebot_ui_bridge::dispatch::a_send_refused_under_an_id_is_refused_again_under_it`
+`verified-by: bravebot_ui_bridge::sends::an_accepted_send_answers_again_and_other_parameters_are_refused`
+`verified-by: bravebot_ui_bridge::sends::a_refused_send_is_refused_again_and_looked_up_as_refused`
+`verified-by: bravebot_ui_bridge::sends::a_new_send_past_the_limit_is_refused_and_no_record_is_dropped`
+`verified-by: bravebot_ui_bridge::sends::a_repeat_with_its_keys_in_another_order_is_the_same_send`
+`verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`
+`verified-by: by-construction (crates/ui-bridge/src/sends.rs holds no rows, and turn.lookup in crates/ui-bridge/src/bridge.rs reads the record alone and not the view)`

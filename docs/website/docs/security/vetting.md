@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Vetting quarantined content
-description: A second model reads quarantined content and reports what it found, so you have an opinion in front of you before you decide.
+description: Vet quarantined text, pictures, PDFs and browser pages with a second model, read its advisory verdict, approve promotion and configure auto-vetting and its limits.
 ---
 
 # Vetting quarantined content
@@ -60,13 +60,40 @@ reference is the only field that decides anything, and you are shown the bytes b
 you approve is the field the call turns on.
 
 That sentence is drawn on the prompt so you can see why the planner wants this, and it is sent to the
-check so a page can be judged against what it was supposed to be. It must not be private: your own data
-must not become another model's prompt. Where the content came from is said in Brave Bot's words, as a
+check so a page can be judged against what it was supposed to be. It may be private. The check is a
+request to the model the session runs on, and that model is shown the page whole, so the sentence adds
+nothing to what it is sent. Where the content came from is said in Brave Bot's words, as a
 path, a URL or a command, because a reference name means something to the planner and nothing to you.
 
-It refuses a reference to nothing, a private sentence, and a call from a delegate. A reference to a file
+It refuses a reference to nothing and a call from a delegate. A reference to a file
 nothing has read yet is opened rather than refused, since naming one is the ordinary way for the planner
 to ask about a file it may not read.
+
+### Asking for the result in the same call
+
+A `fetch_url` call, and a call to a tool of an [MCP server](../customize/mcp-servers.md), can carry
+`read: true`. It asks for the result in the result of the call, without a `vet_content` call after it.
+The argument is offered only to a session that is offered `vet_content`, so a delegate or a definition
+that leaves the tool out is not offered it. A server that lists an argument named `read` of its own
+keeps it: that argument is the server's, is sent to it as written, and does not ask for anything here.
+
+The content is quarantined as it always is, then released by the same path `vet_content` uses, with
+the same label and the same audit entry, and the reference it was kept under comes back beside it.
+That happens in two cases:
+
+- Permissions are bypassed and screening was not asked for. Nobody is asked and no check is made.
+- Auto-vetting is on and the check says `safe`. The check is made at the call and is announced and
+  counted like one made for `vet_content`.
+
+In every other case the content stays behind its reference and the result says the argument did not
+return it. That includes any other word from the check and a check that could not be made, and it
+names neither. Nobody is asked at the call. Where you answer `vet_content` yourself, `read` changes
+nothing: you are asked only if the planner calls `vet_content`. A picture is never released this way,
+content longer than one result may hold stays behind its reference with the reason, and content of
+zero bytes is reported as empty without a check. `read` must be `true` or `false`, and a call that
+gives anything else is refused before it is made. Asking this way saves the model round a
+`vet_content` call would have cost. [`run`](../reference/run-tool.md#reading-the-output-in-the-same-result)
+has the same argument for a program's output.
 
 ## A picture or a PDF
 
@@ -95,7 +122,7 @@ page. The model is handed a reference that names its type and size, and nothing 
 are shown two rows behind the margin, under the label, and not the first lines of its base64:
 
 ```
-  ┃ untrusted · what weather:get_forecast returned · (U,priv)
+  ┃ untrusted · what weather:get_forecast returned with no failure reported · (U,priv)
   ┃ a picture, image/png, 20480 bytes, held as ref:2 and kept from the model
   ┃ Ask the model to write it to a file you can open, or to use vet_content on it, which asks you
   ┃ about a copy of it before the model sees it.
@@ -170,6 +197,14 @@ would be a model call whose word nobody reads, so the verdict is filled in as in
 nothing. That holds when the run asked for no screening. With `--vet` the check is made on the two
 prompts that release one slot, because its word is what answers.
 
+With auto-vetting on, bypassing keeps back a read the check does not pass and asks nobody. The
+planner is told only that the bytes were kept back. You are also told, as a line of your own beside
+the refusal, that auto-vetting kept it back and which setting lifts that; the line comes from the
+mode and the setting and never from what the check said. The same sentence is shown once when
+bypassing is entered with auto-vetting on: by the Shift-Tab step into it, at the top of a session
+started with `--dangerously-skip-permissions`, and after the notice that permissions are skipped in
+`--plain` and `-p` runs. It is not shown on leaving bypassing or on the other steps of the key.
+
 A check takes a moment, so the interface says when one begins, with how many lines it was given (or
 that it is a picture or a PDF), and says when it is over, including when it ended in a failure. The
 notice carries nothing of the content and nothing of the verdict.
@@ -179,6 +214,11 @@ notice carries nothing of the content and nothing of the verdict.
 A reply states `safe` or `unsafe`. Any other word, a reply stating no verdict, a truncated reply or one
 that leaves an object open, a timeout and a backend error are all **inconclusive**, which says nothing about the content. It fails
 closed on every path: a check that half worked lands where a check that did not run lands.
+
+A stop is the one failure that is not inconclusive. If you stop the turn while a check is running, the
+check gives no verdict, nobody is asked, and nothing is refused. The reference stays as it was and the
+model can ask for it again in the next turn. The [audit trail](audit-trail.md) records that the check
+was stopped before it finished.
 
 The three outcomes are told apart on your screen. "This looks like an attempt to give instructions" and
 "nothing looked at this" are different facts about different risks.
@@ -293,7 +333,8 @@ asking or checking".
 - **A read of a quarantined file now sends the file, before anybody has agreed to anything.** The check in
   front of the vouch prompt reads the whole file, so reading a path nobody vouched for puts those bytes on
   the wire even where you then say no. Refusing keeps the bytes out of the planner rather than off the
-  wire. It is bounded by the offer being made once per path per turn, never for a picture or a directory,
+  wire. It is bounded by the offer being made once per path per turn (again after an answer thrown away
+  because the file changed while you were answering), never for a picture or a directory,
   and by the checking conversation holding no tools, no memory and no destination.
 - **The check is a model, so it is wrong sometimes, in both directions.** A safe verdict on content that
   is an attack draws the quiet banner under bytes you still read; an unsafe verdict on an ordinary page

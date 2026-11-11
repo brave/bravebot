@@ -18,10 +18,11 @@ pub(super) fn named_home(named: &str) -> bool {
 ///
 /// Only a whole first component counts, so `~notes/x` stays a relative path (CMD-5). A machine
 /// naming no home refuses the `~` rather than reading it as a directory named `~` (CMDLINE-4).
-pub(super) fn expand_home(
-    named: &str,
-    home: Option<&Path>,
-) -> Result<Option<PathBuf>, &'static str> {
+///
+/// Exported for a caller outside this crate that wants the same reading of `~` a file tool gets,
+/// such as the terminal's `/cd` and `/add-dir` (CMDLINE-4): one function, so a `~` the person
+/// types and a `~` the planner writes in a command line cannot come to resolve apart.
+pub fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'static str> {
     if !named_home(named) {
         return Ok(None);
     }
@@ -307,13 +308,28 @@ impl Workspace {
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve_with_home(relative, self.home.as_deref())?;
-        if self.in_the_stores(&resolved) {
+        if self.in_the_stores(&resolved) || self.spelled_in_the_stores(relative) {
             return Err(WorkspaceError::Escapes {
                 path: relative.to_string(),
                 remedy: Remedy::Nothing,
             });
         }
         Ok(resolved)
+    }
+
+    /// Whether `relative`, as it is spelled and before any link in it is followed, is in a store or
+    /// is the home rules file under some spelling of its name (RECALL-8).
+    ///
+    /// [`Workspace::in_the_stores`] is asked of where a name lands, so a link named `agents.md`
+    /// that leads elsewhere lands outside the stores on a volume that tells `agents.md` and
+    /// `AGENTS.md` apart. The spec refuses the link by its name, and this is that test. Only the
+    /// typed name is compared with the store names, so nothing a file holds is read.
+    fn spelled_in_the_stores(&self, relative: &str) -> bool {
+        let Ok(expanded) = self.spelled(relative, self.home.as_deref()) else {
+            return false;
+        };
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
+        self.in_the_stores(&self.root.join(candidate))
     }
 
     /// The directories under `state` that hold the person's facts and rules, as a path lands on
@@ -349,6 +365,7 @@ impl Workspace {
     #[must_use]
     pub(crate) fn with_state(mut self, state: &Path) -> Self {
         self.stores = Self::refused_in(state);
+        self.state = Some(state.to_path_buf());
         self
     }
 
@@ -427,7 +444,7 @@ impl Workspace {
         for component in candidate.components() {
             match component {
                 Component::ParentDir => {
-                    return Err(Self::refuse_climb(relative));
+                    return Err(self.refuse_climb(candidate, relative));
                 }
                 Component::Prefix(_) | Component::RootDir => {
                     return Err(WorkspaceError::Invalid {
@@ -502,7 +519,7 @@ impl Workspace {
             .components()
             .any(|c| matches!(c, Component::ParentDir))
         {
-            return Err(Self::refuse_climb(named));
+            return Err(self.refuse_climb(candidate, named));
         }
 
         refuse_misleading_names(candidate, named, true, cfg!(windows))?;
@@ -629,7 +646,11 @@ impl Workspace {
             resolved.parent()
         };
         if let (Some(directory), Some(home)) = (to_open, self.home.as_deref())
-            && bravebot_sandbox::rules::inside_a_credential_location(directory, home)
+            && bravebot_sandbox::rules::inside_a_credential_location(
+                directory,
+                home,
+                self.state.as_deref(),
+            )
         {
             return if itself {
                 Remedy::Nothing
@@ -691,11 +712,23 @@ impl Workspace {
     }
 
     /// The refusal of a path with a `..` that [`Workspace::climb_lands`] does not take out.
-    /// Nothing is offered, since no directory a person opens makes such a path reach its file.
-    fn refuse_climb(named: &str) -> WorkspaceError {
+    ///
+    /// A path whose `..` is taken out of the text and lands inside the root does not leave the
+    /// workspace, and the relative spelling without the `..` reaches its file, so the planner is
+    /// told that ([`Remedy::InsideClimb`]). Any other is offered nothing, since no directory a
+    /// person opens makes such a path reach its file.
+    fn refuse_climb(&self, candidate: &Path, named: &str) -> WorkspaceError {
+        let remedy = if self
+            .climbed(candidate)
+            .is_some_and(|lands| lands.starts_with(&self.root))
+        {
+            Remedy::InsideClimb
+        } else {
+            Remedy::Nothing
+        };
         WorkspaceError::Escapes {
             path: named.to_string(),
-            remedy: Remedy::Nothing,
+            remedy,
         }
     }
 }

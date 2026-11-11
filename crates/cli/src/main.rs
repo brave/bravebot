@@ -30,16 +30,19 @@ mod progress;
 mod push_identity;
 mod reopen;
 mod sandbox_check;
+mod schedule;
 mod session_delete;
 mod session_import;
 mod session_search;
 mod sessions_list;
 mod shell_init;
+mod skill_eval;
 mod stats;
 #[cfg(unix)]
 mod supervisor;
 #[cfg(test)]
 mod test_support;
+mod trigger;
 mod update;
 mod usage;
 mod workspace;
@@ -62,8 +65,8 @@ use crate::flags::{
     without_a_definition, without_a_prompt_to_give, without_a_tool_set_to_limit,
 };
 use crate::invocation::{
-    Given, Invocation, input_lines_conflict, limit_not_with_a_goal, limit_not_with_a_manifest,
-    manifest_conflict, parse_invocation, prompt_to_open_on,
+    Given, Invocation, approve_input_lines_conflict, input_lines_conflict, limit_not_with_a_goal,
+    limit_not_with_a_manifest, manifest_conflict, parse_invocation, prompt_to_open_on,
 };
 use crate::model::{
     model_asked_for, model_for_this_run, model_not_served, nothing_serves,
@@ -92,6 +95,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Settled {
     as_json: bool,
     skip_permissions: bool,
+    /// The spelling of the bypass flag that was typed, for a refusal that names it. Meaningful only
+    /// where `skip_permissions` is true.
+    bypass_flag: &'static str,
     /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
     /// `--auto`), or `None` where neither was given and the run asks.
     starts_in: Option<bravebot_agent::PermissionMode>,
@@ -444,7 +450,11 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // Refused rather than ignored where there is no one-shot run to open in the mode: a session
     // has the mode key, and a line that asked for a run to write unasked and was started as
     // something that asks would leave its author believing the flag had been honoured.
-    if starts_in.is_some() && !is_a_one_shot(args, continues_with_a_task(args)) {
+    // `schedule add` is the one command that takes the mode of a run it starts later.
+    if starts_in.is_some()
+        && args.first().map(String::as_str) != Some("schedule")
+        && !is_a_one_shot(args, continues_with_a_task(args))
+    {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
@@ -458,12 +468,26 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     Ok(Settled {
         as_json,
         skip_permissions,
+        bypass_flag,
         starts_in,
         carried,
         agent,
         links,
         prompts,
     })
+}
+
+/// Leave out of the lookup for programs the directory this process ran in and the checkout
+/// holding it ([`bravebot_sandbox::programs::keep_out_with_checkout`]).
+///
+/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session until one records
+/// its directory. `main` calls this once for every command. Where the working directory cannot be
+/// read nothing is recorded: there is no directory to name, and a relative `PATH` entry is no more
+/// readable than the directory it is relative to.
+fn keep_out_where_this_ran() {
+    if let Ok(cwd) = std::env::current_dir() {
+        bravebot_sandbox::programs::keep_out_with_checkout(&cwd);
+    }
 }
 
 fn main() -> ExitCode {
@@ -484,6 +508,12 @@ fn main() -> ExitCode {
     // unusable. See CRED-23.
     let _ = bravebot_sandbox::crash::disable_core_dumps();
 
+    // Before any program is looked up, and so before the language is loaded and the command line is
+    // read, and for every command: a command that opens no session has no `Workspace::new` to
+    // record its directory, and a `bin` of the directory it ran in or of the checkout holding it,
+    // first on `PATH`, would be searched for the programs it starts. See SANDBOX-30.
+    keep_out_where_this_ran();
+
     // Before anything is printed, and exactly once: every later lookup reads what this settled
     // on. Nothing else in the tree consults the environment about a language. What the person
     // said is read here with it, ahead of the command line, since the first sentence the program
@@ -503,6 +533,7 @@ fn main() -> ExitCode {
     let Settled {
         as_json,
         skip_permissions,
+        bypass_flag,
         starts_in,
         carried,
         agent,
@@ -613,6 +644,15 @@ fn main() -> ExitCode {
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
         Some("stats") => stats::command(&args[1..]),
+        Some("schedule") => schedule::command(
+            &args[1..],
+            &schedule::Typed {
+                bypass: skip_permissions.then_some(bypass_flag),
+                starts_in,
+            },
+        ),
+        Some("skill") => skill_eval::command(&args[1..], skip_permissions.then_some(bypass_flag)),
+        Some("trigger") => trigger::command(&args[1..], skip_permissions),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
                 as_json,
@@ -735,8 +775,14 @@ fn open_link(
     if let Some(directory) = &placement.start_in
         && let Err(problem) = std::env::set_current_dir(directory)
     {
+        // Printed as it stands, without `progress::printable_lines` (LAYER-3): `set_current_dir`
+        // fails only with an `io::Error` the operating system made, whose text is the system's own
+        // words and an error number. It holds no path, so the directory the link named is not in
+        // it and there is no control character to draw.
         return fail(Ending::Failed, t!(cli_workspace_problem, problem = problem));
     }
+    // The link moved the process to another directory, which `main` did not record.
+    keep_out_where_this_ran();
     interactive(
         bravebot_tui::app::Start::Prefilling(link.prompt.unwrap_or_default(), placement.note),
         None,
@@ -862,6 +908,9 @@ struct Prepared {
     input_lines: bool,
     /// Whether the person vouched for those lines.
     trust_input_lines: bool,
+    /// Whether the person let the program sending those lines answer the write, run and fetch
+    /// questions of the run.
+    approve_input_lines: bool,
 }
 
 impl Prepared {
@@ -935,11 +984,22 @@ fn prepare_the_run(
         goal,
         input_lines,
         trust_input_lines,
+        approve_input_lines,
         limits,
     } = invocation;
 
     // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
-    if let Some(conflict) = input_lines_conflict(input_lines, trust_input_lines, mode) {
+    if let Some(conflict) =
+        input_lines_conflict(input_lines, trust_input_lines, approve_input_lines, mode)
+    {
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
+    }
+    if let Some(conflict) = approve_input_lines_conflict(
+        approve_input_lines,
+        skip_permissions,
+        "--dangerously-skip-permissions",
+        starts_in,
+    ) {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
 
@@ -1198,6 +1258,12 @@ fn prepare_the_run(
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
         .working_towards(goal.clone());
     task = task_from_the_settings(task, &settings, effort);
+    // A one-shot run puts no question to anybody (ASK-7), so the planner is told to say in its
+    // reply what it could not read. A run reading lines sends its questions to the program feeding
+    // it, which answers them.
+    if !input_lines {
+        task = task.with_nobody_answering();
+    }
     // The kept facts a continued session has already had put in front of its planner (RECALL-9).
     if let Some(record) = &continued {
         task = task.with_injected_facts(record.injected_facts.clone());
@@ -1265,6 +1331,7 @@ fn prepare_the_run(
         goal,
         input_lines,
         trust_input_lines,
+        approve_input_lines,
     })
 }
 
@@ -1378,17 +1445,19 @@ fn reach_the_servers(
             false => servers::Asking::OneShot,
         },
         &mut servers::nobody(),
-        bravebot_sandbox::Stream::Inherited,
+        // Nowhere: a server's stderr is its own bytes, and this run's stderr is where its notices
+        // and progress lines are drawn (SERVERS-25).
+        bravebot_sandbox::Stream::Null,
     );
     say_notices(&mut std::io::stderr().lock(), &reached.notes);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
     if skip_permissions {
-        eprintln!(
-            "{}",
-            t!(cli_notice, notice = t!(session_permissions_skipped))
-        );
+        let auto_vetting = bravebot_session::store::auto_vetting(settings);
+        for line in progress::bypass_notices(true, auto_vetting) {
+            eprintln!("{line}");
+        }
     }
     reached
 }
@@ -1538,6 +1607,16 @@ fn run_and_report(
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
     if let Some(lines) = lines {
         one_shot = one_shot.with_lines(lines.clone());
+        if prepared.approve_input_lines {
+            one_shot = one_shot.approving_over_lines();
+        }
+    }
+    // A run `schedule run-now` or `trigger serve` started for a stored entry has nobody to ask, and
+    // stops at the first question (SCHEDULE-2).
+    let scheduled = schedule::firing();
+    let triggered = trigger::firing();
+    if scheduled.is_some() || triggered.is_some() {
+        one_shot = one_shot.stopping_at_a_question(cancel.clone());
     }
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
     // decides whether a verdict which objects can refuse are the one value resolved above.
@@ -1639,6 +1718,14 @@ fn run_and_report(
 
     // Read once the turn is over, which is when the confirmer's borrow ends.
     let declined = one_shot.declined().to_vec();
+    // What the schedule or the trigger keeps beside its entry: the question this run stopped at, if
+    // it did.
+    if let Some(id) = &scheduled {
+        schedule::record_firing(id, one_shot.asked());
+    }
+    if let Some(name) = &triggered {
+        trigger::record_firing(name, one_shot.asked());
+    }
 
     let answered = outcome.is_ok();
     let code = match outcome {
@@ -2065,11 +2152,16 @@ fn report_a_failed_turn(
 ) -> ExitCode {
     // A plan nobody approved stopped the run before anything happened, which is a gate refusing it
     // and not a failure to run (CLI-6).
-    let ending = match declined.iter().any(|d| d.gate == "manifest_plan") {
+    let ending = match declined
+        .iter()
+        .any(|d| d.gate == "manifest_plan" || d.gate == "scheduled_question")
+    {
         true => Ending::Refused,
         false => exit::ending_of(error),
     };
-    let stopped = fail(ending, error);
+    // A failure can name a path, a model or a definition a checkout chose, so the copy on stderr
+    // is drawn (LAYER-3). The result object below keeps the text as it is.
+    let stopped = fail(ending, progress::printable_lines(&error.to_string()));
     say_notices(&mut std::io::stderr().lock(), reporter.notices());
     // The trail, where `--trace` asked for one, was written as the gates ran.
     if let Some(attempt) = attempt {
@@ -2121,14 +2213,10 @@ fn task_from_the_settings(
         .with_confined_runs(true)
         .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
-        // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
+        // of the three routes by `bravebot_session::store::auto_vetting`, and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so
         // without this every check on this path ends in a refusal.
-        .with_auto_vetting(bravebot_core::vetting::auto(
-            bravebot_core::vetting::asked_for(),
-            bravebot_session::store::load_vetting(),
-            settings.auto_vetting(),
-        ))
+        .with_auto_vetting(bravebot_session::store::auto_vetting(settings))
 }
 
 /// The schema a path names, read and vetted, or the sentence that says why it cannot be used.
@@ -2258,9 +2346,12 @@ fn resume_named(
         // Nor by a second process when another one holds the record: one process writes a record
         // at a time, and the one that holds it may be a terminal (SESSION-38).
         Some(record) if bravebot_session::sessions::is_open_elsewhere(&directory, &record.id) => {
+            // Drawn: the id is read from a stored record (LAYER-3).
             fail(
                 Ending::Failed,
-                bravebot_session::sessions::Held::Open { id: record.id }.refusal(),
+                progress::printable_lines(
+                    &bravebot_session::sessions::Held::Open { id: record.id }.refusal(),
+                ),
             )
         }
         Some(record) => interactive(
@@ -2344,9 +2435,11 @@ fn interactive(
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             );
         }
     };
@@ -2369,7 +2462,7 @@ fn interactive(
     let settings = bravebot_config::Settings::load();
     let workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
-        Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
+        Err(err) => return workspace::workspace_problem(&err),
     };
 
     // What the platform offers, which is what the session reports: this confines a process running
@@ -2458,7 +2551,11 @@ fn interactive(
         // Printed after the terminal is handed back, like the hint above, with the argument status:
         // the session never took a turn, and a one-shot run exits with the same status for the
         // same name (CLI-17).
-        Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
+        // The sentence can name a definition and the model it writes, which a checkout chose, so
+        // it is drawn here and not where the screen's own notes are (LAYER-3).
+        Ok(bravebot_tui::app::Ended::Refused(refused)) => {
+            fail(Ending::Argument, progress::printable_lines(&refused))
+        }
         // After the terminal is handed back, like the rest, so the session it opens has the terminal
         // to itself (SCREEN-8).
         Ok(bravebot_tui::app::Ended::Open(opening)) => reopen::open(&opening),
@@ -2567,6 +2664,8 @@ mod tests {
             "permissions",
             "sessions",
             "stats",
+            "schedule",
+            "trigger",
             "attach",
             "reply",
             "import-leo-creds",
@@ -3655,6 +3754,8 @@ mod tests {
             description: None,
             may_stand: true,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         });
         assert_eq!(answer.decision, Decision::Reject);
 
@@ -3664,6 +3765,85 @@ mod tests {
             with_declined(Vec::new(), unattended.declined()).is_empty(),
             "a call the trail holds was listed again"
         );
+    }
+
+    /// SCHEDULE-2: a run `schedule run-now` fires ends its turn at the first question the planner
+    /// asks, keeps that question whole for `schedule pending`, and counts for the refused status.
+    /// The regressions it rejects are a question answered and carried on from, one that is not kept,
+    /// a later question kept over the first, a turn that is not cancelled, and a run that is
+    /// stopped by a confirmer that was never told to stop.
+    #[test]
+    fn a_scheduled_run_stops_at_the_first_question_and_keeps_it() {
+        let first = a_question("Which branch?");
+        let second = a_question("Which remote?");
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut shown = Vec::new();
+        let mut stopping =
+            OneShot::new(&b"1\n"[..], &mut shown, true).stopping_at_a_question(cancel.clone());
+        let answers = stopping.ask_user(&first);
+        stopping.ask_user(&second);
+        assert!(cancel.is_cancelled(), "the turn was not ended");
+        assert!(
+            answers.iter().all(|answer| !matches!(
+                answer,
+                bravebot_core::ask::Answer::Chosen(_) | bravebot_core::ask::Answer::Typed(_)
+            )),
+            "the question was answered"
+        );
+        assert_eq!(stopping.asked(), Some(&first));
+        assert!(
+            stopping
+                .declined()
+                .iter()
+                .all(|d| d.gate == "scheduled_question"),
+        );
+        assert!(!stopping.declined().is_empty());
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut shown = Vec::new();
+        let mut not_stopping = OneShot::new(&b"1\n"[..], &mut shown, true);
+        not_stopping.ask_user(&first);
+        assert!(!cancel.is_cancelled());
+        assert!(not_stopping.asked().is_none());
+    }
+
+    /// SCHEDULE-2: the turn a scheduled run cancels at its first question ends on the refused
+    /// status, as a plan nobody approved does, and not on the status for a cancelled turn. The fault
+    /// it rejects is a gate name `report_a_failed_turn` does not map, which leaves the status of an
+    /// interrupted run for a run that stopped on purpose.
+    #[test]
+    fn a_run_stopped_at_a_scheduled_question_ends_refused() {
+        let reporter = progress::Progress::new(std::io::stderr());
+        let sink = json::Streaming::new(None);
+        let cancelled = bravebot_agent::TurnError::Cancelled { attempts: None };
+        let stopped_at = [one_shot::Declined {
+            gate: "scheduled_question",
+            reason: "a scheduled run cannot be asked",
+            in_the_trail: false,
+        }];
+        let refused = format!("{:?}", ExitCode::from(Ending::Refused.status()));
+
+        let stopped = report_a_failed_turn(&cancelled, None, false, &reporter, &sink, &stopped_at);
+        assert_eq!(format!("{stopped:?}"), refused);
+
+        let interrupted = report_a_failed_turn(&cancelled, None, false, &reporter, &sink, &[]);
+        assert_ne!(
+            format!("{interrupted:?}"),
+            refused,
+            "a cancelled turn with no question is not a refusal"
+        );
+    }
+
+    fn a_question(text: &str) -> bravebot_core::ask::Asking {
+        bravebot_core::ask::Asking {
+            prompts: vec![bravebot_core::ask::Prompt {
+                header: "Pick".to_string(),
+                question: text.to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 
     /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other
@@ -4266,6 +4446,8 @@ mod tests {
             "permissions",
             "sessions",
             "stats",
+            "schedule",
+            "trigger",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4394,6 +4576,8 @@ mod tests {
             "permissions",
             "sessions",
             "stats",
+            "schedule",
+            "trigger",
             "attach",
             "reply",
             "import-leo-creds",
@@ -5276,6 +5460,29 @@ mod tests {
         );
         open_directories(&mut workspace, &[beside.display().to_string()]).expect("opens");
         assert!(workspace.confines(&file).is_ok(), "not reachable after");
+    }
+
+    /// CLI-11: a relative path such as `--add-dir ../notes` is resolved against the working
+    /// directory, the same way `/add-dir ../notes` resolves it in the terminal, rather than
+    /// refused with "must be an absolute path".
+    #[test]
+    fn a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory() {
+        let scratch = Scratch::new("add-dir-relative");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+        let file = beside.join("notes.md");
+        std::fs::write(&file, "notes").expect("write");
+
+        let mut workspace = Workspace::new(&project).expect("a workspace");
+        assert!(
+            workspace.confines(&file).is_err(),
+            "reachable before it was opened"
+        );
+        open_directories(&mut workspace, &["../beside".to_string()]).expect("opens");
+        assert!(
+            workspace.confines(&file).is_ok(),
+            "a relative --add-dir path was not resolved against the working directory"
+        );
     }
 
     /// CHECKOUT-7. `--add-dir` of a directory holding the working directory says so, since a run

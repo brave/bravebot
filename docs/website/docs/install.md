@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1.5
 title: Install
-description: Install, update and uninstall Brave Bot, and check a download by hand.
+description: Install Brave Bot and Linux packages, verify downloads, check configuration, update to a newer release and uninstall.
 ---
 
 # Install
@@ -50,6 +50,15 @@ fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`, and the client checks
 before it installs anything. The package puts the binary at `/usr/bin/bravebot` and requires glibc
 2.30 or newer.
 
+The packages are meant for the releases that have glibc 2.30 or newer and that their vendor still
+supports: Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04, and a Fedora release that still receives
+updates. Both repositories carry amd64 and arm64 (x86_64 and aarch64 for dnf). The served files
+and the package requirements were read from the repositories, and the steps below have not yet
+been run on each of these releases ([#3466](https://github.com/brave/bravebot/issues/3466)).
+
+A minimal image, such as a container, has none of `curl`, `gpg` and `ca-certificates` for apt, and
+no `sudo`. Install them first (`apt install curl gpg ca-certificates` as root) and leave `sudo` out.
+
 For apt, fetch the key to the place the source names, check its fingerprint, then add the source:
 
 ```sh
@@ -77,8 +86,8 @@ above. The repository file sets `gpgcheck=1`, so dnf checks the signature on eac
 that key.
 
 A package installed this way is updated with `sudo apt update && sudo apt upgrade bravebot` or
-`sudo dnf upgrade bravebot`. The startup notice does not recognise a copy in `/usr/bin`, so it
-says nothing about newer releases for one.
+`sudo dnf upgrade bravebot`. The startup notice gives the same line for a copy one of them
+installed.
 
 On Windows there is a PowerShell script, for a machine with no Node on it. It needs no
 Administrator:
@@ -202,10 +211,14 @@ A session that opens on a version something newer has replaced says so, once, un
 question, and gives the line that updates the copy you are running. The notice names the version you
 are running rather than the newer one, which may have moved by the time you update: the npm command for an npm
 install, the script again for a script install, the PowerShell script again for a PowerShell script
-install, `brew upgrade --cask bravebot` for a copy a Homebrew cask installed and `winget upgrade
-Brave.Bravebot` for one WinGet installed. A package manager's copy is recognised by the directory the
-manager keeps it in. A build from source is told nothing,
-since none of those lines would update one. A package can arrive after the release it follows, and
+install, `brew upgrade --cask bravebot` for a copy a Homebrew cask installed, `winget upgrade
+Brave.Bravebot` for one WinGet installed, `sudo apt update && sudo apt upgrade bravebot` for one apt
+installed and `sudo dnf upgrade bravebot` for one dnf installed. Homebrew and WinGet copies are
+recognised by the directory the manager keeps them in. An apt or dnf copy is the binary at
+`/usr/bin/bravebot` when the package manager's own files say it put it there: for apt, the list
+dpkg keeps of the `bravebot` package, and for dnf, an rpm database and the `bravebot.repo` file from
+the install steps above. A binary at that path that those files do not account for is told nothing,
+and so is a build from source, since none of those lines would update one. A package can arrive after the release it follows, and
 until it does the manager says there is nothing to upgrade.
 
 Nothing about it waits. The notice comes from an answer an earlier launch wrote down, and the
@@ -220,6 +233,14 @@ included. An [incognito session](using/incognito.md) still
 reads an answer an ordinary session left, and neither records one nor asks. A launch that cannot
 write the record of its last check, because there is no home directory or the state directory is not
 writable, does not ask the registry at all.
+
+The desktop app has no command that updates it, so it is told through a link. When the check has
+recorded a newer release, the sidebar shows a notice naming the version you are running, with a
+**Download** link to the latest release page. Dismissing the notice hides it for as long as you run that version. **Help ▸ Update Status…** opens **About**, which says whether you are
+up to date as of the day of the last check, or "Couldn't check recently" with that day when the last
+answer is more than seven days old. A stale answer shows no notice in the sidebar. The same
+[`updateCheck`](customize/configuration.md#updatecheck) setting that turns off the terminal's line turns off the
+check, and a project's settings file cannot.
 
 ## Uninstall
 

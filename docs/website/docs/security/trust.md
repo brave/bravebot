@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Trusted directories
-description: The question at startup, every other way a path comes to be trusted, and how long an answer lasts.
+description: Workspace trust prompts, path matching, trust changes after writes, quarantined-read grants, /add-dir and /cd, scratch directories, remembered answers and trust-map inspection.
 ---
 
 # Trusted directories
@@ -86,7 +86,8 @@ Windows that is every path there is, so opening a directory by name is unavailab
 about one decides the other, in both directions, and where rules disagree about the spellings the least
 trusting one decides: untrusted over undecided over trusted, whichever sorts first. Trusting `docs`
 does not undo a distrust recorded for `Docs`. A decision about one spelling replaces only that
-spelling's rule, since some volumes can hold `claß.md` and `class.md` apart. Where the working
+spelling's rule, since some volumes can hold `claß.md` and `class.md` apart. A trust under `claß.md`
+therefore leaves `class.md` undecided, while a refusal of either name is read for the other. Where the working
 directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
 about `docs`.
 
@@ -183,9 +184,27 @@ asked whether to trust it:
 ╰───────────────────────────────────────────────────────────╯
 ```
 
-Yes writes exactly the rule `@` would have written, so it stays consistent for every later read. It is
-asked once per path per turn, and only where the read is quarantined. Declining leaves the file as it
+Yes writes exactly the rule `@` would have written, so it stays consistent for every later read. The
+prompt shows the full path the rule will be held under, below the file's name, so a rule wider than the
+name reads as wider. A name that is empty, is only whitespace, has a space at either end of it or of a
+directory in it, or holds a character that draws as nothing (a zero-width character, a bidirectional
+control, a no-break space) or as a blank cell (the blank braille pattern) is drawn in quotes with each such
+character spelled out, so it cannot read as another name. The terminal and the desktop window also spell a
+byte of a path that is not part of a UTF-8 character as `\xNN`, so two paths that differ only in such bytes
+are not drawn alike. The prompts for a write, an overwrite and an edit, for reading a credential, for a path
+programs may reach and about a directory, the names a checkout's removal would delete, and the files a run would write and the directories it is confined to, draw names the
+same way, and so do the line a call about a file draws in the transcript, the lists of files a turn
+wrote, read or changed, and the startup notes about an allow rule a checkout proposed. A search for a
+pattern is drawn as written. The question is
+asked once per path per turn, and only where the read is quarantined, except that a yes given after the
+file changed while you were answering is thrown away and the next read of it asks again. Declining leaves the file as it
 was and the turn carries on with a reference.
+
+The startup trust question an editor, the desktop window or the mobile app shows draws the directory and
+the file a yes is kept in the same way. So do the desktop window's notice that a yes was kept, its
+list of what is kept and its list of the allow rules a checkout proposed, and the mobile app's write,
+run and trust cards. The terminal's trust questions also draw the file a yes is kept in and the file each
+proposed rule came from this way.
 
 **The line above the preview is a [check](vetting.md) reading the whole file**, not the few lines you
 can see, because a yes grants the whole file. It decides nothing: a yes writes the rule whatever the
@@ -202,6 +221,11 @@ Never a directory, and never a path naming nothing: a yes writes a rule covering
 name it was given, so a box titled with one file would hand over every file beneath the name at once,
 over a string the planner chose rather than one you typed.
 
+**A yes is not spent if the file may have changed while you were asked.** If the file changed, or a
+`run` line started while the question was open, the yes is thrown away, the file stays quarantined
+and the read says so. A program can rewrite files its line does not name, so the text you read in the
+preview may no longer be what the file holds.
+
 ### `/add-dir`
 
 ```
@@ -209,13 +233,18 @@ over a string the planner chose rather than one you typed.
 ```
 
 records a rule under that directory's own path that does two things together: the directory becomes
-reachable, since an absolute path is otherwise refused whatever the map says, and it is recorded as
+reachable, since a path outside the project is otherwise refused whatever the map says, and it is recorded as
 trusted. Either half alone is no use. One leaves a rule about files nothing can open, the other a
 directory that prompts on every edit.
 
 It lasts the session, `--resume` carries both halves, and `/clear` closes it. A directory already
 inside the project is refused. A directory a resume cannot open again, because it has moved or gone,
 says so rather than being passed over.
+
+The path may also be relative to the working directory: `/add-dir ../notes` opens the directory
+beside the project and `/add-dir ../` the directory that holds it. A leading `~` is read first. What
+is opened, trusted and named in the note is the directory the path resolves to. A relative path is
+refused where the working directory's name is not text. `/add-dir close` takes the same spellings.
 
 ```
 /add-dir close ~/notes
@@ -245,8 +274,10 @@ permissions bypassed the file tools reach such a path with no request and the re
 outside the paths a granted request refuses ([`request_path`](../reference/tools.md#request_path)).
 An absolute path that lands inside the project is
 refused with "is inside the workspace, and a path there is named relative to the workspace root",
-and no directory is offered, since opening one would change nothing. A refused write is not pointed
-at an unconfined `run` line in that case.
+and no directory is offered, since opening one would change nothing. A path with `..` that lands
+inside the project is refused with "contains '..' and lands inside the workspace" and the instruction
+to name it relative to the workspace root without the `..`, and no directory is offered for it
+either. A refused write is not pointed at an unconfined `run` line in either case.
 
 ## Moving the working directory
 
@@ -283,7 +314,9 @@ refused. A path with `..` in it is allowed only where it lands in a directory th
 (`../worktree/file.rs` beside the project, for example), and it is then treated as the absolute
 path it lands on, so rules, trust and the audit trail see that one spelling. A `..` that goes
 through a symlink, lands back inside the project or lands on a name that is not valid UTF-8 is
-refused. A relative path always means the project, never a directory opened beside it.
+refused. One that lands back inside the project is told to be named relative to the project root
+without the `..`; the others are refused as leaving the workspace. A relative path always means the
+project, never a directory opened beside it.
 
 Confinement is about where an operation lands rather than how its path is spelled, so it holds for a
 file that does not exist yet: a write creates what it names, and a symlink out of the tree is refused
@@ -295,6 +328,18 @@ Every session is given a directory of its own in the system temporary directory,
 session opens, and it is somewhere to put an intermediate file. A one-shot run has one for as long as
 it runs. A session that cannot be given one runs without one and says so. On macOS and Linux, one
 left behind by a session that was killed rather than closed is removed as the next session opens.
+
+On Unix it is made inside a directory of your account's own in the temporary directory, named
+`bravebot-` and your numeric user id, so opening a session does not wait on how many entries other
+programs have left in the temporary directory. That directory is used only where it is a directory your
+account owns, and is not removed with the session's directory. Where it cannot be used, the session's directory
+is made in the temporary directory itself. The first start that makes it also removes, once, the
+directories of killed sessions that stand directly in the temporary directory.
+
+The session records which directory it made. Every program may write the temporary directory, so the
+name could be made to lead elsewhere. A program is refused when it starts once the name leads to a link
+or a file, and for the rest of the session. A name that leads to nothing, or on Unix to a different directory because
+the directory was removed or made again, is not granted to programs, and the programs after it still start.
 
 `/status` reports it as the session's own, on a line of its own rather than among the rules, because
 it is reachable without any rule covering it.
@@ -361,8 +406,10 @@ the checkout: full paths on disk would each name somewhere that is no longer the
 match, and the session would resume as though nobody had vouched for anything.
 
 The question grants standing permission, and it says that a yes is kept: what it covers, how to take
-it back and the file it writes are on the screen before you answer. A yes is honoured on narrower
-terms than it is given on.
+it back and the file it writes are on the screen before you answer. In the desktop app the yes stays
+closed, with a line saying how many are left to read, until the directory and each of those lines have
+been on screen; a long directory scrolls inside its own box, and the no is always open. A yes is
+honoured on narrower terms than it is given on.
 
 ### Remembering the answer
 
@@ -427,7 +474,9 @@ permissions show the kept answer, and **Forget** there does the same.
 ```
 
 lists every rule in force, however many there are, so what a line vouched for does not have to be
-remembered. The [session's own directory](#a-directory-of-the-sessions-own) gets a line of its own
+remembered. A rule is listed under its name spelled as the prompts spell one, so a rule about a name made
+of whitespace, or ending in it, is not a row that reads as nothing. The project root is listed as `.` in
+the terminal and as the project root in the desktop window. The [session's own directory](#a-directory-of-the-sessions-own) gets a line of its own
 there, since it holds no rule to list. Where a [kept answer](#remembering-the-answer) will trust the
 working directory in later sessions, the line under it says so, when you gave it, and which file
 holds it.
@@ -473,14 +522,18 @@ All of these are deliberate.
   have answered `n`. The line the session opens with, `/status` and `/forget-trust` are what is left
   of it.
 
-- **A symlink or a hard link inside the project gives one file two names, and each name is its own
-  rule.** A rule is keyed on the path an operation spelled, while confinement resolves where that
-  path lands, and the two do not have to agree. So content written as untrusted through one name is
-  read back as trusted under the other, which is the one way the round trip in
-  [What a write does](#what-a-write-does) stays open. A second path to the same tree, such as a
-  macOS firmlink or a Linux bind mount, does the same once you have opened both. Spellings that differ
-  only in punctuation or letter case are a single rule, so this is about a link or a mount and not
-  about those. If a tree holds a link to somewhere else inside itself, that is a tree to say no to.
+- **A link or a mount that the lookup cannot see leaves one file with two names, and each name is its
+  own rule.** A rule is keyed on the path an operation spelled, while confinement resolves where that
+  path lands. On Linux and macOS a read, a write and a second writer are also checked under the other
+  names the file has: where a symlink lands, its hard links, and its name beneath a second path to
+  the same tree, such as a macOS firmlink or a Linux bind mount. Opening a second path to a tree
+  that is already open is refused, so that last case is a pair that became two paths after both were
+  open. So content written as untrusted through one name is read back as untrusted under the others.
+  That lookup stops at the search cap and at a directory it cannot list, and the file is then read
+  as untrusted. It is not made on Windows, so there a hard link or a second path to a tree is still
+  two rules, and content written as untrusted through one name is read back as trusted under the
+  other. Spellings that differ only in punctuation or letter case are a single rule. If a tree holds
+  a link to somewhere else inside itself, that is a tree to say no to.
 
 - **Confinement is settled before an operation runs, not while it runs.** Where a path lands is worked
   out by resolving it, and the read or the write happens after that. A tree already arranged to escape

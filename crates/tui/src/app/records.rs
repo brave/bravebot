@@ -190,6 +190,10 @@ pub(super) fn rewind(
     // replies a list of links was read from are gone with them.
     session.hunks_listed = None;
     session.links_listed = None;
+    // The answers given in the turns gone are not kept, and those given before them go with them:
+    // the memo does not say which turn an answer came in, and a question put again after an undo
+    // is to be shown (ASK-8).
+    session.answers.forget();
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     // Read off the point before anything is removed. The display prompts of the rewound turns go
@@ -210,6 +214,7 @@ pub(super) fn rewind(
             .record_gap(bravebot_agent::rewind::CoverageGap::BackupUnavailable);
     }
 
+    let record_length = bravebot_session::vectors::record_length(&snapshot.conversation);
     *conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
     session.turns = snapshot.turns;
     session.tokens = snapshot.tokens;
@@ -228,6 +233,7 @@ pub(super) fn rewind(
     session.end_files_if_nothing_written();
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
+    stored.truncate_vectors(record_length);
     // The prompt that was undone goes back into the box, so the next thing the person does is
     // edit it and send it again rather than retype it. After the history removal, which is what
     // takes the prompt off the display, and from the point rather than from the display.

@@ -61,7 +61,7 @@ import { NoteDialog } from './components/NoteDialog'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
-import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
+import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy, thinking } from './live'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -145,7 +145,7 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, submit, submitPlan, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
@@ -409,12 +409,19 @@ export function App(): React.JSX.Element {
 
   /**
    * What the open bot's face should be doing — for the header, and for its row in the list, which
-   * mirrors it. Working while a turn runs; `failed` if the last thing the transcript got was an
-   * error, which is what a `turn.error` leaves at the end of it; otherwise looking at the reader.
-   * The turn's completion is not a state of its own — the face nods on leaving `working`.
+   * mirrors it. While a turn runs: `asking` while it waits on an answer, `thinking` while the model
+   * writes in a round with no tool being written, run or checked, and otherwise `working`. After
+   * one: `failed` if the last thing the transcript got was an error, which is what a `turn.error`
+   * leaves at the end of it; otherwise looking at the reader. The turn's completion is not a state
+   * of its own: the face nods, or cheers, on leaving a running state. Only the shape of the turn is
+   * read here, never what anything in it says.
    */
   const openDoing: Doing = live?.running
-    ? 'working'
+    ? pending
+      ? 'asking'
+      : thinking(live)
+        ? 'thinking'
+        : 'working'
     : live?.entries.at(-1)?.kind === 'error'
       ? 'failed'
       : 'open'
@@ -1019,7 +1026,7 @@ export function App(): React.JSX.Element {
         backendReady={backendReady}
         onCheckBackend={() => void checkBackend()}
         onDiagnostics={() => void doctor()}
-        onSetup={() => openSettingsPage('agent')}
+        onSetup={() => openSettingsPage('providers')}
         onThinking={(shown) => setLive((old) => old ? { ...old, showThinking: shown } : old)}
         storageKey={draftKey}
         attachments={live?.attachments ?? []}
@@ -1059,7 +1066,6 @@ export function App(): React.JSX.Element {
         onMode={(mode) => void chooseMode(mode)}
         onSandbox={(mode) => void chooseSandbox(mode)}
         onSubmit={submit}
-        onPlan={submitPlan}
         reading={reading}
         onCancel={cancel}
         canExport={canExport}
@@ -1142,7 +1148,7 @@ export function App(): React.JSX.Element {
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />
       )}
-      {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
+      {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} onSettings={() => { setUnconfigured(null); openSettingsPage('providers') }} />}
       {rewinding && live?.handle === rewinding.handle && (() => {
         const plan = planRewind(live.rewind ?? [], rewinding.steps)
         return plan && <RewindConfirm plan={plan} bot={live.bot !== null} running={live.running} busy={rewinding.busy}

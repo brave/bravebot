@@ -10,6 +10,7 @@
     allow(clippy::disallowed_methods, reason = "the test names its program")
 )]
 
+pub mod accounts;
 pub mod advisor;
 pub mod agents;
 pub mod answers;
@@ -42,9 +43,11 @@ pub mod home;
 pub mod hooks;
 pub mod host_proxy;
 pub mod hunks;
+pub mod images;
 pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
+pub mod key_entry;
 pub mod links;
 mod live_sandbox;
 pub mod lsp;
@@ -53,6 +56,7 @@ pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod mode;
+pub mod named;
 pub mod notebook;
 pub mod open_loops;
 pub mod outcome;
@@ -73,6 +77,7 @@ pub mod replace;
 pub mod repo_map;
 pub mod report;
 pub mod request_view;
+pub mod retrieval;
 pub mod rewind;
 pub mod roster;
 mod rule_approval;
@@ -81,8 +86,10 @@ pub mod sandbox_reason;
 pub mod scratch;
 mod server_calls;
 pub mod servers;
+pub mod settled;
 pub mod shared;
 pub mod shell;
+pub mod skill_eval;
 pub mod skills;
 // The build script reads it into the pages `help` serves, so the program itself holds no parser:
 // compiling it here is for its tests.
@@ -121,7 +128,7 @@ pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use live_sandbox::LiveSandbox;
 pub use mode::Mode;
-pub use outcome::{Category, Diagnosis, Ending, Spent, Work};
+pub use outcome::{BackendKind, Category, Diagnosis, Ending, Spent, Work};
 pub use permission_mode::{Confining, LiveMode, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};

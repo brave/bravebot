@@ -27,7 +27,8 @@
 //! a turn, and the only thing it is ever used for is computing a signature.
 
 use bravebot_config::{Held, Secret};
-use std::ffi::OsStr;
+use bravebot_sandbox::programs::{Names, selectors};
+use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -81,13 +82,87 @@ fn absent(command: &Command) -> bool {
     command.get_program().is_empty()
 }
 
+/// The variables a program the CLI starts or loads reads to choose code to run, and what each
+/// names ([PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
+///
+/// A value is kept only when it passes [`bravebot_sandbox::programs::may_be_run`], which leaves out
+/// every directory a stage may write ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+/// The CLI is started unconfined, so a file a stage wrote and one of these names would run with the
+/// person's access.
+///
+/// - `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` replace `~/.aws/config` and
+///   `~/.aws/credentials`. A profile in either can name a `credential_process` command, and a
+///   `[plugins]` section in the first loads a Python module from `cli_legacy_plugin_path`.
+/// - `BROWSER` is the command `aws sso login` opens the sign-in page with, judged as a list of
+///   commands. Python's `webbrowser` runs each entry and, with a display, `xdg-open`, which reads
+///   the four `XDG_` directories to choose the handler it runs. Those names and kinds are those of
+///   the browser opener (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list
+///   and is repeated here so this list reads as complete.
+/// - `OPENSSL_CONF` is a configuration file of the OpenSSL the CLI bundles, which can load an
+///   engine or a provider module, and `OPENSSL_CONF_INCLUDE` is where its `.include` lines are read
+///   from. `OPENSSL_ENGINES` and `OPENSSL_MODULES` are where those engines and providers are loaded
+///   from.
+/// - `HOME` selects `~/.aws/config`, `~/.aws/credentials` and `~/.aws/cli/alias`, in which a
+///   `credential_process` or a `!` alias runs a command. It is also where asdf (`~/.asdf`) and pyenv
+///   (`~/.pyenv`) look for the installation an `aws` shim runs.
+/// - `PAGER` and `MANPAGER` are the commands `aws <command> help` pipes its text through
+///   (`MANPAGER` first), judged as a list of commands, so a value with arguments such as
+///   `less -R` is removed. `PYTHONWARNINGS` can import a module by name, and
+///   `BOTOCORE_EXPERIMENTAL__PLUGINS` is read by botocore 1 for the plug-ins a client loads (no
+///   run loaded a module through it); both are options and are removed whatever they hold.
+///
+/// An `aws` that is the frozen executable does not read `PYTHONPATH` or the other `PYTHON*`
+/// variables. An `aws` that is a script (pip, Homebrew) does: the generic names cover
+/// `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE` and `PYTHONPYCACHEPREFIX`, and `BASH_ENV`,
+/// `SHELLOPTS`, `PS4`, the `BASH_FUNC_` prefix and the pyenv and asdf names cover a shim. The
+/// frozen executable runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start
+/// here has piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
+/// `SSL_CERT_DIR` name certificates, and `AWS_WEB_IDENTITY_TOKEN_FILE` names a token; none is run.
+const CODE_SELECTORS: [(&str, Names); 16] = [
+    ("AWS_CONFIG_FILE", Names::File),
+    ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
+    selectors::BROWSER,
+    selectors::OPENSSL_CONF,
+    ("OPENSSL_CONF_INCLUDE", Names::Directory),
+    selectors::OPENSSL_ENGINES,
+    selectors::OPENSSL_MODULES,
+    ("XDG_DATA_HOME", Names::Directory),
+    ("XDG_DATA_DIRS", Names::Directories),
+    ("XDG_CONFIG_HOME", Names::Directory),
+    ("XDG_CONFIG_DIRS", Names::Directories),
+    ("HOME", Names::Directory),
+    ("PAGER", Names::Commands),
+    ("MANPAGER", Names::Commands),
+    ("PYTHONWARNINGS", Names::Options),
+    ("BOTOCORE_EXPERIMENTAL__PLUGINS", Names::Options),
+];
+
 fn command_for(program: &Path) -> Command {
+    command_for_with(
+        program,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
+    )
+}
+
+/// [`command_for`] against a given environment and a given judgment of which files are outside the
+/// directories a stage may write.
+fn command_for_with(
+    program: &Path,
+    held: impl IntoIterator<Item = (OsString, OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> Command {
     // The names the CLI starts itself (an `env` shebang, a `credential_process` command) search
-    // only the entries the lookup above searches (SANDBOX-30).
-    bravebot_sandbox::programs::start(
+    // only the entries the lookup above searches (SANDBOX-30). The rest of the environment stays:
+    // `AWS_PROFILE`, `AWS_REGION` and the credentials the person keeps there are what the CLI is
+    // run to resolve.
+    bravebot_sandbox::programs::start_against(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
+        held,
+        outside_stage_writable,
     )
 }
 
@@ -394,6 +469,185 @@ pub fn sign_in_if_needed(
     login(profile, say)
 }
 
+/// A way to end a sign-in started by [`sign_in_if_needed_until`] from another thread.
+///
+/// Holds the CLI's process while it runs, so [`Stop::stop`] ends it at once and nothing is
+/// signalled by number once it has been waited for, when the number may belong to another program.
+#[derive(Default)]
+pub struct Stop {
+    state: std::sync::Mutex<Stopping>,
+}
+
+#[derive(Default)]
+struct Stopping {
+    stopped: bool,
+    child: Option<std::process::Child>,
+}
+
+impl Stop {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// End the sign-in. The CLI is killed now, and one not started yet never starts.
+    pub fn stop(&self) {
+        let mut state = self.lock();
+        state.stopped = true;
+        if let Some(child) = state.child.as_mut() {
+            kill(child);
+        }
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.lock().stopped
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Stopping> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The CLI and every program in the group it leads. A browser the CLI opens is started in a session
+/// of its own by Python's `webbrowser`, so it is not in the group and stays open.
+fn kill(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Some(group) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
+        rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+            .unwrap_or_default();
+    }
+    child.kill().unwrap_or_default();
+}
+
+/// How a sign-in [`sign_in_if_needed_until`] ran did not end signed in.
+#[derive(Debug)]
+pub enum Stopped {
+    /// [`Stop::stop`] was called before the CLI finished.
+    Cancelled,
+    Failed(CredentialError),
+}
+
+/// [`sign_in_if_needed`], for a caller that may end it before the person has finished in the
+/// browser: a window, which has no Ctrl-C for the program it started.
+///
+/// The CLI leads a process group of its own, so the worker the installed CLI forks goes with it on
+/// a stop. A CLI that finished signed in before the stop reached it is reported signed in, since it
+/// is.
+pub fn sign_in_if_needed_until(
+    profile: Option<&str>,
+    say: impl FnMut(String),
+    stop: &Stop,
+) -> Result<(), Stopped> {
+    if is_signed_in(profile) {
+        return Ok(());
+    }
+    if let Some(absent) = absent_from(profile, profiles()) {
+        return Err(Stopped::Failed(absent));
+    }
+    let command = login_command(profile);
+    if absent(&command) {
+        return Err(Stopped::Failed(CredentialError::NotInstalled));
+    }
+    login_until(command, say, stop)
+}
+
+fn login_until(
+    mut command: Command,
+    mut say: impl FnMut(String),
+    stop: &Stop,
+) -> Result<(), Stopped> {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+
+    let mut state = stop.lock();
+    if state.stopped {
+        return Err(Stopped::Cancelled);
+    }
+    let mut child = start_piped(&mut command)
+        .map_err(|e| started_badly(&e))
+        .map_err(Stopped::Failed)?;
+    let arriving = read_lines_of(&mut child);
+    state.child = Some(child);
+    drop(state);
+
+    // Not until the streams close, as `login` waits: a program the CLI started may hold them open
+    // after it has gone, and a stop has to end the wait without them.
+    let status = loop {
+        match arriving.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(line) => {
+                say(line);
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+        let mut state = stop.lock();
+        let Some(child) = state.child.as_mut() else {
+            return Err(Stopped::Cancelled);
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                state.child = None;
+                break status;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                kill(child);
+                child.wait().ok();
+                state.child = None;
+                return Err(Stopped::Failed(CredentialError::Refused {
+                    detail: e.to_string(),
+                }));
+            }
+        }
+    };
+    // The readers may not have passed on the last lines yet; a program still holding the streams
+    // open is waited for no longer than this.
+    let drained = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while let Ok(line) =
+        arriving.recv_timeout(drained.saturating_duration_since(std::time::Instant::now()))
+    {
+        say(line);
+    }
+
+    if status.success() {
+        Ok(())
+    } else if stop.stopped() {
+        Err(Stopped::Cancelled)
+    } else {
+        Err(Stopped::Failed(CredentialError::Refused {
+            detail: "the sign-in did not complete".to_string(),
+        }))
+    }
+}
+
+fn started_badly(e: &std::io::Error) -> CredentialError {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
+        _ => CredentialError::Refused {
+            detail: e.to_string(),
+        },
+    }
+}
+
+/// Both of the child's output streams, drained on a thread apiece and merged over one channel, so
+/// neither blocks against a pipe nobody is reading and the lines arrive in the order they were
+/// written. The channel closes once both streams have.
+fn read_lines_of(child: &mut std::process::Child) -> mpsc::Receiver<String> {
+    let (lines, arriving) = mpsc::channel::<String>();
+    for stream in [
+        child.stdout.take().map(Reading::Out),
+        child.stderr.take().map(Reading::Err),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let lines = lines.clone();
+        std::thread::spawn(move || stream.read_lines_into(&lines));
+    }
+    arriving
+}
+
 /// Start `command` with no input and both output streams piped, under the spawn gate. The wait for
 /// the program to finish belongs to the caller and is taken outside the gate, so a slow CLI holds up
 /// no other start.
@@ -507,36 +761,12 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
     // person who cannot see it is stuck either way. Nothing is typed at this: the code goes into a
     // browser, and the terminal belongs to whoever called, so a program left able to read stdin
     // would fight for the keys.
-    let mut child = start_piped(&mut command).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
-        _ => CredentialError::Refused {
-            detail: e.to_string(),
-        },
-    })?;
-
-    // Drained on a thread apiece and merged over one channel, so neither stream blocks against a
-    // pipe nobody is reading and the lines arrive in the order they were written.
-    let (lines, arriving) = mpsc::channel::<String>();
-    let readers: Vec<_> = [
-        child.stdout.take().map(Reading::Out),
-        child.stderr.take().map(Reading::Err),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|stream| {
-        let lines = lines.clone();
-        std::thread::spawn(move || stream.read_lines_into(&lines))
-    })
-    .collect();
-    drop(lines);
+    let mut child = start_piped(&mut command).map_err(|e| started_badly(&e))?;
 
     // Every line is passed on as it arrives. The loop ends when both readers have finished, which
     // is when the command has closed its streams.
-    for line in arriving {
+    for line in read_lines_of(&mut child) {
         say(line);
-    }
-    for reader in readers {
-        let _ = reader.join();
     }
 
     let status = child.wait().map_err(|e| CredentialError::Refused {
@@ -757,6 +987,76 @@ mod tests {
         file
     }
 
+    /// Whether the AWS start takes `name` off, when the person's environment holds `name` set to
+    /// `value` and only a path under `/safe` is outside the directories a stage may write.
+    fn withheld_value(name: &str, value: &str) -> bool {
+        withheld_bytes(name, OsStr::new(value))
+    }
+
+    /// [`withheld_value`] for a value that need not be text.
+    fn withheld_bytes(name: &str, value: &OsStr) -> bool {
+        let command = command_for_with(
+            Path::new("/usr/bin/aws"),
+            [(OsString::from(name), value.to_os_string())],
+            &|path: &Path| path.starts_with("/safe"),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. `aws sso login` opens a browser with Python's `webbrowser`, which runs each entry
+    /// of `BROWSER`, and `xdg-open` reads the `XDG_` directories to choose the handler it runs. The
+    /// regression it rejects: the AWS start left as `Checked(&[])`, so a value a stage wrote is run
+    /// by the sign-in.
+    #[test]
+    fn the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write() {
+        assert!(withheld_value("BROWSER", "/stage/browser.sh %s"));
+        assert!(withheld_value(
+            "BROWSER",
+            "/safe/bin/firefox:/stage/browser.sh"
+        ));
+        assert!(withheld_value("BROWSER", "firefox --new-window %s"));
+        assert!(!withheld_value("BROWSER", "firefox"));
+        assert!(!withheld_value("BROWSER", "/safe/bin/firefox %s"));
+
+        assert!(withheld_value("XDG_DATA_HOME", "/stage/share"));
+        assert!(!withheld_value("XDG_DATA_HOME", "/safe/share"));
+        assert!(withheld_value("XDG_DATA_DIRS", "/safe/share:/stage/share"));
+        assert!(!withheld_value("XDG_DATA_DIRS", "/safe/share"));
+        assert!(withheld_value("XDG_CONFIG_HOME", "/stage/config"));
+        assert!(!withheld_value("XDG_CONFIG_HOME", "/safe/config"));
+        assert!(withheld_value("XDG_CONFIG_DIRS", "/safe/etc:/stage/etc"));
+        assert!(!withheld_value("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+    }
+
+    /// A variable the sign-in reads that selects no code is left as the person set it. `HOME` is
+    /// not here: it is in the list and is kept only for a directory outside every stage's.
+    #[test]
+    fn the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read() {
+        for name in ["AWS_PROFILE", "AWS_REGION", "DISPLAY", "XDG_RUNTIME_DIR"] {
+            assert!(
+                !withheld_value(name, "/stage/anything"),
+                "{name} was removed"
+            );
+        }
+    }
+
+    /// A `BROWSER` entry that is not text is judged as the bytes it is: a lossy rendering would
+    /// read `fire\u{FFFD}ox` as a bare program name and keep it.
+    #[cfg(unix)]
+    #[test]
+    fn an_aws_browser_entry_that_is_not_text_is_removed() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(withheld_bytes("BROWSER", OsStr::from_bytes(b"fire\xffox")));
+        assert!(withheld_bytes(
+            "BROWSER",
+            OsStr::from_bytes(b"/safe/bin/fire\xffox %s")
+        ));
+        assert!(!withheld_value("BROWSER", "fire\u{FFFD}ox"));
+    }
+
     /// A confined stage can write `.venv/bin/aws`, and an activated environment puts that
     /// directory first on `PATH`. The CLI is started unconfined with the person's access to
     /// `~/.aws`, so the one behind it is the one that has to run.
@@ -906,7 +1206,6 @@ mod tests {
             "AWS_REGION",
             "AWS_ACCESS_KEY_ID",
             "AWS_SESSION_TOKEN",
-            "HOME",
             "PATH",
         ] {
             assert!(
@@ -914,6 +1213,472 @@ mod tests {
                 "{kept} was withheld, so the CLI cannot resolve the credential it is asked for"
             );
         }
+    }
+
+    /// Whether `name` is taken off the environment an `aws` is started with, when the person's
+    /// environment holds `value` for it and `writable` is the directory a stage may write.
+    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+        let row = writable.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let command = command_for_with(
+            Path::new("/usr/bin/aws"),
+            [(OsString::from(name), value.as_os_str().to_os_string())],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// A file a stage can plant, in a directory it holds, and a genuine one in a directory outside
+    /// every row, each with a directory that does not exist yet beside it. Returns the held
+    /// directory, the planted file, the genuine file and the genuine directory.
+    fn planted_and_genuine(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let session = fresh_directory(&format!("{name}-session"));
+        let safe = fresh_directory(&format!("{name}-safe"));
+        let planted = session.join("planted");
+        let genuine = safe.join("genuine");
+        for file in [&planted, &genuine] {
+            std::fs::write(file, "[default]\n").unwrap();
+        }
+        (session, planted, genuine, safe)
+    }
+
+    /// A link in a directory outside every row to `target`.
+    #[cfg(unix)]
+    fn link_to(name: &str, target: &Path) -> PathBuf {
+        let directory = fresh_directory(&format!("{name}-linked"));
+        let link = directory.join("link");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        link
+    }
+
+    /// The regression it rejects: starting the CLI with `AWS_CONFIG_FILE` as the person set it, so
+    /// a profile in a file a stage wrote names a `credential_process` that runs unconfined, with
+    /// the person's access, when `aws configure export-credentials` resolves it.
+    #[test]
+    fn an_aws_config_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read() {
+        let (session, planted, genuine, safe) = planted_and_genuine("credentials-config-file");
+
+        assert!(withheld("AWS_CONFIG_FILE", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "AWS_CONFIG_FILE",
+            &link_to("credentials-config-file", &planted),
+            &session
+        ));
+        assert!(withheld("AWS_CONFIG_FILE", Path::new("config"), &session));
+        assert!(withheld("AWS_CONFIG_FILE", &safe.join("not-yet"), &session));
+        assert!(withheld("AWS_CONFIG_FILE", &safe, &session));
+        assert!(!withheld("AWS_CONFIG_FILE", &genuine, &session));
+        #[cfg(unix)]
+        assert!(!withheld(
+            "AWS_CONFIG_FILE",
+            &link_to("credentials-config-file-safe", &genuine),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: starting the CLI with `AWS_SHARED_CREDENTIALS_FILE` as the person
+    /// set it. A `[profile]` there can carry a `credential_process` as well.
+    #[test]
+    fn an_aws_credentials_file_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read() {
+        let (session, planted, genuine, safe) = planted_and_genuine("credentials-shared-file");
+
+        assert!(withheld("AWS_SHARED_CREDENTIALS_FILE", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            &link_to("credentials-shared-file", &planted),
+            &session
+        ));
+        assert!(withheld(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            Path::new("./credentials"),
+            &session
+        ));
+        assert!(withheld(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            &safe.join("not-yet"),
+            &session
+        ));
+        assert!(!withheld("AWS_SHARED_CREDENTIALS_FILE", &genuine, &session));
+    }
+
+    /// The regression it rejects: starting the CLI with `OPENSSL_CONF` as the person set it, so the
+    /// OpenSSL the CLI bundles loads an engine or provider module a stage wrote.
+    #[test]
+    fn an_openssl_configuration_a_stage_may_write_is_not_the_one_the_cli_is_told_to_read() {
+        let (session, planted, genuine, safe) = planted_and_genuine("credentials-openssl-conf");
+
+        assert!(withheld("OPENSSL_CONF", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "OPENSSL_CONF",
+            &link_to("credentials-openssl-conf", &planted),
+            &session
+        ));
+        assert!(withheld("OPENSSL_CONF", Path::new("openssl.cnf"), &session));
+        assert!(withheld("OPENSSL_CONF", &safe.join("not-yet"), &session));
+        assert!(!withheld("OPENSSL_CONF", &genuine, &session));
+    }
+
+    /// The regression it rejects: starting the CLI with `BROWSER` as the person set it, so
+    /// `aws sso login` opens the sign-in page with a program a stage wrote. A bare name is looked
+    /// up on the reduced `PATH`, which leaves those directories out, so it is kept.
+    #[test]
+    fn a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-browser");
+
+        assert!(withheld("BROWSER", &planted, &session));
+        #[cfg(unix)]
+        assert!(withheld(
+            "BROWSER",
+            &link_to("credentials-browser", &planted),
+            &session
+        ));
+        assert!(withheld("BROWSER", Path::new("./opener"), &session));
+        assert!(withheld("BROWSER", Path::new("bin/opener"), &session));
+        assert!(!withheld("BROWSER", Path::new("xdg-open"), &session));
+        assert!(!withheld("BROWSER", &genuine, &session));
+    }
+
+    /// SANDBOX-30. A list in `XDG_DATA_DIRS` or `XDG_CONFIG_DIRS` is judged entry by entry on the
+    /// disk. The regression it rejects: a list judged as one path, which names no directory, so a
+    /// person's list of installed directories is removed from the sign-in.
+    #[test]
+    fn an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept() {
+        let (session, planted, _genuine, safe) = planted_and_genuine("credentials-xdg-list");
+        let inner = safe.join("share");
+        std::fs::create_dir_all(&inner).unwrap();
+        let genuine_list = std::env::join_paths([&inner, &safe]).unwrap();
+        let mixed_list = std::env::join_paths([&inner, planted.parent().unwrap()]).unwrap();
+
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(
+                !withheld(name, Path::new(&genuine_list), &session),
+                "{name}: a genuine list"
+            );
+            assert!(
+                withheld(name, Path::new(&mixed_list), &session),
+                "{name}: a list with a directory a stage may write"
+            );
+        }
+    }
+
+    /// The directories the CLI's bundled OpenSSL loads engines, providers and included
+    /// configuration from are held to the same check as the file that names them.
+    #[test]
+    fn an_openssl_directory_a_stage_may_write_is_not_the_one_the_cli_is_told_to_load_from() {
+        let (session, _planted, _genuine, safe) = planted_and_genuine("credentials-openssl-dirs");
+        let planted = session.join("modules");
+        std::fs::create_dir_all(&planted).unwrap();
+
+        assert!(withheld("OPENSSL_CONF_INCLUDE", &planted, &session));
+        assert!(!withheld("OPENSSL_CONF_INCLUDE", &safe, &session));
+        assert!(withheld("OPENSSL_ENGINES", &planted, &session));
+        assert!(!withheld("OPENSSL_ENGINES", &safe, &session));
+        assert!(withheld("OPENSSL_MODULES", &planted, &session));
+        assert!(!withheld("OPENSSL_MODULES", &safe, &session));
+        assert!(withheld("OPENSSL_MODULES", Path::new("modules"), &session));
+    }
+
+    /// SANDBOX-30, an `aws` that is a script (pip or Homebrew), run with the help pager piped:
+    /// `PAGER` and `MANPAGER` are commands `aws s3 help` ran (observed, awscli 1.46.3, `MANPAGER`
+    /// first). The regression it rejects: the names not listed, listed as a file or a program so
+    /// `less -R` passes for a bare name, or judged as options so a person's `less` is removed.
+    #[test]
+    fn a_pager_the_cli_runs_for_its_help_is_kept_only_when_it_is_an_installed_program() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-pager");
+
+        assert!(withheld("PAGER", &planted, &session));
+        assert!(withheld("PAGER", Path::new("./pager"), &session));
+        assert!(withheld("PAGER", Path::new(""), &session));
+        assert!(withheld("PAGER", Path::new("less -R"), &session));
+        assert!(!withheld("PAGER", Path::new("less"), &session));
+        assert!(!withheld("PAGER", &genuine, &session));
+        assert!(withheld("MANPAGER", &planted, &session));
+        assert!(withheld("MANPAGER", Path::new("./pager"), &session));
+        assert!(withheld("MANPAGER", Path::new(""), &session));
+        assert!(withheld("MANPAGER", Path::new("less -R"), &session));
+        assert!(!withheld("MANPAGER", Path::new("less"), &session));
+        assert!(!withheld("MANPAGER", &genuine, &session));
+    }
+
+    /// SANDBOX-30. `HOME` selects `~/.aws/config`, `~/.aws/credentials` and `~/.aws/cli/alias` for
+    /// the script (a `credential_process` and a `!` alias ran, observed), and the installation a
+    /// version-manager shim runs. The regression it rejects: `HOME` left out of the list, or in it
+    /// as options, so a person's own home is removed from the CLI.
+    #[test]
+    fn a_home_a_stage_may_write_is_not_the_one_the_cli_reads_its_configuration_from() {
+        let (session, _planted, _genuine, safe) = planted_and_genuine("credentials-home");
+        let planted = session.join("home");
+        std::fs::create_dir_all(&planted).unwrap();
+
+        assert!(withheld("HOME", &planted, &session));
+        assert!(withheld("HOME", &session, &session));
+        assert!(withheld("HOME", Path::new("home"), &session));
+        assert!(withheld("HOME", &safe.join("not-yet"), &session));
+        assert!(!withheld("HOME", &safe, &session));
+    }
+
+    /// SANDBOX-30. Python imports a module named in `PYTHONWARNINGS` (observed), and botocore 1
+    /// reads `BOTOCORE_EXPERIMENTAL__PLUGINS` for plug-ins (`awscli/botocore/plugin.py`; no run
+    /// loaded a module through it). Both are options, so they are removed whatever they hold. The
+    /// regression it rejects: either left out, or kept for a value that looks like a path outside
+    /// every row.
+    #[test]
+    fn a_python_warning_filter_or_botocore_plugin_is_removed_whatever_it_holds() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-python-options");
+
+        assert!(withheld("PYTHONWARNINGS", &planted, &session));
+        assert!(withheld("PYTHONWARNINGS", &genuine, &session));
+        assert!(withheld(
+            "PYTHONWARNINGS",
+            Path::new("evil_module"),
+            &session
+        ));
+        assert!(withheld(
+            "BOTOCORE_EXPERIMENTAL__PLUGINS",
+            &planted,
+            &session
+        ));
+        assert!(withheld(
+            "BOTOCORE_EXPERIMENTAL__PLUGINS",
+            &genuine,
+            &session
+        ));
+        assert!(withheld(
+            "BOTOCORE_EXPERIMENTAL__PLUGINS",
+            Path::new("evil_module"),
+            &session
+        ));
+    }
+
+    /// A variable of the CLI's that selects no code is left as the person set it, whatever it
+    /// names: the CLI is run to resolve these.
+    #[test]
+    fn an_aws_value_that_selects_no_code_is_left_as_set() {
+        let (session, planted, _genuine, _safe) = planted_and_genuine("credentials-other-values");
+
+        for other in [
+            "AWS_PROFILE",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_CA_BUNDLE",
+            "AWS_PAGER",
+            "AWS_DATA_PATH",
+            "SSL_CERT_FILE",
+        ] {
+            assert!(!withheld(other, &planted, &session), "{other}");
+        }
+    }
+
+    /// A checked start removes the generic names of `CODE_SELECTORS` in the sandbox crate as well
+    /// as the CLI's own, so `PYTHONPATH` and a `GIT_CONFIG_` name a stage may write do not reach it.
+    #[test]
+    fn an_aws_start_has_the_generic_code_selectors_removed_as_well() {
+        let (session, planted, genuine, _safe) = planted_and_genuine("credentials-generic");
+
+        assert!(withheld("PYTHONPATH", &planted, &session));
+        assert!(!withheld("PYTHONPATH", &genuine, &session));
+        assert!(withheld("GIT_CONFIG_GLOBAL", &genuine, &session));
+    }
+
+    /// The whole path from the process environment to the program started: the real
+    /// `outside_stage_writable`, with the session registered as a directory a stage may write. The
+    /// test binary runs again with the four variables set, `PATH` holding an installed directory
+    /// whose `aws` writes down what it was handed, and the export is started. Each variable that
+    /// names a file in the session is not handed on, and one naming a file outside it is.
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str =
+            "credentials::tests::the_cli_is_handed_the_files_outside_a_stage_and_none_inside_one";
+        const SESSION: &str = "BRAVEBOT_TEST_AWS_SELECTORS_SESSION";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            // The stand-in prints no credentials, so the export is refused; what matters is what
+            // it was handed.
+            let _ = export(None);
+            return;
+        }
+
+        let session = fresh_directory("credentials-selectors-session");
+        let installed = fresh_directory("credentials-selectors-installed");
+        let genuine = fresh_directory("credentials-selectors-genuine").join("file");
+        std::fs::write(&genuine, "").unwrap();
+        let planted = session.join("planted");
+        std::fs::write(&planted, "").unwrap();
+        let aws = installed.join("aws");
+        let report = |name: &str| {
+            format!(
+                "printf '%s' \"${{{name}-unset}}\" > '{}'\n",
+                session.join(name).display()
+            )
+        };
+        let body: String = [
+            "AWS_CONFIG_FILE",
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "OPENSSL_CONF",
+            "BROWSER",
+        ]
+        .into_iter()
+        .map(report)
+        .collect();
+        std::fs::write(&aws, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env("PATH", &path)
+            .env("AWS_CONFIG_FILE", &planted)
+            .env("AWS_SHARED_CREDENTIALS_FILE", &genuine)
+            .env("OPENSSL_CONF", &planted)
+            .env("BROWSER", &planted)
+            .output()
+            .unwrap();
+
+        let said = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(
+            session.join("ran").exists(),
+            "the child did not run the test: {said}"
+        );
+        assert!(child.status.success(), "{said}");
+        let handed = |name: &str| std::fs::read_to_string(session.join(name)).unwrap();
+        assert_eq!(handed("AWS_CONFIG_FILE"), "unset");
+        assert_eq!(handed("OPENSSL_CONF"), "unset");
+        assert_eq!(handed("BROWSER"), "unset");
+        assert_eq!(
+            handed("AWS_SHARED_CREDENTIALS_FILE"),
+            genuine.to_string_lossy()
+        );
+    }
+
+    /// The installed `aws` CLI, not a stand-in, runs a `credential_process` helper that a profile in
+    /// `AWS_CONFIG_FILE` names when the file is outside every directory a stage may write, and does
+    /// not run one in a file inside. With the planted file's variable removed the CLI reads its
+    /// default files, which hold no such profile, so the export is refused and the report is
+    /// [`BACKEND-23`](../../../docs/specs/backends.md#BACKEND-23)'s, a profile that is not
+    /// configured, not a sign-in.
+    ///
+    /// Skipped, with a message on stderr, where no `aws` is installed in a directory the lookup
+    /// accepts. `HOME` is a scratch directory with no `.aws` in it, so the person's own files are
+    /// not read, and nothing else of the person's environment reaches the CLI.
+    #[cfg(unix)]
+    #[test]
+    fn the_installed_cli_runs_a_credential_process_outside_a_stage_and_not_one_inside() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "credentials::tests::the_installed_cli_runs_a_credential_process_outside_a_stage_and_not_one_inside";
+        const SESSION: &str = "BRAVEBOT_TEST_REAL_AWS_SESSION";
+
+        const RESULTS: &str = "BRAVEBOT_TEST_REAL_AWS_RESULTS";
+
+        if let Some(session_directory) = std::env::var_os(SESSION) {
+            bravebot_sandbox::programs::keep_out(Path::new(&session_directory));
+            let results = PathBuf::from(std::env::var_os(RESULTS).unwrap());
+            let exported = export(Some("helper")).map(|credentials| credentials.access_key_id);
+            std::fs::write(results.join("exported"), format!("{exported:?}")).unwrap();
+            let diagnosis = session(Some("helper"))
+                .map_err(|failure| matches!(failure, CredentialError::NoSuchProfile { .. }));
+            std::fs::write(results.join("diagnosis"), format!("{diagnosis:?}")).unwrap();
+            return;
+        }
+
+        let real = installed();
+        if absent(&command_for(&real)) {
+            eprintln!(
+                "skipped: no `aws` is installed in a directory the lookup accepts, so no \
+                 credential_process helper was run by the real CLI"
+            );
+            return;
+        }
+
+        // A profile named `helper` whose `credential_process` is a script that notes it ran and
+        // prints a credential in the shape the CLI reads.
+        let helper_in = |directory: &Path| -> (PathBuf, PathBuf) {
+            let marker = directory.join("helper-ran");
+            let script = directory.join("helper.sh");
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nprintf ran > '{}'\nprintf '%s' '{{\"Version\":1,\"AccessKeyId\":\"AKIAHELPER\",\"SecretAccessKey\":\"secret\"}}'\n",
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let config = directory.join("config");
+            std::fs::write(
+                &config,
+                format!(
+                    "[profile helper]\ncredential_process = {}\n",
+                    script.display()
+                ),
+            )
+            .unwrap();
+            (config, marker)
+        };
+        let run = |config: &Path, session_directory: &Path, results: &Path| {
+            let home = fresh_directory("credentials-real-home");
+            let path = std::env::join_paths([
+                real.parent().unwrap().to_path_buf(),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ])
+            .unwrap();
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+                .env_clear()
+                .env(SESSION, session_directory)
+                .env(RESULTS, results)
+                .env("PATH", &path)
+                .env("HOME", &home)
+                .env("AWS_CONFIG_FILE", config)
+                .env("AWS_EC2_METADATA_DISABLED", "true")
+                .output()
+                .unwrap();
+            let said = String::from_utf8_lossy(&child.stderr).into_owned();
+            assert!(child.status.success(), "{said}");
+            let read = |name: &str| std::fs::read_to_string(results.join(name)).unwrap_or_default();
+            (read("exported"), read("diagnosis"))
+        };
+
+        let results = fresh_directory("credentials-real-results");
+        let stage = fresh_directory("credentials-real-stage");
+        let genuine = fresh_directory("credentials-real-genuine");
+        let (config, marker) = helper_in(&genuine);
+        let (exported, diagnosis) = run(&config, &stage, &results);
+        assert_eq!(exported, r#"Ok("AKIAHELPER")"#, "the CLI was not run");
+        assert_eq!(diagnosis, "Ok(())");
+        assert!(marker.exists(), "the helper was not run by the CLI");
+
+        let planted = fresh_directory("credentials-real-planted");
+        let (config, marker) = helper_in(&planted);
+        let results = fresh_directory("credentials-real-results-planted");
+        let (exported, diagnosis) = run(&config, &planted, &results);
+        assert!(
+            !marker.exists(),
+            "the CLI ran a helper named by a file a stage may write"
+        );
+        assert!(exported.starts_with("Err("), "{exported}");
+        assert_eq!(
+            diagnosis, "Err(true)",
+            "a profile the CLI does not have was not reported as one"
+        );
     }
 
     /// The scrubbing is added to the command, not substituted for what the command is: an
@@ -1448,5 +2213,105 @@ mod tests {
     #[test]
     fn a_very_long_failure_is_bounded() {
         assert!(first_line("x".repeat(10_000).as_bytes()).chars().count() <= 200);
+    }
+
+    /// A shell standing in for the CLI: it prints what the CLI prints, then waits, with a worker of
+    /// its own holding the same output open, as the installed CLI's forked worker does.
+    #[cfg(unix)]
+    fn a_waiting_cli(pid_file: &Path) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "echo 'https://device.sso.us-east-1.amazonaws.com/'; echo 'ABCD-EFGH'; sleep 60 & echo $! > \"$0\"; wait",
+        ]);
+        command.arg(pid_file);
+        command
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: i32) -> bool {
+        rustix::process::Pid::from_raw(pid)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+    }
+
+    /// A stop while the CLI waits for the browser ends the sign-in cancelled, and ends the CLI and
+    /// what it started along with it, without waiting for either to close its output.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_while_the_cli_waits_kills_it_and_its_worker() {
+        let directory = fresh_directory("credentials-stop-waiting");
+        let pid_file = directory.join("worker");
+        let stop = std::sync::Arc::new(Stop::new());
+        let (said, heard) = mpsc::channel();
+        let running = {
+            let stop = std::sync::Arc::clone(&stop);
+            let command = a_waiting_cli(&pid_file);
+            std::thread::spawn(move || login_until(command, |line| drop(said.send(line)), &stop))
+        };
+        let lines: Vec<String> = heard.iter().take(2).collect();
+        assert_eq!(
+            lines,
+            ["https://device.sso.us-east-1.amazonaws.com/", "ABCD-EFGH"]
+        );
+        let worker = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                break pid;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert!(alive(worker));
+
+        let asked = std::time::Instant::now();
+        stop.stop();
+        let ended = running.join().unwrap();
+
+        assert!(matches!(ended, Err(Stopped::Cancelled)), "{ended:?}");
+        assert!(asked.elapsed() < std::time::Duration::from_secs(5));
+        let gone = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            !alive(worker)
+        });
+        assert!(gone, "the worker outlived the stop");
+        assert!(stop.lock().child.is_none(), "the CLI was not waited for");
+    }
+
+    /// A stop that came first starts nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_before_the_cli_starts_starts_nothing() {
+        let directory = fresh_directory("credentials-stop-first");
+        let pid_file = directory.join("worker");
+        let stop = Stop::new();
+        stop.stop();
+        let ended = login_until(a_waiting_cli(&pid_file), |_| {}, &stop);
+        assert!(matches!(ended, Err(Stopped::Cancelled)), "{ended:?}");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!pid_file.exists());
+    }
+
+    /// A CLI that finishes is the sign-in's answer, every line it wrote is passed on, and a stop
+    /// after that changes nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_that_finishes_is_the_answer_whether_or_not_it_succeeded() {
+        let mut lines = Vec::new();
+        let stop = Stop::new();
+        let mut finishing = Command::new("/bin/sh");
+        finishing.args(["-c", "echo one; echo two >&2"]);
+        assert!(login_until(finishing, |line| lines.push(line), &stop).is_ok());
+        lines.sort();
+        assert_eq!(lines, ["one", "two"]);
+        stop.stop();
+
+        let mut failing = Command::new("/bin/sh");
+        failing.args(["-c", "exit 3"]);
+        let ended = login_until(failing, |_| {}, &Stop::new());
+        assert!(
+            matches!(ended, Err(Stopped::Failed(CredentialError::Refused { .. }))),
+            "{ended:?}"
+        );
     }
 }

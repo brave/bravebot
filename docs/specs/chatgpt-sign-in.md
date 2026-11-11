@@ -73,8 +73,9 @@ Reaching OpenAI with a pay-per-token API key is a different route, the `openai` 
 [backends.md](backends.md) describes. It needs none of this and this needs none of it.
 
 The command is built: `auth login chatgpt` signs in and stores the tokens, `auth logout chatgpt` forgets
-them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says where the code
-is and that every clause is built whole. [What the exchange has to record](#what-the-exchange-has-to-record)
+them, and `auth status` and the list of ways report them. The desktop window's own sign-in
+([CHATGPT-15](#CHATGPT-15) to [CHATGPT-17](#CHATGPT-17)) is built as well. [What is built](#what-is-built)
+says where the code is and which clauses are built whole. [What the exchange has to record](#what-the-exchange-has-to-record)
 lists what a sign-in made with a real account has observed, what the service's public documents, OpenAI's
 documentation and OpenAI's OpenAPI description state, what users of other programs have reported, and what
 has not been observed. The points where this spec changes another spec are named in
@@ -123,13 +124,14 @@ The flow:
 ## Clauses
 
 <a id="CHATGPT-1"></a>
-### CHATGPT-1: only a command a person types signs in
+### CHATGPT-1: only a person's own action signs in: a command typed at a terminal, or the window's own sign-in
 
 `bravebot auth login chatgpt` is the way in, run by a person at a terminal. It is a fifth way on the list
 `auth login` prints, and `bravebot auth logout chatgpt` and `bravebot auth status chatgpt` are its partners
-([CHATGPT-11](#CHATGPT-11)). No tool the planner calls, no hook, no settings file, no environment variable
-and no slash command in a session starts the flow, and a line that arrives through a quarantined source and
-reads like the command is not the command.
+([CHATGPT-11](#CHATGPT-11)). The desktop window's own sign-in, answered in a dialog the window's main process
+draws, is the one other way in ([CHATGPT-15](#CHATGPT-15)). No tool the planner calls, no hook, no settings
+file, no environment variable and no slash command in a session starts the flow, and a line that arrives
+through a quarantined source and reads like the command is not the command.
 
 A turn whose model is named `chatgpt/<name>` on the command line or by a settings file, where no gateway
 entry has that id ([CHATGPT-9](#CHATGPT-9)), and that finds no usable sign-in, is refused before a request
@@ -143,9 +145,11 @@ The way is named `chatgpt`. `openai` is the id of the gateway reached with an AP
 about a person's machine and account, and a person's own typing is the one source for it that no content
 can author. A session signs in to AWS when it opens, because that sign-in is the AWS CLI's, run in the
 terminal the session already holds. This one has to hold a port for minutes and show a URL a person
-acts on, and a person on another machine has to be told which port to forward. A session in an editor, a
-desktop window or a background run has nowhere to show the URL. A session with no service configured
-already takes this road: it says the command to type and does not start the work.
+acts on, and a person on another machine has to be told which port to forward. A session in an editor or a
+background run has nowhere to show the URL. The desktop window does have somewhere, and it has a source no
+content can author in a dialog its main process draws, which the page cannot draw or answer, so it is the
+one other way in. A session with no service configured already takes this road: it says the command to type
+and does not start the work.
 
 `verified-by: bravebot_cli::layering::the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else`
 `verified-by: bravebot_cli::layering::the_scan_for_the_chatgpt_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file`
@@ -225,8 +229,8 @@ no more.
   message. A test holds the lists in this paragraph to the lists the test reads.
 - One reads the source a release build compiles, which is every file under a crate's `src` except test
   modules, the files only a test module declares, and comments, and pins who may name a host and who holds
-  the token. `Hosts::at` has no caller. `Hosts::compiled_in` has two, the agent's one renewer and the sign-in
-  command, and `Renewer::new` has one, in the agent's renewer. `ResponsesClient::for_account` has one caller,
+  the token. `Hosts::at` has no caller. `Hosts::compiled_in` has three, the agent's one renewer, the sign-in
+  command and the desktop bridge's sign-in, and `Renewer::new` has one, in the agent's renewer. `ResponsesClient::for_account` has one caller,
   in the agent's `backend.rs`, and `list_from_account` has one, in its `chatgpt.rs`. Each sends the access
   token to whatever `Provider` it is given, so the provider each is given is, by the text of the call, the
   one the agent's `account_provider` holds. That function is written four times, twice in `backend.rs` (the
@@ -392,7 +396,10 @@ token, which has to name it as its audience ([CHATGPT-5](#CHATGPT-5)).
 <a id="CHATGPT-5"></a>
 ### CHATGPT-5: nothing the flow reads from outside reaches the driver or the planner
 
-The sign-in runs as a command before any session, so no planner exists whose context it could enter. The
+The command's sign-in runs before any session, so no planner exists whose context it could enter. The
+window's runs beside open sessions, on its own and apart from any turn, and what it tells the window is a
+closed value and the address and port a person acts on ([CHATGPT-16](#CHATGPT-16)), none of which reaches a
+turn. The
 refresh of [CHATGPT-7](#CHATGPT-7) runs inside a turn, in the same crate, and its outcome reaches the agent.
 Both read bytes this program did not write: a callback from a browser, and replies from the authorization
 server and its key set. The crate compares and parses them and hands none of them to a turn, a trace or a
@@ -662,9 +669,10 @@ whether a turn's request, a summary, a goal check or the listing a picker makes,
 sign-in has ended, and asks the token endpoint nothing, since a missing file does not say whether a sign-in
 was never made or ended. The end is read only where the file holds nothing. A file that holds a sign-in
 again is used as any stored sign-in is and the end is forgotten, so a sign-in removed after that is not
-stored. `bravebot auth login chatgpt` is the only place a sign-in is made. It runs before any session and
-asks the renewer for a token only after it has stored one, so no process holds an end and then signs in
-itself, and a sign-in made in another process is found by the file. A process that did not find the end,
+stored. A sign-in is made only by `bravebot auth login chatgpt` or by the window's own sign-in
+([CHATGPT-15](#CHATGPT-15)). Each asks the renewer for a token only after it has stored one, and a renewer
+reads the file again before it acts on an end, so no process holds an end and then signs in itself, and a
+sign-in made in another process is found by the file. A process that did not find the end,
 such as one that starts after it, finds no file and says no sign-in is stored.
 
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
@@ -858,9 +866,9 @@ its status and count.
 The terminal's sentences are lower case, two sentences where a remedy follows, and write the command
 between backticks, none of which a window can draw as it is, so the desktop is sent sentences of its own,
 which are catalog messages in `bravebot-ui-bridge`. Each is one sentence in sentence case that says what
-happened and what to do, chosen from the value alone. The sentence that sends a person to sign in tells them
-to run the command in a terminal, since no window starts the sign-in, and names the command the terminal
-names ([CHATGPT-1](#CHATGPT-1)). The sentence is sent as `accountMessage` beside the name, and the words of
+happened and what to do, chosen from the value alone. The sentence that sends a person to sign in names the
+command the terminal names ([CHATGPT-1](#CHATGPT-1)), and the card that draws it offers the window's own
+sign-in beside it ([CHATGPT-15](#CHATGPT-15)), so a person may do either. The sentence is sent as `accountMessage` beside the name, and the words of
 it that are the command are sent as `accountCommand`, so the window draws them as code without reading the
 sentence for them. A refusal's status is in `status`, and the window's sentence for a refusal that asked
 for a wait at a 429 says it, for either refusal and in the same minutes as the terminal does: the wait is the
@@ -1343,7 +1351,9 @@ skill's file or in any other way, because the service was seen to miss its promp
 of level inside a session. The service accepts a change of level, and holding one level is this program's
 rule. A request that asks for none, as a summary, a goal check and a commit message do,
 carries none, and a session that began with none sends none. A delegate begins at the level of the turn that
-spawned it, or its definition's. The desktop offers no way to choose a level, so its sessions begin at none.
+spawned it, or its definition's. A desktop session begins at the level a turn in its folder asks for when
+the window opens, resumes or forks it: the one its model picker or `/effort` recorded, ranked against the
+folder's settings as [BACKEND-43](backends.md#BACKEND-43) ranks them.
 
 A model of the account that refuses a body carrying a level and takes the same body without it reads none
 ([BACKEND-22](backends.md#BACKEND-22)), and that refusal outranks the level a session began with. The model is
@@ -1446,6 +1456,7 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_tui::panel::the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at`
 `verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
 
 <a id="CHATGPT-11"></a>
 ### CHATGPT-11: logging out, status and doctor never print the sign-in
@@ -1495,7 +1506,8 @@ opens, as storing a gateway key is refused there ([INCOG-7](incognito.md#INCOG-7
 exists to decline. It is refused with the argument status where stderr is not a terminal, since the URL is shown there, and
 says to run it at one. Where a sign-in is already stored the command asks before replacing it
 ([CHATGPT-11](#CHATGPT-11)), and is refused in the same way where stdin is not a terminal, since a run
-nobody is watching cannot answer.
+nobody is watching cannot answer. The window's sign-in has refusals of its own
+([CHATGPT-15](#CHATGPT-15)); a terminal is not one of them.
 
 **Why.** Refusing the sign-in is the argument [INCOG-7](incognito.md#INCOG-7) makes for every sign-in: doing it
 and discarding the result would leave a session that was signed in once and never again.
@@ -1512,7 +1524,8 @@ and discarding the result would leave a session that was signed in once and neve
 The authorization URL is written to stderr, line by line as it is made, before the browser is asked to open
 it, whether or not one can be opened. It is followed by one line naming the port the listener is bound to.
 The command waits for the callback in every case. A person with no browser on the machine opens the URL in
-one elsewhere.
+one elsewhere. The window's sign-in shows the URL and the port in a window of its own, by the same rule
+([CHATGPT-16](#CHATGPT-16)).
 
 That works where the browser can reach this machine's loopback port: it is the same machine, or the port is
 forwarded, and the line says which port. Where it cannot, the redirect fails in the browser, and the command
@@ -1525,7 +1538,10 @@ Windows, where `start` is a shell builtin. It is started as the sandboxing spec 
 that bravebot looks up by name, resolved first and with the variables that spec removes from what an agent
 passes on left out. The opener failing is not the sign-in failing, and the command carries on waiting. The
 opener is `bravebot_tui::opener`, which the terminal interface uses for a link as well, so the program,
-its arguments and what it is given are one definition.
+its arguments and what it is given are one definition. It is a checked start: `BROWSER`, `GIO_LAUNCH_DESKTOP`, `XDG_DATA_HOME`,
+`XDG_CONFIG_HOME`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` are removed unless they name a program or file
+outside every directory a stage may write, `HOME` is removed unless it and the configuration and handler
+directories read under it lead outside every such directory, and every other variable is passed on ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **Why.** A sign-in that printed the URL only when the opener failed would show nothing on a machine where
 the opener exits successfully and opens nothing, which a machine reached over SSH may do. A shell between
@@ -1537,6 +1553,8 @@ identifiers, and the person needs it, so it is the one line [CHATGPT-8](#CHATGPT
 `verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_tui::opener::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
 `verified-by: bravebot_tui::opener::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::opener::the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
+`verified-by: bravebot_tui::opener::the_opener_keeps_an_unrelated_variable_and_a_safe_value_of_its_own_names`
 `verified-by: bravebot_skus::chatgpt::the_announcement_names_the_port_the_listener_is_already_bound_to`
 `verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
 
@@ -1558,6 +1576,84 @@ The test runs the built binary with `--incognito` against a stand-in through the
 `verified-by: bravebot_skus::chatgpt::renew::a_renewal_presents_the_stored_refresh_token_and_writes_what_it_is_given`
 `verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
 `verified-by: bravebot_cli::chatgpt_account::an_incognito_session_writes_the_renewal_of_its_sign_in`
+
+<a id="CHATGPT-15"></a>
+### CHATGPT-15: the window starts a sign-in only on a yes in a dialog its main process draws
+
+The desktop window offers a Sign in on the ChatGPT row of its Accounts settings, and on the card of a failure
+whose sentence sends a person to sign in ([CHATGPT-8](#CHATGPT-8)). The page that offers it may only ask. The
+window's main process answers the ask by showing a native dialog of its own, which the page does not draw and
+cannot answer, and only a yes in it starts the flow. The main process sends the bridge no request to sign in
+that such a yes did not answer, and no client of the bridge but the main process may send one.
+
+The dialog names the account, says that a browser will open at OpenAI and that the sign-in will be kept on this
+computer, and has Sign in and Cancel. Cancel is the answer a default key press and Escape give, so a key typed
+as the dialog appears is a no. Whether a sign-in is already stored is learned by the main process from the
+bridge, never from the page, and where one is, the dialog says it will be replaced; that is the yes
+[CHATGPT-11](#CHATGPT-11) asks for. An ask is dropped where the window is not focused, where it does not come
+from the window's own page, where a dialog is already open or a sign-in already runs, and for a short while
+after a no, so a page cannot put the dialog up again and again until a key press lands on it.
+
+The flow is the one the command runs. It is refused, before the listener binds and with a sentence of the
+window's own, where the state directory cannot be written ([CHATGPT-12](#CHATGPT-12)) and where a gateway entry
+is named `chatgpt` ([CHATGPT-9](#CHATGPT-9)). The conditions about a terminal do not apply, since the window
+shows what the terminal would ([CHATGPT-16](#CHATGPT-16)) and the dialog asks what the terminal would. No tool,
+hook, settings file, environment variable, slash command, bot, background session, deep link or text in a
+session starts it.
+
+**Why.** [CHATGPT-1](#CHATGPT-1) asks that a sign-in start only from a person's own action, since it opens a
+browser, holds a port and stores a credential. The page draws text from replies and from files, so a control
+the page draws is not proof a person chose it: a fault in how the page draws content could press it. A native
+dialog the main process draws is outside the page and cannot be drawn or answered by it, which gives it the
+footing a person's typing has at a terminal, the footing on which a run override is chosen only through the
+native picker. A dialog the page could raise at will would be answered by a stray key press sooner or later,
+so the main process decides when one may be shown.
+
+`verified-by: bravebot_ui_bridge::accounts::a_refused_sign_in_ends_without_starting_and_asks_nothing`
+`verified-by: bravebot_ui_bridge::accounts::no_client_of_the_host_is_offered_the_accounts_methods`
+`verified-by: bravebot_ui_bridge::accounts_tests::a_sign_in_is_refused_in_order_before_it_starts`
+`verified-by: bravebot_ui_bridge::accounts_tests::a_sign_in_is_refused_where_a_gateway_has_the_accounts_name`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: a sign-in is sent only on a yes, Cancel is the default and the answer to Escape, an ask is dropped for an unknown way, a foreign sender, an unfocused window, a second ask while one dialog or attempt is up and in the seconds after a no, and whether to replace comes from the bridge's list and not the page; make check-ui runs the test)`
+
+<a id="CHATGPT-16"></a>
+### CHATGPT-16: the window's sign-in shows the URL only in a window its main process owns, and the page is told only that it waits
+
+Once the listener is bound, and before the browser is asked to open, the main process shows the authorization
+URL, with a control that copies it, and the port the listener is bound to ([CHATGPT-13](#CHATGPT-13)), in a
+small window of its own that loads no session and draws no content. The page that asked is told that the
+sign-in waits, the port, and when it will stop waiting, and not the URL. The browser is opened by the main
+process at the URL the bridge gave it for that sign-in, and at no URL the page names; Open browser again does
+the same. The opener failing is not the sign-in failing, and the sign-in goes on waiting.
+
+The page is told the outcome as a closed value: signed in, cancelled, or failed with one sentence of the
+window's own chosen from the value of the failure alone ([CHATGPT-8](#CHATGPT-8)). After a sign-in, the
+window's pickers ask the account's listing as the command does.
+
+**Why.** The URL carries the `state` and the challenge that tie a callback to this sign-in. A page that held it
+could hand it to someone else, who could finish it with an account of their own, and every turn after would
+go to that account with nothing on the screen to say so, since the window never shows who is signed in
+([CHATGPT-11](#CHATGPT-11)). Kept where the page cannot read it, the URL reaches only the person and the
+browser they open it in.
+
+`verified-by: bravebot_ui_bridge::accounts::the_chatgpt_sign_in_runs_to_a_stored_account`
+`verified-by: bravebot_ui_bridge::accounts_tests::every_way_a_sign_in_stops_has_a_sentence_of_its_own_words`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: the page is told of a sign-in without its URL, the browser is opened once started and only at the recorded URL at exactly OpenAI's origin, and the model listing is dropped after a sign-in is stored; make check-ui runs the test)`
+
+<a id="CHATGPT-17"></a>
+### CHATGPT-17: a window's sign-in can be cancelled until it is stored
+
+While the window's sign-in waits, its own window and the row that asked show a Cancel. Cancel ends the flow:
+the listener is released, nothing is stored, and the row says the sign-in was cancelled. Closing the window or
+quitting the app does the same, and quitting does not wait for the flow to notice. Cancel is looked at again
+just before the sign-in is stored, and a cancel that arrives after the store reports the sign-in as made,
+since it was. The time bound of the command applies unchanged, and the window says its sentence for it.
+
+**Why.** The window, unlike the terminal, has no Ctrl-C that ends the process holding the port. A cancel that
+said "nothing was stored" after the store would leave a sign-in a person believes they declined.
+
+`verified-by: bravebot_skus::chatgpt::a_stop_set_while_the_browser_is_awaited_ends_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::listener::a_stop_set_while_waiting_ends_the_wait_and_lets_the_port_go`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: cancelling sends accounts.cancelSignIn, a bridge that cannot be asked ends the attempt in the window, and closing the window or quitting cancels without waiting; make check-ui runs the test)`
 
 ## What is built
 
@@ -1581,8 +1677,11 @@ turn and each side request it makes.
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
   [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
   [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10),
-  [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12), [CHATGPT-13](#CHATGPT-13) and
-  [CHATGPT-14](#CHATGPT-14).
+  [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12), [CHATGPT-13](#CHATGPT-13),
+  [CHATGPT-14](#CHATGPT-14), [CHATGPT-15](#CHATGPT-15), [CHATGPT-16](#CHATGPT-16) and
+  [CHATGPT-17](#CHATGPT-17). The window's sign-in is `crates/ui-bridge/src/accounts.rs`, which runs it for
+  the window, and `ui/src/main/sign-in.ts` and `ui/src/main/sign-in-window.ts`, which hold it in the main
+  process and show the page in a window of its own.
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
 `chatgpt` entry names, or where it names none, the models the serving host's listing offers, or where the
@@ -2345,7 +2444,7 @@ These are the places where another spec states something about this service, eac
 
 - **Backends.** [BACKEND-3](backends.md#BACKEND-3) and [BACKEND-18](backends.md#BACKEND-18) gain the
   `chatgpt/` identifier. [BACKEND-9](backends.md#BACKEND-9) gains a note that this service starts no
-  sign-in. [BACKEND-39](backends.md#BACKEND-39) names five ways to configure a service, a stored
+  sign-in, and that a person starts it by the command or by the window's own sign-in. [BACKEND-39](backends.md#BACKEND-39) names five ways to configure a service, a stored
   ChatGPT sign-in and a stored xAI sign-in among them, and asks over both accounts at a start. [BACKEND-13](backends.md#BACKEND-13), [BACKEND-17](backends.md#BACKEND-17)
   and [BACKEND-5](backends.md#BACKEND-5) each gain the case of [CHATGPT-9](#CHATGPT-9): an entry named
   `chatgpt` that states no endpoint is read for `models`, where an entry of any other name with no endpoint
@@ -2372,6 +2471,13 @@ These are the places where another spec states something about this service, eac
   own is needed if the flow comes to need the secret type of `bravebot-config` or the clearing of buffers in
   `bravebot-sandbox`, which `bravebot-skus` spells for itself. [CHATGPT-5](#CHATGPT-5) rests on the dependency
   set either way.
+- **The desktop.** [CHATGPT-15](#CHATGPT-15) to [CHATGPT-17](#CHATGPT-17) make `bravebot-ui-bridge` the
+  second caller of the flow, so the layering pin of [CHATGPT-1](#CHATGPT-1) gains its one file and no other,
+  and the bridge gains a normal dependency on `bravebot-skus`. [layering.md](layering.md)'s rows for `bravebot-skus` and
+  `bravebot-ui-bridge` say so, and that the browser is opened by the window's main process.
+  [credential-protection.md](credential-protection.md) names the window as a second writer of the file.
+  `ui/docs/interface.md` and `ui/docs/security.md` gain the dialog the main process draws, its own sign-in
+  window, the one method it sends on a yes, and the scheme check on every link the page opens.
 - **Network egress.** [network-egress.md](network-egress.md) names the destinations of this flow by
   pointing at [CHATGPT-2](#CHATGPT-2) and holds no copy of the addresses. Its register of the crates that
   keep an HTTP client of their own records that `bravebot-skus` builds one for the subscription service
@@ -2521,7 +2627,7 @@ These are the places where another spec states something about this service, eac
   status 503 and a retry under a bounded backoff. A 503
   reply is sent again, up to three requests in all with a pause that doubles from one second. A failed event
   of a stream answered 200 has no status, and either code in one is read as an unknown failure, which is not
-  asked for again and is reported in the incomplete category with nothing of what the service said. The
+  asked for again and is reported in the unrecognised category ([BACKEND-37](backends.md#BACKEND-37)) with nothing of what the service said. The
   documentation says a usage-limit error can arrive that way after streaming has begun. It names no `error`
   event. OpenAI's OpenAPI description states one, with a `code` that is a string or null, and lists no
   `subscription_sharing_` or `chatpass_v2_` code among the codes of a failed response.

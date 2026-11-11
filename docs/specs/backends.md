@@ -51,6 +51,10 @@ governs:
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
+  - crates/ui-bridge/src/effort.rs
+  - ui/src/shared/model-preferences.ts
+  - ui/src/renderer/components/ProviderModels.tsx
+  - ui/src/renderer/components/ProvidersSettings.tsx
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/customize/providers/anthropic.md
@@ -224,7 +228,9 @@ request fails unsigned.
 ### BACKEND-6: a row says which service will answer it
 
 Where the same model is reachable through more than one service, every model offered carries which
-service answers it, in terms that cannot collide with a name a service chose for itself. Brave's own
+service answers it, in terms that cannot collide with a name a service chose for itself: the
+provider's id, except that `openrouter` is written "OpenRouter" wherever it is named, so the accounts
+list, the model list and the settings report spell it alike. Brave's own
 roster carries nothing, being the one every build has. What a person reads is drawn from that,
 under [VIEW-15](terminal-transcript.md#VIEW-15), and the note left when a model is chosen says it
 too, since the row that carried it is gone by the time that note is read. The rows of the ChatGPT account
@@ -294,12 +300,13 @@ another it will never call.
 
 **The ChatGPT account starts no sign-in.** A model named `chatgpt/<name>` needs no sign-in before work
 starts, and no turn, hook, tool or slash command starts one: `bravebot auth login chatgpt` is typed by a
-person ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)). A turn on that model that finds no usable sign-in ends
+person, or the window's own sign-in is answered in a dialog its main process draws
+([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)). A turn on that model that finds no usable sign-in ends
 before a request is sent, naming the command. Replacing an access token that is about to expire is not a
 sign-in and is done inside the turn ([CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7)).
 
-The xAI sign-in starts none either: `bravebot auth login xai` is typed by a person
-([XAI-7](xai-sign-in.md#XAI-7)). A model named `xai/<name>` needs no sign-in before work starts, and a turn
+The xAI sign-in starts none either: `bravebot auth login xai` is typed by a person, or the window's own
+sign-in is answered in a dialog its main process draws ([XAI-7](xai-sign-in.md#XAI-7)). A model named `xai/<name>` needs no sign-in before work starts, and a turn
 on it that finds no usable sign-in ends before a request is sent, naming the command
 ([XAI-17](xai-sign-in.md#XAI-17)).
 
@@ -1271,6 +1278,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
 `verified-by: bravebot_agent::backend::the_xai_account_reads_no_level_is_one_service_and_is_asked_for_the_name_after_its_identifier`
+`verified-by: bravebot_tui::app::models::a_model_that_refused_a_level_is_listed_as_reading_none`
 
 
 <a id="BACKEND-23"></a>
@@ -1317,11 +1325,11 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
+| the seventeen `env` names of the network, Google, Bedrock and endpoint sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)); a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
-| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside the checkout; a project or local layer, and a `--settings` file inside the checkout, naming one is ignored and reported the same way |
+| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside every checkout the session has been in; a project or local layer, and a `--settings` file inside one, naming one is ignored and reported the same way |
 | anything else | the closest layer that set it wins |
 
 The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
@@ -1633,6 +1641,8 @@ fails somewhere far from the mistake. An entry whose region is not lowercase let
 starting with a letter or a digit configures no service either, since the host is built from it and
 one holding `/`, `@`, `?`, `#`, `:` or `.` would send the signed request to another host or another
 route than the one the person named. [BACKEND-33](#BACKEND-33) gives the same rule for `AWS_REGION`.
+`doctor` names a region this refuses, with the value and the entry that wrote it, so the account
+is not left missing from its output with nothing saying why.
 
 **What a row says.** A model named here has no tier, so a picker row carries what the block called
 it, and its id where the block called it nothing. An inference-profile ARN is not a name anybody
@@ -1649,6 +1659,9 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_tui::app::a_bedrock_model_a_block_named_is_shown_under_that_name`
 `verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
+`verified-by: bravebot_config::lib::a_refused_region_in_the_provider_entry_is_recorded_as_the_entry`
+`verified-by: bravebot_config::lib::a_provider_entry_the_machine_replaced_is_not_reported_as_refused`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it`
 
 <a id="BACKEND-30"></a>
 ### BACKEND-30: what a commit or a pull request carries is a settings key, and empty says none
@@ -1680,7 +1693,8 @@ file `--settings` names, and removed from the project and local layers before th
 that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
 never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
 it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
-named file that resolves inside the workspace is a checkout's file under another name.
+named file that resolves inside the workspace, or inside a checkout the session has been in, is a
+checkout's file under another name ([PERM-14](permissions.md#PERM-14)).
 
 **A stated value is handed over as text to copy rather than as a sentence addressed to the
 planner.** The string is the person's own, so this is presentation rather than a defence: it is
@@ -1810,8 +1824,9 @@ last turn's until then. The last turn rather than a total over the
 session, because caching is a property of a request: a session that compacted part way through has
 turns whose prefix survived and turns whose prefix was rewritten, and a total averages away the
 thing the figures are for. The footer shows the cached read as a percentage of the turn's prompt
-tokens. Nothing about a cache is kept in a session record, so a resumed session reports nothing
-until a turn has run. Clearing goes with what the conversation spent rather than with the model the
+tokens. The session record keeps the cache read and write totals ([SESSION-11](sessions.md#SESSION-11)),
+but the panel does not read them back, so a resumed session reports nothing until a turn has run.
+Clearing goes with what the conversation spent rather than with the model the
 user chose, the figures describing a prompt that has been thrown away. Anything else that changes
 which turn is the last one moves the figures with it: rewinding a turn puts back what the turn
 before it read, and a turn that failed or was stopped reports nothing rather than leaving the turn
@@ -1865,6 +1880,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::state::the_cache_figure_follows_which_turn_is_the_last_one`
 `verified-by: bravebot_tui::sessions::a_rewind_point_keeps_no_cache_figure_in_the_record`
 `verified-by: bravebot_aichat::client::an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
+`verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
 
 <a id="BACKEND-32"></a>
 ### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
@@ -2035,14 +2051,21 @@ something reads:
 
 The last six rows are the network names. Three more rows are the Google names, and six are the
 Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
-`ANTHROPIC_DEFAULT_*_MODEL` tiers. All three sets come from the person's own layers alone, the
-user's settings file and a file the command line named that is not inside the checkout. The project
-and local files arrive with a clone, and a proxy or an authority they chose would decide where
-conversation content is sent and who may read it, and a Google key or project, or an AWS account,
-region, profile or tier model, they chose would decide which account receives it. So one of these
-fifteen names in either file is reported by `doctor` with the file that wrote it and decides nothing,
-and it does not displace what a layer
-entitled to state it said. An exported variable still wins, as for every name here, and each of the
+`ANTHROPIC_DEFAULT_*_MODEL` tiers. The endpoint rows, `BRAVE_AI_CHAT_ENDPOINT` and
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, are a fourth set. All four sets come from the person's own layers
+alone, the user's settings file and a file the command line named that is not inside the workspace or
+a checkout the session has been in ([PERM-14](permissions.md#PERM-14) says which).
+The project and local files arrive with a clone, and a proxy or an authority they chose would decide
+where conversation content is sent and who may read it, a Google key or project, or an AWS account,
+region, profile or tier model, they chose would decide which account receives it, and an endpoint
+they chose would decide which host receives the conversation and which host the premium key is
+presented to. So one of these seventeen names in either file is reported by `doctor` with the file
+that wrote it and decides nothing, and it does not displace what a layer entitled to state it said.
+The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six Bedrock names and the two
+endpoints, so every pinnable name is read from the person's layers alone. A build that carries an
+endpoint outranks the file, as for every name ([BACKEND-35](#BACKEND-35)), and a source build
+carries none, so a source build reaches an endpoint only through the person's own file or an
+exported variable. An exported variable still wins, as for every name here, and each of the
 two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
 upper case, and a lower-case spelling is not read from a file.
@@ -2053,6 +2076,14 @@ a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other
 `@`, `?`, `#`, `:` and `.` among them, configures no account, as an absent one does. That holds for
 every layer that may set the name and for an exported variable, and the
 `options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
+
+A region refused for what it holds is named by `doctor` with the value as written and where it
+was written: the exported variable, the `env` block of a settings file (with the path of that
+file) or the machine-level file that pinned it, while the switch is on, or the `amazon-bedrock`
+entry under `provider`, whether or not the switch is on. Nothing else the entry holds is printed, the value is drawn with its control characters
+replaced, and nothing is decided from it. A blank region is absence rather than a refusal, a region
+from `AWS_REGION` with the switch off is not reported, and a `provider` entry that a machine-level `provider` block
+replaced is not reported either, being never read.
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
 states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
@@ -2087,9 +2118,20 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
 `verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::bedrock::a_region_from_lookup_refuses_is_the_one_refused_region_reports`
+`verified-by: bravebot_config::lib::a_refused_region_in_the_env_block_is_recorded_as_the_env_block`
+`verified-by: bravebot_config::lib::a_refused_region_in_the_env_block_is_recorded_with_the_file_that_wrote_it`
+`verified-by: bravebot_config::lib::a_refused_region_that_was_exported_is_recorded_as_exported_over_the_file`
+`verified-by: bravebot_config::lib::a_refused_region_that_is_not_in_an_env_block_names_no_env_file`
+`verified-by: bravebot_config::lib::a_refused_region_the_machine_pinned_is_recorded_as_managed`
+`verified-by: bravebot_config::lib::a_region_nothing_refused_is_not_reported`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
 `verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
 `verified-by: bravebot_config::settings::a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do`
-`verified-by: bravebot_config::settings::every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it`
+`verified-by: bravebot_config::settings::a_checkouts_endpoints_configure_no_host_and_the_persons_own_still_do`
+`verified-by: bravebot_config::lib::a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_endpoints_that_decide_nothing`
+`verified-by: bravebot_config::settings::no_pinnable_name_is_decided_by_a_checkouts_files`
 `verified-by: bravebot_config::settings::the_persons_own_files_decide_every_pinnable_name`
 
 <a id="BACKEND-34"></a>
@@ -2139,9 +2181,11 @@ binary reaches the host it was given and signs with the credentials it was given
 easiest thing on the machine to write to, which is the same reason BACKEND-1 gives for a file
 granting no capability at all.
 
-On a binary built with nothing, which is a source build, the file is what answers for all of it:
-the endpoint, the key id and the signing key included, and a project layer can name any of them.
-That is the case the file exists for, and what it costs is under Known costs.
+On a binary built with nothing, which is a source build, the file is what answers for what the build
+would have carried. A project layer can name the key id and the signing key. It cannot name either
+endpoint, which is read from the person's own layers alone ([BACKEND-33](#BACKEND-33)), so a source
+build with no endpoint in the person's own file or environment has none. That is the case the file
+exists for, and what a project layer naming the key id or the signing key costs is under Known costs.
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
 default on every binary anybody was given, and an exported default would outrank every `model` key
@@ -2155,6 +2199,7 @@ file and from none of these three, which is BACKEND-38.
 `verified-by: bravebot_config::lib::a_blank_variable_survives_when_nothing_was_built_in`
 `verified-by: bravebot_config::lib::an_exported_value_outranks_the_build_which_outranks_the_file`
 `verified-by: bravebot_config::lib::a_blank_export_hides_the_file_but_not_the_build`
+`verified-by: bravebot_config::lib::a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do`
 
 <a id="BACKEND-36"></a>
 ### BACKEND-36: a name nothing reads is kept and decides nothing
@@ -2208,13 +2253,42 @@ before backoff does not count until it starts. Cancelling that wait retains the 
 
 Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
 messages do not enter these details. Processor failures use a fixed category in their tool results;
-delegate failures tell the planner that the delegate did not finish, and nothing about the failure
-beyond that. Where the run had spent its round bound, the driver's own count of that bound is said
-too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a number this process fixed before the run
-started rather than anything read out of the answer that failed. Compaction failure messages also
-use the category, except that one that failed on the ChatGPT account says that failure's sentence
-([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)). These paths do not copy raw backend errors into the
-conversation.
+delegate failures tell the planner that the delegate did not finish and nothing about the failure
+beyond that, except that a delegate that ended rate-limited or unavailable is told so in a sentence
+this driver writes for each of the two categories, and says that starting the same delegate again
+meets the same limit ([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
+closed category name the trail records, so no word of the service's answer is carried, and every
+other category is still not named to the planner. Where the run had spent its round bound, the
+driver's own count of that bound is said too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a
+number this process fixed before the run started rather than anything read out of the answer that
+failed. Compaction failure messages also use the category, except that one that failed on the
+ChatGPT account says that failure's sentence ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)). These
+paths do not copy raw backend errors into the conversation.
+
+A refused failure also carries the request fields the attempt driver left out after the service
+refused the request (effort, cache lifetime, cache marks, the assumed reply limit, tool arguments as
+written, shown thinking), in the order it gave them up, and the backend that sent the requests
+(the Brave endpoint, AWS Bedrock, a configured gateway, the ChatGPT account or the xAI account). The
+line says them after the status and before the count, names the setting that changes a field where
+one exists (`promptCacheTtl`, `/effort`, `BRAVEBOT_OUTPUT_BUDGET`), and ends with the next step:
+another model with `/model`, or `bravebot doctor` for the endpoint and the diagnostic log location.
+The pointer does not claim that either shows the service's error text, which neither holds
+([DIAG-1](diagnostic-log.md#DIAG-1)). The fields and the backend are chosen by this program from
+closed sets: the fields from the concession the driver gave up, the backend from the variant that
+sent the request. Neither is read from a reply, a header or an address, and the request count still
+includes every request sent, concessions among them.
+
+The line also names the model the turn ran on, after the backend: the name the person configured
+or chose (the turn's `model` setting, or the configured default), as the driver holds it. It is
+not the name sent on the wire, which a gateway may map to another, and it is never taken from a
+reply, a header or a URL. The name is the person's own text, so the session layer writes any
+character that draws as nothing or moves the cursor as a visible picture or code point before the
+line is stored or shown, and every front end gets the same safe text. A turn with no model name
+says no model. Only the refused category names the model and the backend.
+
+The note to the planner after a failed turn holds the category and the count only. The desktop
+bridge stores a failed turn's reason through the same line, with the configured model, so the
+desktop's stored reason names the model and the backend of a refused turn as the line above says.
 
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
@@ -2241,6 +2315,21 @@ A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET
 too, streamed or asked for whole, and never a request that did not get through: the service had the
 request and was still writing. It is not asked for again, since the same reply takes as long again.
 
+A failure the service reported inside a stream and whose code or type is not on the list this build
+holds is neither a refusal nor a reply that stopped. It is the unrecognised category, the one
+fallback of that list, and its sentence says the service answered with a failure this build does not
+recognise and ends with the next step of a refused request. Which category is chosen depends on the
+list alone, never on the code, the type or any text the service wrote, and none of it reaches a
+sentence, a record or the log. It is not asked for again: the code says nothing about whether a second
+attempt could pass, and a repeat resends the whole conversation to fail the same way for a fault this
+build cannot name. That is a decision a maintainer can reverse by adding the category to the failures
+that are asked for again, with one repeat. The category applies to the Responses, Anthropic and
+Google clients, which share the failure; the diagnostic line
+([DIAG-7](diagnostic-log.md#DIAG-7)) is written by the Responses client only. The kind of event it
+names is set by the arm of the stream decoder that routes the event, one arm for `response.failed` and
+one for `error`, and travels with the decoded failure. It is not read from the event's `type` again
+afterwards, so it never depends on the type the service wrote.
+
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
 from a reply, and without it the report names a limit and no way to change it.
@@ -2256,7 +2345,53 @@ refused and, at a 429, the wait its `Retry-After` asked for, as any other refusa
 in an event of a stream reports neither. A refusal of the model reports neither. The planner is told the
 category and the request count and no more, as for every failure.
 
+A failure of the category unauthorized is said with the commands to run after its status and its count
+of tries: `bravebot auth status` shows the sign-in or key in use and `bravebot doctor` shows the
+endpoint. Every source of that category says it the same way: a status of 401 or 403, a token the
+Google Cloud CLI would not give, a sign-in AWS would not resolve, and a refusal the service reported
+as one of authentication, permission or billing. A failure of a request that carried the stored
+premium key, or of a key that could not be presented, reports that as a closed flag beside its
+category, set by the step that made the request and never read from a reply, and its line names the
+commands of [PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
+driver's own, so no text from a reply, header, URL or credential is in them, and a failure of the
+account of a ChatGPT or an xAI sign-in keeps its own sentence. The flag and the commands are for the
+person only: the planner is told the category and the request count and no more.
+
+A failure of the category rate-limited ends with its next step after the status and the count. A
+request sent to a backend that has a `provider` entry is told to raise `maxRetries` in that entry
+([BACKEND-55](#BACKEND-55)) and to set `fallbackModel` ([BACKEND-53](#BACKEND-53)). A request sent to
+any other backend (the Brave endpoint, an AWS account reached through the tier variables, the Vertex
+service the environment names, and the ChatGPT and xAI accounts) is told `fallbackModel` and to try
+again later, because there is no `maxRetries` for it to raise. A request to a `provider` entry that
+failed on a 429 whose wait is past the two minutes [BACKEND-54](#BACKEND-54) takes is told the same
+two things, because that call ends on its first request and no `maxRetries` changes it. Which
+sentence is said depends on a closed flag the driver sets from the variant that sent the request and
+the configuration it was selected with, and on the parsed wait, never on text from a reply, a header
+or an address. The flag and the wait are for the person only and are not given to the planner.
+
+`verified-by: bravebot_session::sessions::a_rate_limit_ends_with_the_setting_that_lengthens_the_wait`
+`verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
+`verified-by: bravebot_agent::backend::only_a_backend_reached_through_a_provider_entry_has_a_retry_setting`
+`verified-by: bravebot_config::bedrock::only_an_account_a_block_named_has_a_place_for_max_retries`
+`verified-by: bravebot_config::provider::only_a_provider_written_in_an_entry_has_a_place_for_max_retries`
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
+`verified-by: bravebot_agent::backend::each_source_of_a_refused_credential_is_diagnosed_as_unauthorized`
+`verified-by: bravebot_agent::backend::a_refusal_of_the_premium_key_is_marked_through_the_count_of_attempts`
+`verified-by: bravebot_agent::backend::a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend`
+`verified-by: bravebot_aichat::client::a_client_reports_the_premium_key_only_when_a_request_carried_it`
+`verified-by: bravebot_session::sessions::an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint`
+`verified-by: bravebot_session::sessions::a_refused_premium_key_names_the_commands_that_replace_or_forget_it`
+`verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
+`verified-by: bravebot_session::sessions::a_refused_request_names_its_backend_and_the_fields_the_retries_left_out`
+`verified-by: bravebot_session::sessions::a_refused_request_names_the_model_the_turn_ran_on`
+`verified-by: bravebot_session::sessions::an_unrecognised_failure_is_said_in_its_own_sentence_with_the_refused_next_step`
+`verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
+`verified-by: bravebot_tui::sessions::a_rejected_turn_names_the_configured_model_and_none_of_the_services_words`
+`verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
+`verified-by: bravebot_ui_bridge::history::a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words`
+`verified-by: bravebot_bedrock::lib::the_client_reports_the_fields_the_last_call_gave_up`
+`verified-by: bravebot_aichat::call::the_fields_a_call_gave_up_are_kept_in_order_and_start_afresh`
+`verified-by: bravebot_agent::backend::the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
 `verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
 `verified-by: bravebot_agent::backend::a_hop_refused_for_leaving_https_is_reported_as_a_gate_rather_than_a_failed_request`
@@ -2274,6 +2409,7 @@ category and the request count and no more, as for every failure.
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
 `verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
+`verified-by: bravebot_agent::turn::a_refusal_on_every_request_reports_the_fields_given_up_and_the_backend`
 `verified-by: bravebot_bedrock::lib::request_counts_include_capability_probes`
 `verified-by: bravebot_bedrock::lib::cancellation_in_backoff_counts_only_sent_requests`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
@@ -2303,6 +2439,8 @@ category and the request count and no more, as for every failure.
 `verified-by: bravebot_agent::turn::a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::turn::a_stop_counts_the_requests_that_were_sent_and_no_others`
 `verified-by: bravebot_agent::turn::a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_rate_limited_or_unavailable_is_told_to_the_planner_as_a_limit`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_for_a_limit_or_an_outage`
 
 <a id="BACKEND-38"></a>
 ### BACKEND-38: one machine-level file pins a destination above everything a person can set
@@ -2314,7 +2452,8 @@ above the process environment and therefore above every other source. It is
 
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
-`AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
+`AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. None of the
+variables is read from a project or local file ([BACKEND-33](#BACKEND-33)). Every other
 name in the file decides nothing, the signing key and the key id included, save `crashReports` and
 the server lists below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
 as it would with no such file.
@@ -2806,7 +2945,14 @@ rung [BACKEND-11](#BACKEND-11) gives a model pick: it outranks the key in `~/.br
 and is outranked by one in a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json`,
 or in the file `--settings` named. Above all of it are `--effort`, for the one run it starts, and a
 level picked with `/effort` in the session that is running. Whatever answers is what every surface
-asks for: the interface, a session in lines, and a one-shot run.
+asks for: the interface, a session in lines, a one-shot run, and every turn and plan run of the desktop
+window. The window's model picker records a level in the record `/effort` keeps, or removes it for
+Default, and reads it back with whether a checkout's file outranks it in the folder of the session it
+is open for, so it can say a pick changes nothing there. A checkout's file naming a word that is no
+level still outranks the pick, so the picker is told it is outranked while no level is in force. A
+record the window could not write is an error to the picker, which then shows the level it had.
+The ChatGPT account is sent one level for a whole session, so a window's session begins with the
+level a turn in its folder asks for when it opens, ranked as above, and not with the record alone.
 
 The word is read on the terms [SESSION-15](sessions.md#SESSION-15) reads the recorded one on, by the
 same rule and in one place. A word this program does not define is no level at all rather than a
@@ -2858,6 +3004,14 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
 `verified-by: bravebot_cli::main::an_effort_flag_names_the_level_a_run_asks_for`
 `verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
+`verified-by: bravebot_ui_bridge::effort::a_level_picked_in_the_window_is_recorded_where_the_terminal_reads_it`
+`verified-by: bravebot_ui_bridge::effort::a_word_naming_no_level_is_refused_and_nothing_is_recorded`
+`verified-by: bravebot_ui_bridge::effort::a_checkouts_level_outranks_the_pick_and_the_window_is_told`
+`verified-by: bravebot_ui_bridge::effort::a_checkouts_unknown_level_word_outranks_the_pick_and_leaves_none_in_force`
+`verified-by: bravebot_ui_bridge::effort::a_level_that_could_not_be_saved_is_reported_and_not_claimed`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_level`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_desktop_turn_and_plan_run_ask_for_the_level_they_were_given`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
 
 <a id="BACKEND-44"></a>
@@ -3250,8 +3404,10 @@ for `model`. A model the managed layer refuses ([BACKEND-48](#BACKEND-48)) is no
 A request in the turn's own rounds that fails with the category `rate-limited` or `unavailable`
 ([BACKEND-37](#BACKEND-37)) is sent once more with the fallback model, and the rest of that turn
 runs on it. The client has already made its attempts at the first model, so the fallback is the
-request after them. The decision reads the category, which is derived from the status the service
-answered with, and nothing the reply said. Every other category ends the turn as before.
+request after them: after three requests for most failures, and after six for a 429 that carries no
+wait, or after the count the entry's block states ([BACKEND-54](#BACKEND-54),
+[BACKEND-55](#BACKEND-55)). The decision reads the category, which is derived from the status the
+service answered with, and nothing the reply said. Every other category ends the turn as before.
 
 The fallback is used only where the same service answers for both models: the same AWS account, the
 same gateway, or the aichat endpoint. A fallback another service would answer is not used and the
@@ -3297,32 +3453,65 @@ as the `model` key is, and the switch is decided by a category the driver derive
 ### BACKEND-54: a rate limit is waited out for as long as the service asked, up to a ceiling
 
 A reply that is refused with a status that means not now ([NET-6](network-egress.md#NET-6)) is
-sent again, at most twice unless the entry's block states another count
-([BACKEND-55](#BACKEND-55)). Where the answer was a 429 and carried a `Retry-After`
+sent again for as long as the count and window of [BACKEND-55](#BACKEND-55) allow. Where the answer
+was a 429 and carried a `Retry-After`
 header the wait before the next request is the one it asked for instead of the doubling from one
 second; any other status keeps the doubling whatever the header said. The
 header is read by the egress layer, as whole seconds or an HTTP date in the IMF-fixdate form, and
-is carried on the failure as a duration of at most one hour. A value that is neither, and a header
-that is absent, leave the doubling in force.
+is carried on the failure as a duration of at most one hour.
+
+A 429 that carries no wait is one with no `Retry-After`, one whose value is neither of those forms,
+and one that asked for zero seconds. A throttle that AWS Bedrock reports inside a reply stream (the
+exception kind `throttlingException`) carries no wait at all and is treated the same way. It is
+sent again at most five times where the entry's block states no count, and the waits before them are
+8, 16, 32, 64 and 120 seconds: eight times the
+doubling from one second, at most the two minutes below. Five waits are 240 seconds in all, and
+with the six requests about four minutes. A limit is a count of requests in a window, so sending
+again within a second or two asks inside the window that refused the request. Every other failure,
+including every other status that means not now, every other exception kind Bedrock reports inside
+a stream and a 429 that named its wait, keeps two retries and the doubling from one second. Which
+schedule applies is decided from the status or the reported kind and the parsed figure alone.
+
+Only `Retry-After` is read. Anthropic documents `retry-after` as the seconds to wait and
+`anthropic-ratelimit-*-reset` as the RFC 3339 time at which a limit is fully replenished. OpenAI
+documents `Retry-After` as the minimum seconds to wait and `x-ratelimit-reset-requests` and
+`x-ratelimit-reset-tokens` as the time until a limit returns to its initial state (for example `1s`
+or `6m0s`). A reset header names when the whole window is replenished, which can be much later
+than when one request would be accepted, so waiting for it would hold a turn longer than the
+service asked, and both services name `Retry-After` as the header to follow. xAI's rate limit page
+names no wait header and recommends exponential backoff. No other header is read, and no figure from
+the body of a reply is read either.
 
 The wait is never shorter than that doubling, so `Retry-After: 0` sends the next request after the
 pause it would have had. A wait of more than two minutes is not taken: the request is not sent
 again and the failure ends the call at once. For the category `rate-limited` the failure line then
 says the service asked for a wait of about that many minutes, rounded up. The figure is a number this program parsed
 and bounded and the sentence around it is the fixed one of [BACKEND-37](#BACKEND-37), so no text the
-service wrote is repeated. The wait only sets a timer and a line a person reads: it is never given
+service wrote is repeated. That line ends with `fallbackModel` and trying again later and does not
+name `maxRetries`, since no count changes a call that is never sent again
+([BACKEND-37](#BACKEND-37)). The wait only sets a timer and a line a person reads: it is never given
 to the planner, and nothing branches on the header's text. The wait is announced as the retry it
 is, and a stop ends it as it ends any pause between attempts.
 
-**Why.** A limit that lifts in a minute otherwise ends the turn after three seconds, and a limit
-that lifts in an hour gives the person nothing to act on. The status decides whether to wait, the
-parsed number only how long.
+**Why.** A limit that lifts in a minute is outlasted by the four minutes of waits where the
+service sent no wait, and a limit that lifts in an hour gives the person nothing to act on. The
+status decides whether to wait, the parsed number only how long.
 
 `verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_for_as_long_as_the_service_asked`
 `verified-by: bravebot_aichat::call::a_rate_limit_is_waited_out_and_announced_before_the_wait`
 `verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again`
 `verified-by: bravebot_aichat::client::a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure`
 `verified-by: bravebot_aichat::lib::a_transient_failure_is_retried_unless_a_429_asked_for_more_than_the_ceiling`
+`verified-by: bravebot_aichat::lib::only_a_429_that_carries_no_wait_is_on_the_rate_limit_schedule`
+`verified-by: bravebot_aichat::lib::the_rate_limit_schedule_doubles_from_eight_seconds_and_stops_at_the_ceiling`
+`verified-by: bravebot_aichat::lib::the_pause_follows_the_failure_that_ended_the_attempt`
+`verified-by: bravebot_aichat::client::a_rate_limit_with_no_wait_is_asked_again_up_to_six_requests`
+`verified-by: bravebot_aichat::client::a_rate_limit_with_no_wait_pauses_on_the_longer_schedule`
+`verified-by: bravebot_aichat::client::a_429_that_named_its_wait_keeps_the_three_requests`
+`verified-by: bravebot_aichat::client::a_stop_ends_the_wait_after_a_rate_limit_with_no_wait`
+`verified-by: bravebot_bedrock::lib::a_throttle_with_no_wait_is_asked_again_up_to_six_requests`
+`verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
+`verified-by: bravebot_bedrock::lib::a_throttle_reported_in_the_stream_is_paused_for_on_the_rate_limit_schedule`
 `verified-by: bravebot_aichat::client::a_retry_after_that_does_not_parse_falls_back_to_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`
@@ -3333,25 +3522,48 @@ parsed number only how long.
 `verified-by: bravebot_aichat::client::a_responses_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling`
 `verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
 `verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
+`verified-by: bravebot_session::sessions::a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries`
 
 <a id="BACKEND-55"></a>
-### BACKEND-55: a provider entry states how often a request is sent again and how long a reply may go quiet
+### BACKEND-55: a provider entry states how often a request is sent again, for how long, and how long a reply may go quiet
 
-An entry under `provider`, for a gateway and for an AWS account alike, may state two figures in its
+An entry under `provider`, for a gateway and for an AWS account alike, may state three figures in its
 `options`. `maxRetries` is how many times a request to it is sent again after a failure worth
-another attempt ([NET-6](network-egress.md#NET-6)). `idleTimeoutMs` is the longest gap, in
-milliseconds, between two pieces of a reply that is still arriving
+another attempt ([NET-6](network-egress.md#NET-6)). `retryWindowMs` is how long after its first
+failure a request whose connection failed is still sent again. `idleTimeoutMs` is the longest gap,
+in milliseconds, between two pieces of a reply that is still arriving
 ([NET-5](network-egress.md#NET-5)).
 
-Where `maxRetries` is not stated a request is sent again at most twice, and where `idleTimeoutMs` is
-not stated the gap is two minutes. A count of zero sends every request once. A count above seven is
-seven, and a gap above ten minutes is ten minutes. A value that is not a whole number, a negative
-one, and a gap of zero state nothing, and the entry is otherwise read as written.
+**The count and the window.** A failure of the connection, or a status that means not now, is one
+that nothing was taken from: no part of a reply arrived, so sending the request again costs nothing
+and fails the same way until the connection is back. Such a failure is sent again while the count
+allows and, past the count, for as long as the window holds. The window runs from the first such
+failure of the call, and a request is sent again only when the pause before it ends inside the
+window, so no attempt starts after the window ends. Every other failure worth another attempt, a
+reply that stopped early and a failure the service reported part way through one, is held to the
+count, because each repeat of it is billed.
 
-The figures set a count and a timer and decide nothing else. A request is sent again for the same
-failures as without them, taken from the status or the kind of failure and never from anything a
-reply said. The pause before each is the doubling from one second, a wait a service asked for is
-bound as [BACKEND-54](#BACKEND-54) says, and the count of requests a failure reports is the one
+Where `retryWindowMs` is not stated and `maxRetries` is, only the count decides, so a person who
+chose how often a request is sent is not overridden, and a count of zero sends every request once.
+Where `retryWindowMs` is stated it applies to a failed connection whatever `maxRetries` says. Where
+neither is stated a request is sent again at most twice, or at most five times after a 429 that
+carries no wait ([BACKEND-54](#BACKEND-54)), and a failed connection for five minutes from its
+first failure, so a 429 that carries no wait is sent again past those five times while the window
+holds the pause of the schedule that follows. A stated count replaces either default, so it caps
+the longer schedule of a 429 as it caps any other failure: a count of two sends a rate limit three
+times in all, and a count of zero sends every request once. `idleTimeoutMs`, where not stated,
+leaves the gap at two minutes.
+
+A count above seven is seven, a window above an hour is an hour, and a gap above ten minutes is ten
+minutes. A value that is not a whole number, a negative one, and a window or gap of zero state
+nothing, and the entry is otherwise read as written.
+
+The figures set a count and two timers and decide nothing else. A request is sent again for the
+same failures as without them, taken from the status or the kind of failure and never from anything
+a reply said. The pause before each is the doubling from one second, held at one minute once it
+reaches it, or the schedule of [BACKEND-54](#BACKEND-54) after a 429 that carries no wait. A wait a
+service asked for is taken in place of the pause and bound as
+[BACKEND-54](#BACKEND-54) says, and the count of requests a failure reports is the one
 [BACKEND-37](#BACKEND-37) states, so a stated count shows in it. A stated gap replaces the default
 in either direction, and does not move the bound on the reply as a whole.
 
@@ -3361,37 +3573,54 @@ names a `provider` block with these keys is dropped whole and `doctor` names the
 Brave's endpoint serves, and an account the tier variables alone configure, have no entry to state
 them in and are held to the defaults. A streamed reply from a gateway on this machine is waited on
 through any silence while a person can stop it ([NET-10](network-egress.md#NET-10)), so a stated
-gap does not reach it, and a stated count does.
+gap does not reach it, and a stated count and window do.
 
-**Why.** The defaults suit a service answering over a link that works. A person whose gateway
-thinks silently for longer than two minutes, or whose link drops more than two requests in a row,
-has no way to raise either, and a person billed for each request has no way to lower the count. A
-checkout does not get a say in either: a gap it stretched holds a turn on a connection that has
-died, and a count it raised multiplies requests billed to the person's account, on the strength of
-a file they did not open.
+**Why.** The defaults suit a service answering over a link that works. A machine coming back from
+sleep, a VPN reconnecting and a service recovering from a short outage each leave the connection
+down for longer than two retries span, and a turn that has run for most of an hour should survive
+one. A person whose gateway thinks silently for longer than two minutes has no way to raise the
+gap, and a person billed for each request has no way to lower the count. The window is a length of
+time and not a larger count because how long an attempt takes depends on how it failed: a refused
+connection fails at once and a dead one after the connection timeout, so a count says nothing about
+how long a person waits. A checkout does not get a say in any of them: a gap it stretched holds a
+turn on a connection that has died, and a count or window it raised multiplies requests billed to
+the person's account and holds their time, on the strength of a file they did not open.
 
-Seven retries pause for 127 seconds in all by the doubling, and none for longer than 64, which stays
-inside the two minutes [BACKEND-54](#BACKEND-54) holds a service's own request to. A gap longer than
-ten minutes would be longer than the bound on a reply of unstated length, so it could never be the
-bound that ended one. Both figures are read as numbers and set a count and a timer, so a service has
-no say in either.
+Seven retries pause for 123 seconds in all by the doubling held at a minute, and none for longer
+than that, which stays inside the two minutes [BACKEND-54](#BACKEND-54) holds a service's own
+request to. A window is at most an hour, so a failed connection is reported within that time of the
+first failure, plus the time the last attempt takes. A gap longer than ten minutes would be longer
+than the bound on a reply of unstated length, so it could never be the bound that ended one. The
+figures are read as numbers and set a count and timers, so a service has no say in any of them.
 
 `verified-by: bravebot_config::provider::a_block_states_how_often_a_request_is_sent_again_and_how_long_a_quiet_reply_is_waited_on`
 `verified-by: bravebot_config::provider::zero_retries_is_a_statement_and_zero_milliseconds_is_not`
 `verified-by: bravebot_config::provider::a_figure_above_the_cap_is_the_cap`
 `verified-by: bravebot_config::provider::a_figure_that_is_not_a_whole_number_states_nothing`
-`verified-by: bravebot_config::provider::an_aws_entry_states_the_same_two_figures`
+`verified-by: bravebot_config::provider::a_block_states_how_long_a_failed_connection_is_retried_and_an_hour_is_the_most`
+`verified-by: bravebot_config::provider::a_window_replaces_the_count_only_where_nothing_or_a_window_was_stated`
+`verified-by: bravebot_config::provider::an_aws_entry_states_the_same_three_figures`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap`
 `verified-by: bravebot_config::lib::a_managed_gateway_states_its_own_retry_count_and_idle_gap`
 `verified-by: bravebot_aichat::client::a_gateway_stating_no_retries_is_asked_once`
 `verified-by: bravebot_aichat::client::a_gateway_stating_a_retry_count_is_asked_again_that_many_times`
-`verified-by: bravebot_aichat::client::a_gateway_stating_nothing_is_asked_three_times`
+`verified-by: bravebot_aichat::lib::a_stated_count_replaces_the_default_for_a_rate_limit_as_for_any_failure`
+`verified-by: bravebot_aichat::client::a_stated_retry_count_bounds_a_rate_limit_with_no_wait`
+`verified-by: bravebot_aichat::client::a_gateway_stating_nothing_is_asked_again_while_the_default_window_holds`
+`verified-by: bravebot_aichat::client::a_gateway_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window`
+`verified-by: bravebot_aichat::call::a_failed_connection_is_sent_again_past_the_count_while_the_window_holds`
+`verified-by: bravebot_aichat::call::a_window_does_not_extend_the_count_for_a_failure_that_is_not_the_connection`
+`verified-by: bravebot_aichat::call::with_no_window_the_count_alone_decides`
+`verified-by: bravebot_aichat::call::a_pause_that_does_not_fit_the_window_is_not_waited_on`
+`verified-by: bravebot_aichat::lib::the_pause_doubles_to_a_cap_and_stays_there`
 `verified-by: bravebot_aichat::client::a_larger_retry_count_does_not_make_a_refusal_worth_asking_again`
 `verified-by: bravebot_aichat::client::a_gateway_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`
 `verified-by: bravebot_aichat::client::a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner`
 `verified-by: bravebot_aichat::client::a_gateway_on_this_machine_is_waited_on_through_silence_whatever_gap_was_stated`
 `verified-by: bravebot_bedrock::lib::an_account_stating_no_retries_is_asked_once`
 `verified-by: bravebot_bedrock::lib::an_account_stating_a_retry_count_is_asked_again_that_many_times`
+`verified-by: bravebot_bedrock::lib::an_account_stating_nothing_is_asked_again_while_the_default_window_holds`
+`verified-by: bravebot_bedrock::lib::an_account_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window`
 `verified-by: bravebot_bedrock::lib::an_account_stating_a_retry_count_reaches_a_service_that_recovers_inside_it`
 `verified-by: bravebot_bedrock::lib::a_larger_retry_count_does_not_make_a_refusal_worth_asking_again`
 `verified-by: bravebot_bedrock::lib::an_account_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`
@@ -3895,7 +4124,8 @@ codes with which the ChatGPT account says it has reached its usage limit or may 
 the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of
 that clause without being asked for again. The code of an `error` event is the `code` of an `error` object
 in it or, where that holds none, its own `code`, and the object's wins where both are strings. From any
-other service they are a failure it did not name. A stream that stops before any of them is a reply that
+other service they are a failure it did not name, which ends the turn in the unrecognised category
+([BACKEND-37](#BACKEND-37)) and is written to the diagnostic log once ([DIAG-7](diagnostic-log.md#DIAG-7)). A stream that stops before any of them is a reply that
 did not finish and is asked for again, as many times as the entry's retries allow
 ([BACKEND-55](#BACKEND-55)) and no more.
 
@@ -3989,6 +4219,7 @@ clause was written for.
 `verified-by: bravebot_aichat::client::a_responses_stream_that_stops_short_is_asked_again_and_hands_on_no_unfinished_call`
 `verified-by: bravebot_aichat::client::an_incomplete_responses_reply_keeps_its_words_and_not_its_call`
 `verified-by: bravebot_aichat::client::a_failed_responses_reply_is_named_from_a_closed_set_and_asked_again_only_where_it_could_pass`
+`verified-by: bravebot_aichat::client::an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again`
 `verified-by: bravebot_aichat::client::a_level_a_responses_service_refuses_costs_the_field_and_not_the_turn`
 `verified-by: bravebot_aichat::client::a_models_options_reach_the_responses_body_and_cannot_overwrite_what_the_turn_built`
 `verified-by: bravebot_aichat::client::a_refused_responses_request_does_not_repeat_the_key`
@@ -4194,7 +4425,31 @@ The environment names the service by `GOOGLE_CLOUD_PROJECT` alone ([BACKEND-50](
 program is `gcloud`, found on `PATH` without the directories a stage may write, started with fixed arguments and
 this agent's own credentials taken off its environment, and no value from a settings file, a model or the
 workspace reaches it ([BACKEND-1](#BACKEND-1), [SANDBOX-30](sandboxing.md#SANDBOX-30)). It is not named by
-a file. `GOOGLE_APPLICATION_CREDENTIALS` is read by the CLI and not by bravebot.
+a file.
+
+The start is a checked start ([SANDBOX-30](sandboxing.md#SANDBOX-30)): it removes the generic names that
+clause lists, and the names below. The CLI's launcher and auth code read variables that name code it then runs, or that change what the
+interpreter it starts runs. Each is taken off the environment the program is started with unless its
+value is an absolute path outside every directory a stage may write, with links followed, that exists, and
+is a regular file for a variable that names a file:
+
+- `CLOUDSDK_PYTHON`, the interpreter its launcher executes, given as a bare name is kept, since the
+  program's `PATH` leaves those directories out. `BROWSER`, the command `gcloud auth login` opens a page
+  with, is judged the same way.
+- `CLOUDSDK_CONFIG`, whose `virtenv/bin/activate` the launcher sources when it has no interpreter of
+  its own, `PYTHONHOME`, `PYTHONUSERBASE` and `PYTHONPYCACHEPREFIX` name a directory.
+- `PYTHONPATH` is a list of directories split on the platform's path separator. It is kept only when
+  it has an entry and every entry passes, so one empty, relative, missing or stage-writable entry
+  takes the whole variable off.
+- `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CONTEXT_AWARE_CERTIFICATE_CONFIG_FILE_PATH`,
+  `CLOUDSDK_CONTEXT_AWARE_AUTO_DISCOVERY_FILE_PATH` and `OPENSSL_CONF` name a file. A credential
+  file of type `external_account` names a command to run and a file to read and send to a host it
+  names, so one a stage can write is taken off.
+- `CLOUDSDK_PYTHON_ARGS` holds options for the interpreter, such as `-c <code>`, and is always taken off.
+
+A relative path, and a path to something that does not exist, are taken off. The rest of the
+environment is left as it is. A person whose credential file or interpreter lives in a directory a
+stage may write has it taken off, and `gcloud` then signs in as it would with none set.
 
 The sign-in is asked for before work starts, and only for a model this service answers
 ([BACKEND-9](#BACKEND-9)): where the CLI gives no token, `gcloud auth application-default login` is run and
@@ -4228,6 +4483,22 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::gcloud::a_refusal_reports_the_first_line_of_stderr_and_never_a_token_it_printed`
 `verified-by: bravebot_agent::gcloud::a_reply_that_is_not_one_token_is_refused_and_not_quoted`
 `verified-by: bravebot_agent::gcloud::a_gcloud_a_stage_may_write_is_not_the_one_run`
+`verified-by: bravebot_agent::gcloud::an_interpreter_a_stage_may_write_is_not_the_one_gcloud_is_told_to_run`
+`verified-by: bravebot_agent::gcloud::an_interpreter_with_no_directory_is_kept_and_a_relative_or_missing_one_is_not`
+`verified-by: bravebot_agent::gcloud::a_config_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::a_cloudsdk_value_that_selects_no_code_is_left_as_set`
+`verified-by: bravebot_agent::gcloud::a_python_path_with_an_entry_a_stage_may_write_is_not_the_one_gcloud_imports_from`
+`verified-by: bravebot_agent::gcloud::a_python_path_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_python_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_load_from`
+`verified-by: bravebot_agent::gcloud::a_python_directory_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::a_credential_or_certificate_file_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::an_openssl_configuration_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::an_openssl_configuration_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::a_browser_a_stage_may_write_is_not_the_one_the_sign_in_opens`
+`verified-by: bravebot_agent::gcloud::a_browser_outside_every_directory_a_stage_may_write_still_reaches_gcloud`
+`verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
+`verified-by: bravebot_agent::gcloud::a_started_gcloud_has_the_generic_code_selectors_removed_as_well`
 `verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
 
 <a id="BACKEND-68"></a>
@@ -4290,6 +4561,106 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
 `verified-by: bravebot_config::provider::only_a_true_set_cache_key_turns_the_key_on`
 `verified-by: bravebot_aichat::lib::a_gateway_that_set_a_cache_key_sends_the_key_and_one_that_did_not_sends_none`
 `verified-by: bravebot_agent::backend::a_cache_key_is_the_identifier_of_the_session_and_only_where_the_block_set_it`
+
+<a id="BACKEND-71"></a>
+### BACKEND-71: the desktop window keeps which models each service shows in its picker, and in what order
+
+The window's Settings has a Providers page, second in its list, holding the
+accounts this app can sign in to as a list beside the account chosen, then what the model service is
+and how to set one up. A signed-in
+account shows the models `models.list` gives under its service, each with a switch that
+shows or hides it in the model picker and a handle that moves it, by dragging or by Alt with an arrow
+key, and a switch that shows or hides every model of the service. Reset to defaults forgets those
+choices for that service alone and signs nothing out.
+
+The bridge names the service of each row it lists as `providerKey`: `brave`, `bedrock`, `chatgpt`,
+`xai` or `gateway:<id>`, from where it took the row and never from what a listing said, and `default`
+for the configured model no service listed. An account row names the same key from its way and id,
+every AWS profile being the one `bedrock` service. Each row also says whether its model takes an
+effort level (`readsEffort`), which is false only where the service said it does not.
+
+The choices are the window's own, kept in its experience file against those keys, and are read by
+nothing but the window. The model picker leaves out a hidden service and a hidden model, except the
+model in use, and lists the rest grouped by service in the order chosen, the models no order names
+after, in the order the bridge sent them. Its rail lists every service that has a model to show,
+after an entry for all of them; a row carries its service's mark where more than one service is
+listed. A search runs over every model the picker may list, whichever entry is chosen. Beside the
+models is the level of [BACKEND-43](#BACKEND-43), locked with a line saying why where the model in
+use takes none or a checkout's file outranks a pick.
+
+**Why.** A person signed in to several services is offered every model each of them lists, most of
+which they will never use, and the one they want is a search away each time. Which models a person
+uses is a preference about the window's list and not about what a turn may request: hiding a model
+changes nothing a turn, the terminal or another front end asks for, so it is kept where the window's
+other preferences are and nothing in the agent reads it. The key is the bridge's because only the
+bridge knows which service a row came from; a display name changes when a gateway is renamed, and two
+gateways can share one.
+
+`verified-by: bravebot_ui_bridge::models::each_row_names_the_service_it_came_from_and_whether_it_reads_a_level`
+`verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/model-preferences.test.mjs holds that a hidden service and a hidden model leave the picker's rows while the model in use stays, that a chosen order is kept with the models it does not name after it, that a reset forgets one service and no other, that the choices survive the experience file, and that an account row names the key its models carry; ui/scripts/drive-providers.mjs opens Providers second in the list, hides a model and a service, moves rows by dragging and by keyboard, opens the real picker to hold that it lists what is left in that order and that a search does not bring a hidden service back, and resets a service with its account still signed in; ui/scripts/drive-models.mjs drives the rail, the marks, the search across services and the Reasoning column; make check-ui runs them)`
+
+<a id="BACKEND-70"></a>
+### BACKEND-70: the desktop window signs in to an AWS account with `aws sso login`, only on a yes in a dialog its main process draws
+
+The desktop window offers Sign in on an AWS Bedrock row of its Accounts settings where the row is not
+signed in and signing in is the remedy, which is where the row names `bravebot auth login bedrock`: not
+where the AWS CLI is missing or has no profile by the row's name. The row names its account by the
+profile, or by none for the AWS CLI's default chain. The page that offers it may only ask, as it does for
+the ChatGPT account ([CHATGPT-15](chatgpt-sign-in.md#CHATGPT-15)). The main process learns from the bridge that the row
+is listed and may be signed in, shows a native dialog of its own naming the profile, with Cancel as the
+answer to a default key press and to Escape, and only a yes there sends the bridge the request. No client
+of the bridge but the main process may send one.
+
+The bridge runs the sign-in the command runs for that account ([BACKEND-9](#BACKEND-9)): `aws sso login`
+for the row's profile, found and started as every `aws` this program starts is. It is refused, with a
+sentence of the window's own and before the AWS CLI is started, where the settings cannot be read, where
+no AWS account is configured, where managed settings or `BRAVEBOT_USE_BEDROCK` turn Bedrock off and no
+`amazon-bedrock` provider block names an account, and where the settings no longer name the row's account.
+The URL and the code the AWS CLI writes are passed to the main process as they arrive, and shown only in a
+window it owns, with controls that copy each; the page that asked is told that the sign-in waits and how it
+ended, and nothing the AWS CLI wrote. Open browser again opens the URL the bridge gave, where it is `https`
+at a region's `device.sso.<region>.amazonaws.com` or `oidc.<region>.amazonaws.com`, or an organisation's
+`<name>.awsapps.com`, and at no URL the page names. The AWS CLI opens the browser itself, so the main
+process does not open one unasked.
+
+Cancel in either window, closing the sign-in window, closing the main window and quitting each end the
+sign-in, and the AWS CLI is killed with every process in its group, so nothing it started waits on. A
+browser it opened is the person's and is left open.
+
+Where the AWS CLI finishes, the profile is asked again for credentials, as a turn would ask: a sign-in that
+leaves the profile giving none ends failed. A failure is told in a sentence chosen from its kind alone, so
+nothing the AWS CLI wrote, which can name an account or a role, reaches the page. Where the account signed
+in is the one the tier variables name, `BRAVEBOT_USE_BEDROCK=1` is recorded in the user's own settings as
+the command records it, and the outcome says whether it was written, already there, overruled by a
+settings file or left alone; an incognito session records nothing and says so ([INCOG-7](incognito.md#INCOG-7)).
+`bravebot auth login bedrock` and what it prints are unchanged.
+
+**Why.** A session signs in to AWS when it opens because the terminal it holds can show what `aws sso
+login` writes. The window has no terminal, so a person whose Bedrock row said "not signed in" had to leave
+the window for one. The sign-in is the AWS CLI's, and the window asks for nothing the command does not:
+the same program, the same arguments, the same switch recorded. What it adds is a place to show the URL
+and the code. The code is what a person compares in the browser before approving, and a page that held the
+code and the URL could hand both to someone who would approve their own session in the person's name, so
+they stay with the main process, as ChatGPT's URL does ([CHATGPT-16](chatgpt-sign-in.md#CHATGPT-16)). An AWS
+CLI left running after a cancel would hold the device authorization open for someone to approve, so a
+cancel kills it rather than asking it to stop.
+
+`verified-by: bravebot_cli::layering::the_cancellable_aws_sign_in_is_started_by_the_window_and_nothing_else`
+`verified-by: bravebot_bedrock::credentials::a_stop_while_the_cli_waits_kills_it_and_its_worker`
+`verified-by: bravebot_bedrock::credentials::a_stop_before_the_cli_starts_starts_nothing`
+`verified-by: bravebot_bedrock::credentials::a_cli_that_finishes_is_the_answer_whether_or_not_it_succeeded`
+`verified-by: bravebot_ui_bridge::accounts::the_aws_sign_in_streams_the_url_and_code_and_records_the_switch`
+`verified-by: bravebot_ui_bridge::accounts::a_cancelled_aws_sign_in_kills_the_cli_and_records_nothing`
+`verified-by: bravebot_ui_bridge::accounts::quitting_kills_a_waiting_aws_sign_in`
+`verified-by: bravebot_ui_bridge::accounts::an_aws_sign_in_is_checked_again_once_the_cli_finishes`
+`verified-by: bravebot_ui_bridge::accounts::a_refused_aws_sign_in_starts_no_cli`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::a_sign_in_with_no_account_to_sign_in_to_is_refused_with_why`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::only_the_tier_account_is_a_reason_to_record_the_switch`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::signing_in_records_the_switch_except_in_incognito`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::the_url_and_the_code_are_taken_from_what_the_cli_wrote`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::a_failure_is_told_by_its_kind_alone`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: an AWS sign-in is sent only for a row the bridge lists with its command and names the profile in the dialog, the URL and then the code reach the sign-in window and not the page, the browser is opened only when asked and only at the recorded https URL under the AWS hosts, and closing the window or quitting cancels it; ui/scripts/agent-settings.test.mjs draws Sign in on an AWS row only where the row has its command, asks for the row's own profile, and keeps the rule that coming back to the window reads no AWS row again; make check-ui runs both)`
 
 ## Known costs
 
@@ -4434,8 +4805,10 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
   (`provider` and `model`, [BACKEND-24](#BACKEND-24)) are refused from the project layers outright,
   because the credential value comes from the person's own environment under names the layer would
   choose, and a file nobody read must not pick either. The `env` names that choose the account a
-  request goes to are refused from them too: the six network names, the three Google names and the
-  six Bedrock names ([BACKEND-33](#BACKEND-33)). For the remaining fields, what limits the
+  request goes to are refused from them too: the six network names, the three Google names, the
+  six Bedrock names and the two endpoints ([BACKEND-33](#BACKEND-33)). A team that shares a
+  development endpoint states it in each person's own file, the environment or the build, and not in
+  `.bravebot/settings.json`. For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no
   capability, so the worst it does is send a request somewhere useless or somewhere watching.
 
@@ -4444,13 +4817,11 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
   refused from the project layers outright, as `references` is, and reported by `doctor`. A checkout
   cannot say what its own history carries; the person says it once in their own file.
 
-- **A region refused for what it holds is not reported.** A Bedrock region outside the characters of
-  [BACKEND-33](#BACKEND-33), in an `env` block or in a `provider` entry, configures no account as an
-  absent one does, and nothing names the value that was refused: `doctor` lists the names a file set,
-  so an account missing from its output is the only sign, and a person who mistyped a region has the
-  other backends in force. Importing from Claude Code ([IMPORT-3](import.md#IMPORT-3)) writes the
-  region the file states, so one this refuses is imported and then not read, and an `amazon-bedrock`
-  entry from opencode with one is left with the reason that it has no region.
+- **An imported region that is refused for what it holds is not named at import.** `doctor` names a
+  Bedrock region refused by [BACKEND-33](#BACKEND-33) once it is in force, but importing from Claude
+  Code ([IMPORT-3](import.md#IMPORT-3)) writes the region the file states, so one this refuses is
+  imported and then not read, and an `amazon-bedrock` entry from opencode with one is left with the
+  reason that it has no region.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
@@ -4771,7 +5142,8 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
 - **Brave's endpoint and an account the tier variables alone configure take neither figure of
   BACKEND-55.** Both figures live in a `provider` entry's `options`. The model Brave's endpoint
   serves has no entry, and the tier variables of BACKEND-33 have no block to state anything in, so a
-  person reaching either is held to two retries and a two minute gap. Tier words that resolve
+  person reaching either is held to two retries (five after a rate limit that carried no wait) and a
+  two minute gap. Tier words that resolve
   through an `amazon-bedrock` entry take that entry's figures. Stating them for the tier variables
   would take a name in BACKEND-33's table or a top-level key, and neither is decided here.
 
@@ -4786,7 +5158,10 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
   seven retries, about fourteen minutes with the requests themselves, and the pause the doubling
   gives is only the least of each wait. The count is the person's, and nothing shortens a wait the
   service asked for within the two minutes, since sending sooner is the failure that clause exists
-  to avoid.
+  to avoid. A 429 that carries no wait is bound too: where no count is stated its five waits total
+  240 seconds, and a stated count of seven takes the 8, 16, 32, 64 and 120 second waits and then two
+  more of 120 seconds, 480 seconds in all, so a turn against a limit that never lifts is held for
+  at most about eight minutes in the requests' pauses.
 
 - **Thinking is neither asked for nor kept for an Anthropic model.** No `thinking` field is sent and no
   thinking block is sent back (BACKEND-57), so a model that would have continued from its own

@@ -188,7 +188,9 @@ model services from other tools with `bravebot import-providers` is refused the 
 opens, and `bravebot auth logout chatgpt` is allowed
 ([CHATGPT-12](chatgpt-sign-in.md#CHATGPT-12)). Signing in to xAI with `bravebot auth login xai` is refused
 the same way, before the code is asked for, and `bravebot auth logout xai` is allowed
-([XAI-10](xai-sign-in.md#XAI-10)).
+([XAI-10](xai-sign-in.md#XAI-10)). Storing a premium key or a gateway key in the desktop window's key
+window is refused the same way, before the key window opens
+([PREM-16](premium-credentials.md#PREM-16), [CLI-18](cli.md#CLI-18)).
 Deleting a stored session with `bravebot sessions delete` or `sessions purge` is allowed for the same
 reason ([CLI-33](cli.md#CLI-33)).
 
@@ -208,6 +210,7 @@ points.
 `verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
 `verified-by: bravebot_cli::xai_sign_in::auth_login_xai_is_refused_before_a_code_is_asked_for_where_it_cannot_be_done`
 `verified-by: bravebot_cli::xai_sign_in::auth_logout_xai_forgets_the_sign_in_and_only_that_one`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_key_is_refused_in_order_before_it_is_typed`
 
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so

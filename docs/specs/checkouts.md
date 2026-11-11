@@ -571,6 +571,7 @@ does the description of `isolation`.
 `verified-by: bravebot_agent::workspace::a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened`
 `verified-by: bravebot_agent::workspace::the_working_directory_and_a_checkout_are_not_reachable_from_each_other`
 `verified-by: bravebot_agent::workspace::a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout`
+`verified-by: bravebot_agent::workspace::a_delegates_checkout_records_its_own_root_and_carries_its_parents_records`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout`
 `verified-by: bravebot_agent::workspace::the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout`
@@ -592,7 +593,11 @@ does the description of `isolation`.
 
 As a checkout is made, each rule the map holds under the working directory is copied to the same
 relative path under the checkout, and what was said about the workspace
-([TRUST-7](trust-map.md#TRUST-7)) answers for every path no copied rule names. Re-spelling the map
+([TRUST-7](trust-map.md#TRUST-7)) answers for every path no copied rule names. Rules that land on
+one path under the checkout, because the one-letter fold joins their spellings under the working
+directory, are copied as the weakest of them (a distrust, then an undecided boundary, then a
+trust), as the working directory reads them, and a rule already at a path a copy lands on is
+weighed the same way, so a copy never turns a refusal into a grant. Re-spelling the map
 for a new root, as `/cd` does ([TRUST-13](trust-map.md#TRUST-13)), is not that: every rule would
 still name the file it named, and none would answer for a path in the checkout.
 
@@ -619,7 +624,12 @@ Removing a checkout withdraws its rules except those that distrust a path.
 `verified-by: bravebot_agent::workspace::a_checkout_is_removed_unless_something_was_done_in_it`
 `verified-by: bravebot_core::trust::a_copied_subtree_answers_as_the_original_does`
 `verified-by: bravebot_core::trust::a_copy_of_an_undecided_root_is_not_answered_by_a_broader_rule`
+`verified-by: bravebot_core::trust::a_copy_carries_a_refusal_under_a_name_only_the_simple_fold_joins`
+`verified-by: bravebot_core::trust::a_copy_of_a_distrust_and_a_trust_under_the_pair_the_simple_fold_joins_is_untrusted`
+`verified-by: bravebot_core::trust::a_copy_of_two_rules_that_share_a_destination_is_the_weakest_of_them`
+`verified-by: bravebot_core::trust::a_copy_does_not_replace_a_refusal_already_at_its_destination`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_keeps_what_distrusts_a_path`
+`verified-by: bravebot_core::trust::withdrawing_a_subtree_drops_a_trust_the_simple_fold_joins_and_the_full_fold_does_not`
 `verified-by: bravebot_core::file_authority::a_rooted_handle_files_a_relative_name_under_its_root`
 `verified-by: bravebot_core::file_authority::a_rooted_handle_keeps_whitespace_at_the_end_of_a_name_and_of_its_root`
 `verified-by: bravebot_core::file_authority::copying_a_subtree_moves_no_revision`
@@ -663,6 +673,9 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_agent::turn::a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout`
 `verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
+`verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
+`verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
+`verified-by: bravebot_core::permissions::a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused`
 
 <a id="CHECKOUT-10"></a>
 ### CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout

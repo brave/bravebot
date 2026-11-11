@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a session starts or ends, when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
+description: Declare hooks for session, turn, tool, approval, delegate-checkout and compaction events; configure arguments, input, execution reach, timeouts and failure handling.
 ---
 
 # Hooks
@@ -242,6 +242,13 @@ since you mistyped its path.
 
 ## Known costs
 
+- **`file-changed` fires in the full-screen interface alone.** A session in lines, a one-shot run, the
+  desktop app, an editor over ACP and the local host look at no file, so an entry for it fires nowhere
+  else.
+- **A command that writes the file it watches runs about every 5 seconds.** Only the gap between runs
+  and your own command stop it.
+- **A change is noticed by looking.** A file written and put back to the same size and modification
+  time between two looks is not seen.
 - **A hook is told the moment, not the path.** The formatter above runs over the project rather than
   over the file that changed. For a formatter that is a slower run of the same work; for something
   that wanted to act on one file it is the feature not being there.
@@ -253,8 +260,9 @@ since you mistyped its path.
   a `timeout` for one that needs more than 30 seconds. Stopping the turn does not stop a hook that is
   running. Delegates given a checkout by one call run their hooks at the same time, and the status
   line names only one of them.
-- **A hook that reaches its time limit is stopped alone.** The program it started is stopped and the
-  programs that one started keep running.
+- **A hook that reaches its time limit is stopped with the programs it started.** On Unix the hook
+  leads a process group of its own and the limit ends the whole group, as it does for the programs of a
+  `run` line, so a script that started a build or an installer does not leave it running.
 - **`compacted` does not say who asked, and there is no moment before a compaction.** A compaction you
   asked for and one the budget forced run the same hooks with the same line. A command that has to
   save something while the full history is still in the request has no moment to attach to.

@@ -30,7 +30,10 @@ here reads stops nothing, so a skill written for another agent works here, and
 [SKILL-15](#SKILL-15) is the two keys read for how the skill runs, and [SKILL-20](#SKILL-20) is the
 key that keeps a skill from the planner. `argument-hint` is read too: an interface draws it after the
 skill's name to say what the skill takes ([commands.md](commands.md)), and it is never given to the
-planner. A file with no frontmatter is not a skill.
+planner. A file with no frontmatter is not a skill. A directory is a skill only when its own entry is
+spelled exactly `SKILL.md`, on every volume ([INSTR-1](instructions.md#INSTR-1)): on a volume that
+folds case, `skill.md` opens as `SKILL.md`, and a directory holding it is not listed, not loaded and
+not counted in a root nobody vouched for ([SKILL-6](#SKILL-6)).
 
 ```markdown
 ---
@@ -49,6 +52,13 @@ Write the subject in the imperative. Explain why in the body, never what.
 `verified-by: bravebot_agent::skills::an_argument_hint_reaches_the_interface_and_not_the_planner`
 `verified-by: bravebot_agent::skills::the_body_is_everything_after_the_closing_marker`
 `verified-by: bravebot_agent::skills::a_marker_inside_the_body_is_left_alone`
+`verified-by: bravebot_agent::skills::a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_does_not_hold_the_skill_file`
+`verified-by: bravebot_agent::skills::a_listing_without_the_skill_file_does_not_hold_it`
+`verified-by: bravebot_agent::skills::a_listing_holding_skill_md_exactly_holds_the_skill_file_only_when_it_is_a_file`
+`verified-by: bravebot_agent::skills::a_project_directory_holding_skill_md_in_another_case_is_not_offered`
+`verified-by: bravebot_agent::skills::discovery_does_not_offer_a_skill_the_volume_only_opens_under_the_other_spelling`
+`verified-by: bravebot_agent::skills::a_home_directory_holding_skill_md_in_another_case_is_not_offered`
 
 <a id="SKILL-2"></a>
 ### SKILL-2: only the name and description reach the planner; the body waits for `load_skill`
@@ -157,6 +167,7 @@ name would be on the user's screen as though the agent had written it.
 `verified-by: bravebot_agent::skills::a_skill_that_was_skipped_is_counted_rather_than_passed_over_in_silence`
 `verified-by: bravebot_agent::skills::an_untrusted_skill_is_not_named_in_what_the_user_is_told`
 `verified-by: bravebot_agent::skills::several_untrusted_skills_are_counted_and_none_of_them_is_named`
+`verified-by: bravebot_agent::skills::an_untrusted_directory_holding_skill_md_in_another_case_is_not_counted`
 
 <a id="SKILL-7"></a>
 ### SKILL-7: withdrawn, the most specific source wins
@@ -266,12 +277,46 @@ skill `bravebot-help`, so a session answers a question about using bravebot from
 is running and not from the planner's memory. Its description names one condition, per
 [SKILL-13](#SKILL-13): the user asks a question about using bravebot itself.
 
-The skill's body is an index with one line per page. A page is loaded with `load_skill` by the name
-on its line, `bravebot-help/<place of the page>`, and a question costs the pages it needs and not the
-whole site. The name is matched exactly against the table compiled into the program, so it is never
-a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is: it is this
-program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
-the built-in, and the pages go with it.
+The skill's body is an index with one line per published page, giving its exact name, title, main
+topics and whole-page size. Size counts Unicode scalar values after frontmatter removal,
+including whitespace and Markdown, excluding the tool-result wrapper; it counts neither UTF-8 bytes
+nor tokens. The index also gives the size of the spec list.
+
+`load_skill` with `bravebot-help/<place of the page>::headings` returns only heading selectors, with
+no body text. Each selector is `bravebot-help/<place of the page>::section:<number>:<heading>`.
+The number is the heading's one-based position among all headings in file order, written without
+leading zeroes, so repeated heading text remains separately addressable. The heading text is
+case-sensitive and exact, retaining inline Markdown and omitting surrounding whitespace and optional
+space-separated closing `#` marks. Headings are ATX headings of levels one through six, indented
+by at most three spaces and outside backtick or tilde fences. Indented code and headings inside
+fences are excluded. Backtick fence openers have no backtick in their info string; tilde fence
+openers may have one. A heading whose content consists only of space-separated closing `#` marks
+has an empty title. A section preserves the source Markdown from its heading through just before
+the next heading of the same or higher level, including nested headings, examples and line endings;
+the last section runs to the end of the page. Unknown selectors and mismatched numbers or titles
+are refused without guessing.
+
+The index teaches the two routes to part of a page and tells the model to use one of them for a
+question. The bare name `bravebot-help/<place of the page>` loads a page of 12000 characters or
+fewer whole, without frontmatter, and a longer page as its outline, as the paragraph below states.
+Each name selects compiled text and never becomes a path ([SKILL-8](#SKILL-8)). That text is
+trusted because
+it is this program's own ([SKILL-12](#SKILL-12)); loading it grants no file or directory reach. A
+skill of the user's own named `bravebot-help` shadows the built-in and all its page, headings and
+section routes. A catalogue that excludes the built-in cannot load those routes. These selectors
+apply to published documentation only, not ordinary skills or spec pages.
+
+Each line of the index ends with the size of the page in characters, and for a page that loads by
+section, the number of its sections. A page of more than 12000
+characters loads as its opening text and a list of its sections, one line each with the name
+`bravebot-help/<place of the page>#<section>` and the size of the section, and not as its whole
+text. A section is a `##` heading outside a code fence, or a `###` heading where the page has no
+`##` heading, and everything under it up to the next one.
+Its name is the heading lowercased, with each run of characters other than letters and digits
+written as one hyphen and `-2`, `-3` added to a heading that repeats. A section loads with
+`load_skill` by that name, matched exactly against the sections of the compiled page, so it is
+never a path. A page of 12000 characters or fewer loads whole. A section is not split further, so
+a section of more than 12000 characters loads whole.
 
 The clause headings of `docs/specs/` are carried the same way. The index has one more line, for the
 page `bravebot-help/specs`, which lists every spec with its title and the number of its clauses. The
@@ -297,6 +342,14 @@ wording of a rule is answered from its heading, and the program holds the clause
 `verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
 `verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`
 `verified-by: bravebot_agent::help::every_spec_is_carried_with_the_clause_headings_its_file_holds`
+`verified-by: bravebot_agent::help::a_section_runs_to_the_next_heading_and_a_fenced_heading_starts_none`
+`verified-by: bravebot_agent::help::a_long_page_loads_as_its_sections_and_a_section_loads_alone`
+`verified-by: bravebot_agent::help::a_short_page_loads_whole`
+`verified-by: bravebot_agent::help::a_page_with_only_third_level_headings_splits_at_them`
+`verified-by: bravebot_agent::help::every_long_page_has_sections_to_load_it_by`
+`verified-by: bravebot_agent::help::a_section_is_found_by_its_exact_name_and_nothing_else`
+`verified-by: bravebot_agent::help::the_index_gives_the_size_of_every_page_and_says_which_load_by_section`
+`verified-by: bravebot_agent::tools::a_long_documentation_page_loads_by_section_through_the_tool`
 `verified-by: bravebot_agent::help::a_spec_page_holds_the_heading_of_a_clause_and_names_its_file`
 `verified-by: bravebot_agent::help::a_spec_page_is_found_by_its_exact_name_and_nothing_else`
 `verified-by: bravebot_agent::help::the_list_of_specs_names_a_page_that_loads_for_each_spec`
@@ -307,6 +360,21 @@ wording of a rule is answered from its heading, and the program holds the clause
 `verified-by: bravebot_agent::tools::a_spec_page_loads_by_the_name_the_list_gives_it`
 `verified-by: bravebot_agent::tools::a_documentation_page_loads_by_the_name_the_index_gives_it`
 `verified-by: bravebot_agent::tools::a_users_skill_of_the_help_name_takes_the_pages_with_it`
+`verified-by: bravebot_agent::help::every_index_size_counts_the_loaded_body_in_characters`
+`verified-by: bravebot_agent::help::headings_list_only_real_headings_and_address_repeated_text_exactly`
+`verified-by: bravebot_agent::help::headings_respect_tilde_fences_indentation_and_closing_marks`
+`verified-by: bravebot_agent::help::invalid_backtick_fence_openers_do_not_hide_headings`
+`verified-by: bravebot_agent::help::empty_headings_with_closing_hashes_have_empty_selector_titles`
+`verified-by: bravebot_agent::help::a_section_keeps_literal_nested_markdown_and_stops_at_its_peer`
+`verified-by: bravebot_agent::help::the_index_teaches_sizes_and_the_two_ways_to_reach_a_section`
+`verified-by: bravebot_agent::help::the_outline_and_the_heading_list_agree_on_which_lines_are_inside_a_fence`
+`verified-by: bravebot_agent::help::every_long_pages_outline_is_small_and_each_name_loads_exactly_its_section`
+`verified-by: bravebot_agent::help::spec_pages_carry_only_their_source_headings_in_file_order`
+`verified-by: bravebot_agent::tools::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
+`verified-by: bravebot_agent::tools::compiled_help_dispatch_is_trusted_and_opens_no_files_or_directories`
+`verified-by: bravebot_agent::tools::custom_help_dispatch_shadows_pages_headings_sections_and_specs`
+`verified-by: bravebot_agent::tools::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
+`verified-by: bravebot_agent::tools::the_files_view_answer_loads_through_headings_and_one_small_section`
 
 <a id="SKILL-14"></a>
 ### SKILL-14: an interface listing skills is shown the set a turn would advertise, read the same way
@@ -619,6 +687,11 @@ a project was vouched for from outliving the vouching.
 `verified-by: bravebot_tui::render::the_box_names_the_mode_while_one_is_in_force`
 
 ## Known costs
+
+- **A skill nobody searches for is seen with `skill eval`.** Whether `search_skills` finds a skill of
+  the user's own or the project's ([SKILL-18](#SKILL-18)) depends on its description. `bravebot skill
+  eval <name>` ([SKILLEVAL-1](skill-evals.md#SKILLEVAL-1)) runs a skill's saved cases with and
+  without it and reports how many runs searched for it and how many loaded it.
 
 - **A mode applies a skill's instructions and nothing else of it ([SKILL-21](#SKILL-21)).** Its
   `model` and `effort` are not applied, since they take effect from the round after a load and a mode

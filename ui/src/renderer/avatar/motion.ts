@@ -47,3 +47,20 @@ export function completionNod(elapsed: number): number {
   if (at <= 0 || at >= 1) return 0
   return Math.sin(Math.PI * at) ** 2 * 0.22
 }
+
+/** How often a face at rest may fidget, in seconds: once in each window of this length. */
+export const FIDGET_CYCLE = 32
+
+/**
+ * When in its current window a face at rest fidgets, and how. The moment falls between 8 and 24
+ * seconds into the window, so two fidgets are at least 16 seconds apart, and it depends only on
+ * the seed and the window, so two views of one bot fidget together.
+ */
+export function fidget(seconds: number, seed: string): { cycle: number; start: number; kind: number } {
+  const cycle = Math.floor(seconds / FIDGET_CYCLE)
+  return {
+    cycle,
+    start: cycle * FIDGET_CYCLE + 8 + randomUnit(`${seed}/fidget/${cycle}`) * 16,
+    kind: randomUnit(`${seed}/fidget-kind/${cycle}`),
+  }
+}

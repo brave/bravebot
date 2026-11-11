@@ -15,17 +15,50 @@ use std::path::Path;
 /// Names the directory and not the path joined to it. [`WorkspaceError::describe`] passes the
 /// detail through as it is, and a read through a reference was made on a filename the planner is
 /// never told (LIST-2).
+///
+/// The only thing in the detail that depends on `named` is whether it is absolute or a home
+/// reference, so no byte of a filename picks a sentence. A hint about the name, such as READ-11's
+/// on the kind of space, is added by the one tool that has a name the planner typed, and not here,
+/// because every read, edit and write reaches this function, some of them on a filename out of a
+/// directory listing.
 pub(super) fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
-    if error.kind() == std::io::ErrorKind::NotFound
-        && !Path::new(named).is_absolute()
-        && !named_home(named)
-    {
-        return format!(
-            "{error}; a relative path is looked up under the working directory, {}",
+    let mut detail = error.to_string();
+    if error.kind() != std::io::ErrorKind::NotFound {
+        return detail;
+    }
+    if !Path::new(named).is_absolute() && !named_home(named) {
+        detail = format!(
+            "{detail}; a relative path is looked up under the working directory, {}",
             root.display()
         );
     }
-    error.to_string()
+    detail
+}
+
+/// The error of a read of `resolved`, which the caller reached by the name `named`.
+///
+/// A file that is not there, and a path that is there and is not a regular file, are
+/// [`WorkspaceError::Io`]. A regular file the operating system would not let this process read,
+/// and any other failure of the read, is [`WorkspaceError::Unreadable`]. Decided from the kind of
+/// failure and from `stat` of the path, never from a byte of what the file holds.
+pub(super) fn read_failure(
+    error: &std::io::Error,
+    resolved: &Path,
+    named: &str,
+    root: &Path,
+) -> WorkspaceError {
+    let detail = io_detail(error, named, root);
+    let path = named.to_string();
+    let not_a_file = error.kind() == std::io::ErrorKind::NotFound
+        || match std::fs::metadata(resolved) {
+            Ok(meta) => !meta.is_file(),
+            Err(second) => second.kind() == std::io::ErrorKind::NotFound,
+        };
+    if not_a_file {
+        WorkspaceError::Io { path, detail }
+    } else {
+        WorkspaceError::Unreadable { path, detail }
+    }
 }
 
 #[derive(Debug)]
@@ -38,7 +71,11 @@ pub enum WorkspaceError {
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
     Io { path: String, detail: String },
-    /// The file changed after it was read, so the approved change no longer applies.
+    /// A file that is there and is a regular file could not be read: permission was refused or the
+    /// disk reported an error. [`WorkspaceError::Io`] is the path that is absent or is not a file.
+    Unreadable { path: String, detail: String },
+    /// The file may have changed since the approval was drawn, because it was written or because a
+    /// `run` line started meanwhile (TRUST-4), so the approved change no longer applies.
     Stale { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
     Contended { path: String },
@@ -100,6 +137,14 @@ impl WorkspaceError {
                 "'{named}' is inside the workspace, and a path there is named relative to the \
                  workspace root; refusing to touch it as typed. Name it without the workspace's \
                  own directory in front, or as '.' for the root itself"
+            ),
+            Self::Escapes {
+                remedy: Remedy::InsideClimb,
+                ..
+            } => format!(
+                "'{named}' contains '..' and lands inside the workspace, where a path is named \
+                 relative to the workspace root; refusing to touch it as typed. Name it relative \
+                 to the workspace root, without the '..'"
             ),
             // What the person can do is part of the sentence, since the planner cannot do it and has
             // otherwise been seen to reach the same file through `run` instead.
@@ -187,9 +232,15 @@ impl WorkspaceError {
                  file on the window to have it read with their next message"
             ),
             Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
-            Self::Io { detail, .. } => format!("'{named}': {detail}"),
+            Self::Io { detail, .. } | Self::Unreadable { detail, .. } => {
+                format!("'{named}': {detail}")
+            }
             Self::Stale { .. } => {
-                format!("'{named}' changed after it was read; read it again before editing")
+                format!(
+                    "'{named}' may have changed while the user was being asked about it, because \
+                     the file was written or a command started, so nothing was written; read it \
+                     again if its contents matter, then repeat the call"
+                )
             }
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")
@@ -252,6 +303,7 @@ impl WorkspaceError {
             Self::Escapes { path, .. }
             | Self::Invalid { path, .. }
             | Self::Io { path, .. }
+            | Self::Unreadable { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
             | Self::Binary { path }
@@ -274,14 +326,19 @@ pub(super) const ENDS_CHECKOUTS: &str = "while one is open no delegate is given 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or to a place inside the root; a link carries it out; it names a credential location, which
-    /// cannot be opened; or what was refused is a command's redirection or a rewind.
+    /// or onto a name that is not UTF-8; a link carries it out; it names a credential location,
+    /// which cannot be opened; or what was refused is a command's redirection or a rewind.
     Nothing,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
     /// opened. It is named in some other way than relative to the root: from the top of the file
     /// system, through a link to the root or through `~`. The relative spelling reaches the file,
     /// so the planner is told that and not that the path leaves the workspace, which it does not.
     Inside,
+    /// The path has a `..` and lands inside the root. It does not leave the workspace, and the
+    /// relative spelling without the `..` reaches the file, so the planner is told that. No
+    /// directory is offered, since none can be opened inside the root, and the `..` is the fault,
+    /// which [`Remedy::Inside`] does not say.
+    InsideClimb,
     /// Opening the directory a file is in, or a name nothing is at yet would be created in, makes
     /// the same path reach it, for whatever the call does to it.
     Open,
@@ -321,6 +378,7 @@ impl Remedy {
         match self {
             Self::Nothing => "none",
             Self::Inside => "name it relative to the workspace root",
+            Self::InsideClimb => "name it relative to the workspace root, without the '..'",
             Self::Open => "open its directory",
             Self::OpenOrDrop => "open its directory, or drop the file",
             Self::OpenEndsCheckouts => {

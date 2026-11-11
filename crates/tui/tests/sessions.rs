@@ -96,6 +96,8 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 inference_ms: 11_000,
                 tools_ms: 500,
                 stalled_ms: 0,
+                file_wait_ms: 0,
+                ..Default::default()
             },
         ),
         (
@@ -105,6 +107,8 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 inference_ms: 2_000,
                 tools_ms: 37_000,
                 stalled_ms: 0,
+                file_wait_ms: 0,
+                ..Default::default()
             },
         ),
         (
@@ -114,6 +118,8 @@ fn a_time_breakdown() -> BTreeMap<usize, bravebot_agent::timing::Timing> {
                 inference_ms: 4_000,
                 tools_ms: 1_000,
                 stalled_ms: 294_000,
+                file_wait_ms: 0,
+                ..Default::default()
             },
         ),
     ])
@@ -840,6 +846,108 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
     );
 }
 
+/// SANDBOX-18. A directory reopened by a resume is recorded by device and inode as it is
+/// reopened, so a stage that relinks it afterwards is not given a row for where the link leads.
+/// The fault it rejects: a resume that restores the name alone, so the reopened directory has no
+/// record and the run profile resolves its name again on every stage.
+#[cfg(unix)]
+#[test]
+fn a_resumed_session_holds_the_directory_it_reopened_to_the_directory_it_reopened() {
+    let scratch = Scratch::new("added-directories-held");
+    let notes = scratch.project.parent().expect("a root").join("held-notes");
+    let elsewhere = scratch
+        .project
+        .parent()
+        .expect("a root")
+        .join("held-elsewhere");
+    std::fs::create_dir_all(&notes).expect("create the directory to add");
+    std::fs::create_dir_all(&elsewhere).expect("create the directory to link to");
+
+    let mut workspace = Workspace::new(&scratch.project).expect("workspace");
+    let added = workspace
+        .add_directory(notes.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "hold my notes",
+        Standing {
+            history: None,
+            conversation: &a_conversation().snapshot(),
+            turns: 1,
+            tokens: 10,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &TrustStore::new("/work"),
+            programs: &TrustedPrograms::new(),
+            directories: &workspace.added_directories(),
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+
+    let mut resumed = Workspace::new(&scratch.project).expect("workspace");
+    assert!(record.reopen_added_directories(&mut resumed).is_empty());
+    let held = |workspace: &Workspace| {
+        workspace
+            .session_directories()
+            .into_iter()
+            .find(|directory| directory.path() == added)
+            .expect("the reopened directory is a session directory")
+    };
+    assert!(held(&resumed).stands_as_made_at(&added), "as reopened");
+
+    std::fs::rename(&added, notes.with_extension("aside")).expect("move it aside");
+    std::os::unix::fs::symlink(&elsewhere, &added).expect("link the name elsewhere");
+    assert!(
+        !held(&resumed).stands_as_made_at(&added),
+        "a link at the name is the directory that was reopened"
+    );
+
+    // What a stage is given is decided from those records. The link is removed and a directory
+    // made in its place, which is a directory but not the one reopened, and neither it nor where
+    // the link led is a row. The working directory is the control that rows are given at all.
+    std::fs::remove_file(&added).expect("remove the link");
+    std::fs::create_dir(&added).expect("make a directory at the name again");
+    let step = bravebot_core::command::Step {
+        program: "cat".to_string(),
+        resolved: "/bin/cat".into(),
+        started_as: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Vec::new(),
+        expansions: Vec::new(),
+        routes: Vec::new(),
+    };
+    let policy = bravebot_agent::confine::Confinement::here(
+        std::iter::once(resumed.root().to_path_buf())
+            .chain(resumed.added_directories())
+            .collect(),
+        None,
+        None,
+    )
+    .expect("a platform with a base")
+    .with_session_directories(&resumed.session_directories())
+    .policy(&step, resumed.root(), &[]);
+    let led_to = elsewhere.canonicalize().expect("canonical");
+    let writes = |path: &Path| policy.writable.iter().any(|row| row.path == path);
+    assert!(writes(resumed.root()), "no row for the working directory");
+    assert!(!writes(&added), "a row for a directory made again");
+    assert!(!writes(&led_to), "a row for where the link led");
+    assert!(!policy.readable.contains(&added), "a read row for it");
+    assert!(
+        !policy.readable.contains(&led_to),
+        "a read row for the link"
+    );
+}
+
 /// MODE-4, TRUST-6. A record written by a sitting that had bypass on gives back neither the map
 /// nor the directories it opened, and says so on the record; the same save without bypass gives
 /// both back. The fault it rejects: `save` writing the live map and directories as a person's
@@ -975,6 +1083,78 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
         resumed.added_directories().is_empty(),
         "a directory that could not be opened was counted as open"
     );
+}
+
+/// A resume reopens each directory the record names through the one door every other opening uses
+/// (TRUST-9), so a record that names two paths to one tree reopens the first and says the second
+/// was not reopened, rather than opening both and giving every file in it two names. The identity
+/// is injected so the pair exists on any host. Rejects a replay that opens a directory without the
+/// check (both open), and one that drops the second without saying so.
+#[cfg(unix)]
+#[test]
+fn a_second_path_to_a_tree_is_reported_on_resume_and_not_reopened() {
+    let scratch = Scratch::new("added-directory-second-path");
+    let base = scratch
+        .project
+        .parent()
+        .expect("a root")
+        .join("second-paths");
+    let (a, b) = (base.join("twin-a"), base.join("twin-b"));
+    for directory in [&a, &b] {
+        std::fs::create_dir_all(directory).expect("create the directory to add");
+    }
+    let (a, b) = (
+        a.canonicalize().expect("canonical"),
+        b.canonicalize().expect("canonical"),
+    );
+
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "read my notes",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 10,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &TrustStore::new("/work"),
+            programs: &TrustedPrograms::new(),
+            directories: &[a.clone(), b.clone()],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let mut resumed = Workspace::new(&scratch.project)
+        .expect("workspace")
+        .with_directory_identity(Some(|directory| {
+            use std::os::unix::fs::MetadataExt;
+            match directory.file_name().and_then(|name| name.to_str()) {
+                Some("twin-a" | "twin-b") => Some((u64::MAX, 7)),
+                _ => std::fs::metadata(directory)
+                    .ok()
+                    .map(|found| (found.dev(), found.ino())),
+            }
+        }));
+    let said = record.reopen_added_directories(&mut resumed);
+    let _ = std::fs::remove_dir_all(&base);
+
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains(&b.display().to_string()) && said[0].contains("another path"),
+        "the line does not say which directory or why: {said:?}"
+    );
+    assert_eq!(resumed.added_directories(), [a]);
 }
 
 /// A manifest run is written down so it can be read, and marked so it cannot be continued. The
@@ -2450,6 +2630,7 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
                 inference_ms: 8 * factor,
                 tools_ms: 3 * factor,
                 stalled_ms: 2 * factor,
+                activity: counted_in(factor),
                 ..Default::default()
             },
             ..spent
@@ -2483,6 +2664,9 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
             (timing.inference_ms, timing.tools_ms, timing.stalled_ms),
             (8 * factor, 3 * factor, 2 * factor)
         );
+        // Each ending charges its counts once, and each turn keeps its own: a turn that failed or
+        // was stopped has no messages from which they could be read back.
+        assert_eq!(timing.activity, counted_in(factor), "turn {turn}");
     }
     let conversation = a_conversation();
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
@@ -2513,6 +2697,25 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
     assert_eq!(record.tokens, 720);
     assert_eq!(&record.spend, session.spend_by_turn());
     assert_eq!(&record.timing, session.timing_by_turn());
+    for turn in 1..=3 {
+        assert_eq!(
+            record.timing[&turn].activity,
+            counted_in(turn as u64),
+            "turn {turn} after a reload"
+        );
+    }
+}
+
+/// What a turn did, different in each count and in each turn so a charge that took one turn's
+/// counts for another's, or one count for another, could not pass.
+fn counted_in(factor: u64) -> bravebot_agent::timing::Activity {
+    bravebot_agent::timing::Activity {
+        requests: 2 * factor,
+        written_tokens: 5 * factor,
+        cache_read_tokens: 7 * factor,
+        cache_written_tokens: 11 * factor,
+        compactions: factor - 1,
+    }
 }
 
 mod completed_usage {
@@ -3954,7 +4157,11 @@ mod preserved_history {
             }
             Err(error) => match error.ending() {
                 Ending::Failed(diagnosis) => session.fail(
-                    bravebot_session::sessions::failure_reason(diagnosis, None),
+                    bravebot_session::sessions::failure_line(
+                        &error,
+                        diagnosis,
+                        Some(task.model.as_deref().unwrap_or(&config.default_model)),
+                    ),
                     error.ending(),
                 ),
                 Ending::Stopped { attempts } => {
@@ -4631,6 +4838,96 @@ mod preserved_history {
         }
     }
 
+    /// A turn that ends on a file named with `@` says which one and why (NAME-13), for each reason
+    /// the read can fail with. A category-only line names no file, so it fails every row here.
+    #[test]
+    fn a_named_file_that_cannot_be_read_is_named_with_its_reason_in_the_failure_line() {
+        // (what the person typed, the file to make for it, its bytes, the reason said)
+        let cases: [(&str, Option<&str>, &[u8], &str); 5] = [
+            (
+                "nothing-here.txt",
+                None,
+                b"",
+                "is not a file in this project",
+            ),
+            (
+                "a-directory",
+                Some("a-directory/inner.txt"),
+                b"x",
+                "is not a file in this project",
+            ),
+            (
+                "picture.bin",
+                Some("picture.bin"),
+                &[0, 159, 146, 150, 0, 1, 2],
+                "is not a text file",
+            ),
+            (
+                "latin.txt",
+                Some("latin.txt"),
+                b"caf\xe9 au lait, caf\xe9 noir",
+                "other than UTF-8",
+            ),
+            ("../outside.txt", None, b"", "is not a file in this project"),
+        ];
+        for (typed, made, bytes, said) in cases {
+            let scratch = Scratch::new("named-failure-line");
+            if let Some(made) = made {
+                let at = scratch.project.join(made);
+                std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                std::fs::write(at, bytes).unwrap();
+            }
+            let task = bravebot_agent::Task::new("look at these").with_file(typed);
+            let mut session = Session::new("test");
+            let mut conversation = Conversation::new();
+            run_task(
+                &mut session,
+                &mut conversation,
+                &scratch.project,
+                &config_for("http://127.0.0.1:1"),
+                &task,
+                &bravebot_core::cancel::Cancel::new(),
+            );
+            let line = session.failure_said().expect("a failure line").to_string();
+            assert!(line.contains(&format!("@{typed}")), "{typed}: {line}");
+            assert!(line.contains(said), "{typed}: {line}");
+            // The record keeps the same line, so reopening shows what the screen showed.
+            match &session.turn_history()[0].outcome {
+                Some(bravebot_session::sessions::StoredOutcome::Failed { reason }) => {
+                    assert_eq!(reason, &line, "{typed}")
+                }
+                other => panic!("{typed}: {other:?}"),
+            }
+        }
+    }
+
+    /// With several names the one that failed is the one named, and one that read is not.
+    #[test]
+    fn the_failure_line_names_the_file_that_failed_among_several() {
+        let scratch = Scratch::new("named-failure-several");
+        std::fs::write(scratch.project.join("fine.txt"), "fine").unwrap();
+        let task = bravebot_agent::Task::new("look at these")
+            .with_file("fine.txt")
+            .with_file("absent.txt")
+            .with_file("later.txt");
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for("http://127.0.0.1:1"),
+            &task,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let line = session.failure_said().expect("a failure line");
+        assert!(line.contains("@absent.txt"), "{line}");
+        assert!(
+            !line.contains("fine.txt") && !line.contains("later.txt"),
+            "{line}"
+        );
+    }
+
     /// The next request must exclude the failure that reopening displays to the person.
     #[test]
     fn a_request_after_resume_excludes_the_display_failure() {
@@ -4755,6 +5052,81 @@ mod preserved_history {
             next.contains(r#""role":"tool""#),
             "the completed round was dropped: {next}"
         );
+    }
+
+    /// A rejected request names the model the person configured and the backend, and nothing the
+    /// service wrote (BACKEND-37, SESSION-23). The stand-in answers every request with a 400 whose
+    /// body and headers carry a model name, a host and a sentence of its own.
+    ///
+    /// It rejects a line that leaves the configured model out, one that names the model from the
+    /// reply instead, and one that carries any of the service's words into the screen line or the
+    /// stored reason.
+    #[test]
+    fn a_rejected_turn_names_the_configured_model_and_none_of_the_services_words() {
+        use std::io::{BufRead, Read, Write};
+        let scratch = Scratch::new("rejected-names-model");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let reply = r#"{"error":{"message":"SERVICE_SENTENCE unsupported field","model":"service-model-9","host":"evil.example"}}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nX-Model: service-model-9\r\nLocation: https://evil.example/\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        let task =
+            bravebot_agent::Task::new("hello").with_model(Some("my-configured-model".into()));
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&endpoint),
+            &task,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let line = session.failure_said().expect("a failure line").to_string();
+        assert!(line.contains("the service rejected the request"), "{line}");
+        assert!(line.contains("(HTTP 400)"), "{line}");
+        assert!(
+            line.contains("using the model my-configured-model"),
+            "the line does not name the configured model: {line}"
+        );
+        for service in [
+            "service-model-9",
+            "evil.example",
+            "SERVICE_SENTENCE",
+            "unsupported",
+        ] {
+            assert!(
+                !line.contains(service),
+                "the service's {service} was drawn: {line}"
+            );
+        }
+        match &session.turn_history()[0].outcome {
+            Some(bravebot_session::sessions::StoredOutcome::Failed { reason }) => {
+                assert_eq!(reason, &line)
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A stop inside a processor must stay cancelled through reporting, saving and export.

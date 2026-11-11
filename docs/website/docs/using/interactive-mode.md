@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Interactive mode
-description: The input box, every key, and what a running turn refuses.
+description: Input editing and keybindings, prompt enhancement and history search, queues and stashes, cancellation, background commands, hint rows, delegate and output views, asides and long turns.
 ---
 
 # Interactive mode
@@ -384,6 +384,10 @@ you typed it. So "no, the other file" reaches the planner while the work it is a
 happening, instead of arriving after the thing it was meant to prevent. A prompt still waiting when
 the turn ends becomes a turn of its own.
 
+While the model waits in `job_output` for a job, a line you send ends the wait within a moment, with
+the job still running, and the turn reads the line at the boundary after it. You do not need to stop
+the turn to be heard. A line that is a command, or that waits behind one, does not end the wait.
+
 When the model is still thinking, or is partway through writing a tool call, the prompt does not
 wait for the round to finish: the request is ended, what the model had written so far is dropped,
 and the request goes out again with your prompt in it. When the model is writing text, the text is
@@ -401,7 +405,7 @@ waiting `/clear` for `/rename`, say, and then they wait behind that line and the
 could change the record's name or notes, and are carried out as you press Enter behind a command line. `/style` is carried out as you press Enter behind a command line too, but waits behind a prompt, and `/forget-trust` waits behind both. A waiting `/sandbox off` holds none of
 them back. The four that open a list draw it over the turn. What they answer goes into the
 transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question asked with no turn running, a `/manifest` run or a goal check,
-every command waits. A `/btw` typed during a turn is carried out as you press Enter, and its answer is a row you open with Ctrl-L. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a
+every command waits. A `/btw` typed during a turn is carried out as you press Enter, a line in the transcript says it is out and another says when it is answered, and its answer is a row you open with Ctrl-L. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a
 command carried out as you press Enter, `queued` for one that waits, and `now/queued` where it depends
 on what follows the word and on what is already waiting. A `now` row reads `queued` while a line of the
 same command waits, and during a compaction or an aside asked with no turn running every row reads `queued`. Tab, or Enter on a
@@ -435,6 +439,15 @@ a file you took off the line afterwards was never part of it.
 
 Stopping a turn leaves the queue alone: the next waiting prompt starts as it would after any turn,
 and the rest go on waiting in order.
+
+**The desktop app sends Enter into the running turn too.** The planner reads the line at the turn's next
+round boundary, as the words of your own input and under the routing the turn began with. The line is
+drawn under the box as sent to this turn and moves into the transcript when the planner is given it. A
+turn that is being stopped, a plan run (which asks nothing between rounds) and a line still unread when
+the turn ends do not take it: the line becomes a turn of its own and goes at once, ahead of anything
+queued, even when Stop has paused the queue. **Alt+Enter**, or **Queue for after**, holds the line for
+after the turn instead; that queue is the one Stop pauses and **Resume** releases. A message with a file
+chosen by the attach button, and any message sent while a bot's memory is being updated, is queued rather than sent into the turn. A turn that failed for any other reason leaves an unread line in the queue it paused.
 
 ### Sending the queue now
 
@@ -714,7 +727,10 @@ view back where it was.
 
 **An aside leaves the transcript alone.** Neither the question nor the answer is drawn there, and an
 answer arriving while the turn is still going is not drawn over it: the aside lives in this view and
-nowhere else.
+nowhere else. A question typed during a turn leaves two lines of the program's own, one when it goes
+out and one when it is answered, each naming the key that opens the row. An answer that arrives after
+the turn has ended is announced in the same way, and does not open this view over the prompt you may be
+typing.
 
 The header and the footer name which kind of thing you are looking at: a delegate by its kind and its
 number, a command by the line that ran, an aside as an aside.

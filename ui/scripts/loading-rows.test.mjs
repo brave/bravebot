@@ -1,4 +1,4 @@
-// When a loading row shows its ring.
+// When a loading row shows its ring or its skeleton.
 //
 // The design skill holds a loading state to showing its ring only once loading has lasted 150ms
 // (`useDelayedFlag`), so an answer that arrives sooner draws nothing on its way past. The row is
@@ -89,10 +89,15 @@ async function paint(row, plugins) {
   return renderToStaticMarkup(React.createElement(component, row.props))
 }
 
-/** The opening tag of the status row that holds `words`, or null when no such row is drawn. */
+/**
+ * The opening tag of the status row that holds `words`, or null when no such row is drawn. The row
+ * is a line of text or a skeleton, whose words are its label for a screen reader.
+ */
 function statusRow(markup, words) {
-  for (const match of markup.matchAll(/<p\b[^>]*>(?:(?!<\/p>).)*<\/p>/g)) {
-    if (match[0].includes('role="status"') && match[0].includes(words)) return match[0].slice(0, match[0].indexOf('>') + 1)
+  const opened = [...markup.matchAll(/<(p|div)\b[^>]*role="status"[^>]*>/g)]
+  for (const [index, match] of opened.entries()) {
+    const end = opened[index + 1]?.index ?? markup.length
+    if (markup.slice(match.index, end).includes(words)) return match[0]
   }
   return null
 }

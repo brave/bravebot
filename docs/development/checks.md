@@ -37,7 +37,10 @@ why it is sound. The lint is not in the workspace table because other crates and
 `crates/agent/src/preamble.rs` and the tests of `bravebot-agent`, `bravebot-tui`,
 `bravebot-ui-bridge`, `bravebot-cli` and `bravebot-session`. It is checked on the Linux, macOS and
 Windows clippy runs, which each compile different blocks. Place the comment directly above the
-`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item.
+`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item. Besides the
+`unsafe impl Send` and `Sync` in `swap.rs`, the sandbox crate has one more: the allocator of
+`crates/sandbox/src/alloc_probe.rs`, a test harness that ends a forked child on a call to the
+allocator ([SANDBOX-34](../specs/sandboxing.md#SANDBOX-34), [LAYER-4](../specs/layering.md#LAYER-4)).
 
 Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
 runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
@@ -66,10 +69,12 @@ Adding one means adding a clippy target for it to CI and to this page, then list
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
 with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program
-inherits (`Inherits`) and the `PATH` it is given (`SearchPath`). The lookup or one of the named
+inherits (`Inherits`), the `PATH` it is given (`SearchPath`) and whether the variables that choose
+code to run are removed (`CodeSelectors::Checked`) or left as set (`CodeSelectors::Kept`). The lookup or one of the named
 constructors of `Resolved` (`own_executable`, `written_in_source`, `named_by_person`,
-`found_earlier`, `to_confine`) builds the first, and the other two have no default, so the diff that
-starts a program shows who chose it, what it inherits and where the names it starts are looked up.
+`found_earlier`, `to_confine`) builds the first, and the other three have no default, so the diff that
+starts a program shows who chose it, what it inherits, where the names it starts are looked up and
+whether its code-selecting variables are checked.
 `#[allow(clippy::disallowed_methods, reason = "...")]` is for the few files that cannot call `start`:
 `start` itself, `CreateProcessW` and a build script. `make check-security` fails a mark with no
 reason, a mark that covers more than one start, and a mark in a production file, or a second one in
@@ -154,6 +159,13 @@ For the full run on macOS, start Docker Desktop and run `make check-all` from th
 you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
 neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
 default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+The test binaries that start a mock server per test (`browser_group_servers` and `mcp` in
+`crates/agent/tests`, and `running` in `crates/cli/tests`) raise their own soft open-file limit to
+8192, or to the hard limit where that is lower, through `crates/agent/test-support/open_files.rs`,
+so the 256 a macOS shell starts with does not fail them with `TooManyOpenFiles`. Each binary binds
+its mock servers with `open_files::bind_mock_server()`, which raises the limit once per process
+before the first bind. A new test binary that starts a server per test includes the file with
+`#[path]` and binds through that function rather than `TcpListener::bind`.
 The containers receive current source, including local edits and untracked files,
 but exclude ignored files, build output and nested checkouts. They use Docker's native
 architecture so Apple Silicon does not need to emulate an x86 Linux CPU.
@@ -198,7 +210,10 @@ absolute path when running the target. Without it, that integration test is repo
 The sandbox usability suite (`crates/agent/tests/usability.rs`, spec SANDBOX-21) runs everyday
 workflows under the sandbox default, so a default change cannot break `git`, `gh`, `cargo`, `npm` or
 `make` unnoticed. It runs with `cargo test --all` on Linux and macOS, skips what is not installed, and
-`bravebot doctor --sandbox-check` runs it on any machine.
+`bravebot doctor --sandbox-check` runs it on any machine. Each program it starts is started with
+the variables that choose code to run removed or checked, so a value the person's environment
+holds does not run in a setup stage or a control run, which have the person's access
+([SANDBOX-21](../specs/sandboxing.md#SANDBOX-21), [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)).
 
 These are local checks, not a promise that every CI environment passes. Windows Clippy
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
@@ -269,14 +284,19 @@ agree about how many exceptions to the rule are admitted, whether every crate ke
 client of its own is one the egress register admits and no comment claims a dependency a manifest
 beside it declares, whether the register admitting them leaves as many prompts out of a verdict's
 reach as the clause deciding that does, whether a field documented as read in one place is read in
-one place, whether a trait reaches into a `Labelled`, whether a spec pins the constructors of one as
-well as the releases, whether every gate handing released content to a closure the driver wrote is
-counted rather than merely named and so is every function forwarding its caller's closure to one,
-whether `clippy.toml` still refuses the calls that start a program and no second clippy
-configuration hides them from a crate, and whether every allow of that refusal covers one start and
-carries a reason, since `make check` fails the start and cannot read the reason, whether every
-workflow step is on a commit
-rather than a tag its owner can move, whether every container image this tree runs
+one place, whether a trait, an inherent function outside the type's own seven or one of the seven
+with another visibility or signature, or a conversion
+taking a `Labelled` as an argument reaches into a `Labelled` (read through `Box`, a type alias and a
+wrapper declared beside it, with raw strings blanked before braces are counted), whether every
+public function of `crates/core/src/policy.rs` that builds a trusted or public label is counted by
+a spec's `guards` or named in `LABEL_BUILDERS_NOT_GATES` with a reason, whether a spec pins the constructors
+of one as well as the releases, whether every gate handing released content to a closure the
+driver wrote is counted rather than merely named and so is every function forwarding its caller's
+closure to one, whether `clippy.toml` still refuses the calls that start a program and no second
+clippy configuration hides them from a crate, and whether every allow of that refusal covers one
+start and carries a reason, since `make check` fails the start and cannot read the reason, whether
+every workflow step is on a commit rather than a tag its owner can move, whether every container
+image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm or pnpm dependency, which every step in that job could read the
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
@@ -357,6 +377,42 @@ published wrapper and the desktop application, each of which states it in its ow
 check` runs it and so does CI, because the tagging path's own refusal fires on release day, which
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
+
+`make check-code-selectors` fails a call of `start` or `start_against` that does not write
+`CodeSelectors::Kept` (with a comment giving the reason, outside a test) or
+`CodeSelectors::Checked(&NAME)`, fails a production start that passes `CodeSelectors::Checked(&[])`
+with no comment at the call or whose file has no row in the table of empty-list starts in
+`docs/specs/sandboxing.md`, and holds each variable in a `CODE_SELECTORS` list, in
+`crates/sandbox/src/programs.rs` (the generic table), `crates/agent/src/gcloud.rs`,
+`crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`, the browser opener's in
+`crates/tui/src/opener.rs`, the Windows `powershell` starts' (and `osascript`'s, `systemd-inhibit`'s and `wl-copy`'s, in lists named `OSASCRIPT_CODE_SELECTORS`, `SYSTEMD_INHIBIT_CODE_SELECTORS` and `WL_COPY_CODE_SELECTORS`) in `crates/tui/src/powershell.rs`, the `systemctl --user` starts' (`SYSTEMCTL_CODE_SELECTORS`) in `crates/schedule/src/schedule.rs` and
+the sandbox usability suite's in `crates/agent/src/usability.rs`, to
+a test that keeps a safe value and a test that removes one a stage may write. It fails when the
+opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read
+as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
+`ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
+does, except `HOME`, which the desktop application leaves set because it and the agent it starts
+read it (`APPLICATION_EXCEPTIONS` in the script). An options variable needs only the second. `make check` runs it and so does CI. It
+cannot tell that a list is complete, which
+[PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer. It also reads
+`LOADER_PREFIXES` in `crates/sandbox/src/programs.rs` and `HOST_VARIABLES` in
+`crates/agent/src/usability.rs`, which are not `CODE_SELECTORS` lists. A list that serves one
+program of a file that holds another is named `<PROGRAM>_CODE_SELECTORS` and read with the first. The generic
+table also holds `CODE_SELECTOR_PREFIXES` (names that begin with a prefix) and
+`CODE_SELECTOR_PATTERNS` (names with a fixed start and end, such as `ASDF_<tool>_VERSION`). This
+script reads `CODE_SELECTOR_PREFIXES` only to compare it with `LOADER_PREFIXES`, and does not read
+`CODE_SELECTOR_PATTERNS`; `an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name`
+pins them. It fails when
+`LOADER_PREFIXES` is missing or empty, shares a prefix with `CODE_SELECTOR_PREFIXES` (which every
+checked start applies, so `LD_DEBUG` would go from gcloud and the opener), or is not passed to
+`withhold_prefixed` by the usability suite's stored-login `gh` start, and when a prefix in it has
+no test in the suite that starts that `gh` holding a name with the prefix and asserts the name is
+removed. It fails when `HOST_VARIABLES` is missing or not removed by the suite's stage start, and
+for a name in it that no test starts a stage with and asserts removed; a loop over the list itself
+counts for no name. It does not apply the loader prefixes to other starts, so a start that should
+remove `DYLD_` and `LD_` names and does not is still found by a reviewer. The tests
+`the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start` and the two loader tests in
+`crates/agent/tests/usability.rs` fail when a prefix is dropped.
 
 `make check-narration` fails a pull request whose commit messages, title, body or added lines
 contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)

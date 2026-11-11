@@ -288,11 +288,12 @@ impl ScratchDirectory {
     }
 
     /// The directory at `path` as it stands now, for a caller that did not make it through
-    /// [`SessionScratch`], such as a test handed a directory. None where `path` is not a directory.
+    /// [`SessionScratch`]: a session directory recorded as it is opened or added (SANDBOX-18), or
+    /// a test handed a directory. None where `path` is not a directory.
     ///
-    /// A session that made the directory asks [`SessionScratch::directory`] instead: a name that
-    /// has been changed gives the identity of what it was changed to.
-    #[doc(hidden)]
+    /// The name is not followed, so a link at `path` is not a directory here. A session that made
+    /// the directory asks [`SessionScratch::directory`] instead: a name that has been changed gives
+    /// the identity of what it was changed to.
     pub fn observed(path: PathBuf) -> Option<Self> {
         let found = std::fs::symlink_metadata(&path).ok()?;
         if !found.is_dir() {
@@ -768,6 +769,33 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(theirs.join("mine.txt")).expect("still there"),
             "not yours"
+        );
+    }
+
+    /// LAYER-3: a scratch directory that cannot be made is reported as the operating system's own
+    /// error, which names no path. `scratch_for_this_run` prints that error undrawn on this
+    /// ground, so an error that carried the temporary directory (which `TMPDIR` can set to a name
+    /// with a control character) would be written to stderr raw.
+    ///
+    /// Rejects an implementation that wraps the failure with the directory's name, as
+    /// `io::Error::new(kind, format!("{path}: ..."))` would: that error has no OS code and its text
+    /// holds the name.
+    #[test]
+    fn a_directory_that_cannot_be_made_is_the_systems_error_and_names_no_path() {
+        let held = SessionScratch::create().expect("a scratch directory");
+        let missing = held.path().join("no-such-\u{1b}[31mdirectory");
+
+        let refused = SessionScratch::made_in(&missing, SESSION)
+            .expect_err("a temporary directory that does not exist gives no scratch directory");
+
+        assert!(
+            refused.raw_os_error().is_some(),
+            "the failure was not the system's own: {refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(
+            !said.contains("no-such") && !said.contains('\u{1b}'),
+            "the failure names the directory it was asked to make: {said:?}"
         );
     }
 

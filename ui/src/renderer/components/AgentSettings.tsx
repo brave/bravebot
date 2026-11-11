@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { SettingsGroup } from './SettingsGroup'
+import { useDelayedFlag } from '../hooks'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks, unusableTimeout } from '../../shared/agent-settings'
-import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing } from '../nala'
+import { Alert, Button, Dropdown, Icon, Input, ProgressRing } from '../nala'
+import { Skeleton } from './Skeleton'
 const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
   if (typeof event.value === 'string') return event.value
   const target = event.target
@@ -50,6 +52,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const showLoading = useDelayedFlag(busy && !report)
   useEffect(() => { onDirty(dirty) }, [dirty, onDirty])
   const load = async () => {
     setBusy(true); setProblem('')
@@ -113,24 +116,10 @@ export function AgentSettings({ session, onChanged, onDirty }: {
   return <div className="agent-settings settings-body" data-test="settings-body">
     {problem && <div className="settings-error"><Alert type="error" role="alert" data-test="settings-error">{problem}</Alert><Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button></div>}
     {status && <Alert type="success" size="small" role="status">{status}</Alert>}
-    {busy && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
+    {busy && !report && <Skeleton label="Loading the agent's configuration…" kind="lines" count={5} delayed={!showLoading} />}
+    {busy && report && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Working…</p>}
     <SettingsGroup title="Connection">
       {report && <>
-        <section className="settings-block settings-status"><h3>{report.configured ? 'Model service configured' : 'Choose a model service'}</h3>
-          {report.problem && <p>{report.problem}</p>}
-          <dl>
-            <dt>Agent build</dt><dd>{report.build}</dd>
-            <dt>Default model</dt><dd>{report.model ?? 'Not configured'}</dd>
-            {report.providers.map((p, i) => <div key={i} className="settings-dl-row"><dt>{p.name}</dt><dd>Credential {p.credential}</dd></div>)}
-            {report.brave && <><dt>Brave service</dt><dd>Brave service enabled</dd></>}
-            {report.bedrock && <><dt>AWS Bedrock</dt><dd>AWS Bedrock enabled</dd></>}
-          </dl>
-          <Collapse title="Set up a model service" isOpen={!report.configured ? true : undefined} data-test="settings-setup">
-            <div className="setup-routes"><section><h4>Gateway or local model</h4><p>Add a provider to your agent settings, or select a file in Run settings. Credential-free local services need no token.</p><pre>{'{"provider":{"local":{"options":{"baseURL":"http://localhost:11434/v1"},"models":{"your-model":{}}}},"model":"local/your-model"}'}</pre><p>For authenticated services, name the credential environment variable in the provider’s <code>env</code> array.</p></section>
-            <section><h4>AWS Bedrock</h4><p>Configure your AWS credentials and enable Bedrock in your agent settings or environment. Your AWS account must have access to the selected model.</p><pre>BRAVEBOT_USE_BEDROCK=1{'\n'}AWS_REGION=us-east-1{'\n'}AWS_PROFILE=your-profile{'\n'}ANTHROPIC_DEFAULT_SONNET_MODEL=your-model-id-or-inference-profile-arn</pre></section>
-            <section><h4>Brave service</h4><p>Use a configured Brave build, or launch from a shell with <code>SERVICES_KEY_AICHAT</code>, <code>BRAVE_SERVICES_KEY_ID</code> and <code>BRAVE_AI_CHAT_ENDPOINT</code> set to your supplied credentials and endpoint. Credentials are not stored in this window.</p></section></div>
-          </Collapse>
-        </section>
         <section className="settings-block"><h3>Network</h3>
           <dl><dt>Certificate roots</dt><dd>{report.network.roots.length ? report.network.roots.join(', ') : 'Bundled roots'}</dd><dt>Proxy</dt><dd>{report.network.proxy ?? 'No proxy configured'}{report.network.authenticated ? ' · authenticated' : ''}</dd><dt>Proxy bypass</dt><dd>{report.network.noProxy ?? 'None'}</dd></dl>
           {(report.network.problem || report.network.trustsNothing || report.network.unusableProxy) && <Alert type="warning" role="alert">{report.network.problem || (report.network.trustsNothing ? 'No usable trust roots.' : `Unsupported proxy: ${report.network.unusableProxy}`)}</Alert>}

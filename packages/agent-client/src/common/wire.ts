@@ -12,6 +12,8 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 
 export const SESSION_VIEW_VERSION = 1
 export const SESSION_VIEW_START = 'session.view.start'
+/** The method that asks for a new snapshot of a session's view. */
+export const SESSION_VIEW_RESYNC = 'session.view.resync'
 
 export const STATUSES = [
   'awaiting_trust',
@@ -61,6 +63,14 @@ export interface ViewUpdate {
   status: Status
   pending: Pending | null
   rows: Row[]
+  /** How many rows, from the first, the runtime no longer keeps. Absent from an older runtime. */
+  omitted?: number
+}
+
+/** A `session.view.snapshot`: the whole view at one sequence, with its most recent rows. */
+export interface ViewSnapshot extends ViewUpdate {
+  /** How many rows before the first in `rows` the snapshot leaves out. */
+  omitted: number
 }
 
 export interface SessionViewCapability {
@@ -68,7 +78,10 @@ export interface SessionViewCapability {
   start: typeof SESSION_VIEW_START
   scope: 'fresh_session'
   approvals: string[]
-  reconnect: false
+  /** Present when the runtime sends a new snapshot on request. An older runtime has none. */
+  resync?: typeof SESSION_VIEW_RESYNC
+  /** How many of the most recent rows a snapshot holds, present with `resync`. */
+  retainedRows?: number
 }
 
 export interface BridgeEvent {
@@ -151,6 +164,7 @@ export function decodeUpdate(value: unknown): ViewUpdate {
   if (!isCount(value.sequence) || !isCount(value.turn) || !isCount(target)) {
     throw new ProtocolError('a view update needs numeric sequence and turn, and a numeric target if it has one')
   }
+  if (value.omitted !== undefined && !isCount(value.omitted)) throw new ProtocolError('a view update needs a numeric omitted count if it has one')
   if (!Array.isArray(value.rows)) throw new ProtocolError('a view update needs rows')
   return {
     sequence: value.sequence,
@@ -159,7 +173,16 @@ export function decodeUpdate(value: unknown): ViewUpdate {
     status: oneOf(STATUSES, value.status, 'a status'),
     pending: decodePending(value.pending),
     rows: value.rows.map(decodeRow),
+    ...(value.omitted === undefined ? {} : { omitted: value.omitted }),
   }
+}
+
+/** Read `session.view.snapshot` data. */
+export function decodeSnapshot(value: unknown): ViewSnapshot {
+  const update = decodeUpdate(value)
+  const omitted = (value as Record<string, unknown>).omitted
+  if (!isCount(omitted)) throw new ProtocolError('a view snapshot needs a numeric omitted count')
+  return { ...update, omitted }
 }
 
 /**
@@ -185,12 +208,14 @@ export function readSessionViewCapability(info: unknown): SessionViewCapability 
   const view = info.capabilities.sessionView
   if (!isObject(view)) return null
   if (view.version !== SESSION_VIEW_VERSION || view.start !== SESSION_VIEW_START || view.scope !== 'fresh_session') return null
-  if (view.reconnect !== false || !Array.isArray(view.approvals)) return null
-  return {
+  if (!Array.isArray(view.approvals)) return null
+  const read: SessionViewCapability = {
     version: 1,
     start: SESSION_VIEW_START,
     scope: 'fresh_session',
     approvals: view.approvals.filter((kind): kind is string => typeof kind === 'string'),
-    reconnect: false,
   }
+  if (view.resync === SESSION_VIEW_RESYNC && isCount(view.retainedRows)) return { ...read, resync: SESSION_VIEW_RESYNC, retainedRows: view.retainedRows }
+  // A runtime from before snapshots says it cannot reconnect a view.
+  return view.reconnect === false ? read : null
 }

@@ -79,8 +79,8 @@ releasing it hands the user's data somewhere this policy no longer governs. Writ
 workspace is the one move that lowers confidentiality without releasing anything, because the
 destination is inside the boundary the bytes came from. The same holds for what the planner writes
 with `write_file` or `edit_file` once it has been shown private content
-([LABEL-8](labels.md#LABEL-8)): the text is released public at its own integrity, so the write is
-decided as it was before.
+([LABEL-8](labels.md#LABEL-8)): `declassify_written_into_workspace` releases the text public at its
+own integrity, so the write is decided as it was before.
 
 `verified-by: bravebot_core::policy::a_write_back_into_the_workspace_lowers_only_confidentiality`
 `verified-by: bravebot_core::policy::what_the_planner_writes_into_the_workspace_is_released_public_at_its_own_integrity`
@@ -119,7 +119,9 @@ place mints the same endorsement for the same value and no other, and in the aut
 a classifier's word on one question ([AUTO-6](auto-mode.md#AUTO-6)).
 
 A write that would make a trusted path untrusted is the case that must be shown. Where nobody can
-be asked, effects are refused rather than applied unseen.
+be asked, effects are refused rather than applied unseen. A run that reads input lines and was
+started with `--approve-input-lines` is asked through the program sending them
+([cli.md](cli.md#CLI-36)).
 
 A connector act's content is released only to the place the plan fixed for it.
 

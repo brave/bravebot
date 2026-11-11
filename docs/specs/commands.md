@@ -24,6 +24,7 @@ governs:
   - crates/tui/src/help_command.rs
   - crates/tui/src/open_command.rs
   - crates/tui/src/prompt_files.rs
+  - crates/tui/src/state/scheduling.rs
 guards:
   - symbol: commands
 documented-by:
@@ -290,6 +291,10 @@ carry out or queue a command typed mid-turn (CMD-8), so typing `/` lists every c
 does and narrowing, queueing and dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
 (CMD-9), and no key on one dispatches anything.
 
+Where the room under the box holds fewer rows than the list, the list scrolls: the row under the
+cursor is always drawn, the list moves only as far as the cursor needs, and Down reaches the last
+item. The rows drawn are the rows a press can pick, as [mouse.md](mouse.md) describes.
+
 **Why.** A word written down in more than one place is a word that is renamed in one of them,
 leaving the rest advertising something that no longer works, which a person discovers by typing
 it.
@@ -298,6 +303,7 @@ it.
 `verified-by: bravebot_tui::app::the_config_command_is_offered_like_every_other`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::app::tests::completions::the_list_under_the_box_scrolls_to_keep_the_cursor_drawn`
 
 
 <a id="CMD-7"></a>
@@ -351,8 +357,8 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history` | carried out as it is typed |
+| everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>` and every other form of `/schedule` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
 box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
@@ -360,6 +366,9 @@ it stays where it was. The exception is a line of the same command already waiti
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
 were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
+A `/schedule` that only reads (`list`, `pending`, `history` and the bare word) waits behind a waiting
+`/schedule` that writes, as `/loop stop` waits behind `/loop 5m ...`: a `list` typed after a waiting
+`add` would otherwise answer without the entry the person typed first.
 A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
@@ -450,13 +459,16 @@ turn running and the other loops that share the working status are not a turn, a
 typed during one waits. A `/btw` typed during a turn is the exception: it is asked beside the turn
 on a thread of its own over the exchange the turn published with its latest request, over the
 turn's own file authority and with no sign-in, so it holds nothing the turn holds and no command
-waits for it. Its answer is a row of the agents list and does not open the view
-([WATCH-19](watching.md#WATCH-19)). A second `/btw` is refused while one is out, a file dropped on
-it is refused, a `/btw` typed before the turn has sent a request says there is nothing to read
-yet, nothing is saved or closed for it, and the stop that ends the turn ends the question. A
-prompt or command waiting in the queue does not hold a `/btw` back: it is asked at once and the
-waiting lines stay where they were. Only a `/btw` already waiting holds a later one back, as a
-waiting line of the same command does for any command. A click on a row of the info panel that
+waits for it. Typing it puts one line in the transcript that says the question is out and names
+the key that opens its answer. The answer is a row of the agents list, with a line that says so, and
+does not open the view ([WATCH-19](watching.md#WATCH-19)). A second `/btw` is refused while one is
+out, a file dropped on it is refused, a `/btw` typed before the turn has sent a request says there
+is nothing to read yet, nothing is saved or closed for it, and a stop of the turn ends the question.
+A turn that ends any other way does not: the question is answered between turns, as the row and the
+line it would have been, and the record is written again for the row. A prompt or command waiting in
+the queue does not hold a `/btw` back: it is asked at once and the waiting lines stay where they
+were. Only a `/btw` already waiting holds a later one back, as a waiting line of the same command
+does for any command. A click on a row of the info panel that
 stands for one of these commands is carried out by the same rule ([MOUSE-29](mouse.md#MOUSE-29)).
 
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
@@ -567,11 +579,14 @@ does not read:
 
 - **`/btw`.** It asks over a copy of the exchange the turn published with its latest request, on a
   thread of its own, so the turn's conversation, record and rewind point are neither read nor
-  changed. The answer is a row of the agents list and the transcript gets nothing
+  changed. The answer is a row of the agents list, and the transcript gets a line when the question
+  goes out and a line when the answer is in, neither holding a word of either
   ([WATCH-19](watching.md#WATCH-19)). A file dropped on it is refused, since reading it records a
   rule in the map the turn answers into. Before the turn has sent a request it says there is nothing
   to read yet. What the question cost is charged to the turn ([SESSION-11](sessions.md#SESSION-11)).
-  The exchange the turn publishes, and the one a question is asked over, hold the messages the
+  A question still out when its turn ends by itself is left out and answered between turns, because
+  the person asked it and stopping it would throw away a request already paid for. A stop of the
+  turn stops it, and `/clear` drops it with the rows it clears. The exchange the turn publishes, and the one a question is asked over, hold the messages the
   conversation stores and copy none of them; the quarantine is not shared.
 
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
@@ -695,13 +710,22 @@ carried out or queued as above.
 `verified-by: bravebot_agent::aside::a_question_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
 `verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
-`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_is_stopped`
+`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_is_stopped_is_stopped`
+`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_by_itself_stays_out`
+`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
+`verified-by: bravebot_tui::app::a_btw_that_failed_after_the_turn_ended_says_why`
+`verified-by: bravebot_tui::app::settling_with_no_question_out_does_nothing`
+`verified-by: bravebot_tui::state::clearing_stops_and_drops_a_question_still_out`
 `verified-by: bravebot_agent::turn::the_exchange_is_forked_once_per_parent_request_and_never_for_a_delegate`
 `verified-by: bravebot_agent::turn::a_question_over_a_published_exchange_holds_the_prompt_and_ends_with_the_question`
 `verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`
 `verified-by: bravebot_tui::render::the_rows_carry_no_label_when_nothing_is_running`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs`
+`verified-by: bravebot_tui::app::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
+`verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
+`verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
 
 ## What a slash word is offered
 
@@ -1284,7 +1308,7 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 <a id="CMD-22"></a>
-### CMD-22: `/sandbox`, `/limit`, `/review` and `/reach` spell out what they take after the word
+### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach` and `/schedule` spell out what they take after the word
 
 Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
 `workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
@@ -1299,7 +1323,9 @@ words, `remove <n>` and `keys`. In each, the words are the ones the parser compa
 from the type or constant it reads, so a mode, scope or target added there appears in the hint.
 The completion list and the table keep the short form, so the description column does not move,
 and `--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
-because a name there may come from a file a person wrote.
+because a name there may come from a file a person wrote. `/schedule` completes the subcommand word
+from `bravebot_schedule::words::SUBCOMMANDS` ([SCHEDULE-8](schedule.md#SCHEDULE-8)) and nothing
+after it.
 
 Nothing from the conversation reaches any of them. They read the typed line and fixed sets.
 
@@ -1310,6 +1336,7 @@ apart from the parser drifts from it.
 `verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
+`verified-by: bravebot_tui::command_table::tab_completes_the_schedule_subcommands`
 
 <a id="CMD-23"></a>
 ### CMD-23: `/commit-message` puts a draft in the box, and the diff and the draft reach no planner
@@ -1421,7 +1448,7 @@ the typed line itself is never sent (CMD-4).
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::help_command::the_prompt_names_the_help_skill_and_carries_the_question_as_typed`
 `verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
-`verified-by: by-construction (the command returns Action::Submit like any typed line, and the one place a submitted line is run reads it as the person's; nothing in the command marks the question as anything else)`
+`verified-by: bravebot_tui::app::a_help_questions_file_names_are_the_persons_while_its_prompt_is_the_drivers`
 
 <a id="CMD-25"></a>
 ### CMD-25: `/changelog` shows the release notes this program carries, and starts no turn

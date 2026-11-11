@@ -278,6 +278,8 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
             inference_ms: 80,
             tools_ms: 20,
             stalled_ms: 10,
+            file_wait_ms: 0,
+            ..Default::default()
         },
     )]);
 

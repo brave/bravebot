@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Non-interactive use
-description: One-shot tasks, piped input, and what changes when there is nobody to ask.
+description: One-shot tasks and piping, unattended approvals, JSON and streaming output, multi-turn input, session follow-ups, schedules and event triggers, model selection, limits and exit codes.
 ---
 
 # Non-interactive use
@@ -21,6 +21,11 @@ A one-shot run has nobody to ask, and most of what makes it different follows fr
 and the planner's own questions are declined rather than answered on your behalf. The planner is told
 that a reply came from a person, so inventing one would be worse than not asking at all.
 
+A write, a program, a fetch or a plan that you would have been asked about and nobody could be asked
+about ends the run on status 4 (`BB1004`), as a refusal by a rule does, and the result object under
+`--json` lists each one under `refusals`. A run that was refused something does not exit 0 because the
+agent carried on without it.
+
 So a one-shot run is for reading, explaining and summarising. If you want it to change something, run
 it interactively, or say so on the command line:
 
@@ -29,7 +34,7 @@ bravebot --dangerously-skip-permissions -p "fix the failing test"
 ```
 
 If the run only needs to edit files, `--accept-edits` is the narrower grant: writes go through, and
-commands, fetches and a write that would create a credential are still refused.
+commands, fetches, a write to a [protected path](../security/permission-modes.md) and a write that would create a credential are still refused.
 
 ```sh
 bravebot --accept-edits -p "apply the lint fixes"
@@ -106,8 +111,11 @@ Progress, errors and the audit trail all go to stderr, so a one-shot run is pipe
 bravebot "list the public functions in src/lib.rs" > functions.txt
 ```
 
+Content the run quarantined is shown on stderr too, as a block with each row behind a bar and a heading that names where it came from. Colour codes in it are left out and counted, as [the transcript](transcript.md) describes.
+
 `--trace` puts the audit trail on stderr beside it: which gate checked what, the label every value
-carried, and what was released.
+carried, and what was released. Each line is written as the gate takes the decision rather than after
+the run ends, so a run that is slow or stuck shows what it had decided so far.
 
 ```sh
 bravebot "what does this do?" --file src/main.rs --trace 2> trail.txt
@@ -156,7 +164,9 @@ EOF
 turn over the conversation the last one left, a `steer` reaches the turn that is running, an `answer`
 replies to a question the agent asked, and a `stop` ends the turn in flight. Each turn ends with its
 own result object. Where nobody typed `--trust-input-lines`, the text of a line is a program's words
-and the agent is given a reference to it, never the words. [The reference](../reference/cli.md#--input-format-lines)
+and the agent is given a reference to it, never the words. With `--approve-input-lines` as well, the
+program is also shown each write, command and fetch that would ask you, and approves or declines it
+with an `answer`. [The reference](../reference/cli.md#--input-format-lines)
 has the lines and the events.
 
 ## Sending a follow-up to an earlier run
@@ -188,6 +198,65 @@ change one key without restating a whole configuration.
 Given twice, the last file wins. A path naming no file, and a blank path, are refused by name and the
 run stops before it starts. A named file that did not parse leaves the layers below it in force, and is
 visible by its absence from what [`doctor`](../reference/cli.md) lists.
+
+## Running on a schedule
+
+```sh
+bravebot schedule add --cron "0 9 * * 1-5" --prompt "summarize the pull requests merged yesterday"
+bravebot schedule list
+bravebot schedule history 1
+```
+
+`schedule add` writes an entry and one line in your crontab that runs `bravebot schedule run-now <id>`
+at the times the expression gives. Each run is a one-shot run in the entry's directory (this one
+unless you gave `--dir`), with the stored prompt as its task, and it is recorded as a session like
+any other run. Nothing of bravebot's keeps running between runs, and a background job a run started
+ends with it. `add` has to be typed at a terminal, so a command a session runs cannot add one.
+
+A run has nobody to ask, so it reads and reports, and writes only if you typed `--accept-edits` or
+`--dangerously-skip-permissions` when you ran `add`. A run that the planner asks a question stops at
+the first one, exits with status 4 and keeps the question for `schedule pending`, which `schedule
+clear <id>` deletes. `schedule pause <id>` keeps an entry and its line and stops it from running, and
+`schedule resume <id>` lets it run again. A firing that finds the previous firing of the same entry
+still running is skipped. `history` lists each run with its exit status, the session it recorded and
+the tokens it spent.
+
+To be told what a run printed, give `add` `--deliver-to /path/to/program`. After each run that
+program is started with the run's output on its standard input, for at most 60 seconds, and
+`schedule list` shows where each entry delivers. If it fails, one line on standard error says so and
+nothing else about the run changes. The output goes only to that program, and nothing can answer a
+question the run stopped at. [The reference](../reference/cli.md#schedule) has the options.
+
+In a session, `/schedule list`, `/schedule add ...` and the other subcommands do the same through the
+same code ([`/schedule`](../reference/commands.md#schedule-subcommand)); an entry added there reads
+and reports only.
+
+## Running on an event
+
+```sh
+bravebot trigger add on-push --event push -- "summarise this delivery and say whether it needs a person"
+bravebot trigger list
+bravebot trigger serve
+```
+
+`trigger add` stores the prompt under a name and an event and prints a secret once. `trigger serve`
+listens on `127.0.0.1:7471`. A sender signs the event and the body with the secret and posts them to
+`/on-push` with the header `X-Bravebot-Signature: sha256=<hex>`; `add` prints how. A delivery that
+verifies starts the prompt as a one-shot run in the directory you named. The body of the delivery
+is on the run's standard input, untrusted and private, so the planner is told that a delivery
+arrived and reads the content only through a processor, never as instructions.
+
+Every delivery that does not verify, names a trigger that is not stored, or is malformed gets the
+same `404` page and starts nothing. Each trigger runs one delivery at a time and at most six an
+hour unless `add` was given `--max-concurrent` or `--max-per-hour`, and a delivery over the limit
+is answered `429`. A run has nobody to ask, so it reads and reports, and writes only if you typed
+`--dangerously-skip-permissions` when you ran `add`. A run that the planner asks a question stops at
+the first one, exits with status 4 and keeps the question for `trigger pending`, which `trigger clear
+<name>` deletes.
+
+The listener is on the loopback address only. To receive a delivery from a service on another
+machine, forward a port to it yourself. [The reference](../reference/cli.md#trigger) has the options
+and the answers.
 
 ## Planning the whole run first
 
@@ -271,6 +340,7 @@ the wrong thing to search for.
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
 | `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; implies `--json-stream` |
 | `--trust-input-lines` | treat those lines as your own words and not a program's |
+| `--approve-input-lines` | let the program sending those lines approve or decline each write, run or fetch |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
 | `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many; ends on status 8 |

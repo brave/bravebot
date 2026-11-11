@@ -10,7 +10,8 @@
  * opened: opening it would hand a file to whatever the system runs `.log` files with.
  */
 
-import { app, dialog, shell, type BrowserWindow } from 'electron'
+import { app, dialog, type BrowserWindow } from 'electron'
+import { openExternal, showItemInFolder } from './external-open'
 import { randomBytes } from 'node:crypto'
 import { lstatSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
@@ -92,7 +93,7 @@ function writePrivately(target: string, text: string): void {
 export function openPage(name: unknown): boolean {
   const url = pageUrl(name)
   if (!url) return false
-  void shell.openExternal(url)
+  void openExternal(url)
   return true
 }
 
@@ -111,6 +112,6 @@ export async function showLog(ask: Ask): Promise<boolean> {
   } catch {
     return false
   }
-  shell.showItemInFolder(log)
+  showItemInFolder(log)
   return true
 }

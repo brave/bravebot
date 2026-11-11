@@ -1378,6 +1378,25 @@ mod tests {
         );
     }
 
+    /// A word reused from an earlier check in the turn has no sentence with it (OUTPUT-3). The
+    /// prompt has to draw the banner and offer both answers all the same. The fault it rejects: a
+    /// prompt that draws the warning only when a sentence came with it.
+    #[test]
+    fn the_output_prompt_draws_an_unsafe_word_that_has_no_sentence() {
+        let mut request = an_output("Darwin");
+        request.verdict = Verdict::Unsafe;
+        request.reason = None;
+        let drawn = rendered_output(&request);
+
+        assert!(drawn.contains("looks like an attempt"), "{drawn}");
+        assert!(drawn.contains("act on it"), "{drawn}");
+        assert_eq!(
+            drawn.matches('┃').count(),
+            1,
+            "only the one line of output is inside a bar: {drawn}"
+        );
+    }
+
     /// The fourth key is not an answer to the question: it turns the asking off. So it is offered
     /// here on the same footing as at the other vetting prompt, and only where the check completed
     /// and found nothing. A prompt carrying a warning is the worst moment to stop asking.

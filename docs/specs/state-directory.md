@@ -35,7 +35,7 @@ is written into it. Where [STATE-2](#STATE-2) puts it elsewhere, every statement
 directory. The prompt history, the model, theme, effort, language and editing choices, the answer to
 the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
 instructions, the premium key, the ChatGPT and xAI sign-ins, the gateway keys, the command lines somebody asked to be remembered past a
-session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
+session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout, the schedules a person stored, `schedules/` ([schedule.md](schedule.md)), the triggers a person registered with their secrets, `triggers/` ([triggers.md](triggers.md)), and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)). The rules and facts a person's sessions remember live here too, as `projects/<id>/` and `facts/` ([recall.md](recall.md)), written readable by their owner alone and refused to programs like the rest of the directory.
 The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)). Which Bedrock models refused the ask to show thinking is kept there as `bedrock-refusals.json`
@@ -64,8 +64,8 @@ itself.
 
 The programs a `run` starts are refused the whole directory except `sessions/`, which they read and
 never write ([SANDBOX-12](sandboxing.md#SANDBOX-12)). A file added to the directory later is refused
-without a change to any list. That refusal is of `~/.bravebot`, and a directory `BRAVEBOT_HOME` puts
-anywhere else is not covered by it ([Known costs](#known-costs)).
+without a change to any list. That refusal is of the state directory in force: `~/.bravebot`, and a
+directory `BRAVEBOT_HOME` puts anywhere else, with the same `sessions/` exception.
 
 Three of those kinds of file are bounded by age: session records, a language server's indexes and the
 files of what a scan found. [STATE-4](#STATE-4) says which are removed, when, and which are left
@@ -167,13 +167,16 @@ over is said to be, by name and not by value, so a person whose attempt to move 
 nothing is told why. The crates that sit below the one
 holding the answer resolve the path themselves, since [layering.md](layering.md) forbids them the
 dependency, and each spells the same name, reads the same variables in the same order, and offers
-the same absence of a fallback.
+the same absence of a fallback. The sandbox crate reads no environment: it is handed the directory
+the agent resolved, and refuses it as it refuses `~/.bravebot` ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
 
 `BRAVEBOT_HOME` moves what the program keeps and nothing else. The profile directory a leading `~`
 stands for is still the one `HOME` or `USERPROFILE` states, and the file the installer records where
 it installed to is kept in the directory the variable names.
 `install.sh` and `install.ps1` both read the variable the same way, and where no directory is stated
-at all they install and record nothing.
+at all they install and record nothing. The shell hook reads it the same way (absolute only, before
+`HOME`). The hook and the installers run in a person's shell, outside any stage, so none of them hands
+a directory to the sandbox or refuses one.
 
 **Why.** Inventing a location where the platform states none is worse than doing without: it would
 mean reading files from somewhere the user never chose, and this is the one directory whose contents
@@ -223,6 +226,8 @@ that invented a fallback would be the case above, whichever crate it happened in
 `verified-by: bravebot_agent::home::a_directory_that_is_not_text_is_the_state_directory_and_not_its_lookalike`
 `verified-by: bravebot_agent::home::a_directory_that_is_not_text_is_not_reported_as_passed_over`
 `verified-by: bravebot_agent::home::a_directory_named_in_the_environment_is_the_state_directory_in_every_crate`
+`verified-by: bravebot_agent::home::the_crates_and_the_sandbox_name_one_moved_state_directory`
+`verified-by: bravebot_agent::home::the_state_directory_is_the_one_the_sandbox_refuses`
 `verified-by: bravebot_skus::store::no_home_directory_is_reported_rather_than_guessed`
 `verified-by: bravebot_skus::store::the_profile_directory_answers_where_no_home_is_named`
 `verified-by: bravebot_skus::store::a_named_home_answers_before_the_profile_directory`
@@ -408,14 +413,12 @@ age does not end them.
   thread is running, which leaves a record whose trail went first, and still opens, or an index whose
   directory is partly removed, which a server starts on and fills again. A client that loads a record
   as the sweep removes it reads it without its trail.
-- **A directory `BRAVEBOT_HOME` puts anywhere other than `~/.bravebot` is not refused to the programs
-  a `run` starts.** [SANDBOX-12](sandboxing.md#SANDBOX-12) refuses the state directory by its default
-  name under the profile directory, so the gateway keys, the premium key and the ChatGPT and xAI sign-ins in a moved directory
-  can be read by a program a stage starts, as any file outside that table can. Refusing the directory
-  the variable names is [#2917](https://github.com/brave/bravebot/issues/2917), which needs a
-  security review: the refusal is built from the profile directory in each platform's engine, in the
-  rules that judge a granted path and in the scopes that name a directory. The documentation tells a
-  person to keep the directory where they would accept that, or to leave the variable unset.
+- **A `BRAVEBOT_HOME` that is the profile directory, a directory above it or a filesystem root adds
+  no refusal, and a caller that passes no directory refuses only the default `~/.bravebot`.** A row
+  over any of those values would refuse the account's files and not the state directory, and the
+  sandbox crate cannot resolve the directory itself, so a caller has to hand it the one the agent
+  resolved ([SANDBOX-12](sandboxing.md#SANDBOX-12),
+  [#2917](https://github.com/brave/bravebot/issues/2917)).
 - **A directory `BRAVEBOT_HOME` names is narrowed whatever else is kept in it.** STATE-1 gives the
   state directory mode 0700 and the installer does the same, and the variable can name a directory
   somebody already uses: their home directory, a shared directory or a project. The program then

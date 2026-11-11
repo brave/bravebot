@@ -459,7 +459,25 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
         let mut session = Session::new("test");
         let mut stored =
             sessions::Handle::begin(root, sessions::Front::Terminal, bravebot_stamp::BUILD);
-        for (index, (tokens, written)) in [(11, 4), (12, 7)].into_iter().enumerate() {
+        let turns = [
+            (
+                11,
+                4,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 6,
+                    written_tokens: 1,
+                },
+            ),
+            (
+                12,
+                7,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 8,
+                    written_tokens: 2,
+                },
+            ),
+        ];
+        for (index, (tokens, written, cached)) in turns.into_iter().enumerate() {
             let start = conversation.recounted().len();
             session.paste(&format!("turn {index}"));
             session.submit().unwrap();
@@ -470,7 +488,9 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
             conversation.push(Message::user(format!("turn {index}")));
             conversation.push(Message::assistant("done"));
             session.complete("done", vec![], tokens);
-            session.charged_split(tokens, written);
+            session.charged_split(
+                bravebot_session::sessions::Split::of(tokens, written).with_cache(cached),
+            );
             session.record_turn(start, &conversation);
         }
         save(&mut stored, &session, &conversation, &trust, &programs);
@@ -491,7 +511,11 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
             session.split(),
             sessions::Split {
                 read: 12,
-                written: 11
+                written: 11,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 14,
+                    written_tokens: 3,
+                },
             },
             "resumed: {resumed}, the split did not come back from the record with the tokens"
         );
@@ -510,7 +534,10 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
         assert_eq!(session.tokens, 11);
         assert_eq!(
             session.split(),
-            sessions::Split::of(11, 4),
+            sessions::Split::of(11, 4).with_cache(bravebot_aichat::protocol::Cached {
+                read_tokens: 6,
+                written_tokens: 1,
+            }),
             "resumed: {resumed}, the undone turn's split stayed in the session"
         );
         std::fs::remove_dir_all(root).unwrap();
@@ -760,7 +787,7 @@ fn bridge_handoff(ending: &str) {
     call(
         &mut bridge,
         "turn.send",
-        json!({"session":handle,"prompt":"copy","recall":false,"model":"undo-test/test"}),
+        json!({"session":handle,"prompt":"copy","recall":false,"model":"undo-test/test","messageId":"undo-1"}),
     );
     let mut observed = Vec::new();
     let until = std::time::Instant::now() + endpoint::LIMIT;
@@ -1645,6 +1672,21 @@ fn a_turn_wrote_foo(name: &str) -> Wrote {
 /// A session whose last turn is said to have turned `before` into `after` in `foo.rs`, with the
 /// rewind point and backup that says so and no turn run to make it.
 fn a_point_over(name: &str, before: &str, after: &str) -> Wrote {
+    a_point_over_file(
+        name,
+        "foo.rs",
+        bravebot_agent::workspace::Before::Bytes(before.as_bytes().to_vec()),
+        after,
+    )
+}
+
+/// [`a_point_over`] for the file `file`, which held `before` ahead of the turn.
+fn a_point_over_file(
+    name: &str,
+    file: &str,
+    before: bravebot_agent::workspace::Before,
+    after: &str,
+) -> Wrote {
     let root = scratch_dir(&format!("hunks-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -1663,14 +1705,14 @@ fn a_point_over(name: &str, before: &str, after: &str) -> Wrote {
         rewind_point(&session, &conversation, &trust, &programs, &stored),
         "edit foo.rs".into(),
     );
-    let path = workspace.root().join("foo.rs");
+    let path = workspace.root().join(file);
     std::fs::write(&path, after).unwrap();
     session
         .rewind
         .keep_backups(vec![bravebot_agent::workspace::Backup {
             kept: false,
             path,
-            was: bravebot_agent::workspace::Before::Bytes(before.as_bytes().to_vec()),
+            was: before,
             captured_trust: Integrity::Trusted,
         }]);
     Wrote {
@@ -1771,6 +1813,36 @@ impl Drop for Wrote {
     }
 }
 
+/// A rewind replaces the conversation with the one captured at the point, so no plan mode remains
+/// to retract after it: a turn that went into plan mode and was undone leaves a conversation with
+/// no plan-mode notice (MODE-8).
+///
+/// This holds under any way of recording the notice, so it pins the outcome of a rewind and not a
+/// particular design.
+#[test]
+fn undoing_a_turn_that_went_into_plan_mode_leaves_no_plan_mode_to_retract() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_point_over("plan-notice", "before\n", "after\n");
+    wrote.conversation.push_composed(
+        bravebot_aichat::protocol::Message::user("plan mode is on"),
+        bravebot_agent::conversation::Composed::ModeNotice { plan: true },
+    );
+    assert!(
+        wrote.conversation.plan_mode_told(),
+        "the notice was not recorded, so this says nothing"
+    );
+
+    wrote.undo();
+
+    assert!(
+        !wrote.conversation.plan_mode_told(),
+        "the rewound conversation still records a plan-mode notice it no longer holds: {}",
+        wrote.said()
+    );
+}
+
 /// The list is what a number is read beside, so each row says which hunk it is, where it is in the
 /// file now, and shows the lines it replaced and the lines that replaced them.
 #[test]
@@ -1801,6 +1873,86 @@ fn the_hunks_of_the_last_turn_are_listed_with_their_lines() {
     assert!(rows[1].changes.contains(&Change::Added("INDIA TOO".into())));
     assert!(!rows[0].untrusted && !rows[1].untrusted);
     assert_eq!(wrote.foo(), EDITED, "listing wrote to the file");
+}
+
+/// PROMPT-1: a file the turn wrote is named in the list as every prompt names it. A name that ends
+/// in a space or holds a character that draws as nothing is not drawn as the name without it, in
+/// the row, in the line saying a hunk went back and in the line for a file with no hunks. A name
+/// that is only text is drawn as it always was.
+#[test]
+fn the_list_and_its_notes_draw_a_file_name_spelled() {
+    if !in_isolated_profile() {
+        return;
+    }
+    use bravebot_agent::workspace::Before;
+    let bytes = |text: &str| Before::Bytes(text.as_bytes().to_vec());
+    let spellings = [
+        ("note.md", "note.md"),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b.md", "\"a\\u{202e}b.md\""),
+        ("a\u{200b}b.md", "\"a\\u{200b}b.md\""),
+    ];
+    let mut rows = Vec::new();
+    for (file, shown) in spellings {
+        let mut wrote = a_point_over_file("spelled", file, bytes("one\ntwo\n"), "one\nTWO\n");
+
+        wrote.list();
+
+        let listed = wrote.rows();
+        assert_eq!(listed.len(), 1, "{file:?}: {}", wrote.said());
+        assert_eq!(listed[0].line(), format!("Hunk(1 {shown})"), "{file:?}");
+        rows.push(listed[0].line());
+
+        wrote.put_back(1);
+
+        assert!(
+            wrote.said().contains(&format!(
+                "put back hunk 1 of {shown} as it stood before turn 1"
+            )),
+            "{file:?}: {}",
+            wrote.said()
+        );
+        let mut created = a_point_over_file("spelled-left", file, Before::Nothing, "one\n");
+
+        created.list();
+
+        assert!(
+            created
+                .said()
+                .contains(&format!("{shown}: the turn created it")),
+            "{file:?}: {}",
+            created.said()
+        );
+    }
+    for (at, row) in rows.iter().enumerate().skip(1) {
+        assert_ne!(
+            row, &rows[0],
+            "{:?} drew as the plain name",
+            spellings[at].0
+        );
+    }
+}
+
+/// A row that names a file is drawn by the activity as it stands, so the desktop and mobile
+/// transcripts, which draw `shownTarget`, do not spell the name a second time.
+#[test]
+fn a_hunk_row_is_not_spelled_a_second_time_by_the_activity() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_point_over_file(
+        "twice",
+        "note.md ",
+        bravebot_agent::workspace::Before::Bytes(b"one\ntwo\n".to_vec()),
+        "one\nTWO\n",
+    );
+
+    wrote.list();
+
+    let rows = wrote.rows();
+    assert_eq!(rows.len(), 1, "{}", wrote.said());
+    assert_eq!(rows[0].shown_target(), rows[0].target);
+    assert_eq!(rows[0].shown_target(), "1 \"note.md\u{2423}\"");
 }
 
 /// Only the named hunk goes back, the file keeps the other as the turn wrote it, the map is as it

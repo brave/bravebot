@@ -8,6 +8,8 @@ governs:
   - crates/cli/src/plain.rs
   - crates/ui-bridge/src/turn.rs
   - crates/i18n/src/ask.rs
+  - crates/agent/src/settled.rs
+  - crates/ui-bridge/src/wire.rs
   - ui/src/renderer/asking.ts
   - ui/scripts/asking.test.mjs
   - ui/scripts/drive-manual-walkthrough.mjs
@@ -125,7 +127,8 @@ The position is worded once, in `bravebot-i18n`, and the end of the series is de
 call the first. The picker and the bridge call the second; the line-by-line interface puts every
 question not already answered in turn and has no step to end. The desktop bridge sends each
 prompt's position (`place`) and whether settling it ends the series (`last`), so the window keeps
-only which question it is on, its drafts and its focus.
+only which question it is on, its drafts and its focus. What the planner is told is unchanged by
+[ASK-13](#ASK-13), which draws each question and its outcome on the screen once the series is settled.
 
 `verified-by: bravebot_tui::ask::the_position_in_the_series_is_shown`
 `verified-by: bravebot_tui::ask::a_lone_question_is_not_labelled_one_of_one`
@@ -153,7 +156,9 @@ only which question it is on, its drafts and its focus.
 
 In a one-shot `bravebot "..."` run, every question in the series is declined rather than answered
 on the user's behalf. A run given `--input-format lines` puts the questions to the program sending
-its lines instead, which answers by position among the choices offered and in no words of its own
+its lines instead, which answers by position among the choices offered, and in words of its own only
+where the person typed `--trust-input-lines` and the question has one prompt, in which case the
+trail records the words as arriving on a vouched channel and not as typed
 ([CLI-36](../cli.md#CLI-36)).
 
 **Why.** The planner is told the reply came from a person, so inventing one would be worse than
@@ -168,7 +173,10 @@ not asking.
 A planner that loops back over the same decision does not make the user restate it, and a set
 where some are already settled shows only the rest. Questions differing anywhere, including in
 their tag, are different questions. `/clear` and `/branch` begin another session, and the answers
-given before do not carry into it. The desktop application keeps them the same way: for the
+given before do not carry into it. An undo (`/undo` and `/rewind` in the terminal, `session.rewind`
+in the desktop application) forgets every answer, those given before the turns it undid as well as
+in them, because an answer is not kept with the turn it was given in; an undo that finds no turn to
+go back to forgets none. The desktop application keeps them the same way: for the
 session, across its turns, and a session opened, resumed or forked there begins with none. The
 turn's notices name each question it did not put. The terminal and the desktop application
 remember only an answer the person gave, so a question that nobody could be asked, or that the
@@ -176,7 +184,9 @@ interface returned no answer for, is put again, as is one closed on a clock
 ([ASK-9](#ASK-9)), which nobody answered. A session in lines reads the end of its input as a
 decline and remembers it, as it does a line left empty. The plan put by `propose_plan` is not one
 of these questions: it is a permission to change mode, and it is put under a key of its own every
-time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#MODE-14)).
+time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#MODE-14)). A question
+answered from memory is not put and so draws no block of [ASK-13](#ASK-13) beside the note that it
+was answered already.
 
 `verified-by: bravebot_core::ask::the_key_distinguishes_questions_that_differ_anywhere`
 `verified-by: bravebot_core::ask::the_key_distinguishes_questions_that_differ_in_their_tag`
@@ -198,6 +208,7 @@ time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#
 `verified-by: bravebot_core::ask::a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is`
 `verified-by: bravebot_tui::ask::a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered`
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_answers_to_the_planners_questions`
+`verified-by: bravebot_tui::app::undoing_a_turn_forgets_the_answers_to_the_planners_questions`
 `verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
 `verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`
 `verified-by: bravebot_ui_bridge::answering_tests::a_question_the_person_answered_is_not_put_to_the_window_again`
@@ -210,6 +221,8 @@ time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#
 `verified-by: bravebot_ui_bridge::remembered_answers::a_question_answered_in_one_turn_is_not_put_again_in_the_next`
 `verified-by: bravebot_ui_bridge::remembered_answers::a_question_that_differs_only_in_its_tag_is_put_again`
 `verified-by: bravebot_ui_bridge::remembered_answers::another_session_is_not_answered_from_the_first_ones_memory`
+`verified-by: bravebot_ui_bridge::remembered_answers::a_question_answered_in_an_undone_turn_is_put_again`
+`verified-by: bravebot_ui_bridge::remembered_answers::an_undo_that_goes_back_nowhere_keeps_the_answers`
 `verified-by: bravebot_ui_bridge::remembered_answers::a_turn_that_fails_after_a_remembered_answer_still_names_the_question_it_did_not_put`
 
 <a id="ASK-9"></a>
@@ -224,7 +237,9 @@ it can go on with its own judgment and ask again later. Answers already given in
 kept. A mark or half-typed text the person had not confirmed is not one, since reporting it would
 be a reply nobody gave ([ASK-7](#ASK-7)). Any key press starts the time again, for each question of
 a series in turn, and a release, the pointer or a change of size does not. The transcript says that
-a question was closed, and the question is not remembered ([ASK-8](#ASK-8)).
+a question was closed, and the question is not remembered ([ASK-8](#ASK-8)). The note the terminal
+draws for the series is the one that says so for the series, and the block under each question that
+was closed ([ASK-13](#ASK-13)) says `closed on the clock` for that question alone.
 
 Only the questions the planner puts with `ask_user` close this way. A plan to approve, a spend limit
 and a repeated call are the driver's own questions, asked of a person who has to be there, and they
@@ -263,7 +278,8 @@ person's file alone as well.
 ### ASK-10: the line under the call counts the questions asked
 
 The line a front end draws under the call says how many questions were asked, as `3 questions asked`
-or `1 question asked`, whatever the person did with them. It does not count answers.
+or `1 question asked`, whatever the person did with them. It does not count answers. The questions and what became of each
+are drawn under it by [ASK-13](#ASK-13), and the line is the same with or without them.
 
 **Why.** The line is read by a person returning to the session. A count of answers tells them their
 questions were settled when they were skipped. The kernel puts the replies into words for the planner,
@@ -274,6 +290,45 @@ and the line does not read them a second time to count them.
 `verified-by: bravebot_agent::tools::the_line_counts_every_question_asked_where_each_was_answered`
 `verified-by: bravebot_agent::tools::the_line_counts_one_question_in_the_singular`
 `verified-by: bravebot_agent::turn::the_line_under_a_skipped_question_does_not_call_it_an_answer`
+
+<a id="ASK-13"></a>
+### ASK-13: the screen shows each question put and what became of it
+
+Once the questions of a call are settled, the front end draws, under the call, one block for each
+question that was put: its tag and sentence, then the options picked, the words typed, `skipped`, or
+`closed on the clock` ([ASK-9](#ASK-9)). The line under the call still counts the questions asked
+([ASK-10](#ASK-10)) and the blocks follow it. A question a remembered answer settled was not put and
+has no block ([ASK-8](#ASK-8)). Where nobody could be asked ([ASK-7](#ASK-7)) and the interface
+returned no answers, there are no blocks, since `skipped` under each question would read as the
+person's choice.
+
+The blocks are built once, in `bravebot_core::ask::settled_rows`, from the questions that were put
+and the answers the interface returned. They are worded in `bravebot-i18n` and assembled in
+`bravebot_agent::settled`, which the terminal, the line-by-line interface and the desktop bridge call.
+The bridge sends them as the `ask.settled` event. A newline or other control character in a question
+or an answer becomes a space, so neither starts a line of its own. The blocks are for the screen: they
+are not given to the planner, not written to the session record and not added to the report of
+answers ([ASK-6](#ASK-6)).
+
+**Why.** The planner's reply is the only other place the answers appear. A person scrolling back
+saw `3 questions asked` and had to ask the planner what they had decided. The rows are drawn from
+values the picker or window returned, in the order the questions were put, and nothing branches on the
+text of a question or an answer.
+
+`verified-by: bravebot_core::ask::each_question_is_paired_with_what_became_of_it`
+`verified-by: bravebot_core::ask::a_row_is_made_for_each_question_shown_whatever_came_back`
+`verified-by: bravebot_i18n::ask::each_way_a_question_can_end_has_its_own_words`
+`verified-by: bravebot_i18n::ask_in_french::the_ways_a_question_ends_are_said_in_the_chosen_catalog`
+`verified-by: bravebot_agent::settled::each_question_is_followed_by_what_became_of_it`
+`verified-by: bravebot_agent::settled::a_question_with_no_answer_reads_as_skipped`
+`verified-by: bravebot_agent::settled::nothing_typed_or_asked_starts_a_line_of_its_own`
+`verified-by: bravebot_agent::settled::the_glimpse_is_the_lines_and_nothing_cut`
+`verified-by: bravebot_tui::render::a_settled_ask_user_call_shows_each_question_and_its_answer_without_a_reply`
+`verified-by: bravebot_tui::render::a_series_nobody_could_be_asked_draws_no_rows`
+`verified-by: bravebot_cli::plain::each_question_put_is_followed_by_what_became_of_it`
+`verified-by: bravebot_cli::plain::a_series_wholly_remembered_draws_no_rows`
+`verified-by: bravebot_ui_bridge::answering_tests::the_window_is_sent_each_question_put_and_what_became_of_it`
+`verified-by: bravebot_ui_bridge::answering_tests::a_window_that_returned_no_answers_is_sent_no_rows`
 
 <a id="ASK-11"></a>
 ### ASK-11: a series of questions is reviewed before anything is sent, and can be gone back through
@@ -290,7 +345,9 @@ shows none ([ASK-8](#ASK-8)).
 
 Nothing reaches the planner or the session's memory before Enter on the review: the answers leave the
 picker only as the one ordered vector it returns, so the memory is written from what was confirmed
-and ASK-5, ASK-6 and the report to the planner are unchanged. The one other way out is the clock
+and ASK-5, ASK-6 and the report to the planner are unchanged. The blocks of [ASK-13](#ASK-13) are
+drawn from the answers the picker returns after the review is confirmed, so a question reopened and
+changed shows the answer that was sent. The one other way out is the clock
 ([ASK-9](#ASK-9)), which keeps every answer given, including the one a reopened question had, and
 closes only a question never answered.
 
@@ -362,6 +419,8 @@ mode, so it says what a question costs and which questions are left to ask.
 
 ## Known costs
 
+- The blocks of ASK-13 are not kept in the session record, so a conversation resumed later shows the
+  count line without them.
 - Only the terminal picker reviews. The line-by-line interface and the desktop app still settle a
   series question by question, and neither can go back.
 - The setting applies to the terminal interface's picker alone. A session in lines (`--plain`) reads

@@ -57,7 +57,7 @@ name whoever made the link chose, and the sentence is the driver's own words, as
 <a id="PATHREQ-3"></a>
 ### PATHREQ-3: a path an `allowWrite` row refuses is refused, and not asked about
 
-`~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot`, a
+`~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot` (or the directory `BRAVEBOT_HOME` puts elsewhere), a
 credential location and any path holding a wildcard are refused whatever the person would answer;
 a request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to
 write there is refused like the rest of `~/.bravebot`. The result says so without asking, says what is true of the path that made it refuse (it holds
@@ -71,6 +71,8 @@ program should not have put.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::only_a_read_of_the_session_records_is_granted_in_the_state_directory`
+`verified-by: bravebot_sandbox::rules::a_request_for_the_state_directory_that_is_moved_is_refused_as_the_default_is`
+`verified-by: bravebot_sandbox::rules::a_directory_added_inside_or_above_the_state_directory_that_is_moved_is_refused`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 
@@ -97,18 +99,28 @@ Under the sandbox mode `off` there is no profile to add to, and a workspace that
 `read-only` a request to write is refused and a request to read is accepted
 ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), so the mode that answers every question does not hand
 back the writes the mode withholds. The result says the request is not accepted, and nobody is
-asked. A session that accepts no request does not point the planner at the route: the `run`
-description and the sentence after a failed step name neither `request_path` nor `run`'s `scopes`
-argument there ([SANDBOX-19](../sandboxing.md#SANDBOX-19)). The mode that answers every question
+asked. A session that accepts no request does not point the planner at the route. Under `off`, and
+on a turn that confines no run, the `run` description says that `request_path` is refused and
+nobody is asked, in every permission mode, and says nothing of `scopes`, which is accepted and
+dropped there. A turn whose list lacks `request_path` is told nothing of the tool in any of these
+sentences, since a tool it cannot call needs no refusal ([TOOL-6](tool-surface.md#TOOL-6)). In an untrusted workspace under a mode that confines, the `run` description and the
+sentence after a failed step name no route to a request and say that `run` accepts no `scopes`
+argument and, where the list holds `request_path`, that `request_path` is refused ([SANDBOX-19](../sandboxing.md#SANDBOX-19)). The mode that answers every question
 does not give the programs of such a session the rows a request would have added either: a write
 beside the session's directories is refused by the operating system, and the sentence, the trail and
 `/status` say nothing of a reach through `request_path`
 ([SANDBOX-28](../sandboxing.md#SANDBOX-28)).
 
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
+`verified-by: bravebot_agent::turn::the_run_description_says_request_path_is_refused_under_off`
+`verified-by: bravebot_agent::turn::the_run_description_says_request_path_is_refused_where_runs_are_not_confined`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
+`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 
 <a id="PATHREQ-6"></a>
 ### PATHREQ-6: a delegate has no such tool
@@ -141,8 +153,9 @@ where the path leads through links:
 
 - for a read, the paths [PATHREQ-3](#PATHREQ-3) refuses: a filesystem root, a drive root, the home
   directory and the directories above it, `~/.ssh`, `~/.bravebot` (a read of its `sessions`
-  directory excepted), credential locations and the directories that hold one, and a path with a
-  control character or a wildcard;
+  directory excepted) or the directory `BRAVEBOT_HOME` puts elsewhere (with the same exception),
+  credential locations and the directories that hold one, and a path with a control character or a
+  wildcard;
 - for a write, the paths [SANDBOX-28](../sandboxing.md#SANDBOX-28) gives a bypass stage no write row
   for: the same, and persistence locations and the directories that hold one. A new entry is judged
   by the directory it lands in, so an entry already inside the home directory or a directory above

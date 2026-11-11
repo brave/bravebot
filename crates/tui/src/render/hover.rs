@@ -111,7 +111,12 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Back => said(t!(hover_back)),
         Hit::Reply(_) => said(t!(hover_reply)),
         Hit::Block(..) => said(t!(hover_block)),
-        Hit::Queued(_) => said(t!(hover_queued)),
+        // A command a click queued has nothing to put in the box, so a click on it removes it
+        // (MOUSE-28).
+        Hit::Queued(place) if session.queued_comes_back(place) => said(t!(hover_queued)),
+        Hit::Queued(_) => said(t!(hover_queued_command)),
+        Hit::Discard(crate::state::Discard::One(_)) => said(t!(hover_queued_remove)),
+        Hit::Discard(crate::state::Discard::All) => said(t!(hover_queued_clear)),
         Hit::Call(_) if session.scrolling() => said(t!(hover_call_toggle)),
         Hit::Call(_) => said(t!(hover_call_open)),
         Hit::Delegate(_) => said(t!(hover_delegate)),

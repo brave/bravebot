@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: The audit trail
-description: What is recorded about every decision the system makes, and how to read it.
+description: Read gate decisions and audit records for compaction, limits, plans, permission modes, network hosts, delegates, checkouts and processors; inspect model requests and on-disk storage.
 ---
 
 # The audit trail
@@ -14,7 +14,7 @@ would not answer "why did it not do the thing I asked", which is most of what an
 | Where | How |
 |---|---|
 | in a session, live | **Ctrl-T** toggles the trail |
-| a one-shot run | `--trace`, which puts it on stderr, after the error too when the run ends in one |
+| a one-shot run | `--trace`, which puts it on stderr, each line as the gate takes the decision, so a run that ends in an error shows the trail above it. A control character in a path or name on a line is drawn as its picture, so a file name cannot change your terminal |
 | after the fact | `~/.bravebot/sessions/<directory>/<id>.audit.jsonl` |
 
 An [incognito session](../using/incognito.md) shows its gate
@@ -63,7 +63,9 @@ the remedy, and the turn does not end as clean. Where the person has turned perm
 a path a read would reach is armed instead, and the first time the session reaches its directory
 the trail carries one `path_reach` record naming the mode, `watch_file` and `path`. An absolute path
 that lands inside the workspace is recorded as "is inside the workspace but not named relative to
-its root; remedy offered: name it relative to the workspace root".
+its root; remedy offered: name it relative to the workspace root". A relative or absolute path with a
+`..` that lands inside the workspace is recorded the same way, with the remedy "name it relative to
+the workspace root, without the '..'".
 
 Three pieces of notation appear throughout:
 
@@ -73,6 +75,18 @@ Three pieces of notation appear throughout:
   reference instead of the bytes.
 - `routing` marks the part of a call that **decides where it lands**, as opposed to the part that is
   merely carried.
+
+The desktop app draws a label as two chips, **Trusted** or **Untrusted** and **Public** or **Private**,
+each with a tooltip, on confined content, on the vet, output and vouch cards and on a processor's
+remark under a write. The chips are neutral in every state, so a trusted label is not drawn as safe.
+The **Confined content** panel opens with a **Conversation** row saying whether the conversation is
+trusted or has met untrusted content. The row is hidden from the moment a turn starts until the
+session is next opened or rewound. A turn's **Audit** view has a **Routing & content** section that
+lists each tool call's fields with their role (routing decides where the effect lands, content is
+carried there), their label and whether they were allowed or refused, and each release of a slot
+from one label to another, in the order recorded. A turn's details name the service that answered it (**Answered by**: Brave,
+AWS Bedrock, ChatGPT, xAI or a gateway) only when the turn ran on the session's model, so a turn
+answered by a bot's, a skill's or the fallback model names none.
 
 A *gate* is a check that has to pass before anything consequential happens: content reaching the
 model, a file being written, a program being run, a request leaving the process. Each one decides a
@@ -146,8 +160,9 @@ A `run` call that asks for no sandbox (`unconfined`) or for a credential scope (
 refused gets a blocked `sandbox` line naming the argument and every cause that held. The planner is
 told one sentence that names no setting, so this line is where to read which one withheld the
 request: the sandbox mode, a workspace you have not trusted, a managed closed network, a delegate,
-a turn that confines none of its runs, or for `scopes` a platform with no sandbox or a session with
-no profile directory.
+or for `scopes` a platform with no sandbox or a session with no profile directory. Under sandbox mode
+`off` and in a turn that confines none of its runs, a request is accepted and ignored, so it gets no
+blocked line.
 
 ```
 BLOCK   sandbox: run.unconfined: the request was refused and the line did not run: the strict sandbox mode does not take it
@@ -163,6 +178,11 @@ A `download_url` asks about the host and then about the file, and the line says 
 BLOCK   approval: write_file: the write was not approved, so nothing was written
 BLOCK   approval: fetch_url: the fetch was not approved, so nothing was fetched
 ```
+
+A `run` line that was put to you and not approved, by an answer of no, Ctrl-C or nobody being there to
+ask, is recorded the same way as a refusal under `approval` saying the line was not approved and did not
+run. Its `sandbox` entry is written only once the line is approved, so a line that did not start is not
+recorded as having run.
 
 A call to an MCP server's tool that was put to you and not approved gets the same line, naming the
 call as the server's alias and the tool's name. Answering no, pressing Ctrl-C, and a question nobody
@@ -206,7 +226,9 @@ ending line says how long it ran, how many rounds it made out of the most it may
 answered, it reached its round limit and answered with what it had, it was stopped, it did not finish
 (with the kind of failure), or its thread died and returned nothing. A delegate that ran for
 twenty minutes and produced nothing can be told apart this way from one that ran out of rounds. The
-same cause is in the note you are shown. The planner is told only that the delegate did not finish.
+same cause is in the note you are shown. The planner is told only that the delegate did not finish,
+except when the cause was a rate limit or an outage: it is then also told which, and that starting the
+same delegate again meets the same limit.
 
 Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
 removed, is recorded as well.

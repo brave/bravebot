@@ -7,6 +7,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
@@ -228,7 +230,7 @@ fn a_turn_is_refused_until_trust_has_been_answered() {
         call(
             &mut bridge,
             "turn.send",
-            json!({ "session": &handle, "prompt": "hello" })
+            message_ids::with_fresh(json!({ "session": &handle, "prompt": "hello" }))
         ),
         Err(ErrorCode::BadRequest),
         "no turn before the question is answered"
@@ -249,13 +251,74 @@ fn a_turn_is_refused_until_trust_has_been_answered() {
     let after = call(
         &mut bridge,
         "turn.send",
-        json!({ "session": &handle, "prompt": "hello" }),
+        message_ids::with_fresh(json!({ "session": &handle, "prompt": "hello" })),
     );
     assert_ne!(
         after,
         Err(ErrorCode::BadRequest),
         "the trust gate should be passed"
     );
+}
+
+/// A refusal is recorded under the send's id as an acceptance is. Sent again once the trust question
+/// is answered, the send is refused the same way, and a lookup says it was refused.
+#[test]
+fn a_send_refused_under_an_id_is_refused_again_under_it() {
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+    let send = json!({ "session": &handle, "prompt": "hello", "messageId": "early" });
+
+    assert_eq!(
+        call(&mut bridge, "turn.send", send.clone()),
+        Err(ErrorCode::BadRequest)
+    );
+    call(
+        &mut bridge,
+        "trust.reply",
+        json!({ "session": &handle, "trusted": false }),
+    )
+    .expect("answered");
+    assert_eq!(
+        call(&mut bridge, "turn.send", send),
+        Err(ErrorCode::BadRequest)
+    );
+    let looked = call(
+        &mut bridge,
+        "turn.lookup",
+        json!({ "session": &handle, "messageId": "early" }),
+    )
+    .expect("looked up");
+    assert_eq!(looked["state"], "refused", "{looked}");
+    assert_eq!(looked["error"]["code"], "bad_request", "{looked}");
+    assert_eq!(
+        call(
+            &mut bridge,
+            "turn.lookup",
+            json!({ "session": "s-none", "messageId": "early" })
+        ),
+        Err(ErrorCode::NoSuchSession)
+    );
+
+    // A tag the bridge refuses is a refusal of the send like any other, and recorded.
+    let tagged =
+        json!({ "session": &handle, "prompt": "hello", "messageId": "tagged", "composed": 7 });
+    assert_eq!(
+        call(&mut bridge, "turn.send", tagged),
+        Err(ErrorCode::BadRequest)
+    );
+    let looked = call(
+        &mut bridge,
+        "turn.lookup",
+        json!({ "session": &handle, "messageId": "tagged" }),
+    )
+    .expect("looked up");
+    assert_eq!(looked["state"], "refused", "{looked}");
 }
 
 #[test]
@@ -465,7 +528,7 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
     let bare = call(
         &mut bridge,
         "turn.send",
-        json!({ "session": &handle, "prompt": "hello" }),
+        message_ids::with_fresh(json!({ "session": &handle, "prompt": "hello" })),
     );
     assert_ne!(
         bare,
@@ -483,12 +546,12 @@ fn a_turn_may_name_files_or_none_and_none_is_the_default() {
     let named = call(
         &mut bridge,
         "turn.send",
-        json!({
+        message_ids::with_fresh(json!({
             "session": &handle,
             "prompt": "hello",
             "files": ["README.md"],
             "dropped": [briefing.display().to_string()],
-        }),
+        })),
     );
     assert_ne!(
         named,
@@ -516,11 +579,11 @@ fn a_dropped_path_that_names_no_file_is_refused() {
         call(
             &mut bridge,
             "turn.send",
-            json!({
+            message_ids::with_fresh(json!({
                 "session": &handle,
                 "prompt": "hello",
                 "dropped": [missing.display().to_string()],
-            })
+            }))
         ),
         Err(ErrorCode::BadRequest),
         "nothing is at that path, so nobody dropped it",
@@ -532,11 +595,11 @@ fn a_dropped_path_that_names_no_file_is_refused() {
         call(
             &mut bridge,
             "turn.send",
-            json!({
+            message_ids::with_fresh(json!({
                 "session": &handle,
                 "prompt": "hello",
                 "dropped": [held.path().display().to_string()],
-            })
+            }))
         ),
         Err(ErrorCode::BadRequest),
         "a directory is not a file anybody dropped",
@@ -559,11 +622,11 @@ fn a_relative_dropped_path_is_refused() {
         call(
             &mut bridge,
             "turn.send",
-            json!({
+            message_ids::with_fresh(json!({
                 "session": &handle,
                 "prompt": "hello",
                 "dropped": ["Cargo.toml"],
-            })
+            }))
         ),
         Err(ErrorCode::BadRequest),
         "a path inside the project belongs in `files`",
@@ -616,7 +679,9 @@ fn a_malformed_dropped_list_costs_the_files_and_not_the_turn() {
         let sent = call(
             &mut bridge,
             "turn.send",
-            json!({ "session": &handle, "prompt": "hello", "dropped": wrong }),
+            message_ids::with_fresh(
+                json!({ "session": &handle, "prompt": "hello", "dropped": wrong }),
+            ),
         );
         assert_ne!(
             sent,
@@ -856,4 +921,42 @@ fn a_desktop_session_is_given_a_directory_of_its_own() {
         !directory.exists(),
         "{reported} outlived the session that was given it"
     );
+}
+
+/// `schedule.command` reaches the shared function through the dispatcher: a session that is not
+/// open is refused, and a form with no such subcommand is answered as a refusal in lines to draw.
+/// The line is one that reads nothing from the schedule store.
+#[test]
+fn schedule_command_is_dispatched_to_the_shared_function() {
+    let (mut bridge, _) = harness();
+    let missing = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": "nobody", "argument": "list" }),
+    );
+    assert_eq!(missing, Err(ErrorCode::NoSuchSession));
+
+    let handle = a_trusting_session(&mut bridge);
+    let answer = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": &handle, "argument": "no-such-subcommand" }),
+    )
+    .expect("answered");
+    assert_eq!(answer["refused"], true, "{answer}");
+    assert_eq!(answer["running"], false, "{answer}");
+    assert!(
+        answer["lines"]
+            .as_array()
+            .is_some_and(|lines| !lines.is_empty()),
+        "{answer}"
+    );
+
+    let unclosed = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": &handle, "argument": "add \"never closed" }),
+    )
+    .expect("answered");
+    assert_eq!(unclosed["refused"], true, "{unclosed}");
 }

@@ -146,6 +146,28 @@ fn cancelling_stops_a_running_command() {
     );
 }
 
+/// brave/bravebot#2964: a line that backgrounds a process with `&`, such as `sleep 10 & true`,
+/// must be reported finished once the shell itself exits, not once the process it left running
+/// exits on its own. Before the fix, the backgrounded process inherited the pipe the shell wrote
+/// to, kept its write end open after the shell returned, and `run` waited for that pipe to reach
+/// its end before collecting a result: the spinner spun and the stop key had nothing to interrupt
+/// for the whole ten seconds, because nothing was reported running for the cancel check to reach.
+#[test]
+fn a_line_that_backgrounds_a_process_returns_once_the_shell_exits() {
+    let scratch = Scratch::new("background");
+    let cancel = Cancel::new();
+    let started = std::time::Instant::now();
+
+    let ran = shell::run("sleep 10 & true", &scratch.path, &cancel).expect("the shell runs");
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the result waited for the backgrounded process instead of the shell's own exit: {elapsed:?}"
+    );
+    assert!(ran.succeeded());
+}
+
 /// Output larger than a pipe buffer must not deadlock against a drain nobody is running.
 #[test]
 fn a_large_result_does_not_deadlock() {

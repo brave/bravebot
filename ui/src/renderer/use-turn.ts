@@ -6,6 +6,8 @@ import { declined, markersOf, mayGo, route, sentInto } from './interjecting'
 import { type Interjection, type Live, NEW_CHAT, liveKey } from './live'
 import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
+import { RequestFailed } from './rewind'
+import { scheduleArgument, type ScheduleAnswer } from '../shared/schedule'
 import { grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
@@ -137,7 +139,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         // there from a definition this side cannot reach.
         await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
+        // A new id for each Send, which the agent requires on every send (RPCVIEW-10).
+        await call('turn.send', { session: handle, prompt, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {
@@ -165,6 +168,35 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
+  /**
+   * Carry out `/schedule <argument>` for a line a person typed into the composer (CMD-1).
+   *
+   * The bridge cuts the line and runs the code `bravebot schedule` runs. What it answers is drawn as
+   * a row of the transcript and is never sent to the model. A form that changes the schedule is
+   * refused by the bridge while a turn runs (`turn_in_flight`, the bridge's decision and not a
+   * reading of the line here), and the line then waits in the queue to be asked again when the
+   * turn ends (CMD-8). Nothing here reads the argument. A line typed while a `/schedule` line already
+   * waits waits behind it, whatever it is, since the bridge cannot see this queue and would answer a
+   * read before the write typed first (CMD-8).
+   */
+  const schedule = useCallback(async (handle: string, argument: string, line: string, queuedAlready = false) => {
+    const waiting = !queuedAlready && openedLives.current.get(handle)?.queued?.some((item) => item.schedule !== undefined)
+    if (waiting) {
+      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+      return
+    }
+    try {
+      const answer = await call<ScheduleAnswer>('schedule.command', { session: handle, argument })
+      updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.scheduleAnswered(answer)] } : old)
+    } catch (error) {
+      if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+        return
+      }
+      updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(String(error))] } : old)
+    }
+  }, [])
+
   // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
   // bridge's check of the message's `@` names before it marks the chat running, and without this the
   // queue would take the next message in that gap and send both.
@@ -178,7 +210,11 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      void send(message.prompt, handle, message.attachments, message.staged).finally(() => {
+      // A waiting `/schedule` line is asked again and starts no turn.
+      const settled = message.schedule !== undefined
+        ? schedule(handle, message.schedule, message.prompt, true)
+        : send(message.prompt, handle, message.attachments, message.staged)
+      void settled.finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
@@ -257,39 +293,16 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
-  /**
-   * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
-   *
-   * One run per press. The session does not hold this as a mode, so the next message is an
-   * ordinary turn unless the button is pressed again.
-   */
-  const plan = useCallback(async (task: string) => {
-    const handle = handleRef.current
-    if (!handle) return
-    const model = openedLives.current.get(handle)?.model ?? null
-    updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
-    try {
-      await call('manifest.run', { session: handle, task, model })
-    } catch (error) {
-      if (error instanceof Unconfigurable) setUnconfigured(error.message)
-      updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
-    }
-  }, [])
-
-  /** Start a run from whatever is in the composer, where a run can take it. */
-  const submitPlan = useCallback(() => {
-    const task = draft.trim()
-    if (!handleRef.current || !canSend(live, backendReady, task)) return
-    // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
-    // carries a briefing a run has no place for.
-    if (live?.attachments?.length || named(live?.staging, task).length || live?.bot) return
-    setDraft('')
-    void plan(task)
-  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.staging, live?.bot, plan, backendReady])
-
   /** Hold the draft for after the turn: each queued message starts a turn of its own, with the grants it names. */
   const queueDraft = () => {
     if (!draft.trim()) return
+    const typed = scheduleArgument(draft)
+    if (typed !== null && handleRef.current) {
+      const handle = handleRef.current
+      setDraft('')
+      void schedule(handle, typed, draft.trim())
+      return
+    }
     setLive((old) => old ? {
       ...old,
       queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
@@ -304,14 +317,25 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const prompt = draft.trim()
     if (!handleRef.current || !canSend(live, backendReady, prompt)) return
     setDraft('')
+    const typed = scheduleArgument(prompt)
+    if (typed !== null) {
+      void schedule(handleRef.current, typed, prompt)
+      return
+    }
     void send(prompt)
-  }, [draft, live?.running, live?.askingTrust, send, backendReady])
+  }, [draft, live?.running, live?.askingTrust, send, schedule, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
     const handle = handleRef.current
     const text = draft.trim()
     if (!handle || !text || !live) return
+    const typed = scheduleArgument(text)
+    if (typed !== null) {
+      setDraft('')
+      void schedule(handle, typed, text)
+      return
+    }
     if (route(live, named(live.staging, draft)) === 'queue') { queueDraft(); return }
     const staged = named(live.staging, draft)
     const line = { id: crypto.randomUUID(), prompt: text, attachments: [], staged }
@@ -320,5 +344,5 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     void interject(handle, line)
   }
 
-  return { answerTrust, submit, submitPlan, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
 }

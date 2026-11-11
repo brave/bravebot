@@ -1,7 +1,7 @@
 ---
 sidebar_position: 10
 title: Signing in
-description: Every way to sign in to a model service, from one command.
+description: Model-service authentication commands, xAI and gateway sign-in, credential status checks and authentication during incognito sessions.
 ---
 
 # Signing in
@@ -136,7 +136,8 @@ written in your settings would not be read there, and the list and the refusal o
 that file.
 
 With one service offered, or one named as in `bravebot auth login gateway openai`, it asks for the
-key straight away. Nothing appears as the key is typed or pasted. Ctrl-U starts it again, and
+key straight away. Nothing appears as the key is typed or pasted, including a key pasted the moment the
+question appears. Where the terminal cannot be set to show nothing, the key is not asked for. Ctrl-U starts it again, and
 Escape, Ctrl-C, Ctrl-D or Enter on nothing stops without storing anything. A service that already
 has a key stored asks before replacing it.
 

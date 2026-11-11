@@ -3,7 +3,10 @@
 @import './styles/legacy.css';
 @import './styles/shell.css';
 @import './styles/sidebar.css';
+@import './styles/avatar.css';
 @import './styles/menus.css';
+@import './styles/models.css';
+@import './styles/skeleton.css';
 @import './styles/transcript.css';
 @import './styles/activity.css';
 @import './styles/cards.css';

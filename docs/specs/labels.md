@@ -11,25 +11,26 @@ guards:
   - symbol: Labelled::new
     sites:
       - crates/agent/src/backend.rs: 2
+      - crates/agent/src/classifier.rs: 1
       - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
-      - crates/agent/src/manifest.rs: 3
+      - crates/agent/src/manifest.rs: 4
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 30
+      - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 16
+      - crates/agent/src/workspace.rs: 17
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 39
-      - crates/aichat/src/anthropic.rs: 8
+      - crates/agent/tests/workspace.rs: 44
+      - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
-      - crates/aichat/src/generate_content.rs: 7
-      - crates/aichat/src/responses.rs: 6
+      - crates/aichat/src/generate_content.rs: 5
+      - crates/aichat/src/responses.rs: 4
       - crates/aichat/src/lib.rs: 7
-      - crates/bedrock/src/lib.rs: 8
+      - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 139
+      - crates/core/src/policy.rs: 140
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -44,22 +45,24 @@ guards:
       - crates/agent/src/aside.rs: 3
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/file_preview.rs: 1
+      - crates/agent/src/images.rs: 1
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 40
+      - crates/agent/src/tools.rs: 42
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 65
+      - crates/agent/tests/workspace.rs: 67
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 70
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
+      - crates/mcp/tests/openshell.rs: 1
       - crates/mcp/tests/stdio.rs: 9
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
@@ -70,17 +73,17 @@ guards:
       - crates/agent/src/connectors.rs: 1
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/tools/link.rs: 1
-      - crates/agent/src/manifest.rs: 12
+      - crates/agent/src/manifest.rs: 13
       - crates/agent/src/preamble.rs: 1
-      - crates/agent/src/skills.rs: 3
+      - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
-      - crates/agent/src/tools.rs: 25
-      - crates/agent/src/turn.rs: 7
-      - crates/agent/src/workspace.rs: 16
+      - crates/agent/src/tools.rs: 26
+      - crates/agent/src/turn.rs: 8
+      - crates/agent/src/workspace.rs: 17
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 287
+      - crates/agent/tests/workspace.rs: 289
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -117,21 +120,21 @@ guards:
       - crates/core/src/policy.rs: 3
   - symbol: Policy::release_where_a_slot_came_from
     sites:
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/core/src/policy.rs: 1
   - symbol: Policy::names_for_display
     sites:
-      - crates/agent/src/tools.rs: 4
+      - crates/agent/src/tools.rs: 5
       - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 1
   - symbol: Policy::promote_reference_for_read
     sites:
       - crates/agent/src/tools.rs: 1
-      - crates/core/src/policy.rs: 5
+      - crates/core/src/policy.rs: 7
   - symbol: Policy::destination_from_reference
     sites:
       - crates/agent/src/tools.rs: 1
-      - crates/core/src/policy.rs: 5
+      - crates/core/src/policy.rs: 6
   - symbol: VettingSpec::where_it_came_from
     sites:
       - crates/core/src/policy.rs: 5
@@ -150,6 +153,7 @@ guards:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/file_preview.rs: 1
+      - crates/agent/src/images.rs: 1
       - crates/agent/src/manifest.rs: 8
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
@@ -183,6 +187,40 @@ guards:
       - crates/agent/src/tools.rs: 2
       - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 4
+  - symbol: Policy::declassify_into_workspace
+    sites:
+      - crates/agent/src/manifest.rs: 1
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 2
+  - symbol: Policy::declassify_written_into_workspace
+    sites:
+      - crates/agent/src/tools.rs: 2
+      - crates/core/src/policy.rs: 2
+  - symbol: Policy::declassify_checkout_into_workspace
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::promote_a_tool_list
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/core/src/policy.rs: 4
+  - symbol: Policy::promote_a_server_move
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/agent/src/servers.rs: 1
+      - crates/core/src/policy.rs: 5
+  - symbol: Policy::adopt_edited_body
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 3
+  - symbol: Policy::promote_vetted
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 20
+  - symbol: Policy::promote_vetted_picture
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 7
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
@@ -192,7 +230,9 @@ guards:
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
     sites:
+      - crates/agent/src/images.rs: 1
       - crates/aichat/src/anthropic.rs: 2
+      - crates/aichat/src/embeddings.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1
       - crates/aichat/src/lib.rs: 3
@@ -284,7 +324,8 @@ No inputs means no taint.
 
 Untrusted content is never placed in a message to the model. It is quarantined in a write-once
 slot and the planner is given a **reference**: origin, line count, byte count, label, and for an
-entry out of a listing whether it stands for a file or for a directory the walk stopped at. The
+entry out of a listing whether it stands for a file or for a directory the walk stopped at, said once
+in the listing's result for all its entries ([LIST-2](tools/list-files.md#LIST-2)). The
 planner acts on content it cannot read by naming that reference, and the policy layer resolves it
 when the write or the call actually happens. Where the content has to be changed rather than moved, it goes
 to a processor, described in [processors.md](processors.md). A reference to a number a processor chose
@@ -296,7 +337,10 @@ label is an enum, but the origin is a string that reaches the planner's context,
 transcript verbatim, so it is one the driver chose: a path, a slot, or an argument a person
 approved. It is never taken from the content it describes, nor from anything that answered the
 request for that content. An origin a server wrote is untrusted content in the planner's context
-wearing the driver's attribution, which is the thing this clause exists to stop.
+wearing the driver's attribution, which is the thing this clause exists to stop. The origin of what
+a `run` printed names the directory in the words the planner named it with, and not the directory a
+symbolic link in the tree led to, because whoever wrote a tree nobody vouched for chose that name
+([CMDLINE-12](tools/command-line.md#CMDLINE-12)).
 
 `verified-by: bravebot_core::policy::untrusted_content_is_presented_as_a_reference`
 `verified-by: bravebot_core::policy::trusted_content_is_presented_visibly`
@@ -307,6 +351,8 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_choice_reference_states_its_limit_and_no_count`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
+`verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context
@@ -373,7 +419,7 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::reading_an_argument_is_recorded`
 `verified-by: bravebot_agent::turn::a_write_reads_the_file_it_replaces_through_a_gate_that_records_it`
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
-`verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref and AsRef, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest)`
+`verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref, AsRef and a conversion into the content, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest, every function of the type's own impl blocks against the seven the type has (new, trusted, label, declassify, into_trusted, relabel and shape) by name, visibility and signature, every impl whose subject is Labelled, a Box of it, a type alias of it or a wrapper declared beside it, an impl in that file whose subject is a generic parameter or a projection, and every impl for another type that takes a Labelled as an argument of its trait, such as From<Labelled<String>> for String, with comments, strings, raw strings and character literals blanked before any brace is counted; it does not see a wrapper declared in another file, which has no access to the private fields)`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
 `verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
@@ -523,27 +569,28 @@ and the content has no say in it.
 | what such a program printed with no input at all | trusted and private, because it is a function of nothing an attacker influenced, and private because a run is not a release | `verified-by: bravebot_core::policy::a_filter_with_no_input_prints_trusted_private_output` |
 | what a line whose every step is accounted for printed | trusted and private, because the steps were vouched for and the output is a function of what went in | `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted` |
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
-| input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` |
+| input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for. The body of a delivery to `bravebot trigger serve` is this row: it is written to the standard input of the run it starts and takes no label of its own ([TRIGGER-7](triggers.md#TRIGGER-7)) | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` `verified-by: bravebot_cli::running::a_signed_delivery_starts_the_prompt_and_the_planner_never_sees_the_body` |
 | the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
 | a fact kept by `remember` or the person | trusted, with the confidentiality its `label` field states, private when missing, because a kept fact is in the user's own memory and is written only by the person or by a save they were shown; a private one makes what the planner writes private once it is read | `verified-by: bravebot_core::policy::a_kept_fact_is_trusted_with_the_confidentiality_it_states` `verified-by: bravebot_core::policy::labelling_a_kept_fact_is_recorded_in_the_audit_trail` `verified-by: bravebot_core::policy::reading_a_private_fact_makes_the_context_private` `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was` |
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
-| the auto mode's classifier's reply | the context's, as any reply taken out of a transport's envelope gets. The driver reads one word of it, and only where that label is trusted and public; a reply labelled any other way is read as a refusal to allow ([AUTO-6](auto-mode.md#AUTO-6)) | `verified-by: bravebot_agent::turn::a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier` `verified-by: bravebot_agent::classifier::only_the_allow_word_alone_allows` |
+| the auto mode's classifier's reply | the context's, as any reply taken out of a transport's envelope gets. The driver reads one word of it, and only where that label is trusted, whether or not it is private; a reply labelled untrusted is read as a refusal to allow ([AUTO-6](auto-mode.md#AUTO-6)) | `verified-by: bravebot_agent::turn::an_untrusted_context_is_not_put_to_the_classifier` `verified-by: bravebot_agent::turn::a_private_context_is_put_to_the_classifier_and_its_word_answers` `verified-by: bravebot_agent::classifier::a_context_that_has_met_something_untrusted_is_not_consulted` `verified-by: bravebot_agent::classifier::a_trusted_context_is_consulted_whether_or_not_it_holds_private_content` `verified-by: bravebot_agent::classifier::only_the_allow_word_alone_allows` |
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
-| the body a person saved from their editor over a proposed write | trusted and public, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
+| the body a person saved from their editor over a proposed write | trusted and public, from `Policy::adopt_edited_body`, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | a number a processor chose from a list | untrusted and private, by taint over what the processor was given, assigned by the policy layer as the reader returns its byte and no better than the answer's. The number is all that is kept of the answer, and which number is read is decided by the crate that reads it, which is the ninth entry of [Known costs](#known-costs). It reaches a call at that label, on the person's answer to the call ([ROUTE-10](routing.md#ROUTE-10), [MCP-14](mcp.md#MCP-14)) | `verified-by: bravebot_core::policy::a_number_read_from_an_answer_keeps_the_label_of_the_answer` `verified-by: bravebot_core::policy::a_stored_choice_is_a_reference_whatever_its_label_and_the_trail_holds_no_digit` `verified-by: bravebot_core::policy::carry_a_choice_consumes_the_endorsement_spends_the_choice_and_refuses_before_spending` |
-| one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
-| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
-| where a remote server's reply pointed, once a person says the server moved there | trusted and public, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
+| one slot's bytes a person read on their screen and vouched for | trusted and private, from `Policy::promote_vetted`, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
+| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, from `Policy::promote_a_tool_list`, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
+| where a remote server's reply pointed, once a person says the server moved there | trusted and public, from `Policy::promote_a_server_move`, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
 | a part of a server's tool result: its text, and each picture it carries | untrusted and private, the capability's own label, the same for a picture as for the text and the same whatever the parts hold. Which parts are taken, and under which of four media types, is decided by the transport crate from the `type`, the `mimeType` and the size of the data the server wrote, and is the eighth entry of [Known costs](#known-costs) | `verified-by: bravebot_mcp::stdio::a_tool_result_picture_is_labelled_untrusted_and_private` `verified-by: bravebot_mcp::http::a_tool_result_picture_is_labelled_untrusted_and_private` |
 | the text of a prompt a person ran from a server | untrusted and private, the capability's own label, whoever chose the prompt and typed its arguments, because choosing to run a prompt does not vouch for what it says ([MCP-11](mcp.md#MCP-11)) | `verified-by: bravebot_mcp::stdio::a_prompt_text_is_labelled_untrusted_and_private` `verified-by: bravebot_mcp::http::a_prompt_text_is_labelled_untrusted_and_private` `verified-by: bravebot_agent::mcp::a_prompt_a_person_ran_reaches_the_server_with_their_arguments_and_the_planner_gets_a_reference` |
 | what a session fetched with a tool of what a person held out in the browser, a selection, a link or a tab | untrusted and private, as any part of a server's tool result is. Holding it out gives the bytes no label: they are the page's whichever hand selected them, a selection includes the text the page hides, and the extension that keeps them is not the driver ([BROWSER-39](browser.md#BROWSER-39)) | `verified-by: bravebot_agent::browser_group_servers::what_a_person_held_out_in_the_browser_is_a_reference_and_the_planner_never_holds_it` `verified-by: bravebot_agent::browser_group_servers::an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every_call_after_is_put_to_the_person` |
-| a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
+| a picture or a PDF `vet_content` let through | trusted and private, from `Policy::promote_vetted_picture`, on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
 | a line sent while a turn is running on an input channel the person vouched for with `--trust-input-lines` | none, for the reason a typed line gets none: the flag the person typed is the vouching, and the trail records it as that and not as typed ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context` `verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed` |
+| the words of an `answer` line to a question of one prompt, on an input channel the person vouched for with `--trust-input-lines` | trusted and private, as an answer a person typed is, because the flag the person typed is the vouching. The trail records it as words from a vouched channel and not as typed, and a position among the choices the planner offered is recorded as neither. A channel nobody vouched for has its words refused ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_agent::tools::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not` `verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for` |
 | a line on an input channel nobody vouched for | untrusted and private, as input piped into the process is, because the launching program is not necessarily the person ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_cli::running::lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do` |
 | a message another background session sent | the label it was sent with, read back from the word beside the text, so a message never arrives better than it left; untrusted and private where there is no word or the word names no label ([MSG-9](session-messages.md#MSG-9)) | `verified-by: bravebot_core::policy::a_message_from_another_session_keeps_the_label_it_was_sent_with` `verified-by: bravebot_core::policy::a_message_whose_label_cannot_be_read_is_untrusted_and_private` `verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference` |
 | a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
@@ -554,7 +601,8 @@ starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md)
 
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
-wrote, and a delegate starts out holding what the context that wrote its task held. Content restored
+wrote, and a delegate starts out holding what the context that wrote its task held, so what it writes is
+private from its first round ([DELEGATE-8](delegation.md#DELEGATE-8)). Content restored
 from a resumed session keeps the labels it was given when it first arrived, and what resuming does
 to the integrity of the context is LABEL-9. What the context held is kept the same way: a resumed,
 forked or compacted session holds whatever the original held, and a session file that does not say
@@ -646,12 +694,13 @@ arrives at all.
 
 ## Known costs
 
-- **Nine places do look at untrusted bytes in order to decide something.** Three are in the policy
+- **Ten places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
   sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
   read, which are in `bravebot-agent` too, the eighth is the choice of which parts of a tool
-  result are taken, which is in `bravebot-mcp`, and the ninth is the read of a processor's answer
-  for one number, which is in `bravebot-choice`. The clauses above say
+  result are taken, which is in `bravebot-mcp`, the ninth is the read of a processor's answer
+  for one number, which is in `bravebot-choice`, and the tenth is the trigger listener's reading
+  of a request's framing and path, which is in `bravebot-cli`. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -736,21 +785,28 @@ arrives at all.
     written into a checkout. What it buys is bounded by everything the verdict does not decide: one
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
     nothing becomes routing, with no trust rule written, and only on the routes
-    [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path and a server's tool list are
-    still asked about. The slot is still the planner's choice and not the content's. A picture
+    [CHECK-12](vetting.md#CHECK-12) covers, which are the `vet_content` and `read_output` prompts and
+    the result of a `run` that passed `read: true` ([RUN-22](tools/run.md#RUN-22)), so vouching for a
+    path and a server's tool list are still asked about. The slot is still the planner's choice and not the content's. A picture
     ([VET-4](tools/vet-content.md#VET-4)) is the easier case of this: no encoding stands between the
     words drawn in it and the checker ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the
     same one slot, once.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in. Where nobody
     can be asked, which is a run that bypasses permissions with auto-vetting on, there is no
-    prompt: the verdict alone answers, anything but `safe` is a refusal, and the planner is told
-    the slot was kept back and not to ask again ([CHECK-12](vetting.md#CHECK-12), "nobody to fall
+    prompt: the verdict alone answers, anything but `safe` is a refusal, the planner is told
+    the slot was kept back and not to ask again, and the person is told that auto-vetting kept it
+    back ([CHECK-9](vetting.md#CHECK-9), [CHECK-12](vetting.md#CHECK-12), "nobody to fall
     back to", and the Known cost "A screened run with nobody to ask" in [vetting.md](vetting.md)).
+    A `run` that passed `read: true` is the same in every mode: a word other than `safe` keeps the
+    output back with no prompt drawn, and the person is asked when the planner calls `read_output`.
     What it buys is the denial of one slot read the planner asked for, decided by the check's
     reply with no person in between, at no cost to the attacker. It promotes nothing, chooses no
     destination, changes no label and writes no trust rule, and none of their bytes reach the
-    planner on this path. The same refusal follows a check that could not complete.
+    planner on this path. The same refusal follows a check that could not complete. One forced
+    `unsafe` word lasts for the rest of the turn for that slot, since the driver remembers the slot
+    and not the reason, so the later `read_output` or `vet_content` on it uses the word and makes no
+    second check ([CHECK-12](vetting.md#CHECK-12)).
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
     inside a margin it cannot forge, no model is given it, and it is kept out of the audit trail.
     It can still *lie*, since nothing holds a reason against the content it describes and nothing
@@ -1090,3 +1146,28 @@ arrives at all.
   labelled are pinned under [PROC-16](processors.md#PROC-16), and the claims that the number reaches
   a call only through the gate that carries it, after the person's answer, are pinned under
   [ROUTE-10](routing.md#ROUTE-10) and [MCP-14](mcp.md#MCP-14).
+
+- **The tenth is the trigger listener's reading of a request.** `bravebot trigger serve`
+  ([TRIGGER-10](triggers.md#TRIGGER-10)) answers a request from a sender nobody vouched for, and
+  four of its decisions are taken from bytes the sender wrote. It is in `bravebot-cli`, which is not
+  the driver, and the body is never one of them.
+
+  - **The framing.** `parse_head` in `crates/cli/src/trigger.rs` refuses a request whose method is
+    not `POST`, whose version is not `HTTP/1.x`, that has a `Transfer-Encoding` header, that has no
+    `Content-Length` or more than one, or whose `Content-Length` is not digits, that has no signature
+    header or more than one, and a path that is
+    not a name. Each is decided from the request line and the headers only, and none is decided from
+    the body. The answer to each is the same fixed 404.
+  - **The body length.** The `Content-Length` is compared with the cap to decide whether to read the
+    body or refuse it whole with a fixed page. It says how many bytes to read and nothing about what
+    they say.
+  - **The path.** The path is looked up as a name among the entries the person stored. The sender can
+    only pick among names the person made, each of which the person agreed would start its own
+    prompt.
+  - **The signature.** The signature header is compared with a value computed from the person's
+    secret, and the event it covers is the person's own. A delivery that does not verify starts
+    nothing.
+
+  The listener holds no `declassify`. The body reaches the run's standard input unchanged and is read
+  by nothing here. A header, a path suffix or a byte of the body that selects a trigger, an event, a
+  flag, a directory or a limit is a violation, and not one of these four.

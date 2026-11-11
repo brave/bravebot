@@ -13,8 +13,11 @@ documented-by:
 
 Fetching the body of a skill named in the system prompt or returned by
 [`search_skills`](search-skills.md). `name` is routing; there are no content arguments. The result
-is the skill's text, followed by the files kept beside it where it keeps any. Where skills come
-from and what they are trusted for is [skills.md](../skills.md).
+is the skill's text, followed by the files kept beside it where it keeps any. Built-in help also
+accepts the exact compiled page, headings and section names described in [skills.md](../skills.md).
+Those selectors apply only while the built-in help is in the turn's catalogue and select no
+filesystem path or ordinary skill's section. Where skills come from and what they are trusted for
+is [skills.md](../skills.md).
 
 ## Clauses
 
@@ -33,6 +36,7 @@ nothing.
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 `verified-by: bravebot_agent::turn::a_skill_kept_from_the_planner_is_unreachable_in_a_turn_that_does_not_name_it`
 `verified-by: bravebot_agent::turn::a_skill_the_person_named_cannot_also_be_loaded_by_the_planner`
+`verified-by: bravebot_agent::tools::excluded_help_catalogues_refuse_every_compiled_route_and_ordinary_skill_selectors`
 
 <a id="LOAD-2"></a>
 ### LOAD-2: a name close to a real one is refused, not guessed at
@@ -43,6 +47,7 @@ prefix, a case-insensitive comparison or a nearest match.
 **Why.** Guessing would load instructions nobody asked for.
 
 `verified-by: bravebot_agent::skills::a_name_one_character_off_selects_no_skill`
+`verified-by: bravebot_agent::tools::compiled_help_dispatch_loads_every_advertised_page_and_rejects_near_misses`
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
 
 <a id="LOAD-3"></a>
@@ -81,6 +86,10 @@ not text or holds a control character is left out, and so is a directory
 `list_files` skips (`__pycache__`, `node_modules`) and a compiled `.pyc`: they are generated, and would
 fill the cap and become the example file offered. The list is capped in count and in depth.
 
+The sentence after the listing tells the planner to read a file with `read_file` only where the
+turn's list holds `read_file` ([TOOL-6](tool-surface.md#TOOL-6)). A list without it gets the
+directory and the files by name, with no instruction to read them.
+
 **Why.** Without it the planner cannot tell what a skill keeps beside its instructions, and the
 author has to fold every reference into the one body, which defeats loading it only when asked.
 Running a bundled script is not part of this: `run` keeps its own gate.
@@ -94,6 +103,8 @@ Running a bundled script is not part of this: `run` keeps its own gate.
 `verified-by: bravebot_agent::tools::the_listing_searches_six_directories_down_and_no_further`
 `verified-by: bravebot_agent::tools::a_project_skill_reached_through_a_link_names_where_it_lands_inside_the_workspace_only`
 `verified-by: bravebot_agent::tools::a_landing_a_rule_denies_or_the_trust_map_distrusts_is_not_named`
+`verified-by: bravebot_agent::tools::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::turn::the_files_beside_a_named_skill_name_read_file_only_where_the_turn_was_offered_it`
 
 <a id="LOAD-5"></a>
 ### LOAD-5: loading a skill of the user's own lets its directory be read, and nothing else

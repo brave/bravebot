@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: AWS Bedrock
-description: Reach models through your own AWS account, name more than three, and sign in when AWS has no session.
+description: Configure AWS Bedrock models and extra model names, sign in to AWS, handle replies without tool calls and understand the assumed context window.
 ---
 
 # Reaching a model through AWS Bedrock
@@ -25,6 +25,10 @@ configured. Every build can reach Brave; the other two are what you configure.
 
 `AWS_REGION` is spelled as AWS spells a region: lowercase letters, digits and `-`, such as
 `us-west-2`. A value with any other character is read as no region, and Bedrock is not configured.
+`bravebot doctor` names such a region as written, and says where it was written: the environment,
+the `env` block of a settings file (with the file's path), the machine-level file, or the
+`amazon-bedrock` entry under `provider`. A region from `AWS_REGION` is named only while
+`BRAVEBOT_USE_BEDROCK` is on; the `amazon-bedrock` entry is named whenever it is in force.
 
 Each tier takes either a model id or an inference-profile ARN. With `AWS_PROFILE` unset the AWS CLI
 resolves credentials as it would for any other command, which is what a machine on instance
@@ -88,13 +92,20 @@ your file lists, each under the id a request sends:
 
 `options.region` is **required**, for the reason `AWS_REGION` is: a guessed region is a request that
 fails somewhere far from the mistake. An entry without one, or with one spelled other than the way
-`AWS_REGION` is, configures no service at all.
+`AWS_REGION` is, configures no service at all, and `bravebot doctor` names a refused one.
 `options.profile` picks which credentials sign, exactly as `AWS_PROFILE` does, and is optional on the
 same terms.
-`options.maxRetries` and `options.idleTimeoutMs` state how many times a request is sent again and how
-long a reply may go quiet, as they do for a
+`options.maxRetries`, `options.retryWindowMs` and `options.idleTimeoutMs` state how many times a
+request is sent again, for how long after its first failure a failed connection is sent again, and
+how long a reply may go quiet, as they do for a
 [gateway](openai-compatible.md#retries-and-a-reply-gone-quiet). The tier variables have no block to
-state them in, so models they alone name keep two retries and two minutes.
+state them in, so models they alone name keep the defaults: two retries, five minutes for a failed
+connection and two minutes of quiet, or five retries after a throttle that carried no wait. A
+throttled request waits
+as long as the service asked for with a `Retry-After`, never less than the usual pause, and a wait
+longer than two minutes ends the request at once instead of being sat through. A throttled request
+that carried no wait is sent again up to five times where you state no count, after waits of 8, 16,
+32, 64 and 120 seconds. A `maxRetries` you state replaces that count as it replaces the other one.
 
 **There is no credential to name here.** Bedrock takes a signature over the request rather than a
 bearer token, so this entry reads neither `env` nor `options.apiKey`. Which AWS credentials sign

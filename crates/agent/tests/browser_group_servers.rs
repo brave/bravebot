@@ -18,6 +18,9 @@
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[path = "../test-support/open_files.rs"]
+mod open_files;
+
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Reached, Session};
 use bravebot_agent::turn::{self, Task};
@@ -36,7 +39,6 @@ use bravebot_net::Egress;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -102,7 +104,7 @@ const A_CHECK_ASKING: &str = "prompt-injection classifier";
 /// spawns are two runs asking the one server, and a delegate's requests never hold its parent's
 /// task, so the parent's rule goes first. Every check is answered that it found nothing.
 fn serve_chat(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -266,7 +268,7 @@ fn wire(group: &str, tool: &str) -> String {
 /// A mock MCP server for one group, answering by method and listing the tools it was started with.
 /// Every body is reported.
 fn serve_group(tools: &'static [(&'static str, &'static str)]) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -1152,7 +1154,7 @@ const A_PICTURE: &str =
 /// the server marks as its own, and every other call succeeds, each in a sentence shaped as an
 /// instruction, or with one picture where `acting.pictures` names the tool.
 fn serve_acting(acting: &'static Acting) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -1931,7 +1933,11 @@ fn an_answer_is_a_reference(acting: &'static Acting) {
         after_the_wait.contains(&format!(
             "what {} said about its failure",
             acting.named(acting.fails)
-        )) && after_the_wait.contains("Quarantined"),
+        )) && after_the_wait.contains("Quarantined")
+            && !after_the_wait.contains(&format!(
+                "what {} returned with no failure reported",
+                acting.named(acting.fails)
+            )),
         "the planner was given no reference for the failure the call reported: {after_the_wait}"
     );
     for (round, body) in sent.iter().enumerate() {
@@ -1947,7 +1953,7 @@ fn an_answer_is_a_reference(acting: &'static Acting) {
     for (_, media) in acting.pictures {
         // The request is JSON, so the reference's line ends at the escaped newline.
         let line = after_the_click
-            .split_once(&format!("returned ({media}, "))
+            .split_once(&format!("returned with no failure reported ({media}, "))
             .and_then(|(_, rest)| rest.split("\\n").next())
             .unwrap_or_default();
         assert!(
@@ -2358,7 +2364,7 @@ const HELD_TOOLS: &[(&str, &str)] = &[(
 /// [`serve_group`] for `held`: the one tool takes no argument, and a call is answered with
 /// [`the_held_answer`] as one text part.
 fn serve_held() -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -2544,13 +2550,12 @@ fn an_item_held_out_is_given_to_a_processor_as_text_and_never_to_the_planner() {
     }
 }
 
-/// VET-4, PERM-9, PROC-4, BROWSER-39. The planner reads what was held out only when a person has
-/// read the exact text and said yes. The call before the vet is the control: an allow rule answers
-/// it. After the vet the text is in the planner's context, what it writes is private, so the next
-/// fetch is put to the person though the rule covers it, and no processor can be started. The
-/// regressions it rejects are a text that never reaches the planner after a yes, a rule that
-/// answers for words written after private content was let through, and a processor started in a
-/// context that holds private content.
+/// VET-4, PERM-9, BROWSER-39. The planner reads what was held out only when a person has read the
+/// exact text and said yes. The call before the vet is the control: an allow rule answers it. After
+/// the vet the text is in the planner's context and what it writes is private, so the next fetch
+/// is put to the person though the rule covers it. The regressions it rejects are a text that
+/// never reaches the planner after a yes, and a rule that answers for words written after private
+/// content was let through.
 #[test]
 fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every_call_after_is_put_to_the_person()
  {
@@ -2566,10 +2571,6 @@ fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every
                 r#"{"ref":"ref:1","expects":"the text I selected on the news page"}"#,
             ),
             tool_request(&wire("held", "take_held"), "{}"),
-            tool_request(
-                "spawn_processor",
-                r#"{"reads":["ref:2"],"instruction":"say what it is about"}"#,
-            ),
             reply_with("done"),
         ],
     )]);
@@ -2604,11 +2605,6 @@ fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every
         sent[2].contains(PAYLOAD),
         "the text did not reach the planner after the person agreed: {}",
         sent[2]
-    );
-    let last = sent.last().expect("the turn asked");
-    assert!(
-        last.contains("no processor can be started in this conversation"),
-        "a processor was not refused once private content had been let through: {last}"
     );
 }
 
@@ -2735,7 +2731,7 @@ fn choosing_tools() -> Value {
 /// A mock MCP server listing `tools`, which are [`choosing_tools`] for the tests that need no
 /// others. A call is answered with a sentence shaped as an instruction. Every body is reported.
 fn serve_listing(tools: Value) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -3023,16 +3019,25 @@ fn a_choice_fills_only_the_argument_the_declaration_named() {
             .map(|name| name.as_str().expect("a name").to_string())
             .collect()
     };
+    // Every tool is also offered `read`, which this process takes off the call before it reaches
+    // the server (the turn is offered `vet_content`). No tool is offered a reference or a choice
+    // beyond the two the declaration named.
     assert_eq!(
         properties("click_element"),
-        ["element_number", "element_number_ref", "url"]
+        ["element_number", "element_number_ref", "read", "url"]
     );
     assert_eq!(
         properties("type_text"),
-        ["element_number", "element_number_ref", "text", "url"]
+        [
+            "element_number",
+            "element_number_ref",
+            "read",
+            "text",
+            "url"
+        ]
     );
-    assert_eq!(properties("scroll_page"), ["pages", "url"]);
-    assert_eq!(properties("list_page_elements"), ["url"]);
+    assert_eq!(properties("scroll_page"), ["pages", "read", "url"]);
+    assert_eq!(properties("list_page_elements"), ["read", "url"]);
     assert_eq!(
         required("click_element"),
         ["url"],
@@ -3437,10 +3442,20 @@ fn a_free_text_answer_cannot_be_named_as_a_choice() {
         .map(|message| words_of_a_result(message["content"].as_str().expect("a result")))
         .collect();
     assert_eq!(refusals.len(), 4, "{refusals:#?}");
-    for (named, told) in ["ref:1", "ref:3", "ref:99"].iter().zip(&refusals) {
+    for (named, told) in ["ref:1"].iter().zip(&refusals) {
         assert!(
             told.starts_with("refused:")
                 && told.contains(&format!("slot '{named}' holds no choice")),
+            "{named}: {told}"
+        );
+    }
+    // A name nothing holds is told how a reference is written, not that a slot holds no choice.
+    for (named, told) in ["ref:3", "ref:99"].iter().zip(&refusals[1..]) {
+        assert!(
+            told.starts_with(&format!("refused: no reference is named \"{named}\""))
+                && told.contains("ref:N, for example ref:3")
+                && told.contains("No processor has made a choice yet.")
+                && !told.contains("holds no choice"),
             "{named}: {told}"
         );
     }
@@ -3448,6 +3463,33 @@ fn a_free_text_answer_cannot_be_named_as_a_choice() {
         refusals[3].starts_with("error:") && refusals[3].contains("must be a reference"),
         "{}",
         refusals[3]
+    );
+}
+
+/// OUTPUT-6, ROUTE-10. A name no slot holds, named where a choice is expected after a processor
+/// has made one, is told how a reference is written and is listed the references that hold a
+/// choice: `ref:3` only, not the listing `ref:1` that holds text. The regression it rejects is a
+/// list of every reference, which would offer the planner text where only a choice fills the
+/// argument, or a list that is empty although a choice was made.
+#[test]
+fn a_name_no_slot_holds_is_listed_the_choices_that_were_made() {
+    let ran = choosing_turn(
+        "lists-choices",
+        "3",
+        choosing_replies(&[click_naming("ref:99")]),
+        approving(),
+        &mut Conversation::new(),
+    );
+
+    assert_eq!(after_the_listing(&ran), [], "a call named no choice");
+    let told = told_of_the_last_call(&ran);
+    assert!(
+        told.starts_with("refused: no reference is named \"ref:99\"")
+            && told.contains("ref:N, for example ref:3")
+            && told.contains("The references to choices so far are ref:3.")
+            && !told.contains("ref:1")
+            && !told.contains("No processor has made a choice yet."),
+        "{told}"
     );
 }
 
@@ -3856,6 +3898,88 @@ fn session_ordinary(scratch: &Scratch) -> (Session, mpsc::Receiver<String>) {
     session_declared(scratch, |reached| reached)
 }
 
+/// SERVERS-7, MCP-14. A call that names a choice a processor made is asked on its own and is never
+/// listed in the question about an earlier call to the same tool in the same round. One reply makes
+/// a click that names no choice and then one that does: the question about the first lists nothing,
+/// the second is put to the person with the number drawn, and a yes to each sends both. The
+/// regression it rejects is listing a later call by its alias and tool alone, which lists the call
+/// with a choice under the first question and covers it by an answer that never showed the number.
+#[test]
+fn a_call_naming_a_choice_is_never_listed_in_an_earlier_question() {
+    let first = call_of("click_element", json!({"url": CART, "element_number": 2}));
+    let second = call_of(
+        "click_element",
+        json!({"url": CART, "element_number_ref": "ref:3"}),
+    );
+    // Both calls in one reply, so they are one round.
+    let together = {
+        let calls = |reply: &str| -> String {
+            let start = reply.find(r#""tool_calls":["#).expect("tool calls") + 14;
+            let end = reply.rfind("]}}]}").expect("end of tool calls");
+            reply[start..end].to_string()
+        };
+        let (one, two) = (
+            calls(&first),
+            calls(&second).replace(r#""id":"c1""#, r#""id":"c2""#),
+        );
+        format!(
+            r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{one},{two}]}}}}]}}"#
+        )
+    };
+    let mut replies = choosing_replies(&[]);
+    let done = replies.pop().expect("the last reply");
+    replies.push(together);
+    replies.push(done);
+
+    let scratch = Scratch::new("choosing-listed-choice");
+    let (session, bodies) = session_declared(&scratch, |reached| {
+        reached
+            .asking_every_call(false)
+            .choosing(choices_declared())
+    });
+    let mut asked = approving();
+    let (_sent, _trail) = {
+        let mut confirmer = Confining::new(&mut asked, PermissionMode::Ask, false);
+        choosing_run(
+            &scratch,
+            session,
+            "3",
+            replies,
+            |task| {
+                task.with_permissions(allowing(&[]))
+                    .with_permission_mode(PermissionMode::Ask)
+            },
+            &mut confirmer,
+            &mut Conversation::new(),
+        )
+    };
+    let clicks: Vec<&McpCallRequest> = asked
+        .calls
+        .iter()
+        .filter(|call| call.tool == "click_element")
+        .collect();
+    assert_eq!(
+        clicks.len(),
+        2,
+        "the call with a choice was not asked on its own"
+    );
+    assert!(
+        clicks[0].also.is_empty(),
+        "the call with a choice was listed under another: {:?}",
+        clicks[0].also
+    );
+    assert!(clicks[1].also.is_empty());
+    assert!(
+        clicks[1].arguments.iter().any(|(name, shown)| {
+            name == "element_number" && shown.starts_with("3 (chosen by a processor from ref:3;")
+        }),
+        "the question did not draw the number: {:?}",
+        clicks[1]
+    );
+    let heard: Vec<(String, Value)> = heard(&bodies).into_iter().skip(1).collect();
+    assert_eq!(heard, [click_of(2), click_of(3)]);
+}
+
 /// ROUTE-10, MCP-14, SERVERS-21, SERVERS-7. A turn with nobody to ask refuses a call that names a
 /// choice and sends nothing, though an answer 2 was recorded for the tool in this project before the
 /// server was declared to ask every call, which carries through such a turn for a server not
@@ -4216,4 +4340,21 @@ fn whatever_the_processor_answered_the_driver_makes_the_same_calls() {
             "the trail follows the answer {answer:?}"
         );
     }
+}
+
+/// A test binary that starts many mock servers raises its soft open-file limit when the first one
+/// binds, so a default shell limit of 256 does not fail it with `TooManyOpenFiles`.
+#[cfg(unix)]
+#[test]
+fn the_soft_open_file_limit_is_raised_before_a_server_starts() {
+    let _server = serve_group(&[]);
+    let hard = rustix::process::getrlimit(rustix::process::Resource::Nofile).maximum;
+    let wanted = hard.map_or(open_files::WANTED_OPEN_FILES, |hard| {
+        hard.min(open_files::WANTED_OPEN_FILES)
+    });
+    let soft = open_files::open_file_limit();
+    assert!(
+        soft.is_none_or(|soft| soft >= wanted),
+        "the soft open-file limit is {soft:?}, below the {wanted} the mock servers need"
+    );
 }

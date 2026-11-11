@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use bravebot_agent::confirm::shown_argument;
+use bravebot_agent::confirm::{printable, shown_argument};
 use bravebot_agent::diff::Change;
 use bravebot_i18n::t;
 
@@ -33,25 +33,6 @@ pub const QUARANTINE_BAR: &str = "\u{2503}";
 /// [`vet_lines`]), since a yes releases every byte of either to the planner and a line counted
 /// rather than shown would be approved unread.
 pub const MOST_CONTENT_LINES: usize = 40;
-
-/// Replace control characters, so shown text cannot move the cursor or recolour the screen.
-///
-/// The margin in front of every row is written by the caller. An escape sequence in the content
-/// would let the content write one instead, and a forged margin is worse than no margin, since
-/// drawing one is the whole claim being made about the block.
-pub fn printable(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if !c.is_control() || c == '\t' {
-                c
-            } else {
-                // The Unicode pictures for C0, so an escape reads as ␛ rather than vanishing: a
-                // character silently dropped is one nobody can tell was ever in the file.
-                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
-            }
-        })
-        .collect()
-}
 
 /// Quarantined content as rows, each behind a margin, capped.
 ///
@@ -220,7 +201,9 @@ pub struct RunStep {
 pub struct Confinement {
     /// The sentence that introduces the directories.
     pub heading: String,
-    /// The directories every stage reads and writes. Drawn through `shown_name`, as the writes are.
+    /// The directories every stage reads and writes, each already spelled by the caller as the
+    /// writes are (`bravebot_agent::confirm::shown_path` for a path held as one, or the
+    /// `shownDirectories` the bridge sent). `run_lines` draws them as given.
     pub directories: Vec<String>,
     /// What else the turn confines, in the order the agent gave it.
     pub sentences: Vec<String>,
@@ -232,8 +215,11 @@ pub struct Run<'a> {
     pub summary: &'a str,
     /// Every step, in order.
     pub steps: &'a [RunStep],
-    /// The paths the plan says it writes. Each is drawn through `shown_name`, so a path that would
-    /// draw as nothing or as another is spelled.
+    /// The paths the plan says it writes, each already spelled by the caller: through
+    /// `bravebot_agent::confirm::shown_path` for a path held as one, so a path that would draw as
+    /// nothing or as another, or holds a byte that is not text, is spelled, or the `shownWrites`
+    /// the bridge sent. A `String` cannot carry such a byte, so the spelling is not done here;
+    /// `run_lines` draws each as given.
     pub writes: &'a [String],
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
@@ -268,7 +254,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     if !run.writes.is_empty() {
         lines.push(t!(run_writes).to_string());
         for path in run.writes {
-            lines.push(format!("  {}", bravebot_agent::confirm::shown_name(path)));
+            lines.push(format!("  {path}"));
         }
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
@@ -277,10 +263,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         Some(confined) => {
             lines.push(confined.heading.clone());
             for directory in &confined.directories {
-                lines.push(format!(
-                    "  {}",
-                    bravebot_agent::confirm::shown_name(directory)
-                ));
+                lines.push(format!("  {directory}"));
             }
             lines.extend(confined.sentences.iter().cloned());
         }
@@ -626,6 +609,12 @@ pub struct Call<'a> {
     /// Whether the server's declaration says every call to it is asked about, so `call_lines`
     /// says no answer to this one lasts (SERVERS-21).
     pub asked_every_call: bool,
+    /// Whether the call is asked because its arguments are private, so `call_lines` says no
+    /// stored answer covers it (SERVERS-7). Ignored where `asked_every_call` is set.
+    pub asked_for_private_arguments: bool,
+    /// The arguments of the later calls of the same round to the same tool that the answer also
+    /// covers (SERVERS-7). Empty where the call is asked on its own.
+    pub also: &'a [Vec<(String, String)>],
 }
 
 /// The lines a call to an MCP server's tool is read before approving.
@@ -641,6 +630,23 @@ pub fn call_lines(call: &Call<'_>) -> Vec<String> {
             }
         }
     }
+    if !call.also.is_empty() {
+        lines.push(t!(mcp_call_also, count = call.also.len()).to_string());
+        for arguments in call.also {
+            match arguments.is_empty() {
+                true => lines.push(format!("  {}", t!(mcp_call_no_arguments))),
+                false => {
+                    for (name, value) in arguments {
+                        let shown = shown_argument(value);
+                        lines.push(format!("  {}: {}", printable(name), printable(&shown.head)));
+                        lines.extend(shown.rows.iter().map(|row| format!("    {row}")));
+                    }
+                }
+            }
+            lines.push(String::new());
+        }
+        lines.pop();
+    }
     if let Some(description) = call.description {
         lines.extend(quarantined(description));
     }
@@ -649,6 +655,8 @@ pub fn call_lines(call: &Call<'_>) -> Vec<String> {
     }
     if call.asked_every_call {
         lines.push(t!(mcp_call_asked_every_time).to_string());
+    } else if call.asked_for_private_arguments {
+        lines.push(t!(mcp_call_asked_for_private_arguments).to_string());
     }
     lines
 }
@@ -954,6 +962,8 @@ mod tests {
                 description: None,
                 offers_remember,
                 asked_every_call: false,
+                asked_for_private_arguments: false,
+                also: &[],
             })
             .join("\n")
         };
@@ -990,6 +1000,8 @@ mod tests {
             description: None,
             offers_remember: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: &[],
         });
         assert_eq!(
             &drawn[..8],
@@ -1008,6 +1020,72 @@ mod tests {
         assert!(drawn[8].contains("asked about"), "{drawn:?}");
     }
 
+    /// SERVERS-7: a call asked for private arguments says so under the call, and the declaration's
+    /// reason wins where both hold. The regression it rejects is a line builder that ignores the
+    /// reason, so the plain interface and the editor draw a call with no reason at all.
+    #[test]
+    fn a_call_asked_for_private_arguments_says_so_and_a_declaration_wins() {
+        let lines = |every, private| {
+            call_lines(&Call {
+                name: "weather:get_forecast",
+                arguments: &[],
+                description: None,
+                offers_remember: false,
+                asked_every_call: every,
+                asked_for_private_arguments: private,
+                also: &[],
+            })
+            .join("\n")
+        };
+        assert!(lines(false, true).contains("something read earlier was private"));
+        assert!(!lines(false, false).contains("something read earlier was private"));
+        let both = lines(true, true);
+        assert!(
+            both.contains("Every call to this server is asked about"),
+            "{both}"
+        );
+        assert!(
+            !both.contains("something read earlier was private"),
+            "{both}"
+        );
+    }
+
+    /// SERVERS-7: a call whose answer also covers later calls of the round lists each of them
+    /// under the first, with the count, and says nothing where there are none. The regression it
+    /// rejects is a question that carries the later calls to the front end and draws only the
+    /// first, so one yes approves calls a person never read.
+    #[test]
+    fn a_call_lists_the_later_calls_its_answer_also_covers() {
+        let first = [("city".to_string(), "\"Paris\"".to_string())];
+        let also = [
+            vec![("city".to_string(), "\"Rome\"".to_string())],
+            vec![("city".to_string(), "\"Oslo\"".to_string())],
+        ];
+        let lines = |also: &[Vec<(String, String)>]| {
+            call_lines(&Call {
+                name: "weather:get_forecast",
+                arguments: &first,
+                description: None,
+                offers_remember: false,
+                asked_every_call: false,
+                asked_for_private_arguments: false,
+                also,
+            })
+        };
+        assert_eq!(
+            lines(&also),
+            [
+                "weather:get_forecast (MCP)",
+                "  city: \"Paris\"",
+                "Your answer also covers these 2 later calls to the same tool in this round:",
+                "  city: \"Rome\"",
+                "",
+                "  city: \"Oslo\"",
+            ]
+        );
+        assert!(!lines(&[]).join("\n").contains("also covers"));
+    }
+
     /// ROUTE-11, PROMPT-13: the lines of a call write out the characters the confirmation window
     /// marks that the list of characters that draw as nothing does not hold, so an editor and
     /// every front end that draws these lines show a no-break space, a private use character and a
@@ -1023,6 +1101,8 @@ mod tests {
             description: None,
             offers_remember: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: &[],
         });
         assert_eq!(
             &drawn[1..6],
@@ -1049,13 +1129,13 @@ mod tests {
         let drawn = |write: &str, directory: &str| {
             let confinement = Confinement {
                 heading: "confined to".to_string(),
-                directories: vec![directory.to_string()],
+                directories: vec![bravebot_agent::confirm::shown_name(directory)],
                 sentences: Vec::new(),
             };
             run_lines(&Run {
                 summary: "write it",
                 steps: &steps,
-                writes: &[write.to_string()],
+                writes: &[bravebot_agent::confirm::shown_name(write)],
                 confinement: Some(&confinement),
                 ambient: &[],
                 releases_private: false,

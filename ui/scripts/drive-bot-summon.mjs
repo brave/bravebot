@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, TRUST_APPROVE } from './drive-support.mjs'
+import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
 
 // Every request lists each definition's purpose among the delegate kinds, so the sentence the
 // agent adds to a turn addressed to a definition is what says which one the turn ran under. The
@@ -64,7 +64,7 @@ try {
   const answerTrust = async () => {
     await page.waitForTimeout(500)
     if (!(await trust.isVisible())) return
-    await trust.locator(TRUST_APPROVE).click()
+    await approveTrust(trust)
     await trust.waitFor({ state: 'hidden' })
   }
   const openBot = async (name) => {
@@ -208,7 +208,7 @@ try {
     refusals.sentFailing = await api.summonBot({ session, slug: 'lantern', prompt: FAIL })
     const failedWith = await failed
     const plain = waitFor(session, ['turn.done', 'turn.error'])
-    await api.request('turn.send', { session, prompt: 'A plain follow-up' })
+    await api.request('turn.send', { session, prompt: 'A plain follow-up', messageId: 'follow-up-1' })
     const plainWith = await plain
     await api.request('session.close', { session })
     return { refusals, failedWith, plainWith }

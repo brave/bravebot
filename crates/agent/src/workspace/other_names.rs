@@ -5,8 +5,9 @@
 use super::Workspace;
 #[cfg(unix)]
 use std::collections::HashMap;
+use std::path::Path;
 #[cfg(unix)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The names a file has under the open directories, for a file with more than one.
 #[cfg(unix)]
@@ -16,7 +17,7 @@ pub(super) struct LinkNames {
     pub(super) spelled: Vec<String>,
     /// Whether a name is not UTF-8. No rule can be written about it, so a rule may cover the file
     /// under it.
-    unspellable: bool,
+    pub(super) unspellable: bool,
 }
 
 #[cfg(unix)]
@@ -36,6 +37,29 @@ impl LinkNames {
     }
 }
 
+/// Why a directory that is another path to a tree already open is refused (TRUST-9).
+#[cfg(unix)]
+const SECOND_PATH_TO_AN_OPEN_TREE: &str =
+    "is another path to a directory that is already open, so its files would have two names";
+
+/// Why a directory is refused when the file system does not say which directory it or an open one
+/// is, so that it cannot be shown not to be another path to an open tree (TRUST-9).
+#[cfg(unix)]
+const IDENTITY_UNREADABLE: &str = "cannot be checked against the directories already open, because \
+     the file system does not say which directory it or one of them is";
+
+/// An identity that is different for every path, for a test that opens a second path to a tree
+/// (TRUST-9) while nothing is the same directory as another. Not `None`: a directory whose identity
+/// cannot be read is refused, since nothing then says it is not a second path.
+#[cfg(unix)]
+pub(super) fn distinct_identity(directory: &Path) -> Option<(u64, u64)> {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    directory.hash(&mut hasher);
+    Some((u64::MAX - 1, hasher.finish()))
+}
+
 /// The device and inode of `directory`, or `None` where it is not one that can be read.
 #[cfg(unix)]
 pub(super) fn directory_identity(directory: &Path) -> Option<(u64, u64)> {
@@ -47,7 +71,213 @@ pub(super) fn directory_identity(directory: &Path) -> Option<(u64, u64)> {
         .map(|found| (found.dev(), found.ino()))
 }
 
+/// What a walk keeps between the entries it meets, so a lookup that costs a pass over the open
+/// directories or a `stat` of a directory is made once for the walk and not once per entry.
+///
+/// Shared by the rules the walk holds each entry to ([`super::WalkRules`]) and by the labelling of
+/// what it reported ([`Workspace::walked_other_keys`]), so a tree with hard links is walked for
+/// them once whichever of the two asks first. Nothing is looked up unless an entry asks.
+#[cfg(unix)]
+#[derive(Default)]
+pub(super) struct WalkNames {
+    /// Whether a directory is open beside the root, so an entry can have a name under another path
+    /// to the same tree.
+    second_trees: bool,
+    /// The names of each file that has more than one, or `None` where the walk for them could not
+    /// finish.
+    links: std::cell::OnceCell<Option<HashMap<(u64, u64), LinkNames>>>,
+    /// The device and inode of each directory asked about, so the directories above the entries
+    /// of one directory are looked up once for the walk.
+    identities: std::cell::RefCell<HashMap<PathBuf, Option<(u64, u64)>>>,
+}
+
+#[cfg(not(unix))]
+#[derive(Default)]
+pub(super) struct WalkNames;
+
+impl WalkNames {
+    pub(super) fn of(workspace: &Workspace) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                second_trees: !workspace.added_directories().is_empty(),
+                ..Self::default()
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = workspace;
+            Self
+        }
+    }
+
+    /// Whether a directory is open beside the root.
+    #[cfg(unix)]
+    pub(super) fn has_second_trees(&self) -> bool {
+        self.second_trees
+    }
+
+    /// The files with more than one name, built by the first call. `None` where the walk for them
+    /// could not finish.
+    #[cfg(unix)]
+    pub(super) fn link_index(
+        &self,
+        workspace: &Workspace,
+    ) -> Option<&HashMap<(u64, u64), LinkNames>> {
+        self.links
+            .get_or_init(|| workspace.multi_link_names())
+            .as_ref()
+    }
+
+    /// The device and inode of `directory`, asked of the file system once per walk.
+    #[cfg(unix)]
+    pub(super) fn identity(&self, workspace: &Workspace, directory: &Path) -> Option<(u64, u64)> {
+        *self
+            .identities
+            .borrow_mut()
+            .entry(directory.to_path_buf())
+            .or_insert_with(|| (workspace.identity)(directory))
+    }
+}
+
+/// The map keys of the other names a file has, beside the one it was asked under.
+#[derive(Debug)]
+pub(crate) struct OtherKeys {
+    /// Each other name, as [`Workspace::trust_key`] spells it.
+    pub(crate) keys: Vec<String>,
+    /// False where a lookup could not finish, so the file may have a name that is not here. The
+    /// caller reads such a file as untrusted.
+    pub(crate) complete: bool,
+}
+
 impl Workspace {
+    /// The other names of an entry a walk reported as `reported`, whose key under the name the call
+    /// typed is `key`: the keys a read of it is asked under besides that one (TRUST-2, TRUST-18).
+    ///
+    /// The spelling the walk landed on, which differs from the typed one where the call went
+    /// through a symbolic link. Its hard links, for a file whose link count is above one. Its
+    /// spelling under a second path to an open tree. A walk does not enter a symbolic link, so a
+    /// file it reports has no other symbolic-link name than the landing.
+    ///
+    /// Cheap for the ordinary entry: a file with no directory open beside the root costs one
+    /// `stat` and, when its link count is 1, nothing more. The index of hard-linked files is built
+    /// when the first file with a link count above one is met, once for the walk, through the same
+    /// helper the deny rules use ([`Workspace::multi_link_names`]).
+    ///
+    /// `complete` is false where a lookup could not finish, so the entry is read as untrusted
+    /// (TRUST-2). Taken from metadata of a path the walk built, never from a file's bytes, and it
+    /// can only add keys, so it can only lower what the map answers.
+    pub(super) fn walked_other_keys(
+        &self,
+        names: &WalkNames,
+        reported: &str,
+        key: &str,
+        is_file: bool,
+    ) -> OtherKeys {
+        let mut keys = vec![self.trust_key(reported)];
+        #[cfg(unix)]
+        let mut complete = true;
+        #[cfg(not(unix))]
+        let complete = {
+            let _ = (names, is_file);
+            true
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            let reported_path = Path::new(reported);
+            let absolute = if reported_path.is_absolute() {
+                reported_path.to_path_buf()
+            } else {
+                self.root.join(reported_path)
+            };
+            if names.has_second_trees() {
+                match self
+                    .same_tree_names_of(&absolute, |directory| names.identity(self, directory))
+                {
+                    Some(found) => keys.extend(found.iter().map(|name| self.trust_key(name))),
+                    None => complete = false,
+                }
+            }
+            if is_file {
+                // Followed, as the read path's lookup is: a symbolic link named as the target is
+                // the file it opens, whose hard links are the names that count.
+                match std::fs::metadata(&absolute) {
+                    Ok(found) if found.nlink() >= 2 => {
+                        match names.link_index(self) {
+                            Some(index) => {
+                                if let Some(linked) = index.get(&(found.dev(), found.ino())) {
+                                    keys.extend(
+                                        linked.spelled.iter().map(|name| self.trust_key(name)),
+                                    );
+                                    // A name that is not UTF-8 has no key a rule can be
+                                    // written about.
+                                    complete &= !linked.unspellable;
+                                }
+                            }
+                            None => complete = false,
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => complete = false,
+                }
+            }
+        }
+        keys.retain(|other| other != key);
+        keys.sort();
+        keys.dedup();
+        OtherKeys { keys, complete }
+    }
+
+    /// The key and the other keys of each entry a walk of `root` reported, for a call that typed
+    /// `typed`. `is_file` is false for the directories a bounded walk stopped at, which have no
+    /// hard links.
+    pub(super) fn walked_keys(
+        &self,
+        names: &WalkNames,
+        typed: &str,
+        root: &Path,
+        reported: &[String],
+        is_file: bool,
+    ) -> Vec<(String, OtherKeys)> {
+        reported
+            .iter()
+            .map(|path| {
+                let key = self.key_below(typed, root, path);
+                let others = self.walked_other_keys(names, path, &key, is_file);
+                (key, others)
+            })
+            .collect()
+    }
+
+    /// The names `named` has besides its own spelling, as the keys the trust map and the writer
+    /// reservation are asked under (TRUST-2, TRUST-4): where a symbolic link or a case variant
+    /// lands ([`Workspace::landing`]), its hard links ([`Workspace::hard_links`]) and its spelling
+    /// under another open directory that is the same directory ([`Workspace::same_tree_names`]).
+    ///
+    /// These are the lookups a `deny` rule is asked under, so the two share one implementation. The
+    /// answer comes from the file system's metadata about a name the planner typed and never from
+    /// a file's bytes. It can only add keys, so it can only lower what the map answers.
+    pub(crate) fn other_trust_keys(&self, named: &str) -> OtherKeys {
+        let mut keys = Vec::new();
+        let mut complete = true;
+        if let Some(landed) = self.landing(named) {
+            keys.push(self.trust_key(&landed));
+        }
+        for lookup in [self.hard_links(named), self.same_tree_names(named)] {
+            match lookup {
+                Some(names) => keys.extend(names.iter().map(|name| self.trust_key(name))),
+                None => complete = false,
+            }
+        }
+        let own = self.trust_key(named);
+        keys.retain(|key| *key != own);
+        keys.sort();
+        keys.dedup();
+        OtherKeys { keys, complete }
+    }
+
     /// The other names of the file `named` opens, where it has a hard link, by device and inode
     /// (PERM-7). A hard link canonicalizes to its own name, so [`Workspace::landing`] cannot reach
     /// the name a rule is written about.
@@ -116,7 +346,8 @@ impl Workspace {
     ///
     /// A symbolic link is not followed, and every directory is walked, an ignored one included,
     /// because a link can be made anywhere a stage may write. `None` where the walk stopped at the
-    /// search cap, could not list a directory, or `visit` gave up.
+    /// search cap, could not list a directory or read an entry, its type or its metadata, or
+    /// `visit` gave up.
     #[cfg(unix)]
     fn each_regular_file(
         &self,
@@ -128,16 +359,17 @@ impl Workspace {
             let mut pending = vec![root];
             while let Some(directory) = pending.pop() {
                 let entries = std::fs::read_dir(&directory).ok()?;
-                for entry in entries.flatten() {
+                for entry in entries {
+                    // An entry that cannot be read, typed or stated is a name the walk did not
+                    // see, and it may be another name of the file asked about, so the walk is
+                    // not complete (PERM-7).
+                    let entry = entry.ok()?;
                     budget = budget.checked_sub(1)?;
-                    let Ok(kind) = entry.file_type() else {
-                        continue;
-                    };
+                    let kind = entry.file_type().ok()?;
                     if kind.is_dir() {
                         pending.push(entry.path());
-                    } else if kind.is_file()
-                        && let Ok(found) = entry.metadata()
-                    {
+                    } else if kind.is_file() {
+                        let found = entry.metadata().ok()?;
                         visit(&entry.path(), &found)?;
                     }
                 }
@@ -166,7 +398,72 @@ impl Workspace {
         let Ok(resolved) = self.resolve(named) else {
             return Some(Vec::new());
         };
-        self.same_tree_names_of(&resolved, directory_identity)
+        self.same_tree_names_of(&resolved, self.identity)
+    }
+
+    /// Whether `candidate` is another path to a directory the workspace holds open, or to one
+    /// inside or around it (TRUST-9, TRUST-2): the file system calls them one directory and the
+    /// paths name them apart, so a file in it would have two names and a rule written about one
+    /// would not reach the other.
+    ///
+    /// A name beneath an open directory, or around it, by the same spelling is not this: that is
+    /// one name and is judged by the path alone. Decided from device and inode, never from a file's
+    /// bytes.
+    #[cfg(unix)]
+    pub(super) fn is_another_path_to_an_open_tree(&self, candidate: &Path) -> Option<&'static str> {
+        self.refuse_a_second_path_among(candidate, &self.added_directories())
+    }
+
+    /// [`Workspace::is_another_path_to_an_open_tree`] against the added directories `added`, for a
+    /// caller that holds the lock on them and so cannot ask for them again.
+    ///
+    /// The reason `candidate` is refused, or `None`. It is also refused where the identity of
+    /// `candidate` or of an open directory cannot be read though the directory is there, since
+    /// nothing then says it is not another path to the tree: a missing directory is no tree
+    /// anything reaches, so a directory that was added and has been removed since refuses nothing.
+    #[cfg(unix)]
+    pub(super) fn refuse_a_second_path_among(
+        &self,
+        candidate: &Path,
+        added: &[PathBuf],
+    ) -> Option<&'static str> {
+        let unreadable = |directory: &Path| {
+            (self.identity)(directory).is_none()
+                && !matches!(
+                    std::fs::symlink_metadata(directory),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+        };
+        let open = || std::iter::once(&self.root).chain(added);
+        if unreadable(candidate) || open().any(|open| unreadable(open)) {
+            return Some(IDENTITY_UNREADABLE);
+        }
+        open()
+            .any(|open| Self::another_name_for_the_same_tree(candidate, open, self.identity))
+            .then_some(SECOND_PATH_TO_AN_OPEN_TREE)
+    }
+
+    /// Whether `candidate` and `open` are the same tree, or one holds the other, under names that
+    /// are not one inside the other. `identity` is what makes two directories one.
+    ///
+    /// Each is compared with the other's own directory and the directories above it, never with
+    /// the directories above both: every pair of paths shares the top of the file system.
+    #[cfg(unix)]
+    pub(super) fn another_name_for_the_same_tree(
+        candidate: &Path,
+        open: &Path,
+        identity: impl Fn(&Path) -> Option<(u64, u64)>,
+    ) -> bool {
+        if candidate.starts_with(open) || open.starts_with(candidate) {
+            return false;
+        }
+        let above = |tree: &Path, directory: &Path| {
+            identity(directory).is_some_and(|held| {
+                tree.ancestors()
+                    .any(|ancestor| identity(ancestor) == Some(held))
+            })
+        };
+        above(candidate, open) || above(open, candidate)
     }
 
     /// [`Workspace::same_tree_names`] for a path that is already resolved, as a walk meets one,

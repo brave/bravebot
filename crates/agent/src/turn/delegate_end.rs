@@ -5,13 +5,14 @@
 //! state. None reads a report, which is why they can live apart from the presentation of one in
 //! `collect_delegates`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bravebot_core::delegate::{DelegateId, Finish};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 
 use super::{TOOL_BUDGET_SPENT, TurnError, Worked, Working};
+use crate::outcome::Category;
 use crate::report::Reporter;
 use crate::tools;
 
@@ -123,7 +124,8 @@ pub(super) fn unfinished_account(
     // The same comparison the answering arm makes, on the same two driver-held counts.
     // A delegate that spent its whole budget and then failed to answer is the common
     // way the bound is reached rather than a corner of it, and the planner told only
-    // that it did not finish retries the identical task (DELEGATE-26).
+    // that it did not finish retries the identical task (DELEGATE-26). Every other
+    // category is still not named to the planner.
     let reached = ran.is_some_and(|(_, rounds)| rounds >= bound);
     let bound_text = match reached {
         true => format!(
@@ -131,6 +133,21 @@ pub(super) fn unfinished_account(
             tools::tally(bound, "round", "rounds")
         ),
         false => String::new(),
+    };
+    // A delegate whose requests met a limit or an outage meets it again when the same
+    // delegate is started again, and the planner told only that it did not finish starts
+    // another (DELEGATE-26). The sentence is chosen from the closed category name the
+    // trail records, so no word of the failure reaches the planner (BACKEND-37).
+    let cause_text = match finish {
+        Finish::Failed { why, .. } if *why == Category::RateLimited.name() => {
+            " It ended because the service asked for fewer requests (rate-limited), so \
+             starting the same delegate again meets the same limit."
+        }
+        Finish::Failed { why, .. } if *why == Category::Unavailable.name() => {
+            " It ended because the service could not answer (unavailable), so starting the \
+             same delegate again meets the same limit."
+        }
+        _ => "",
     };
     // The same fixed name the trail records, and never the error's own text.
     let note = match finish {
@@ -145,7 +162,8 @@ pub(super) fn unfinished_account(
         ),
         false => note,
     };
-    let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{bound_text}");
+    let body =
+        format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{cause_text}{bound_text}");
     (note, body)
 }
 
@@ -272,19 +290,23 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
     round: usize,
 ) -> Joined {
     let id = working.id;
-    reporter.delegate_waiting(id);
+    // A wake that took the turn here already named the delegate it waited on, and naming it again
+    // would show a wait that is not happening.
+    if !waits.wake_announced() {
+        reporter.delegate_waiting(id);
+    }
     // After the report above, not before it: what a delegate's requests are clipped to is the
     // wait itself, and a reporter that draws a screen or blocks on the lock another delegate
     // holds is the parent's own overhead. Starting the window first would charge whatever a
     // request happened to overlap of it as inference the parent never spent waiting.
-    let joined_at = Instant::now();
+    let joined_at = waits.join_window_start();
     #[cfg(test)]
     if let Some(started) = working.join_started {
         // A closed receiver means the test observer has already exited.
         let _ = started.send(());
     }
-    let (delegated, ran, partial, requests, work) = match working.handle.join() {
-        Ok((ended, partial, requests)) => {
+    let (delegated, ran, partial, requests, blocked, work) = match working.handle.join() {
+        Ok((ended, partial, requests, blocked)) => {
             // Before anything else, and on both of the ways a run can end. A person who
             // vouched for the build inside this delegate is not asked again by a delegate
             // spawned after it, and one whose run failed had the same person answer the same
@@ -316,7 +338,7 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
             }
             let ran = Some((ended.took, ended.rounds));
             let work = Some((ended.worked.work, working.checkout.is_some()));
-            (ended.delegated, ran, partial, requests, work)
+            (ended.delegated, ran, partial, requests, blocked, work)
         }
         // A thread that panicked is a delegate that stopped, which is all anybody can be
         // told about it: what it was doing died with it, and the turn is still running.
@@ -330,11 +352,26 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
             None,
             Default::default(),
             Vec::new(),
+            Vec::new(),
             None,
         ),
     };
 
-    spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
+    // The spans reach this turn's parent too, if it is a delegate itself, which is joined over a
+    // window that holds this one.
+    policy
+        .file_authority()
+        .record_waits(
+            blocked
+                .iter()
+                .map(|span| bravebot_core::file_authority::Wait {
+                    start: span.start,
+                    end: span.end,
+                }),
+        );
+    let added = waits.collected(crate::timing::Interval::since(joined_at), requests, blocked);
+    spent.inference += added.inference;
+    spent.file_wait += added.file_wait;
 
     let finish = finish_of(&delegated, ran);
     // What its own backend reported it spent, which on a failed run is the part that completed.
@@ -426,6 +463,79 @@ mod tests {
                 9
             ),
             "the delegate could not finish (transport), having spent its limit of 9 rounds"
+        );
+    }
+
+    /// BACKEND-37, DELEGATE-26. A delegate that ended rate-limited or unavailable is told to the
+    /// planner with the category and that starting it again meets the same limit, and every other
+    /// ending is told as before, so the planner is given a category only for the two where a
+    /// repeat cannot pass. The sentence composes with the bound sentence and carries nothing else.
+    #[test]
+    fn the_planner_is_told_the_category_only_for_a_limit_or_an_outage() {
+        let took = Duration::from_secs(3);
+        let body = |why: &'static str, rounds, bound| {
+            unfinished_account(
+                &Finish::Failed { took, rounds, why },
+                Some((took, rounds)),
+                bound,
+                DelegateId::nth(1),
+            )
+            .1
+        };
+        let head = format!(
+            "{} The delegate d1 did not finish.",
+            super::TOOL_BUDGET_SPENT
+        );
+        assert_eq!(
+            body("rate-limited", 2, 9),
+            format!(
+                "{head} It ended because the service asked for fewer requests (rate-limited), \
+                 so starting the same delegate again meets the same limit."
+            )
+        );
+        assert_eq!(
+            body("unavailable", 2, 9),
+            format!(
+                "{head} It ended because the service could not answer (unavailable), so \
+                 starting the same delegate again meets the same limit."
+            )
+        );
+        // With the bound spent as well, both sentences are said, cause first.
+        assert_eq!(
+            body("rate-limited", 9, 9),
+            format!(
+                "{head} It ended because the service asked for fewer requests (rate-limited), \
+                 so starting the same delegate again meets the same limit. It had spent its \
+                 limit of 9 rounds, so the same task will not get further."
+            )
+        );
+        assert_eq!(
+            body("unavailable", 9, 9),
+            format!(
+                "{head} It ended because the service could not answer (unavailable), so \
+                 starting the same delegate again meets the same limit. It had spent its \
+                 limit of 9 rounds, so the same task will not get further."
+            )
+        );
+        // Every other category, a stop and a loss are told as they were.
+        for why in [
+            "refused",
+            "transport",
+            "incomplete",
+            "internal",
+            "unauthorized",
+            "timeout",
+        ] {
+            assert_eq!(body(why, 2, 9), head, "{why} was named to the planner");
+        }
+        let stopped = Finish::Stopped { took, rounds: 2 };
+        assert_eq!(
+            unfinished_account(&stopped, Some((took, 2)), 9, DelegateId::nth(1)).1,
+            head
+        );
+        assert_eq!(
+            unfinished_account(&Finish::Lost, None, 9, DelegateId::nth(1)).1,
+            head
         );
     }
 

@@ -187,6 +187,7 @@ def run_checks():
         findings.extend(check.check_clause_numbering(one))
         findings.extend(check.check_clause_history(one, declared))
         findings.extend(check.check_coverage(one, index))
+        findings.extend(check.check_construction_paths(one))
         findings.extend(check.check_anchors(one))
         findings.extend(check.check_governs(one))
         findings.extend(check.check_guards(one, sources))
@@ -582,6 +583,23 @@ def cite_another_spec(root):
     edit_spec(root, "the gate opens only once", "the same rule `OTHER-1` states")
 
 
+def bracket_names(*paths, create=()):
+    """The `break_it` that makes DEMO-2's by-construction bracket name `paths`, with the files in
+    `create` written under the fixture so that a bracket can name one that exists."""
+
+    def break_it(root):
+        for made in create:
+            (root / made).parent.mkdir(parents=True, exist_ok=True)
+            (root / made).write_text("", encoding="utf-8")
+        edit_spec(
+            root,
+            "by-construction (the field is private)",
+            f"by-construction (the field is private, and {' and '.join(paths)} pin it)",
+        )
+
+    return break_it
+
+
 CASES = [
     ("a clean spec tree reports nothing", lambda root: None, None),
     (
@@ -723,6 +741,38 @@ CASES = [
         "governs-missing",
     ),
     (
+        "a by-construction bracket naming a test file that does not exist",
+        bracket_names("ui/scripts/missing.test.mjs"),
+        {"by-construction-path-missing"},
+    ),
+    (
+        "a by-construction bracket naming a test file that exists",
+        bracket_names("ui/scripts/present.test.mjs", create=["ui/scripts/present.test.mjs"]),
+        None,
+    ),
+    (
+        "a by-construction bracket naming one file that exists and one that does not",
+        bracket_names(
+            "crates/demo/src/lib.rs", "crates/demo/src/gone.rs"
+        ),
+        {"by-construction-path-missing"},
+    ),
+    (
+        "a by-construction bracket naming a path relative to a package rather than the root",
+        bracket_names("scripts/local-client.ts"),
+        None,
+    ),
+    (
+        "a by-construction bracket naming a directory, a glob and an elided path",
+        bracket_names("ui/scripts/", "ui/scripts/*.test.mjs", "ui/scripts/...", "ui/scripts/shown.test.*"),
+        None,
+    ),
+    (
+        "a by-construction bracket naming a path with a longer extension than a file that exists",
+        bracket_names("ui/scripts/present.test.mjsx", create=["ui/scripts/present.test.mjs"]),
+        {"by-construction-path-missing"},
+    ),
+    (
         "a guarded symbol that was renamed away",
         lambda root: edit_spec(root, "symbol: Gate::open", "symbol: Gate::unlock"),
         "guard-missing",
@@ -770,7 +820,141 @@ CASES = [
     (
         "a guarded method called through a generic path",
         open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    <Gate>::open(g);\n}"),
-        "guard-spelling-unseen",
+        "guard-site-count",
+    ),
+    (
+        "a guarded method called through the qualifier's turbofish",
+        open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    Gate::<u8>::open(g);\n}"),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through the qualifier's turbofish",
+        open_the_gate_by_another_spelling('fn build() -> Gate {\n    Gate::<u8>::new("a gate")\n}'),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through a qualified generic path",
+        open_the_gate_by_another_spelling('fn build() -> Gate {\n    <Gate<u8>>::new("a gate")\n}'),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through a qualified path wrapped over lines",
+        open_the_gate_by_another_spelling(
+            'fn build() -> Gate {\n    <Gate<u8>>::\n        new("a gate")\n}'
+        ),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through a qualifier with nested generics",
+        open_the_gate_by_another_spelling(
+            'fn build() -> Gate {\n    Gate::<Vec<Option<u8>>>::new("a gate")\n}'
+        ),
+        "guard-site-count",
+    ),
+    (
+        "a guarded constructor called through an alias",
+        open_the_gate_by_another_spelling(
+            'use Gate as G;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded constructor called through a type alias",
+        open_the_gate_by_another_spelling(
+            'type G = Gate;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded constructor called through a type alias with parameters",
+        open_the_gate_by_another_spelling(
+            'type G<T> = Gate;\n\nfn build() -> Gate {\n    G::<u8>::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "an associated type naming the guarded type in a trait impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Iterator for Reach {\n    type Item = Gate;\n\n"
+            "    fn next(&mut self) -> Option<Gate> {\n        None\n    }\n}"
+        ),
+        None,
+    ),
+    (
+        "a type alias of the guarded type inside a function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    fn build(&self) -> Gate {\n        type G = Gate;\n"
+            '        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type after an impl that holds an associated type",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Iterator for Reach {\n    type Item = Gate;\n\n"
+            "    fn next(&mut self) -> Option<Gate> {\n        None\n    }\n}\n\n"
+            'type G = Gate;\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type inside an async function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    pub async fn build(&self) -> Gate {\n        type G = Gate;\n"
+            '        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a type alias of the guarded type inside a const unsafe extern function of an impl",
+        open_the_gate_by_another_spelling(
+            "struct Reach;\n\nimpl Reach {\n    pub const unsafe extern \"C\" fn build() -> Gate {\n"
+            '        type G = Gate;\n        G::new("a gate")\n    }\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a trait-qualified path naming the guarded type",
+        open_the_gate_by_another_spelling(
+            "fn build() -> Gate {\n    <Gate as From<u8>>::from(1)\n}"
+        ),
+        None,
+    ),
+    (
+        "a guarded constructor called through an alias inside a use group",
+        open_the_gate_by_another_spelling(
+            'use crate::{Gate as G, Other};\n\nfn build() -> Gate {\n    G::new("a gate")\n}'
+        ),
+        {"guard-spelling-unseen"},
+    ),
+    (
+        "a guarded method called through a qualified generic path wrapped over lines",
+        open_the_gate_by_another_spelling(
+            "fn reach(g: &Gate) {\n    <Gate<u8>>::\n        open(g);\n}"
+        ),
+        {"guard-site-count"},
+    ),
+    (
+        "another type's constructor through its own turbofish",
+        open_the_gate_by_another_spelling(
+            "fn build() -> Vec<Gate> {\n    Vec::<Gate>::new()\n}\n\n"
+            "fn wrap() -> Option<Gate> {\n    Option::<Gate>::None\n}"
+        ),
+        None,
+    ),
+    (
+        "a type that holds the guarded type, aliased",
+        open_the_gate_by_another_spelling("type Gates = Vec<Gate>;"),
+        None,
+    ),
+    (
+        "another type's constructor with generics, in a file that names the guarded type",
+        open_the_gate_by_another_spelling(
+            "struct Latch<T>(T);\n\nimpl<T> Latch<T> {\n    fn new(inner: T) -> Self {\n        Latch(inner)\n    }\n}\n\n"
+            "fn latch() -> Latch<Gate> {\n    Latch::<Gate>::new(Gate)\n}\n\n"
+            "fn qualified() -> Latch<Gate> {\n    <Latch<Gate>>::new(Gate)\n}"
+        ),
+        None,
     ),
     (
         "a guarded method called through an alias",
@@ -2063,6 +2247,45 @@ def record_checks():
     return checks
 
 
+def exit_status_checks():
+    """What the script itself exits with when a by-construction bracket names a file, run through
+    the scripts as a person runs them, since the status is what `make check-spec` reads."""
+    checks = []
+    for name, paths, create, wanted in (
+        ("a bracket naming a missing test file fails the run", ("ui/scripts/missing.test.mjs",), (), 1),
+        (
+            "a bracket naming a test file that exists leaves the run passing",
+            ("ui/scripts/present.test.mjs",),
+            ("ui/scripts/present.test.mjs",),
+            0,
+        ),
+    ):
+
+        def broken(root, paths=paths, create=create):
+            build_incremental(root)
+            bracket_names(*paths, create=create)(root)
+
+        def ask(wanted=wanted):
+            done = run_script("check-spec.py", "--mechanical-only", "--json")
+            found = [
+                f
+                for f in json.loads(done.stdout)["findings"]
+                if f["kind"] == "by-construction-path-missing"
+            ]
+            if wanted == 0:
+                return done.returncode == 0 and not found
+            return (
+                done.returncode == 1
+                and len(found) == 1
+                and found[0]["severity"] == "error"
+                and found[0]["clause"] == "DEMO-2"
+                and "ui/scripts/missing.test.mjs" in found[0]["summary"]
+            )
+
+        checks.append((name, bool(in_fixture(broken, ask))))
+    return checks
+
+
 def collect_checks():
     """Which answers a reviewer of a change may give, and what each one keeps."""
     earlier = {
@@ -2253,6 +2476,140 @@ def generated_list():
     return check.unverified_clauses(load_specs(), TestIndex())
 
 
+# The gates that lower a value's confidentiality or give bytes a trusted label. Each is pinned in
+# the real labels.md rather than in a demo spec, so a new caller of any of them is reported there.
+LABEL_GATES = [
+    "Policy::declassify_into_workspace",
+    "Policy::declassify_written_into_workspace",
+    "Policy::declassify_checkout_into_workspace",
+    "Policy::promote_a_tool_list",
+    "Policy::promote_a_server_move",
+    "Policy::adopt_edited_body",
+    "Policy::promote_vetted",
+    "Policy::promote_vetted_picture",
+]
+
+
+def derived_gates(labels, sources):
+    """The `Policy::` functions the labels spec counts that the security-audit skill finds building
+    a trusted or public label in `crates/core/src/policy.rs`, sorted.
+
+    `LABEL_GATES` is written by hand, and a ninth function written the same way is in neither it
+    nor any count until somebody remembers to add it. The security-audit check reports a builder no
+    spec counts; this reports one the labels spec counts and the list lacks, and a name on the list
+    that is no longer a builder."""
+    folder = Path(__file__).resolve().parent.parent / "security-audit"
+    if str(folder) not in sys.path:
+        sys.path.append(folder.as_posix())
+    audit = importlib.util.spec_from_file_location("security_audit", folder / "security-audit.py")
+    module = importlib.util.module_from_spec(audit)
+    audit.loader.exec_module(module)
+    builders = module.label_builders(sources)
+    return sorted(
+        symbol
+        for symbol in labels.allowlists
+        if symbol.startswith("Policy::") and symbol.partition("::")[2] in builders
+    )
+
+
+def label_gate_checks():
+    """The eight gates in docs/specs/labels.md, against the real tree.
+
+    Three cases read the real spec: all eight are pinned with a sites list, no entry pins nothing,
+    and no other spec guards them. For each gate, the pinned counts must equal what the scan of its
+    pinned files finds. A probe file no `sites:` list names, calling the gate as a method and as a
+    qualified path, must give exactly one guard-site-unlisted finding, and one extra call in a
+    pinned file must give exactly one guard-site-count finding. Each of those cases expects the
+    whole list of findings, so a count that was already stale fails it."""
+    specs = load_specs()
+    labels = next(one for one in specs if one.id == "LABEL")
+    sources = check.load_sources()
+    probe = Path("crates/net/src/probe.rs")
+    here = labels.allowlists
+
+    def findings(symbol, tree):
+        """What the pinned list of one gate reports against `tree`, as (kind, summary) pairs.
+        The scan reads each file for each gate, so the tree is cut to the files the gate is
+        pinned in plus whatever the case adds, which is every file the count can differ in."""
+        sites = check.guard_sites(symbol, tree)
+        return [(f["kind"], f["summary"]) for f in check.check_allowlist(labels, symbol, here[symbol], sites)]
+
+    def pinned_files(symbol):
+        paths = [Path(item.rpartition(":")[0].strip()) for item in here[symbol]]
+        return {path: sources[path] for path in paths}
+
+    checks = [
+        (
+            "every gate is pinned in the labels spec, with a sites list",
+            all(symbol in here for symbol in LABEL_GATES),
+        ),
+        (
+            "LABEL_GATES is the set of functions in the policy layer that build a trusted or public "
+            "label and that the labels spec counts, so a ninth gate is added to it or reported",
+            derived_gates(labels, sources) == sorted(LABEL_GATES),
+        ),
+        (
+            "no entry of the labels spec pins nothing beside the ones that do",
+            len(labels.pinned_guards) == len(labels.front.get("guards", [])),
+        ),
+        (
+            "no other spec guards a gate the labels spec pins",
+            not [
+                (one.id, symbol)
+                for one in specs
+                if one.id != "LABEL"
+                for symbol in one.guards
+                if symbol in LABEL_GATES
+            ],
+        ),
+    ]
+    for symbol in LABEL_GATES:
+        if symbol not in here:
+            continue  # reported by the case above, and there is nothing to count it against
+        bare = symbol.split("::")[-1]
+        tree = pinned_files(symbol)
+        checks.append(
+            (
+                f"the pinned counts of {symbol} are what the tree has",
+                findings(symbol, tree) == [],
+            )
+        )
+        for spelling, call in (
+            ("a method call", f'policy.{bare}(slot, "https://example.invalid/upload", body)'),
+            ("a qualified call", f'Policy::{bare}(&mut policy, slot, "https://example.invalid/upload", body)'),
+        ):
+            lines = ["fn leak<S>(policy: &mut Policy<S>) {", f"    {call}", "}"]
+            checks.append(
+                (
+                    f"{spelling} of {symbol} in a file its sites list does not name",
+                    findings(symbol, {**tree, probe: lines})
+                    == [
+                        (
+                            "guard-site-unlisted",
+                            f"`{symbol}` is used in `{probe}`, which its `sites:` list does not name",
+                        )
+                    ],
+                )
+            )
+
+        listed = next(iter(here[symbol])).rpartition(":")
+        path, pinned = Path(listed[0].strip()), int(listed[2])
+        more = {**tree, path: tree[path] + [f'    policy.{bare}(slot, "x", body);']}
+        checks.append(
+            (
+                f"a second caller of {symbol} in a file it is pinned in",
+                findings(symbol, more)
+                == [
+                    (
+                        "guard-site-count",
+                        f"`{symbol}` is pinned at {pinned} uses in `{path}` and has {pinned + 1}",
+                    )
+                ],
+            )
+        )
+    return checks
+
+
 def main():
     failures = []
 
@@ -2295,6 +2652,10 @@ def main():
     for name, held in manifests:
         note(name, held, "the manifest was not read as the pipeline expects")
 
+    gates = label_gate_checks()
+    for name, held in gates:
+        note(name, held, "the labels spec did not report the added caller as expected")
+
     sited = in_fixture(None, site_checks)
     for name, held in sited:
         note(name, held, "the drafter chose a different place")
@@ -2314,6 +2675,7 @@ def main():
         + [(c, "a hash moved, or did not") for c in in_fixture(build_incremental, hash_checks)]
         + [(c, "the plan was not the one the record calls for") for c in in_fixture(build_incremental, incremental_checks)]
         + [(c, "the scripts did not do what a run needs") for c in in_fixture(build_incremental, record_checks)]
+        + [(c, "the run did not exit as a bracket naming a file requires") for c in exit_status_checks()]
     )
     for (name, held), why in repeated:
         note(name, held, why)
@@ -2325,6 +2687,7 @@ def main():
         + len(UNVERIFIED_CASES)
         + len(SELECTIONS)
         + len(drafted)
+        + len(gates)
         + len(manifests)
         + len(sited)
         + len(selected)

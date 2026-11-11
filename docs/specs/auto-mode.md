@@ -32,26 +32,30 @@ that untrusted content never reaches the driver or the planner is
 ## Clauses
 
 <a id="AUTO-1"></a>
-### AUTO-1: the key and a flag on a one-shot run reach auto, and nothing else does
+### AUTO-1: the key, a flag on a one-shot run and the desktop window's menu reach auto, and nothing else does
 
 The mode key stops on auto between planning and bypassing, so the press after planning lands in auto
 and the one after that in bypassing where that is reachable ([MODE-5](permission-modes.md#MODE-5)).
 A click on the mode under the box passes it by ([MOUSE-14](mouse.md#MOUSE-14)). `--auto` opens a
 one-shot run in it, and is refused beside `--dangerously-skip-permissions` and `--accept-edits`, and
-where the line starts no one-shot run, since a session has the key. `/plan` does not set it, the
-desktop window does not offer it and a request naming it is refused
-([MODE-11](permission-modes.md#MODE-11)), a background session cannot be in it
-([BG-7](background-sessions.md#BG-7)), no settings file selects it, and no recorded session restores
-it ([MODE-10](permission-modes.md#MODE-10)).
+where the line starts no one-shot run, since a session has the key. The desktop window offers it as
+an item of the Approvals group of the session controls menu, named and described there, and its
+shortcut stops on it after planning and walks on to asking, since the window has no bypassing
+([MODE-11](permission-modes.md#MODE-11)). `/plan` does not set it, a background session cannot be in
+it ([BG-7](background-sessions.md#BG-7)), no settings file selects it, and no recorded session
+restores it ([MODE-10](permission-modes.md#MODE-10)).
 
 **Why.** Bypassing is on the key's ladder, and auto answers fewer questions than it does, so the key
-reaches it. A click is the input a stray press can make, and the mode hands questions to a model, so
-a click does not grant it. A checkout or a file a person did not write must not be able to choose
-who answers.
+reaches it. A click on a control that cycles is the input a stray press can make, and the mode hands
+questions to a model, so a click there does not grant it. The window's menu shows what each item
+does before it is chosen, so choosing auto there is a choice made by name. A checkout or a file a
+person did not write must not be able to choose who answers, and every session opens asking, so none
+can.
 
 `verified-by: bravebot_agent::permission_mode::the_key_reaches_auto_after_planning_and_before_bypass`
 `verified-by: bravebot_tui::app::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
-`verified-by: bravebot_ui_bridge::wire::a_window_cannot_choose_auto`
+`verified-by: bravebot_ui_bridge::wire::a_window_chooses_auto_and_never_bypass`
+`verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_session::jobs::a_background_session_cannot_be_in_auto`
 `verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
 
@@ -123,7 +127,9 @@ The lines are the ones recorded as typed when they arrived, never chosen by read
 ([LAYER-6](layering.md#LAYER-6)). A line sent with files, a message nobody recorded the origin of, a
 file the person named, the planner's words and a result are not among them. The newest twelve are
 sent, each cut to 4000 bytes. The action is the line the planner typed and its directory, or the URL
-and its host. Both are plain text the driver already holds, so nothing is released from a label to
+and its host. The directory is the one the planner typed, or the workspace's own spelling of a climb
+into an added directory, and not where a link in the tree led: a name a clone chose is not put in a
+model's request. Both are plain text the driver already holds, so nothing is released from a label to
 build the request and the request carries no tool, no tool result, no body, no output, no listing
 name, no resolved binary, no remark of a processor, no description a server wrote and no instruction
 file from the checkout. A row for the reply is in [LABEL-8](labels.md#LABEL-8).
@@ -137,6 +143,7 @@ was given. The planner may hold vouched files, and a vouched file is the tree's 
 `verified-by: bravebot_agent::classifier::the_request_holds_the_persons_lines_and_the_action_and_offers_no_tools`
 `verified-by: bravebot_agent::classifier::a_long_history_is_bounded_and_a_line_is_cut_at_a_character_boundary`
 `verified-by: bravebot_agent::classifier::a_fetch_names_the_url_and_the_host`
+`verified-by: bravebot_agent::turn::the_classifier_is_shown_the_directory_as_typed_and_not_where_a_link_led`
 
 <a id="AUTO-6"></a>
 ### AUTO-6: the classifier returns one word, and anything but the allow word puts the question to the person
@@ -145,17 +152,28 @@ The reply is the word `allow` after trimming and lowercasing and after nothing e
 `allow, but` are not it ([CHECK-4](vetting.md#CHECK-4)). A block, an unreadable reply, a timeout, an
 error, a reply labelled quarantined and a refused model are the same result: the question goes to the
 person, or is refused where nobody can be asked ([CHECK-12](vetting.md#CHECK-12)). The classifier is
-not consulted at all where the planner's context holds private content
-([ADVISOR-3](tools/advisor.md#ADVISOR-3)) or has met something untrusted, or where the machine's
-settings refuse the model. It runs on the session's own model.
+not consulted at all where the planner's context has met something untrusted, or where the machine's
+settings refuse the model. It runs on the session's own model, and is consulted whether or not the
+planner's context holds private content.
 
 **Why.** The classifier removes a question and never refuses one on its own word, so a person is asked
 at most once more than in asking. A reply an attacker could make fail is a reply that must not
 approve ([MODE-4](permission-modes.md#MODE-4)).
 
+A private context is consulted because the request goes to the model the planner is running on, with
+the planner's own subscription, and the private content was read to that model already. A
+processor, a check and the advisor are put a private instruction or question for the same reason
+([PROC-4](processors.md#PROC-4), [CHECK-3](vetting.md#CHECK-3),
+[ADVISOR-3](tools/advisor.md#ADVISOR-3)). Refusing here would end the classifier's use for the rest of a session as soon as the planner read
+one command's output: `read_output` makes what the planner writes private from then on, and a
+resumed context cannot be made public again ([LABEL-8](labels.md#LABEL-8)).
+
 `verified-by: bravebot_agent::classifier::only_the_allow_word_alone_allows`
 `verified-by: bravebot_agent::turn::auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
-`verified-by: bravebot_agent::turn::a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::an_untrusted_context_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::a_private_context_is_put_to_the_classifier_and_its_word_answers`
+`verified-by: bravebot_agent::classifier::a_context_that_has_met_something_untrusted_is_not_consulted`
+`verified-by: bravebot_agent::classifier::a_trusted_context_is_consulted_whether_or_not_it_holds_private_content`
 `verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
 
 <a id="AUTO-7"></a>
@@ -211,8 +229,6 @@ nothing about what the person wanted.
 - GHSA-mhg7-666j-cqg4 is a defect in another agent in which a validator judged whether a command was
   safe to run. Here the classifier's yes answers one question and is bound to the exact line shown
   ([PROMPT-5](prompting.md#PROMPT-5)), and the sandbox holds the line.
-- After a slot is promoted, the planner's arguments are private, and the classifier is not consulted
-  for the rest of the session (AUTO-6). The questions go to the person.
 - Each run or fetch question costs one model round trip, on the session's own model.
 - A confined plain line in a trusted directory already runs unasked ([RUN-5](tools/run.md#RUN-5)), so
   the classifier is consulted in a directory the person has not trusted.
@@ -221,10 +237,9 @@ nothing about what the person wanted.
 
 - A setting that makes the mode unreachable for a layer, as `permissions.bypassUnreachable` does for
   bypassing ([PERM-17](permissions.md#PERM-17), [PERM-18](permissions.md#PERM-18)). Until it exists an
-  administrator cannot remove the mode from the ladder.
+  administrator cannot remove the mode from the ladder or from the desktop window's menu.
 - A model of its own for the classifier, read from the home layer only
   ([BACKEND-24](backends.md#BACKEND-24), [COMPACT-15](compaction.md#COMPACT-15)). It runs on the
   session's model.
-- The desktop window, which offers three modes ([MODE-11](permission-modes.md#MODE-11)).
 - A flag that opens an interactive session in the mode. The key reaches it.
 - Instruction files as input to the classifier, which Claude Code includes.

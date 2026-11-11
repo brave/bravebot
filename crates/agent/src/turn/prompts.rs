@@ -53,16 +53,17 @@ offset to continue from, so asking for all of it loses nothing. A window is for 
 something genuinely long. Three windows of one file cost three rounds and more of the \
 conversation than the file would have, and every later round re-sends the lot.
 
-You may write files, but every write is shown to the user for approval first. Say what you \
-intend to change before writing it, and if a write is refused do not retry the same one.
+You may write files. A write inside a directory the user vouched for is applied without a \
+prompt; any other write is shown to the user for approval first. Say what you intend to change \
+before writing it, and if a write is refused do not retry the same one.
 
 To change part of an existing file, prefer edit_file over write_file: the user reviews a \
 diff rather than a whole body. Read the file first so the text you replace matches exactly, \
 and include enough surrounding lines to identify it uniquely.
 
 Some content is quarantined. Instead of the text you are given a reference such as ref:0, with \
-where it came from and how big it is, and nothing will ever show you what is in it: not another \
-read, not a search, not asking. edit_file does not work on a quarantined file either, since \
+where it came from and how big it is. Another read or a search will not show you what is in \
+it. edit_file does not work on a quarantined file either, since \
 matching a passage would mean reading it. To change one, call spawn_processor with the \
 reference and an instruction saying what has to be true of the file afterwards, then call \
 write_file with contents_ref set to the reference that comes back. Be exact about the *shape* of \
@@ -131,9 +132,9 @@ directory.
 Working blind is a last resort, not the first move. Where a file is quarantined it is because \
 nobody has vouched for it, and that is a thing the user can change in one line: they can vouch \
 for a file or for the directory, and then you read it directly instead of guessing at it through \
-a processor. So when the task would go better with you reading the file, say so plainly in your \
-reply and let them decide. Say it in terms of the reference, since you do not know the name and \
-they do. Carrying on silently through a processor, when one sentence would have got you the file, \
+a processor. So where the task needs a file read and nothing offered to you can show it, say so \
+plainly in your reply and let them decide. Say it in terms of the reference, since you do not \
+know the name and they do. Carrying on silently through a processor, when one sentence would have got you the file, \
 wastes their time and yours and leaves you unable to confirm anything you did.
 
 Report what you did, not what you achieved, wherever you could not see the result. You have not \
@@ -171,6 +172,48 @@ programs can reach, and nothing here can tell which, so it is quarantined until 
 for the exact line. That is the whole of the difference, and it is not a verdict on the shell. \
 Where you want four files, ask for four reads in one round rather than one program to print them \
 all: you get the same bytes visibly, and each one gated on its own.";
+
+/// What a planner is told about reading a quarantined reference, which depends on the tools the run
+/// was offered and on whether anybody can answer it.
+///
+/// Separate from [`PLANNING`] because a delegate shares that text and is never offered
+/// `vet_content` (VET-2), so a sentence naming the tool there would point it at one it does not
+/// have. Built from the offered tool list and the run's own flags, never from content.
+///
+/// `vetting_offered` is whether `vet_content` is among the offered tools. `auto_vetting` is whether
+/// a check already answers for it, in which case `--vet` is not worth naming. `nobody_answers` is
+/// whether a question put to the run reaches no person.
+pub(super) fn reading_a_reference(
+    vetting_offered: bool,
+    auto_vetting: bool,
+    nobody_answers: bool,
+) -> String {
+    let mut text = String::new();
+    if vetting_offered {
+        text.push_str(
+            "Where the task needs you to read a quarantined reference, call vet_content for it \
+             first. The result is the content, or a statement that it was kept back from you. Say \
+             in your reply that the file needs vouching for only where vet_content was refused.",
+        );
+    }
+    if nobody_answers {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(
+            "Nobody is available to answer a question in this run, so do not end your reply on \
+             one. Where you could not read what the task needs, say in your reply how the person \
+             can lift the quarantine on another run: --trust-workspace vouches for the whole \
+             directory, and --file names one file",
+        );
+        match (vetting_offered, auto_vetting) {
+            (true, false) => text
+                .push_str(", and --vet lets a check answer for vet_content in place of a person."),
+            _ => text.push('.'),
+        }
+    }
+    text
+}
 
 /// The heading over the kept facts put in front of the planner (RECALL-9). They are the person's
 /// own, so they are trusted, and they are background: a fact that reads like a command is not one.
@@ -282,3 +325,74 @@ reads exactly like one from a delegate that ran it.
 While a delegate is working you have your round back. Spend it on work, or answer with nothing \
 and wait. A round spent reporting that delegates are running costs a whole request, says what the \
 person can already see on the screen, and stays in the conversation being re-sent afterwards.";
+
+#[cfg(test)]
+mod tests {
+    use super::{PLANNING, reading_a_reference};
+
+    /// WRITE-3. The planner is not told every write is shown for approval: a write to a trusted
+    /// path with trusted data is applied unasked (TRUST-4). A regression that restores the claim
+    /// tells the planner something false in a vouched directory.
+    #[test]
+    fn the_planner_is_told_when_a_write_is_shown_and_when_it_is_applied_unasked() {
+        assert!(
+            PLANNING.contains(
+                "A write inside a directory the user vouched for is applied without a prompt; any \
+                 other write is shown to the user for approval first."
+            ),
+            "{PLANNING}"
+        );
+        assert!(
+            !PLANNING.contains("every write is shown"),
+            "the prompt still says every write is shown: {PLANNING}"
+        );
+        assert!(
+            PLANNING.contains("if a write is refused do not retry the same one"),
+            "{PLANNING}"
+        );
+    }
+
+    /// A turn offered `vet_content` is sent to it first, since it can read a reference there. A
+    /// regression that names the person's flags instead sends a run to steps it does not need.
+    #[test]
+    fn a_run_offered_vet_content_is_sent_to_it() {
+        let said = reading_a_reference(true, false, false);
+        assert!(said.contains("call vet_content"), "{said}");
+        assert!(!said.contains("--trust-workspace"), "{said}");
+    }
+
+    /// A delegate is never offered `vet_content` (VET-2), so pointing it at that tool sends it to
+    /// a tool it lacks. A regression that names the tool without checking the list does that.
+    #[test]
+    fn a_run_not_offered_vet_content_is_not_sent_to_it() {
+        let said = reading_a_reference(false, false, true);
+        assert!(!said.contains("vet_content"), "{said}");
+        assert!(
+            said.contains("--trust-workspace") && said.contains("--file"),
+            "{said}"
+        );
+        assert!(!said.contains("--vet"), "{said}");
+    }
+
+    /// Only a run with nobody to ask has to say how the person can lift the quarantine, because
+    /// anywhere else a question reaches somebody. A regression that gives the paragraph to every run
+    /// tells a person who is there to run a flag they have no use for.
+    #[test]
+    fn only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine() {
+        assert!(!reading_a_reference(true, false, false).is_empty());
+        assert!(reading_a_reference(false, false, false).is_empty());
+        let said = reading_a_reference(true, false, true);
+        assert!(said.contains("--vet"), "{said}");
+        assert!(said.contains("Nobody is available"), "{said}");
+    }
+
+    /// `--vet` is not worth naming where a check already answers for `vet_content`, since the
+    /// person would be sent to a flag that changes nothing. A regression that names it anyway
+    /// misleads them.
+    #[test]
+    fn a_run_a_check_already_answers_for_is_not_pointed_at_the_vet_flag() {
+        let said = reading_a_reference(true, true, true);
+        assert!(!said.contains("--vet"), "{said}");
+        assert!(said.contains("--trust-workspace"), "{said}");
+    }
+}

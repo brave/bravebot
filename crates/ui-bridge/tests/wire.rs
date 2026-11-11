@@ -22,7 +22,7 @@ fn every_enum_has_the_tag_the_protocol_promises() {
     assert_eq!(wire::phase(Phase::Planning), "planning");
     assert_eq!(wire::phase(Phase::Thinking), "thinking");
     assert_eq!(wire::phase(Phase::Compacting), "compacting");
-    assert_eq!(wire::phase(Phase::Reconnecting), "reconnecting");
+    assert_eq!(wire::phase(Phase::Reconnecting(None)), "reconnecting");
 
     assert_eq!(wire::reach(Reach::NotThePlanner), "not_the_planner");
     assert_eq!(wire::reach(Reach::NoModel), "no_model");
@@ -580,6 +580,26 @@ fn a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose() {
     );
 }
 
+/// LAYER-6: a plan-mode notice has no row of its own, so it crosses as a plain message and takes no
+/// prompt ordinal, which keeps the prompts after it numbered as `fork::cut` counts them.
+#[test]
+fn a_plan_mode_notice_crosses_as_plain_text_and_takes_no_ordinal() {
+    let said = wire::recounted(&[
+        Said::User("first".into(), None),
+        Said::Composed {
+            why: Composed::ModeNotice { plan: true },
+            text: "Plan mode is on".into(),
+        },
+        Said::User("second".into(), None),
+    ]);
+    assert_eq!(
+        said[1],
+        json!({ "kind": "user", "text": "Plan mode is on" })
+    );
+    assert_eq!(said[0]["prompt"], json!(0));
+    assert_eq!(said[2]["prompt"], json!(1));
+}
+
 /// LAYER-6: a request may say the front end composed its own prompt, and may not say the agent
 /// composed one.
 ///
@@ -610,6 +630,41 @@ fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
             "a front end may not claim {refused}",
         );
     }
+}
+
+/// RPCVIEW-10: a send's id is 1 to 64 ASCII letters, digits, `-` or `_`, and anything else,
+/// including no id at all, is refused.
+#[test]
+fn a_message_id_is_a_short_ascii_word_and_is_required() {
+    let longest = "a".repeat(wire::MESSAGE_ID_LENGTH);
+    for taken in [
+        "0f1e2d3c-aaaa-4bbb-8ccc-123456789abc",
+        "acp_1",
+        "7",
+        longest.as_str(),
+    ] {
+        assert_eq!(wire::message_id(Some(&json!(taken))).expect("an id"), taken);
+    }
+    let longer = "a".repeat(wire::MESSAGE_ID_LENGTH + 1);
+    for refused in [
+        json!(""),
+        json!(longer),
+        json!("a.b"),
+        json!("a b"),
+        json!("a\nb"),
+        json!("é"),
+        json!(7),
+        Value::Null,
+    ] {
+        assert!(
+            wire::message_id(Some(&refused)).is_err(),
+            "{refused} was taken as an id"
+        );
+    }
+    assert!(
+        wire::message_id(None).is_err(),
+        "a send without an id was taken"
+    );
 }
 
 /// MSG-11: a message between sessions crosses as its own kind with the session, the name, the
@@ -1206,6 +1261,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
         started_as: "/usr/bin/printf".into(),
         args: vec!["hello world".into()],
         environment: vec![("MODE".into(), "preview".into())],
+        expansions: Vec::new(),
         routes: vec![Route::Stdout {
             path: "/tmp/result.txt".into(),
             append: false,
@@ -1529,6 +1585,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
                 started_as: "/bin/sh".into(),
                 args: vec!["deploy.sh".into()],
                 environment: vec![],
+                expansions: vec![],
                 routes: vec![],
             }]),
             writes: vec![],
@@ -1583,6 +1640,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
                 started_as: "/usr/bin/wc".into(),
                 args: vec!["-l".into(), "notes.txt".into(), "report.txt".into()],
                 environment: vec![],
+                expansions: vec![],
                 routes: vec![],
             }]),
             writes: vec![],
@@ -1626,6 +1684,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
                 started_as: "/bin/ls".into(),
                 args: vec!["-1".into()],
                 environment: vec![],
+                expansions: vec![],
                 routes: vec![],
             }]),
             writes: vec![],
@@ -1748,6 +1807,25 @@ fn approval_evidence_is_kept_beside_the_decision() {
         },
     );
     assert_eq!(output["vetting"]["detail"], "offline");
+    // A word reused from an earlier check carries no sentence: the field is null, not missing, and
+    // the verdict is still the word.
+    let reused = wire::output_request(
+        8,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: "content".into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 0,
+            reference: "1".into(),
+            verdict: Verdict::Unsafe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(reused["vetting"]["verdict"], "unsafe");
+    assert!(reused["vetting"]["reason"].is_null());
+    assert!(reused["vetting"]["label"].is_null());
     let vouch = wire::vouch_request(
         9,
         &VouchRequest {
@@ -2118,6 +2196,8 @@ fn the_mcp_questions_carry_what_a_card_draws() {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         },
     );
     assert_eq!(call["name"], "weather:get_forecast");
@@ -2126,6 +2206,33 @@ fn the_mcp_questions_carry_what_a_card_draws() {
         json!([{"name": "city", "value": "\"Paris\""}])
     );
     assert_eq!(call["mayStand"], false);
+    assert_eq!(call["askedForPrivateArguments"], false);
+    assert_eq!(call["also"], json!([]));
+
+    let batched = wire::mcp_call_request(
+        4,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: true,
+            also: vec![
+                vec![("city".into(), "\"Lyon\"".into())],
+                vec![("city".into(), "\"Nice\"".into())],
+            ],
+        },
+    );
+    assert_eq!(batched["askedForPrivateArguments"], true);
+    assert_eq!(
+        batched["also"],
+        json!([
+            [{"name": "city", "value": "\"Lyon\""}],
+            [{"name": "city", "value": "\"Nice\""}]
+        ])
+    );
 
     let moved = wire::mcp_move_request(
         3,
@@ -2282,17 +2389,22 @@ fn a_host_prompt_carries_the_hosts_and_nothing_else() {
     );
 }
 
-/// AUTO-1, MODE-11: a window cannot ask for auto, and a mode it can ask for is still read. The
-/// wire has a name for auto so a session that held the mode could be drawn. The regression it
-/// rejects is a request naming the mode being read as another one, which would leave a client
-/// drawing a mode its session is not in.
+/// AUTO-1, MODE-11: a window can ask for auto, and for no mode past it. The regression it rejects
+/// is a request naming a mode being read as another one, or bypass being read at all, which would
+/// leave a client drawing a mode its session is not in or reach a mode only the command line may.
 #[test]
-fn a_window_cannot_choose_auto() {
+fn a_window_chooses_auto_and_never_bypass() {
     use bravebot_agent::PermissionMode;
-    assert!(wire::permission_mode(&json!("auto")).is_err());
+    assert_eq!(
+        wire::permission_mode(&json!("auto")).ok(),
+        Some(PermissionMode::Auto)
+    );
     assert_eq!(
         wire::permission_mode(&json!("plan")).ok(),
         Some(PermissionMode::Plan)
     );
+    for word in [json!("bypass"), json!("Auto"), json!(null)] {
+        assert!(wire::permission_mode(&word).is_err(), "{word} was accepted");
+    }
     assert_eq!(wire::permission_mode_name(PermissionMode::Auto), "auto");
 }

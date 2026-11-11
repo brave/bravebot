@@ -145,6 +145,10 @@ const PANEL_WIDTH_FILE: &str = "panel-width";
 /// global state directory.
 const CAFFEINATE_FILE: &str = "caffeinate";
 
+/// The embeddings endpoint the person was told retrieval sends to when they turned it on, one
+/// line, inside the global state directory (RETRIEVE-25).
+const RETRIEVAL_DISCLOSED_FILE: &str = "retrieval-disclosed";
+
 /// The longest model name worth reading back.
 ///
 /// A name goes into a request field, and one this long is not a name the endpoint listed. Bounded
@@ -665,6 +669,21 @@ pub fn load_vetting() -> Option<bool> {
     parse_vetting(&std::fs::read_to_string(path).ok()?)
 }
 
+/// Whether a check that finds nothing may promote a slot without anybody being asked, for a
+/// session that reads the three routes itself: the command line's `--vet`, the recorded choice and
+/// the `vetting.auto` key in `settings`.
+///
+/// The one place the terminal and one-shot paths gather those inputs, so the notice printed on
+/// entering bypass and the session's setting cannot be resolved from different ones. The rule is
+/// [`bravebot_core::vetting::auto`].
+pub fn auto_vetting(settings: &bravebot_config::Settings) -> bool {
+    bravebot_core::vetting::auto(
+        bravebot_core::vetting::asked_for(),
+        load_vetting(),
+        settings.auto_vetting(),
+    )
+}
+
 /// Read the answer out of the file's contents.
 ///
 /// Separate from the I/O so the rules are testable. Exactly the two words, after trimming: a blank
@@ -810,6 +829,34 @@ pub fn save_caffeinate_confirmed() {
         return;
     }
     let _ = bravebot_agent::home::replace(&dir.join(CAFFEINATE_FILE), b"confirmed\n");
+}
+
+/// The embeddings endpoint the person was told about before turning retrieval on, if they were.
+///
+/// Read through [`writable`], as [`load_caffeinate_confirmed`] is.
+pub fn load_retrieval_disclosed() -> Option<String> {
+    writable()
+        .and_then(|dir| std::fs::read_to_string(dir.join(RETRIEVAL_DISCLOSED_FILE)).ok())
+        .and_then(|contents| parse_retrieval_disclosed(&contents))
+}
+
+/// The endpoint out of the file's contents: the first line, trimmed, where it is not blank.
+pub fn parse_retrieval_disclosed(contents: &str) -> Option<String> {
+    let line = contents.lines().next()?.trim();
+    (!line.is_empty()).then(|| line.to_string())
+}
+
+/// Record that the person was told retrieval sends to `endpoint`, and say whether it was kept.
+pub fn save_retrieval_disclosed(endpoint: &str) -> bool {
+    let Some(dir) = writable() else {
+        return false;
+    };
+    bravebot_agent::home::create_directory(&dir).is_ok()
+        && bravebot_agent::home::replace(
+            &dir.join(RETRIEVAL_DISCLOSED_FILE),
+            format!("{}\n", endpoint.trim()).as_bytes(),
+        )
+        .is_ok()
 }
 
 /// Encode a prompt as one line.
@@ -1209,6 +1256,24 @@ and this?
                 None,
                 "{contents:?} became a width"
             );
+        }
+    }
+
+    /// RETRIEVE-25: the endpoint a person was told about is the first line, and a blank file names
+    /// none, so an empty or half-written file does not count as the disclosure having been read.
+    #[test]
+    fn the_disclosed_endpoint_is_the_first_line_and_a_blank_one_is_none() {
+        let url = "ai-chat-backend-dev.bsg.brave.software/v1/embeddings";
+        assert_eq!(
+            parse_retrieval_disclosed(&format!("{url}\n")).as_deref(),
+            Some(url)
+        );
+        assert_eq!(
+            parse_retrieval_disclosed(&format!("  {url} \nmore")).as_deref(),
+            Some(url)
+        );
+        for contents in ["", "\n", "   \n", "\nexample.invalid\n"] {
+            assert_eq!(parse_retrieval_disclosed(contents), None, "{contents:?}");
         }
     }
 

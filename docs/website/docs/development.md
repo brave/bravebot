@@ -1,7 +1,7 @@
 ---
 sidebar_position: 8
 title: Development
-description: Building from source, the checks CI runs, and how this project is specified.
+description: Build from source, configure a build, run CI checks, manage repository agent configuration, identify session builds, test the interface and review code against specs and security rules.
 ---
 
 # Development

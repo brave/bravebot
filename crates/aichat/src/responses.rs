@@ -21,9 +21,9 @@ use crate::anthropic::what_was_written;
 use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, Effort, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, AccountAccess, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
-    WAKE, learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body,
-    remember, remembered, reply_bound, worth_another_attempt_or_report,
+    AccountAccess, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, WAKE,
+    learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body, remember,
+    remembered, reply_bound, worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -35,7 +35,27 @@ use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request};
 use protocol::{Decoded, Ending, Event, WireUsage};
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Writes the end of a request by a failure the service reported and this build cannot name.
+///
+/// Every field is this program's own: the kind of event that carried it (a closed pair), that the
+/// code was not on the list, the time the request took and the requests sent. Nothing the service
+/// wrote is in it ([DIAG-7](../../../docs/specs/diagnostic-log.md#DIAG-7)).
+fn log_unlisted(carrier: protocol::Carrier, started: Instant, attempts: u32) {
+    bravebot_diag::error(
+        "aichat.stream_failure",
+        &[
+            ("event", bravebot_diag::Field::word(carrier.as_str())),
+            ("code", bravebot_diag::Field::word("unlisted")),
+            (
+                "elapsed_ms",
+                bravebot_diag::Field::num(started.elapsed().as_millis()),
+            ),
+            ("attempts", bravebot_diag::Field::num(attempts)),
+        ],
+    );
+}
 
 /// `body` as one zstd frame, the form the account's serving host takes a body in.
 ///
@@ -133,7 +153,15 @@ impl Driven for ResponsesClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
-        worth_another_attempt_or_report(self.attempts_allowed(), attempt, error)
+        worth_another_attempt_or_report(self.provider.patience, attempt, error)
+    }
+
+    fn retry_window(&self) -> Option<Duration> {
+        self.provider.patience.retry_window()
+    }
+
+    fn of_the_connection(error: &ChatError) -> bool {
+        crate::failed_connection(error)
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
@@ -237,6 +265,11 @@ impl<'a> ResponsesClient<'a> {
         self.spent.attempts
     }
 
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> crate::call::Conceded {
+        self.spent.conceded
+    }
+
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
@@ -271,12 +304,6 @@ impl<'a> ResponsesClient<'a> {
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.pace.backoff = backoff;
         self
-    }
-
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the entry's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.provider.patience.attempts(ATTEMPTS)
     }
 
     /// What a refusal is remembered against: the service, and the name the model goes out under.
@@ -486,18 +513,10 @@ impl<'a> ResponsesClient<'a> {
             plan,
             &mut progress,
             |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
-            |progress, attempt| {
+            |progress, retry| {
                 // Announced before the wait rather than after it, so the pause is explained
                 // while it is happening. Reply progress resets; completed costs remain charged.
-                progress(Progress {
-                    written: Labelled::new("", Label::untrusted_public()),
-                    output_tokens: 0,
-                    calling: None,
-                    thinking: Labelled::new("", Label::untrusted_public()),
-                    counted_by_server: false,
-                    prose: false,
-                    attempt,
-                });
+                progress(Progress::announcing(retry));
             },
         );
         // No copy of the token outlives the call that was sent with it.
@@ -527,6 +546,7 @@ impl<'a> ResponsesClient<'a> {
         };
         let http = self.build(body, token.as_ref());
         self.spent.sent();
+        let started = Instant::now();
         let stream = match self.egress.fetch_streaming(
             policy,
             http,
@@ -593,13 +613,16 @@ impl<'a> ResponsesClient<'a> {
                     // Reported rather than read past. A reply the service abandoned ends the same
                     // way a dead connection does, so without this the cause is replaced by "the
                     // reply was cut off" and a request nothing can fix is asked for twice more.
-                    Decoded::Event(Event::Failed(failure)) => {
+                    Decoded::Event(Event::Failed(failure, carrier)) => {
+                        if failure == Failure::Unknown {
+                            log_unlisted(carrier, started, self.spent.attempts);
+                        }
                         return Err(ChatError::Reported { failure });
                     }
                     // The account's own words for a refusal, told as a refusal that came with a status
                     // is. Any other service has no such words, and a code it writes that is one of them is
                     // a failure it did not name.
-                    Decoded::Event(Event::Refused(refusal)) => {
+                    Decoded::Event(Event::Refused(refusal, carrier)) => {
                         return Err(if self.account.is_some() {
                             ChatError::Account(crate::AccountFailure::Named {
                                 refusal,
@@ -609,6 +632,7 @@ impl<'a> ResponsesClient<'a> {
                                 retry_after: None,
                             })
                         } else {
+                            log_unlisted(carrier, started, self.spent.attempts);
                             ChatError::Reported {
                                 failure: Failure::Unknown,
                             }
@@ -633,7 +657,7 @@ impl<'a> ResponsesClient<'a> {
                 thinking: Labelled::new(&reply.thinking[thought_before..], label),
                 counted_by_server: reply.counted(),
                 prose: Progress::has_prose(&reply.text),
-                attempt,
+                ..Progress::quiet(attempt)
             });
         }
 
@@ -800,7 +824,7 @@ impl Reply {
             Event::Declined => self.withheld = true,
             // A failure and a refusal end the stream where they arrive, in `stream_once`, before a
             // reply is built from anything after them.
-            Event::Failed(_) | Event::Refused(_) => {}
+            Event::Failed(..) | Event::Refused(..) => {}
         }
     }
 

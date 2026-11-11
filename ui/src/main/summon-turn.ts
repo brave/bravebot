@@ -5,6 +5,7 @@
  * the pick first.
  */
 
+import { randomUUID } from 'node:crypto'
 import { type Bot } from '../shared/bots'
 import { type Pending } from './summons'
 
@@ -132,7 +133,8 @@ export async function sendSummonedTurn(
     services.adopt(session, owner)
   }
 
-  const params: Record<string, unknown> = { session, prompt, address: summoned.definition }
+  // A new id for this send, which the agent requires on every send (RPCVIEW-10).
+  const params: Record<string, unknown> = { session, prompt, address: summoned.definition, messageId: randomUUID() }
   if (hosting?.definition) params.definition = hosting.definition
   const selectedModel = hosting?.model ?? options.model
   if (selectedModel !== undefined) params.model = selectedModel

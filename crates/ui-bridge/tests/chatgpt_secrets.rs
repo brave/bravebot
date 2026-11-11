@@ -23,6 +23,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -121,6 +123,7 @@ fn a_child_that_signs_in_to_the_stand_in() {
             done: "You can close this tab.",
             not_found: "Not found.",
         },
+        &std::sync::atomic::AtomicBool::new(false),
         |announcement| {
             std::fs::write(&url_file, announcement.url).expect("the address is written");
             chatgpt_stand_in::browse(announcement.url);
@@ -213,7 +216,7 @@ impl Window {
         let session = self.session.clone();
         self.call(
             "turn.send",
-            json!({"session": session, "prompt": prompt, "model": MODEL}),
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt, "model": MODEL})),
         );
         self.until(|message| message["event"] == "turn.done" || message["event"] == "turn.error")
     }
@@ -765,7 +768,9 @@ fn what_the_local_host_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values
     for turn in 1..=4 {
         client.call(
             "turn.send",
-            json!({"session": session, "prompt": "a prompt that is not a secret"}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": "a prompt that is not a secret"}),
+            ),
         );
         let ended = client
             .until(|message| message["event"] == "turn.done" || message["event"] == "turn.error");

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Connecting Gmail
-description: Read Gmail from a session through Google's Workspace MCP server, with every other Google service switched off.
+description: Connect Gmail through Google's Workspace MCP server with other Google services disabled, or use Google's remote Gmail server.
 ---
 
 # Connecting Gmail
@@ -111,3 +111,17 @@ What you have handed over:
   `gmail.downloadAttachment:off` in the override string keeps it out of the list.
 - **You update it yourself.** The directory holds the release you checked. A newer release is
   downloaded and checked the same way.
+
+## Google's remote Gmail server
+
+Google also runs a remote Gmail MCP server at `gmailmcp.googleapis.com`, in developer preview. It
+searches mail, reads threads, lists labels, and drafts and labels messages. It has no send tool,
+and it requires membership in Google's Workspace Developer Preview Program.
+
+bravebot cannot use it today. It needs OAuth sign-in, and `bravebot mcp add --http` offers only
+`--bearer-env` and `--header-env`, which send a token obtained elsewhere. Google's access tokens
+expire after an hour and bravebot does not refresh one, so a header set that way stops working
+within the hour. OAuth sign-in for remote servers is proposed in
+[#1535](https://github.com/brave/bravebot/issues/1535), and this server's use of it is tracked in
+[#3457](https://github.com/brave/bravebot/issues/3457). Until then, the Workspace server above is
+the one to use.

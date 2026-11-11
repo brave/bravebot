@@ -178,6 +178,35 @@ pub fn format_elapsed(elapsed: Duration) -> String {
     )
 }
 
+/// What to call a request that is waiting to be sent again, as of `now`, or `None` once the pause
+/// that was announced at `since` is over.
+///
+/// Whole seconds, rounded up, so the figure reaches the second it names and does not read `0s`
+/// while a retry is still to come. The time left before the request is given up on is said only
+/// where a window decides it. The figures are the driver's own numbers: nothing the service wrote
+/// is read here.
+pub fn waiting_to_retry(
+    retry: bravebot_agent::report::Retry,
+    since: std::time::Instant,
+    now: std::time::Instant,
+) -> Option<String> {
+    let waited = now.saturating_duration_since(since);
+    let wait = retry
+        .pause
+        .checked_sub(waited)
+        .filter(|left| !left.is_zero())?;
+    let whole_seconds =
+        |left: Duration| Duration::from_secs(left.as_secs() + u64::from(left.subsec_nanos() > 0));
+    let wait = format_elapsed(whole_seconds(wait));
+    Some(match retry.gives_up_in {
+        Some(total) => {
+            let left = format_elapsed(whole_seconds(total.saturating_sub(waited)));
+            t!(indicator_reconnecting_until, wait = wait, left = left)
+        }
+        None => t!(indicator_reconnecting_in, wait = wait),
+    })
+}
+
 /// What a finished call spent at a model, for the end of the line saying what came of it.
 ///
 /// Empty for a call that asked none, which is nearly all of them, and empty for a wait under a
@@ -419,5 +448,67 @@ mod tests {
         let line = at(90, 1_500).line();
         assert!(line.contains("1m 30s"));
         assert!(line.contains("1.5k tokens"));
+    }
+
+    fn retry_in(pause_secs: u64, gives_up_in_secs: Option<u64>) -> bravebot_agent::report::Retry {
+        bravebot_agent::report::Retry {
+            attempt: 4,
+            pause: Duration::from_secs(pause_secs),
+            gives_up_in: gives_up_in_secs.map(Duration::from_secs),
+        }
+    }
+
+    /// BACKEND-55: a request waiting to be sent again names the time until the attempt and, where a
+    /// window decides, the time until it is given up on, both counted down from the moment the wait
+    /// was announced. Rejects a line that shows the pause as announced and never counts it down,
+    /// and one that counts the time to give up from the wrong end.
+    #[test]
+    fn a_wait_to_retry_counts_down_to_the_attempt_and_to_giving_up() {
+        let since = std::time::Instant::now();
+        let retry = retry_in(38, Some(3130));
+        let say = |after_ms: u64| {
+            waiting_to_retry(retry, since, since + Duration::from_millis(after_ms))
+                .expect("still waiting")
+        };
+
+        assert_eq!(
+            say(0),
+            "Reconnecting, next try in 38s, giving up in 52m 10s"
+        );
+        assert_eq!(
+            say(8_000),
+            "Reconnecting, next try in 30s, giving up in 52m 02s"
+        );
+        assert_eq!(
+            say(500),
+            "Reconnecting, next try in 38s, giving up in 52m 10s",
+            "a half second into the wait read as a second less"
+        );
+        assert_eq!(
+            say(37_500),
+            "Reconnecting, next try in 1s, giving up in 51m 33s",
+            "the last half second read as nothing, with a retry still to come"
+        );
+    }
+
+    /// BACKEND-55: where only a count decides there is no time to give up, so the line names the
+    /// attempt alone, and once the pause is over there is nothing to count down.
+    #[test]
+    fn a_wait_with_no_window_names_no_time_to_give_up_and_ends_with_the_pause() {
+        let since = std::time::Instant::now();
+        let retry = retry_in(2, None);
+
+        assert_eq!(
+            waiting_to_retry(retry, since, since).as_deref(),
+            Some("Reconnecting, next try in 2s")
+        );
+        assert_eq!(
+            waiting_to_retry(retry, since, since + Duration::from_secs(2)),
+            None
+        );
+        assert_eq!(
+            waiting_to_retry(retry, since, since + Duration::from_secs(60)),
+            None
+        );
     }
 }

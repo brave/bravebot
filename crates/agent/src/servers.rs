@@ -286,7 +286,8 @@ pub fn nobody() -> Person<std::io::Empty, std::io::Sink> {
 ///
 /// `requested` is each alias with the settings file that asked for it. `project` is the workspace
 /// root, which is what answer 2 records. `managed` is the machine's layer, whose refusals no answer
-/// reaches. `diagnostics` is where a local server's stderr goes.
+/// reaches. `diagnostics` is where a local server's stderr goes; every front end passes
+/// [`Stream::Null`] (SERVERS-25).
 pub fn reach<A: Asker + ?Sized>(
     requested: &[(PathBuf, String)],
     project: &Path,
@@ -518,6 +519,22 @@ enum Plan {
         /// The arguments of its tools that take a choice (SERVERS-22).
         choice_arguments: ChoiceArguments,
     },
+    /// A local server that runs in an NVIDIA OpenShell sandbox, offered to manifest runs only.
+    OpenShell {
+        /// The program as the declaration names it, which is looked up inside the image.
+        program: String,
+        arguments: Vec<String>,
+        /// The image the sandbox is made from.
+        image: String,
+        declared: Digest,
+        timeouts: Timeouts,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
+        /// The hosts the declaration lists for it. None is no egress.
+        allowed_hosts: Option<Vec<String>>,
+        ask_every_call: bool,
+        choice_arguments: ChoiceArguments,
+    },
     Http {
         url: String,
         headers: Vec<(String, String)>,
@@ -568,7 +585,7 @@ fn settle<A: Asker + ?Sized>(
         Err(why) => {
             let reason = t!(
                 mcp_unreadable,
-                path = mcp::declarations_file(directory).display().to_string(),
+                path = crate::confirm::shown_path(&mcp::declarations_file(directory)),
                 reason = unreadable(&why)
             );
             notes.push(t!(
@@ -660,7 +677,7 @@ fn settle<A: Asker + ?Sized>(
                 declaration: &declaration,
                 program: match &plan {
                     Plan::Stdio { program, .. } => Some(program),
-                    Plan::Http { .. } => None,
+                    Plan::OpenShell { .. } | Plan::Http { .. } => None,
                 },
                 changed,
             };
@@ -848,12 +865,128 @@ fn aliases(requested: &[(PathBuf, String)]) -> String {
 /// A settings file as the person knows it: relative to the project where it is inside it.
 ///
 /// `project` has its links followed, so the file is compared with its own followed too.
+///
+/// A checkout can make a settings layer a link to a file whose name holds control characters, and
+/// the name is followed here, so it is drawn with [`crate::confirm::shown_path`]. The result is
+/// printed by the CLI as it is. The desktop bridge sends it as `Question.file`, where the window
+/// draws it, and the CLI's `mcp` commands draw it again with `printable`, which leaves what is
+/// already drawn unchanged.
 pub fn named(file: &Path, project: &Path) -> String {
     let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-    file.strip_prefix(project)
-        .unwrap_or(&file)
-        .display()
-        .to_string()
+    crate::confirm::shown_path(file.strip_prefix(project).unwrap_or(&file))
+}
+
+/// What a declaration that runs in an OpenShell sandbox starts.
+///
+/// Its program is named as it is inside the image, so nothing on this machine is looked up for it.
+/// Why a declaration for OpenShell would be refused for what it shares of this machine, in the
+/// words a session refuses it with, or nothing where it shares nothing. One check, so `mcp add`
+/// refuses what a session would and no copy of it can drift.
+///
+/// Nothing that reaches a native server's environment or files is passed into the sandbox yet: a
+/// variable would travel on a command line, and a path on this machine means nothing in the image.
+pub fn shared_with_openshell(declaration: &Declaration) -> Result<(), String> {
+    match declaration {
+        Declaration::Stdio {
+            variables,
+            env,
+            reads,
+            directory,
+            ..
+        } => shares_nothing(variables, env, reads, directory.as_deref()),
+        _ => Ok(()),
+    }
+}
+
+fn shares_nothing(
+    variables: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+    reads: &[String],
+    directory: Option<&str>,
+) -> Result<(), String> {
+    if !variables.is_empty() || !env.is_empty() {
+        return Err(t!(servers_openshell_no_variables).to_string());
+    }
+    if !reads.is_empty() || directory.is_some() {
+        return Err(t!(servers_openshell_no_files).to_string());
+    }
+    Ok(())
+}
+
+fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, String> {
+    let Declaration::Stdio {
+        argv,
+        variables,
+        env,
+        reads,
+        directory,
+        tools,
+        exclude_tools,
+        ..
+    } = declaration
+    else {
+        return Err(problem(&mcp::Problem::Remote("backend")));
+    };
+    shares_nothing(variables, env, reads, directory.as_deref())?;
+    // An approval covers the reference as written, so one that names no digest, a tag or a path
+    // whose contents can change, would cover whatever it names later. Only `mcp add` pins one.
+    if !crate::images::Reference::parse(image).is_some_and(|reference| reference.digest.is_some()) {
+        return Err(t!(servers_openshell_unpinned, image = image).to_string());
+    }
+    let (program, arguments) = argv
+        .split_first()
+        .ok_or_else(|| problem(&mcp::Problem::Program))?;
+    Ok(Plan::OpenShell {
+        program: program.clone(),
+        arguments: arguments.to_vec(),
+        image: image.to_string(),
+        declared: declaration.digest(),
+        timeouts: declaration.timeouts(),
+        tools: tools.clone(),
+        exclude_tools: exclude_tools.clone(),
+        allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
+        ask_every_call: declaration.asks_every_call(),
+        choice_arguments: declaration.choice_arguments().clone(),
+    })
+}
+
+/// The hosts a server in an OpenShell sandbox may reach: the ones its declaration lists, less any
+/// the session's own list does not cover, and none where the session closes the network or the
+/// declaration lists none.
+#[cfg(unix)]
+fn openshell_hosts(
+    session: (bravebot_sandbox::network::Network, Option<&Hosts>),
+    declared: Option<&[String]>,
+) -> Vec<String> {
+    if session.0 == bravebot_sandbox::network::Network::Closed {
+        return Vec::new();
+    }
+    let Some(declared) = declared else {
+        return Vec::new();
+    };
+    let Some(hosts) = crate::confine::hosts_for_a_server(session.1, Some(declared)) else {
+        return Vec::new();
+    };
+    // An OpenShell policy can only allow, so a host the session denies any name of is left out
+    // whole. A denied entry that does not parse would be a denial lost, so nothing is granted.
+    let (denied, invalid) = bravebot_sandbox::hosts::HostList::parse(
+        [],
+        hosts.denied.iter().map(|host| host.entry.as_str()),
+    );
+    if !invalid.is_empty() {
+        return Vec::new();
+    }
+    hosts
+        .allowed
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|host| bravebot_sandbox::hosts::HostRule::parse(&host.entry))
+        .filter(|rule| !denied.denies_any_name_of(rule))
+        // As OpenShell spells it, lower case and with no trailing dot, and only what it takes: a
+        // name the session's list allows and OpenShell does not, with `_` in it, is left out alone.
+        .map(|rule| rule.spelling())
+        .filter(|spelling| bravebot_sandbox::openshell::accepts_host(spelling))
+        .collect()
 }
 
 /// What a declaration starts, read against this process's environment for the variables it names
@@ -866,6 +999,9 @@ fn planned(
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
+    if let bravebot_config::mcp::Backend::OpenShell { image } = declaration.backend() {
+        return planned_in_openshell(declaration, image);
+    }
     let (argv, names, env, reads, directory, tools, exclude_tools) = match declaration {
         Declaration::Http {
             url,
@@ -1186,6 +1322,14 @@ fn refused(managed: &Managed, plan: &Plan) -> Option<String> {
                 .collect();
             managed_refusal(managed, Server::Local(&argv))
         }
+        Plan::OpenShell {
+            program, arguments, ..
+        } => {
+            let argv: Vec<String> = std::iter::once(program.clone())
+                .chain(arguments.iter().cloned())
+                .collect();
+            managed_refusal(managed, Server::InImage(&argv))
+        }
         Plan::Http { url, .. } => managed_refusal(managed, Server::Remote(url)),
     }
 }
@@ -1201,6 +1345,12 @@ pub fn refused_declaration(
 ) -> Option<String> {
     match (planned(declaration, environment), declaration) {
         (Ok(plan), _) => refused(managed, &plan),
+        // One in an image is matched as one, whether or not it could be planned.
+        (Err(_), Declaration::Stdio { argv, .. })
+            if matches!(declaration.backend(), mcp::Backend::OpenShell { .. }) =>
+        {
+            managed_refusal(managed, Server::InImage(argv))
+        }
         (Err(_), Declaration::Stdio { argv, .. }) => managed_refusal(managed, Server::Local(argv)),
         (Err(_), Declaration::Http { url, .. }) => managed_refusal(managed, Server::Remote(url)),
     }
@@ -1556,6 +1706,9 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             }
         ));
     }
+    if let bravebot_config::mcp::Backend::OpenShell { image } = declaration.backend() {
+        lines.push(format!("{indent}{}", t!(mcp_openshell, image = image)));
+    }
     if !declaration.tools().is_empty() {
         lines.push(format!(
             "{indent}{}",
@@ -1612,26 +1765,28 @@ pub fn problem(found: &Problem) -> String {
         Problem::Program => t!(mcp_problem_program).to_string(),
         Problem::Name => t!(mcp_problem_name).to_string(),
         Problem::Env => t!(mcp_problem_env).to_string(),
-        Problem::Value(name) => t!(mcp_problem_value, name = name),
-        Problem::Twice(name) => t!(mcp_problem_twice, name = name),
+        Problem::Value(name) => t!(mcp_problem_value, name = shown(name)),
+        Problem::Twice(name) => t!(mcp_problem_twice, name = shown(name)),
         Problem::Reads => t!(mcp_problem_reads).to_string(),
         Problem::Directory => t!(mcp_problem_directory).to_string(),
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
-        Problem::Header(name) => t!(mcp_problem_header, name = name),
+        Problem::Header(name) => t!(mcp_problem_header, name = shown(name)),
         Problem::Remote(key) => t!(mcp_problem_remote, key = *key),
         Problem::Timeout(key) => t!(
             mcp_problem_timeout,
             key = *key,
             most = mcp::MAX_TIMEOUT_SECS
         ),
-        Problem::Tool(name) => t!(mcp_problem_tool, name = name),
+        Problem::Tool(name) => t!(mcp_problem_tool, name = shown(name)),
         Problem::Tools(key) => t!(mcp_problem_tools, key = *key),
         Problem::Hosts(entry) if entry.is_empty() => t!(mcp_problem_hosts_list).to_string(),
         Problem::Hosts(entry) => t!(mcp_problem_hosts, entry = shown(entry)),
         Problem::AskEveryCall => t!(mcp_problem_ask_every_call).to_string(),
         Problem::Choice => t!(mcp_problem_choice).to_string(),
         Problem::ChoiceWithoutAsking => t!(mcp_problem_choice_without_asking).to_string(),
+        Problem::Backend("image") => t!(mcp_problem_backend_image).to_string(),
+        Problem::Backend(_) => t!(mcp_problem_backend).to_string(),
     }
 }
 
@@ -1659,7 +1814,7 @@ pub fn record(
     crate::home::replace(&path, approvals.to_text()).map_err(|error| {
         t!(
             mcp_not_written,
-            path = path.display().to_string(),
+            path = crate::confirm::shown_path(&path),
             error = error.to_string()
         )
     })
@@ -1717,7 +1872,7 @@ pub fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
         "{indent}{}",
         t!(servers_fetches, runner = shown(&fetched.runner))
     )];
-    lines.extend(fetched.unpinned.map(|unpinned| {
+    lines.extend(fetched.unpinned.into_iter().map(|unpinned| {
         let line = match unpinned {
             Unpinned::Package(package) => t!(servers_unpinned, package = shown(&package)),
             Unpinned::Unread(flag) => t!(
@@ -1737,7 +1892,9 @@ pub fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
 struct Fetches {
     /// The runner, as the words it was invoked with.
     runner: String,
-    unpinned: Option<Unpinned>,
+    /// Each package the line installs that names no exact version, in the order the words name
+    /// them, then the flag the words could not be read past.
+    unpinned: Vec<Unpinned>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1755,25 +1912,498 @@ enum Unpinned {
 /// cannot say what the runner will find.
 fn fetches(argv: &[String]) -> Option<Fetches> {
     let program = Path::new(argv.first()?).file_stem()?.to_str()?;
-    let rest = &argv[1..];
-    let (runner, rest, ecosystem) = match (program, rest.first().map(String::as_str)) {
-        ("npx" | "bunx", _) => (program.to_string(), rest, Ecosystem::Node),
-        ("pnpm" | "yarn", Some("dlx")) => (format!("{program} dlx"), &rest[1..], Ecosystem::Node),
-        ("npm", Some("exec")) => ("npm exec".to_string(), &rest[1..], Ecosystem::Node),
-        ("uvx", _) => (program.to_string(), rest, Ecosystem::Python),
-        ("uv", Some("tool")) if rest.get(1).map(String::as_str) == Some("run") => {
-            ("uv tool run".to_string(), &rest[2..], Ecosystem::Python)
+    let invocation = Invocation::of(program)?;
+    let (runner, located, ecosystem) = match invocation.after_subcommand(&argv[1..]) {
+        Ok(Some(located)) => (invocation.runner.to_string(), located, invocation.ecosystem),
+        Ok(None) => return None,
+        Err(flag) => {
+            return Some(Fetches {
+                runner: invocation.runner.to_string(),
+                unpinned: vec![Unpinned::Unread(flag)],
+            });
         }
-        ("pipx", Some("run")) => ("pipx run".to_string(), &rest[1..], Ecosystem::Python),
-        _ => return None,
     };
-    let unpinned = match package(rest, ecosystem) {
-        Ok(package) => package
-            .filter(|package| !ecosystem.pinned(package))
-            .map(Unpinned::Package),
-        Err(flag) => Some(Unpinned::Unread(flag)),
-    };
+    let read = packages(located.rest, ecosystem, located.earlier);
+    let unpinned = read
+        .named
+        .into_iter()
+        .filter(|package| !ecosystem.pinned(package))
+        .map(Unpinned::Package)
+        .chain(read.unread.map(Unpinned::Unread))
+        .collect();
     Some(Fetches { runner, unpinned })
+}
+
+/// The options a program takes before the word that names what it does, as they are written
+/// (`-y`, `--yes`), split by whether the next word is their value.
+#[derive(Debug, Clone, Copy)]
+struct Globals {
+    switches: &'static [&'static str],
+    valued: &'static [&'static str],
+}
+
+/// How a program names a runner: the words after the program that name it, each with every
+/// spelling the program accepts for it, and the options it takes in front of each word.
+#[derive(Debug, Clone, Copy)]
+struct Invocation {
+    /// What the prompt calls the runner, whichever spelling was declared.
+    runner: &'static str,
+    ecosystem: Ecosystem,
+    words: &'static [&'static [&'static str]],
+    globals: Globals,
+}
+
+/// Options npm takes before its sub-command: every switch and valued option in npm's own
+/// definitions (`@npmcli/config`, npm 11.19), with the short forms and shorthands it resolves.
+const NPM_GLOBALS: Globals = Globals {
+    switches: &[
+        "--all",
+        "--allow-same-version",
+        "--allow-scripts-pending",
+        "--allow-scripts-pin",
+        "--audit",
+        "--bin-links",
+        "--browser",
+        "--bypass-2fa",
+        "--color",
+        "--commit-hooks",
+        "--dangerously-allow-all-scripts",
+        "--dd",
+        "--ddd",
+        "--desc",
+        "--description",
+        "--dev",
+        "--diff-ignore-all-space",
+        "--diff-name-only",
+        "--diff-no-prefix",
+        "--diff-text",
+        "--dry-run",
+        "--engine-strict",
+        "--expect-results",
+        "--force",
+        "--foreground-scripts",
+        "--format-package-lock",
+        "--fund",
+        "--git-tag-version",
+        "--global",
+        "--global-style",
+        "--help",
+        "--if-present",
+        "--ignore-scripts",
+        "--include-attestations",
+        "--include-staged",
+        "--include-workspace-root",
+        "--init-private",
+        "--install-links",
+        "--iwr",
+        "--json",
+        "--legacy-bundling",
+        "--legacy-peer-deps",
+        "--link",
+        "--local",
+        "--long",
+        "--no",
+        "--offline",
+        "--omit-lockfile-registry-resolved",
+        "--optional",
+        "--package-lock",
+        "--package-lock-only",
+        "--packages-all",
+        "--parseable",
+        "--porcelain",
+        "--prefer-dedupe",
+        "--prefer-offline",
+        "--prefer-online",
+        "--production",
+        "--progress",
+        "--provenance",
+        "--quiet",
+        "--read-only",
+        "--readonly",
+        "--rebuild-bundle",
+        "--save",
+        "--save-bundle",
+        "--save-dev",
+        "--save-exact",
+        "--save-optional",
+        "--save-peer",
+        "--save-prod",
+        "--shrinkwrap",
+        "--sign-git-commit",
+        "--sign-git-tag",
+        "--silent",
+        "--strict-allow-scripts",
+        "--strict-peer-deps",
+        "--strict-ssl",
+        "--timing",
+        "--unicode",
+        "--update-notifier",
+        "--usage",
+        "--verbose",
+        "--version",
+        "--versions",
+        "--workspaces",
+        "--workspaces-update",
+        "--ws",
+        "--yes",
+        "-?",
+        "-B",
+        "-D",
+        "-E",
+        "-H",
+        "-O",
+        "-P",
+        "-S",
+        "-a",
+        "-d",
+        "-dd",
+        "-ddd",
+        "-f",
+        "-g",
+        "-h",
+        "-l",
+        "-n",
+        "-p",
+        "-q",
+        "-s",
+        "-v",
+        "-y",
+    ],
+    valued: &[
+        "--_auth",
+        "--access",
+        "--allow-directory",
+        "--allow-file",
+        "--allow-git",
+        "--allow-remote",
+        "--allow-scripts",
+        "--also",
+        "--audit-level",
+        "--auth-type",
+        "--before",
+        "--ca",
+        "--cache",
+        "--cache-max",
+        "--cache-min",
+        "--cafile",
+        "--call",
+        "--cert",
+        "--cidr",
+        "--cpu",
+        "--depth",
+        "--diff",
+        "--diff-dst-prefix",
+        "--diff-src-prefix",
+        "--diff-unified",
+        "--editor",
+        "--enjoy-by",
+        "--expect-result-count",
+        "--expires",
+        "--fetch-retries",
+        "--fetch-retry-factor",
+        "--fetch-retry-maxtimeout",
+        "--fetch-retry-mintimeout",
+        "--fetch-timeout",
+        "--git",
+        "--globalconfig",
+        "--heading",
+        "--https-proxy",
+        "--include",
+        "--init-author-email",
+        "--init-author-name",
+        "--init-author-url",
+        "--init-license",
+        "--init-module",
+        "--init-type",
+        "--init-version",
+        "--install-strategy",
+        "--key",
+        "--libc",
+        "--local-address",
+        "--location",
+        "--lockfile-version",
+        "--loglevel",
+        "--logs-dir",
+        "--logs-max",
+        "--maxsockets",
+        "--message",
+        "--min-release-age",
+        "--min-release-age-exclude",
+        "--name",
+        "--node-gyp",
+        "--node-options",
+        "--noproxy",
+        "--omit",
+        "--only",
+        "--orgs",
+        "--orgs-permission",
+        "--os",
+        "--otp",
+        "--pack-destination",
+        "--package",
+        "--packages",
+        "--packages-and-scopes-permission",
+        "--password",
+        "--prefix",
+        "--preid",
+        "--provenance-file",
+        "--proxy",
+        "--reg",
+        "--registry",
+        "--replace-registry-host",
+        "--save-prefix",
+        "--sbom-format",
+        "--sbom-type",
+        "--scope",
+        "--scopes",
+        "--script-shell",
+        "--searchexclude",
+        "--searchlimit",
+        "--searchopts",
+        "--searchstaleness",
+        "--shell",
+        "--tag",
+        "--tag-version-prefix",
+        "--token-description",
+        "--umask",
+        "--user-agent",
+        "--userconfig",
+        "--viewer",
+        "--which",
+        "--workspace",
+        "-C",
+        "-L",
+        "-c",
+        "-m",
+        "-w",
+    ],
+};
+
+/// Options pnpm takes before its sub-command, from `pnpm --help` (pnpm 11.28).
+const PNPM_GLOBALS: Globals = Globals {
+    switches: &[
+        "-v",
+        "--version",
+        "-y",
+        "--yes",
+        "--ignore-workspace",
+        "--color",
+        "--no-progress",
+        "--stream",
+        "--aggregate-output",
+        "--use-stderr",
+        "-r",
+        "--recursive",
+        "-w",
+        "--workspace-root",
+        "--fail-if-no-match",
+        "--no-fail-if-no-match",
+        "--include-workspace-root",
+        "--no-include-workspace-root",
+        "--sort",
+        "--no-sort",
+        "--reverse",
+        "--parallel",
+        "-h",
+        "--help",
+    ],
+    valued: &[
+        "-C",
+        "--dir",
+        "--store-dir",
+        "--state-dir",
+        "--npmrc-auth-file",
+        "--userconfig",
+        "--workspace-packages",
+        "--registry",
+        "--https-proxy",
+        "--http-proxy",
+        "--no-proxy",
+        "--reporter",
+        "--loglevel",
+        "-F",
+        "--filter",
+        "--filter-prod",
+        "--test-pattern",
+        "--changed-files-ignore-pattern",
+        "--workspace-concurrency",
+    ],
+};
+
+/// Options uv takes before `tool` and `run`, written from the global options uv documents and not
+/// read from an installed uv. An option missing from this list makes the line read as unknown,
+/// which draws the more cautious prompt.
+const UV_GLOBALS: Globals = Globals {
+    switches: &[
+        "-q",
+        "--quiet",
+        "-v",
+        "--verbose",
+        "-n",
+        "--no-cache",
+        "--no-progress",
+        "--offline",
+        "--native-tls",
+        "--no-native-tls",
+        "--no-config",
+        "--isolated",
+        "--preview",
+        "--no-preview",
+        "--no-python-downloads",
+        "--managed-python",
+        "--no-managed-python",
+        "-h",
+        "--help",
+        "-V",
+        "--version",
+    ],
+    valued: &[
+        "--color",
+        "--cache-dir",
+        "--python-preference",
+        "--config-file",
+        "--directory",
+        "--project",
+        "--allow-insecure-host",
+    ],
+};
+
+/// Options pipx takes before `run`, written from the global options pipx documents and not read
+/// from an installed pipx. An option missing from this list makes the line read as unknown, which
+/// draws the more cautious prompt.
+const PIPX_GLOBALS: Globals = Globals {
+    switches: &[
+        "-q",
+        "--quiet",
+        "-v",
+        "--verbose",
+        "--global",
+        "-h",
+        "--help",
+        "--version",
+    ],
+    valued: &[],
+};
+
+/// A program whose options before its sub-command are not known, so that any option there is read
+/// as one this does not know.
+const NO_GLOBALS: Globals = Globals {
+    switches: &[],
+    valued: &[],
+};
+
+/// Where a runner's own words begin: the words after its sub-command, and the packages that
+/// package flags in front of the sub-command named.
+struct Located<'a> {
+    rest: &'a [String],
+    earlier: Vec<String>,
+}
+
+impl Invocation {
+    /// The runner a program of this name starts, if it starts one by itself or with a sub-command.
+    fn of(program: &str) -> Option<Self> {
+        let named = |runner, ecosystem, words, globals| Self {
+            runner,
+            ecosystem,
+            words,
+            globals,
+        };
+        Some(match program {
+            "npx" => named("npx", Ecosystem::Node, &[], NO_GLOBALS),
+            "bunx" => named("bunx", Ecosystem::Node, &[], NO_GLOBALS),
+            "pnpm" => named("pnpm dlx", Ecosystem::Node, &[&["dlx"]], PNPM_GLOBALS),
+            "yarn" => named("yarn dlx", Ecosystem::Node, &[&["dlx"]], NO_GLOBALS),
+            // `exe` and `exec` are the abbreviations npm resolves to `exec` (the word `ex` is
+            // ambiguous with `explain` and `explore`), and `x` is its alias.
+            "npm" => named(
+                "npm exec",
+                Ecosystem::Node,
+                &[&["exec", "exe", "x"]],
+                NPM_GLOBALS,
+            ),
+            "uvx" => named("uvx", Ecosystem::Python, &[], NO_GLOBALS),
+            "uv" => named(
+                "uv tool run",
+                Ecosystem::Python,
+                &[&["tool"], &["run"]],
+                UV_GLOBALS,
+            ),
+            "pipx" => named("pipx run", Ecosystem::Python, &[&["run"]], PIPX_GLOBALS),
+            _ => return None,
+        })
+    }
+
+    /// The words after the ones that name the runner, skipping the program's own options in front
+    /// of each. None where the words name something else. Err with the option where one this does
+    /// not know comes in front of a word that could be the one asked for, because it may take that
+    /// word as its value and then the line is not read.
+    ///
+    /// A package flag listed among the program's valued options (`npm --package=x exec`) names a
+    /// package like the same flag after the sub-command does, so its value is returned in
+    /// `earlier` and is not skipped.
+    fn after_subcommand<'a>(&self, arguments: &'a [String]) -> Result<Option<Located<'a>>, String> {
+        let mut rest = arguments;
+        let mut earlier = Vec::new();
+        for spellings in self.words {
+            loop {
+                let Some(word) = rest.first() else {
+                    return Ok(None);
+                };
+                if !word.starts_with('-') {
+                    if !spellings.contains(&word.as_str()) {
+                        return Ok(None);
+                    }
+                    rest = &rest[1..];
+                    break;
+                }
+                if word == "--" {
+                    return Ok(None);
+                }
+                let globals = self.globals;
+                let (flag, attached) = match word.split_once('=') {
+                    Some((flag, value)) => (flag, Some(value)),
+                    None => (word.as_str(), None),
+                };
+                if globals.valued.contains(&flag) && self.ecosystem.package_flags().contains(&flag)
+                {
+                    match attached {
+                        Some(value) => {
+                            earlier.push(value.to_string());
+                            rest = &rest[1..];
+                        }
+                        None => {
+                            earlier.extend(rest.get(1).cloned());
+                            rest = rest.get(2..).unwrap_or_default();
+                        }
+                    }
+                    continue;
+                }
+                let valued = globals.valued.contains(&word.as_str());
+                if word.contains('=')
+                    || globals.switches.contains(&word.as_str())
+                    || (!valued
+                        && !globals.switches.is_empty()
+                        && self.ecosystem == Ecosystem::Node
+                        && word.starts_with("--no-"))
+                {
+                    rest = &rest[1..];
+                } else if valued {
+                    rest = rest.get(2..).unwrap_or_default();
+                } else {
+                    let next_could_name_it = rest[1..]
+                        .iter()
+                        .take(2)
+                        .any(|next| spellings.contains(&next.as_str()));
+                    return if next_could_name_it {
+                        Err(word.clone())
+                    } else {
+                        Ok(None)
+                    };
+                }
+            }
+        }
+        Ok(Some(Located { rest, earlier }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1783,7 +2413,8 @@ enum Ecosystem {
 }
 
 impl Ecosystem {
-    /// The flags naming the package where it is not the first word.
+    /// The flags naming the package where it is not the first word. Once one is given, the first
+    /// word that is not a flag is the command to run in it.
     fn package_flags(self) -> &'static [&'static str] {
         match self {
             Self::Node => &["-p", "--package"],
@@ -1791,10 +2422,19 @@ impl Ecosystem {
         }
     }
 
+    /// The flags naming a package that is installed beside the one that runs, and so leave the
+    /// first word that is not a flag where it was.
+    fn added_package_flags(self) -> &'static [&'static str] {
+        match self {
+            Self::Node => &[],
+            Self::Python => &["--with", "-w"],
+        }
+    }
+
     /// The flags before the package that take no value.
     fn switches(self) -> &'static [&'static str] {
         match self {
-            Self::Node => &["-y", "--yes", "--no", "-q", "--quiet", "--bun"],
+            Self::Node => &["-y", "--yes", "--no", "-q", "--quiet", "--bun", "--offline"],
             Self::Python => &[
                 "-q",
                 "--quiet",
@@ -1813,15 +2453,7 @@ impl Ecosystem {
     fn valued(self) -> &'static [&'static str] {
         match self {
             Self::Node => &["--registry", "--cache", "--userconfig"],
-            Self::Python => &[
-                "--with",
-                "-w",
-                "--python",
-                "-p",
-                "--index",
-                "--index-url",
-                "-i",
-            ],
+            Self::Python => &["--python", "-p", "--index", "--index-url", "-i"],
         }
     }
 
@@ -1855,25 +2487,58 @@ fn release(version: &str) -> Option<usize> {
         .then_some(parts.len())
 }
 
-/// The package a runner's arguments name, or the flag before it that they cannot be read past.
+/// What a runner's arguments name: every package the line installs, and the flag before the
+/// command that they cannot be read past.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Packages {
+    named: Vec<String>,
+    unread: Option<String>,
+}
+
+/// Every package a runner's arguments name, or the flag before the command that they cannot be read
+/// past.
+///
+/// `earlier` is the packages that package flags in front of the runner's sub-command named. A
+/// package flag (`-p`, `--package`, `--from`, `--spec`) names a package each time it is given,
+/// and once one is given, there or here, the first word that is not a flag is the command to run
+/// in it. With none,
+/// that word is the package. A flag that adds a package beside the one that runs (`--with`) names
+/// one and leaves that word where it was. Over-naming a word that turns out not to be a package
+/// costs the person one more line at the question, and leaving one out draws a floating package as
+/// pinned, so the reading names a word where it is not sure.
 ///
 /// A flag this does not know may take the next word as its value, and then that word is not the
 /// package: guessing either way could name a pinned word and leave the package unnamed.
-fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>, String> {
+fn packages(arguments: &[String], ecosystem: Ecosystem, earlier: Vec<String>) -> Packages {
+    let mut flagged = !earlier.is_empty();
+    let mut read = Packages {
+        named: earlier,
+        unread: None,
+    };
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
         let (flag, value) = match word.split_once('=') {
             Some((flag, value)) if flag.starts_with('-') => (flag, Some(value)),
             _ => (word.as_str(), None),
         };
-        if ecosystem.package_flags().contains(&flag) {
-            return Ok(value.map(str::to_string).or_else(|| words.next().cloned()));
+        let named = ecosystem.package_flags().contains(&flag);
+        if named || ecosystem.added_package_flags().contains(&flag) {
+            flagged |= named;
+            read.named
+                .extend(value.map(str::to_string).or_else(|| words.next().cloned()));
+            continue;
         }
         if word == "--" {
-            return Ok(words.next().cloned());
+            if !flagged {
+                read.named.extend(words.next().cloned());
+            }
+            return read;
         }
         if !word.starts_with('-') {
-            return Ok(Some(word.clone()));
+            if !flagged {
+                read.named.push(word.clone());
+            }
+            return read;
         }
         if value.is_some() || ecosystem.switches().contains(&flag) {
             continue;
@@ -1882,9 +2547,10 @@ fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>,
             words.next();
             continue;
         }
-        return Err(word.clone());
+        read.unread = Some(word.clone());
+        return read;
     }
-    Ok(None)
+    read
 }
 
 /// Start every planned server, and wait for each handshake for the startup bound its declaration
@@ -1990,7 +2656,7 @@ fn start_under(
                             t!(
                                 servers_no_home,
                                 alias = alias,
-                                path = place.display().to_string(),
+                                path = crate::confirm::shown_path(&place),
                                 reason = error.to_string()
                             )
                             .to_string(),
@@ -2059,7 +2725,7 @@ fn start_under(
                     let outcome = handshake_local(
                         server,
                         declared,
-                        effective,
+                        Some(effective),
                         timeouts,
                         &tools,
                         &exclude_tools,
@@ -2075,6 +2741,74 @@ fn start_under(
                     });
                     let _ = sender.send((alias, outcome, None));
                 });
+            }
+            Plan::OpenShell {
+                program,
+                arguments,
+                image,
+                declared,
+                timeouts,
+                tools,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call,
+                choice_arguments,
+            } => {
+                #[cfg(not(unix))]
+                {
+                    let _ = (program, arguments, image, declared, tools, exclude_tools);
+                    let _ = (allowed_hosts, ask_every_call, choice_arguments, timeouts);
+                    notes.push(t!(servers_openshell_unsupported, alias = alias).to_string());
+                    continue;
+                }
+                #[cfg(unix)]
+                {
+                    sweep_openshell(home, notes);
+                    let ledger = openshell_ledger(home);
+                    let hosts = openshell_hosts(session, allowed_hosts.as_deref());
+                    waiting.push(wait_for(&alias, timeouts));
+                    std::thread::spawn(move || {
+                        // The sandbox is held by the server from here, so a start or a handshake
+                        // that fails drops it, and the sandbox goes with it.
+                        let outcome = start_in_openshell(
+                            &alias,
+                            &program,
+                            &arguments,
+                            &image,
+                            &hosts,
+                            diagnostics,
+                            ledger.as_ref(),
+                        )
+                        .and_then(|(server, sandbox, name)| {
+                            let started = t!(
+                                servers_openshell_started,
+                                alias = &alias,
+                                name = &name,
+                                image = &image
+                            )
+                            .to_string();
+                            let shown = crate::mcp::Sandboxed { name, image, hosts };
+                            handshake_local(
+                                server,
+                                declared,
+                                None,
+                                timeouts,
+                                &tools,
+                                &exclude_tools,
+                            )
+                            .map(|reached| {
+                                reached
+                                    .in_a_sandbox_for_manifest_runs(sandbox, shown)
+                                    .asking_every_call(ask_every_call)
+                                    .choosing(choice_arguments)
+                                    .noting(vec![started])
+                            })
+                        });
+                        // A session that stopped waiting has no use for the server, and dropping
+                        // it here removes its sandbox.
+                        sender.send((alias, outcome, None)).ok();
+                    });
+                }
             }
             Plan::Http {
                 url,
@@ -2143,6 +2877,11 @@ fn start_under(
                 started.push(server);
             }
             (Err(_), Some(hop)) => hops.push(hop),
+            // Only a server started on its own thread, as one in an OpenShell sandbox is, can be
+            // refused its confinement after the loop has moved on.
+            (Err(bravebot_mcp::McpError::Confinement(reason)), None) => {
+                notes.push(t!(servers_not_confined, alias = alias, reason = reason).to_string())
+            }
             (Err(error), None) => notes.push(
                 t!(
                     servers_no_handshake,
@@ -2172,6 +2911,71 @@ fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
     )
 }
 
+/// The file in the state directory that records the OpenShell sandboxes this machine made.
+#[cfg(unix)]
+const OPENSHELL_LEDGER: &str = "openshell-sandboxes";
+
+/// The record of the OpenShell sandboxes this machine made, in `home` where it may be written.
+/// Nowhere to write, as in an incognito session, means nothing recorded or swept.
+#[cfg(unix)]
+fn openshell_ledger(home: &Home) -> Option<bravebot_sandbox::openshell::Ledger> {
+    home.directory
+        .as_ref()
+        .filter(|_| home.writable)
+        .map(|directory| bravebot_sandbox::openshell::Ledger::at(directory.join(OPENSHELL_LEDGER)))
+}
+
+/// Once a process, before its first sandbox: delete the recorded sandboxes a process killed by a
+/// signal left behind, since the session that made them never will, and say which.
+#[cfg(unix)]
+fn sweep_openshell(home: &Home, notes: &mut Vec<String>) {
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| {
+        if let Some(Ok(removed)) = openshell_ledger(home).map(|ledger| ledger.remove_left_behind())
+            && !removed.is_empty()
+        {
+            notes.push(t!(servers_openshell_removed, names = removed.join(", ")).to_string());
+        }
+    });
+}
+
+/// Start `program` in a new OpenShell sandbox made from `image`, reaching `hosts` alone, and give
+/// back the server, the sandbox it holds and the sandbox's name. Run on the server's own thread:
+/// creating a sandbox and confirming its policy take seconds, which the declaration's startup bound
+/// covers and no other server waits on. A sandbox that cannot be recorded or made is refused as a
+/// confinement that failed.
+#[cfg(unix)]
+fn start_in_openshell(
+    alias: &str,
+    program: &str,
+    arguments: &[String],
+    image: &str,
+    hosts: &[String],
+    diagnostics: Stream,
+    ledger: Option<&bravebot_sandbox::openshell::Ledger>,
+) -> McpResult<(StdioServer, Box<dyn std::any::Any + Send + Sync>, String)> {
+    let name = bravebot_sandbox::openshell::next_name();
+    if let Some(ledger) = ledger {
+        ledger.record(&name).map_err(|error| {
+            bravebot_mcp::McpError::Confinement(format!(
+                "the sandbox could not be recorded: {error}"
+            ))
+        })?;
+    }
+    let sandbox = bravebot_sandbox::openshell::OpenShell::new(&name, image, hosts)
+        .map_err(|error| bravebot_mcp::McpError::Confinement(error.to_string()))?;
+    let server = StdioServer::launch(
+        alias,
+        program,
+        arguments,
+        Variables::new(),
+        &sandbox,
+        &bravebot_sandbox::policy::SandboxPolicy::strict(),
+        diagnostics,
+    )?;
+    Ok((server, Box::new(sandbox), name))
+}
+
 /// A local server's handshake, and then its list, each within the startup bound it was given.
 ///
 /// A request that is not answered in time stops the process. Once the handshake is done the server
@@ -2179,7 +2983,7 @@ fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
 fn handshake_local(
     mut server: StdioServer,
     declared: Digest,
-    confined_by: EffectivePolicy,
+    confined_by: Option<EffectivePolicy>,
     timeouts: Timeouts,
     tools: &[String],
     exclude_tools: &[String],
@@ -2191,13 +2995,14 @@ fn handshake_local(
         bravebot_mcp::listed_or_none(&alias, server.list_tools())?.filtered(tools, exclude_tools);
     let (prompts, notes) = prompts_or_none(&alias, server.list_prompts())?;
     server.set_bound(timeouts.tool());
-    Ok(
-        crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
-            .filtered_by(tools, exclude_tools)
-            .confined_by(confined_by)
-            .with_prompts(prompts)
-            .noting(notes),
-    )
+    let reached = crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
+        .filtered_by(tools, exclude_tools)
+        .with_prompts(prompts)
+        .noting(notes);
+    Ok(match confined_by {
+        Some(policy) => reached.confined_by(policy),
+        None => reached,
+    })
 }
 
 /// A remote server's handshake, through the one egress gate every request passes, with where it
@@ -2264,7 +3069,7 @@ fn handshake_at(
     exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
     let mut server = HttpServer::new(alias, url)
-        .with_headers(headers)
+        .with_headers(headers.clone())
         .starting_within(timeouts.startup());
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
     let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?
@@ -2274,6 +3079,7 @@ fn handshake_at(
     Ok(
         crate::mcp::Reached::new(Connection::Http(server), listing, declared)
             .filtered_by(tools, exclude_tools)
+            .sending(headers)
             .with_prompts(prompts)
             .noting(notes),
     )
@@ -2383,9 +3189,10 @@ pub struct EffectivePolicy {
     /// Every path that was wanted and is not in `rows` because this platform names no path that is
     /// not on disk, and this one was not (SANDBOX-9).
     pub left_out: Vec<PathBuf>,
-    /// Whether a write row stops short of a `.git` beneath it, which macOS does for a policy that
-    /// grants any write and does not lift it (SANDBOX-14). A row says `write` and a write there is
-    /// still refused, so this is part of what the rows mean.
+    /// Whether a write row stops short of the protected names beneath it, which macOS does for a
+    /// policy that grants any write and does not lift it (SANDBOX-14). A row says `write` and a
+    /// write to a `.git`, `.bravebot`, `.husky`, `.gitmodules`, `.gitconfig` or
+    /// `.pre-commit-config.yaml` there is still refused, so this is part of what the rows mean.
     pub git_held_back: bool,
 }
 
@@ -2579,6 +3386,7 @@ fn confinement_here(
         own,
         &temporary_directory(),
         crate::home::profile().as_deref(),
+        crate::home::directory().as_deref(),
         developer_directory().as_deref(),
     )
 }
@@ -2645,13 +3453,14 @@ fn confinement(
     own: &Path,
     temporary: &Path,
     home: Option<&Path>,
+    moved: Option<&Path>,
     developer: Option<&Path>,
 ) -> Option<SandboxPolicy> {
     let mut policy = base(prelude?, temporary, developer, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
-    for directory in crate::confine::server_program_reads(program, searched, home) {
+    for directory in crate::confine::server_program_reads(program, searched, home, moved) {
         policy = policy.allow_read(directory);
     }
     // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by
@@ -2724,6 +3533,152 @@ mod tests {
         declarations.insert("weather", &declaration);
         std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
         (home, project, declaration)
+    }
+
+    /// The reason an approval was not recorded names the approvals file as `shown_path` draws it. The
+    /// state directory comes from the environment, so a control character in it would otherwise
+    /// reach the terminal the reason is printed to.
+    #[test]
+    fn the_path_in_an_approval_that_was_not_recorded_is_drawn() {
+        let root = scratch("record-path-drawn");
+        let missing = root.join("state\u{1b}[2Jdir");
+        let mut approvals = Approvals::default();
+        let declaration =
+            Declaration::stdio(words(&["weather-mcp"]), Vec::new(), None).expect("declaration");
+        let reason = record(
+            &missing,
+            &Declarations::default(),
+            &mut approvals,
+            "weather",
+            &declaration,
+        )
+        .expect_err("the directory is not there, so nothing is written");
+        assert!(
+            !reason.chars().any(char::is_control),
+            "a control character reached the reason: {reason:?}"
+        );
+        assert!(
+            reason.contains("state\u{241b}[2Jdir"),
+            "the path is drawn with the picture of the control character: {reason:?}"
+        );
+    }
+
+    /// The note for declarations that cannot be read names the file as `shown_path` draws it, since
+    /// the state directory comes from the environment.
+    #[cfg(unix)]
+    #[test]
+    fn the_path_in_a_note_about_unreadable_declarations_is_drawn() {
+        let root = scratch("unreadable-path-drawn");
+        let home = root.join("state\u{1b}[2Jdir");
+        std::fs::create_dir_all(mcp::declarations_file(&home)).expect("a directory for a file");
+        let bin = root.join("bin");
+        installed(&bin, "weather-mcp");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+
+        let settled = settled(&home, &project, Asking::Person, true, true, "", &bin);
+
+        assert!(settled.plans.is_empty());
+        let note = settled.notes.join("\n");
+        assert!(
+            !note.chars().any(|c| c.is_control() && c != '\n'),
+            "a control character reached the note: {note:?}"
+        );
+        assert!(note.contains("state\u{241b}[2Jdir"), "{note:?}");
+    }
+
+    /// The note for a server whose own directory could not be made names the directory as
+    /// `shown_path` draws it. The state directory, and the system temporary directory a throwaway
+    /// one is made in, come from the environment, so a control character in either would otherwise
+    /// reach the terminal the note is printed to.
+    ///
+    /// Rejects the note naming the directory as the file system spells it.
+    #[cfg(unix)]
+    #[test]
+    fn the_path_in_a_note_about_a_server_directory_that_could_not_be_made_is_drawn() {
+        let root = scratch("server-home-path-drawn");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let state = root.join("state\u{1b}[2J\u{202e}dir");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::write(state.join("mcp-home"), "").expect("a file where the directory goes");
+        let program = installed(&root.join("bin"), "weather-mcp");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: Some(state),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work),
+            declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, None),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert!(started.is_empty(), "the server started: {notes:?}");
+        let note = notes.join("\n");
+        assert!(
+            note.contains("mcp-home"),
+            "no note named the directory: {note:?}"
+        );
+        assert!(
+            !note.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "a character a terminal acts on reached the note: {note:?}"
+        );
+        assert!(note.contains("state\u{241b}[2J"), "{note:?}");
+    }
+
+    /// A checkout can make `.bravebot/settings.json` a link to a file inside it whose name holds
+    /// control characters, and the question names the file the link leads to. The question is
+    /// printed to the terminal as it is, so the name is drawn when it is made.
+    ///
+    /// Rejects `named` returning the followed name as the file system spells it.
+    #[cfg(unix)]
+    #[test]
+    fn the_settings_file_a_question_names_is_drawn_when_a_link_leads_to_an_odd_name() {
+        let root = scratch("named-odd-file");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let project = project.canonicalize().expect("project resolved");
+        let target = project.join("odd\u{1b}[2J\u{202e}.json");
+        std::fs::write(&target, "{}").expect("the file the link leads to");
+        let link = project.join(".bravebot").join("settings.json");
+        std::os::unix::fs::symlink(&target, &link).expect("a link to it");
+
+        let said = named(&link, &project);
+
+        assert!(said.contains("odd"), "{said:?}");
+        assert!(
+            !said.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "a character a terminal acts on reached the name: {said:?}"
+        );
+        assert_eq!(
+            named(&project.join(".bravebot/absent.json"), &project),
+            ".bravebot/absent.json"
+        );
     }
 
     struct Settled {
@@ -3006,6 +3961,48 @@ mod tests {
         std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("approve");
         let path = PathBuf::from(std::env::join_paths([&planted, &real]).expect("PATH"));
 
+        let settled = settled(&home, &project, Asking::OneShot, false, true, "", &path);
+
+        assert_eq!(started(&settled), vec!["weather"]);
+        let Some((_, Plan::Stdio { program, .. })) = settled.plans.first() else {
+            panic!("a stdio plan");
+        };
+        assert_eq!(program, &genuine);
+    }
+
+    /// A session opened in a subdirectory leaves out the checkout holding it
+    /// ([`bravebot_sandbox::programs::with_checkout`]), so a name approved while it resolved to an
+    /// installed program does not start a file planted in that checkout's `bin` ahead of it. The
+    /// installation sits under the same repository's `target/` as the fixture and outside the
+    /// fixture's checkout, and is still found. Rejects a record of the session directory alone,
+    /// which starts the planted file, and one that leaves out every ancestor of the directory,
+    /// which loses the installation.
+    #[test]
+    fn an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session() {
+        let (home, project, declaration) = declared("cli-servers-checkout", &["weather-mcp"]);
+        let root = home.parent().unwrap();
+        // The scratch directory is under this repository, so the fixture needs a `.git` of its own
+        // for the checkout the session was opened in.
+        let checkout = root.join("checkout");
+        let session = checkout.join("sub");
+        std::fs::create_dir_all(checkout.join(".git")).expect("checkout");
+        std::fs::create_dir_all(&session).expect("session");
+        let real = root.join("real-bin");
+        let genuine = installed(&real, "weather-mcp");
+        installed(&checkout.join("bin"), "weather-mcp");
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", declaration.digest());
+        std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("approve");
+        let path = PathBuf::from(
+            std::env::join_paths([checkout.join("bin"), real.clone()]).expect("PATH"),
+        );
+
+        // What a session opened in `session` records, in the test's list of its own.
+        STAGE_WRITABLE.with(|writable| {
+            writable
+                .borrow_mut()
+                .extend(bravebot_sandbox::programs::with_checkout(&session))
+        });
         let settled = settled(&home, &project, Asking::OneShot, false, true, "", &path);
 
         assert_eq!(started(&settled), vec!["weather"]);
@@ -3582,6 +4579,134 @@ mod tests {
                 None,
             ),
             (&["pipx", "install", "server"][..], None, None),
+            (
+                &["npm", "x", "-y", "evil@latest"][..],
+                Some("npm exec"),
+                unpinned("evil@latest"),
+            ),
+            (
+                &["npm", "x", "-y", "--offline", "-p", "evil@latest", "bin"][..],
+                Some("npm exec"),
+                unpinned("evil@latest"),
+            ),
+            (
+                &["npm", "x", "-y", "evil@1.0.0"][..],
+                Some("npm exec"),
+                None,
+            ),
+            (
+                &[
+                    "npm",
+                    "--loglevel=silent",
+                    "exe",
+                    "-y",
+                    "-p",
+                    "evil@latest",
+                    "bin",
+                ][..],
+                Some("npm exec"),
+                unpinned("evil@latest"),
+            ),
+            (
+                &["npm", "--loglevel", "silent", "exec", "evil"][..],
+                Some("npm exec"),
+                unpinned("evil"),
+            ),
+            (
+                &["npm", "--no-audit", "-C", "app", "x", "evil"][..],
+                Some("npm exec"),
+                unpinned("evil"),
+            ),
+            (
+                &["npm", "--noproxy", "example.com", "exec", "evil@1.0.0"][..],
+                Some("npm exec"),
+                None,
+            ),
+            (
+                &["pnpm", "--no-proxy", "example.com", "dlx", "server@1.0.0"][..],
+                Some("pnpm dlx"),
+                None,
+            ),
+            (
+                &["npm", "--unheard-of", "x", "evil@latest"][..],
+                Some("npm exec"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (&["npm", "--unheard-of", "install", "evil"][..], None, None),
+            (&["npm", "install", "x", "evil"][..], None, None),
+            (&["npm", "ex", "evil"][..], None, None),
+            (&["npm", "x"][..], Some("npm exec"), None),
+            (
+                &["pnpm", "--dir", "app", "dlx", "server"][..],
+                Some("pnpm dlx"),
+                unpinned("server"),
+            ),
+            (
+                &["pnpm", "--loglevel=silent", "-y", "dlx", "server@1.0.0"][..],
+                Some("pnpm dlx"),
+                None,
+            ),
+            (
+                &["pnpm", "--unheard-of", "dlx", "server"][..],
+                Some("pnpm dlx"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (&["pnpm", "exec", "server"][..], None, None),
+            (
+                &["yarn", "--unheard-of", "dlx", "server"][..],
+                Some("yarn dlx"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (
+                &["uv", "--quiet", "tool", "run", "server"][..],
+                Some("uv tool run"),
+                unpinned("server"),
+            ),
+            (
+                &[
+                    "uv",
+                    "--color",
+                    "never",
+                    "tool",
+                    "--offline",
+                    "run",
+                    "server==1.0.0",
+                ][..],
+                Some("uv tool run"),
+                None,
+            ),
+            (
+                &["uv", "--unheard-of", "tool", "run", "server"][..],
+                Some("uv tool run"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (&["uv", "tool", "install", "server"][..], None, None),
+            (&["uv", "pip", "install", "server"][..], None, None),
+            (
+                &["pipx", "--quiet", "run", "server"][..],
+                Some("pipx run"),
+                unpinned("server"),
+            ),
+            (
+                &["pipx", "--unheard-of", "run", "server"][..],
+                Some("pipx run"),
+                Some(Unpinned::Unread("--unheard-of".to_string())),
+            ),
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"][..],
+                Some("npx"),
+                unpinned("evil"),
+            ),
+            (
+                &["npx", "-p", "a@1.0.0", "-p", "b@1.0.0", "bin"][..],
+                Some("npx"),
+                None,
+            ),
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil"][..],
+                Some("npx"),
+                unpinned("evil"),
+            ),
             (&["weather-mcp", "--stdio"][..], None, None),
             (&["node", "server.js"][..], None, None),
         ] {
@@ -3591,7 +4716,156 @@ mod tests {
                 runner,
                 "{argv:?}"
             );
-            assert_eq!(found.and_then(|found| found.unpinned), expected, "{argv:?}");
+            assert_eq!(
+                found.map(|found| found.unpinned).unwrap_or_default(),
+                expected.into_iter().collect::<Vec<_>>(),
+                "{argv:?}"
+            );
+        }
+    }
+
+    /// A line that installs several packages names each one that floats, and the prompt draws
+    /// each of them (SERVERS-6).
+    #[test]
+    fn every_package_a_runner_line_installs_is_read_and_each_unpinned_one_is_named() {
+        let package = |package: &str| Unpinned::Package(package.to_string());
+        for (argv, expected) in [
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &["npx", "-y", "-p", "evil", "-p", "good@1.2.3", "bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &[
+                    "npx",
+                    "-p",
+                    "a@latest",
+                    "--package=b",
+                    "-p",
+                    "c@1.0.0",
+                    "bin",
+                ][..],
+                vec![package("a@latest"), package("b")],
+            ),
+            (
+                &[
+                    "npx",
+                    "--offline",
+                    "-y",
+                    "-p",
+                    "a@1.0.0",
+                    "-p",
+                    "b@2.0.0",
+                    "b-bin",
+                ][..],
+                vec![],
+            ),
+            // Once a package flag is given the next word is the command, not a package.
+            (&["npx", "-y", "-p", "good@1.2.3", "serve"][..], vec![]),
+            (
+                &["npx", "-y", "-p", "good@1.2.3", "-p", "evil"][..],
+                vec![package("evil")],
+            ),
+            // What follows the command belongs to the command.
+            (
+                &["npx", "-p", "good@1.2.3", "serve", "-p", "evil"][..],
+                vec![],
+            ),
+            (
+                &["npm", "x", "-y", "-p", "good@1.2.3", "-p", "evil", "bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &["pnpm", "dlx", "-p", "good@1.2.3", "-p", "evil", "bin"][..],
+                vec![package("evil")],
+            ),
+            (
+                &["yarn", "dlx", "-p", "good@1.2.3", "-p", "evil", "bin"][..],
+                vec![package("evil")],
+            ),
+            (&["npx", "--", "server"][..], vec![package("server")]),
+            // A flag that cannot be read past is named after the packages read before it.
+            (
+                &[
+                    "npx",
+                    "-p",
+                    "evil",
+                    "--prefer-offline",
+                    "-p",
+                    "good@1.0.0",
+                    "bin",
+                ][..],
+                vec![
+                    package("evil"),
+                    Unpinned::Unread("--prefer-offline".to_string()),
+                ],
+            ),
+            // `uvx --from` and `--spec` repeat, and `--with` packages are installed too.
+            (
+                &["uvx", "--from", "a==1.0.0", "--from", "b", "serve"][..],
+                vec![package("b")],
+            ),
+            (
+                &["uvx", "--spec", "a==1.0.0", "--from=b>=1", "serve"][..],
+                vec![package("b>=1")],
+            ),
+            (
+                &["uvx", "--with", "helper", "server==1.0.0"][..],
+                vec![package("helper")],
+            ),
+            (
+                &["uvx", "--with", "helper", "--with=other>=2", "server"][..],
+                vec![package("helper"), package("other>=2"), package("server")],
+            ),
+            (
+                &[
+                    "uvx",
+                    "--with",
+                    "helper==1.0.0",
+                    "--from",
+                    "tool>=1",
+                    "serve",
+                ][..],
+                vec![package("tool>=1")],
+            ),
+            (
+                &["uvx", "--with", "helper==1.0.0", "server==1.0.0"][..],
+                vec![],
+            ),
+            // `-w` is read as `--with`, so its package is named and the main one stays pinned.
+            (
+                &["uvx", "-w", "helper", "server==1.0.0"][..],
+                vec![package("helper")],
+            ),
+            // A `--package` in front of npm's sub-command names a package, and the word after the
+            // sub-command is then the command to run in it.
+            (
+                &["npm", "--package=evil@latest", "x", "bin"][..],
+                vec![package("evil@latest")],
+            ),
+            (
+                &["npm", "--package", "evil@latest", "exec", "bin"][..],
+                vec![package("evil@latest")],
+            ),
+            (
+                &[
+                    "npm",
+                    "--package",
+                    "good@1.2.3",
+                    "exec",
+                    "--package",
+                    "evil",
+                    "bin",
+                ][..],
+                vec![package("evil")],
+            ),
+            (&["npm", "--package=good@1.2.3", "exec", "bin"][..], vec![]),
+        ] {
+            let found = fetches(&words(argv)).expect("a runner");
+            assert_eq!(found.unpinned, expected, "{argv:?}");
         }
     }
 
@@ -3615,6 +4889,106 @@ mod tests {
             lines.contains(
                 &t!(servers_unpinned, package = "@dangahagan/weather-mcp@latest").as_str()
             ),
+            "{lines:?}"
+        );
+    }
+
+    /// A floating package behind a pinned one is what the prompt exists to show: reading only the
+    /// first package would call the line pinned (SERVERS-6).
+    #[test]
+    fn a_runner_line_that_installs_two_packages_draws_the_one_that_floats() {
+        let argv = words(&["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"]);
+        let declaration = Declaration::stdio(argv, Vec::new(), None).expect("declaration");
+        let lines: Vec<String> = fetching("weather", &declaration)
+            .iter()
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                t!(servers_fetches, runner = "npx").to_string(),
+                t!(servers_unpinned, package = "evil").to_string(),
+            ]
+        );
+
+        let argv = words(&["npx", "-p", "a@latest", "-p", "b", "-p", "c@1.0.0", "bin"]);
+        let declaration = Declaration::stdio(argv, Vec::new(), None).expect("declaration");
+        let lines: Vec<String> = fetching("weather", &declaration)
+            .iter()
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                t!(servers_fetches, runner = "npx").to_string(),
+                t!(servers_unpinned, package = "a@latest").to_string(),
+                t!(servers_unpinned, package = "b").to_string(),
+            ]
+        );
+    }
+
+    /// A person who writes `npm x` runs a package from the registry as `npm exec` does, so the
+    /// prompt must draw it as a runner; `npm install` fetches nothing to run and must not be
+    /// (SERVERS-6).
+    #[test]
+    fn an_npm_alias_is_drawn_as_the_npm_exec_runner_it_is_and_install_is_not() {
+        let lines_of = |argv: &[&str]| -> Vec<String> {
+            let declaration =
+                Declaration::stdio(words(argv), Vec::new(), None).expect("declaration");
+            fetching("weather", &declaration)
+                .iter()
+                .map(|line| line.trim().to_string())
+                .collect()
+        };
+        assert_eq!(
+            lines_of(&["npm", "x", "-y", "evil@latest"]),
+            vec![
+                t!(servers_fetches, runner = "\"npm exec\"").to_string(),
+                t!(servers_unpinned, package = "evil@latest").to_string(),
+            ]
+        );
+        assert_eq!(
+            lines_of(&[
+                "npm",
+                "--loglevel=silent",
+                "exe",
+                "-y",
+                "-p",
+                "evil@latest",
+                "bin"
+            ]),
+            vec![
+                t!(servers_fetches, runner = "\"npm exec\"").to_string(),
+                t!(servers_unpinned, package = "evil@latest").to_string(),
+            ]
+        );
+        assert!(lines_of(&["npm", "install", "x", "evil@latest"]).is_empty());
+    }
+
+    /// The question a person answers is where the unpinned package has to be visible, so the line
+    /// naming it must reach the prompt and not only the unit that reads the command (SERVERS-6).
+    #[test]
+    fn a_runner_line_with_two_packages_draws_the_unpinned_one_at_the_question() {
+        let (home, project, _) = declared(
+            "cli-servers-runner-two",
+            &["npx", "-y", "-p", "good@1.2.3", "-p", "evil", "evil-bin"],
+        );
+        let bin = home.parent().unwrap().join("bin");
+        installed(&bin, "npx");
+
+        let settled = settled(&home, &project, Asking::Person, true, true, "3\n", &bin);
+
+        let lines: Vec<&str> = settled.screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_fetches, runner = "npx").as_str()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&t!(servers_unpinned, package = "evil").as_str()),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.contains(&t!(servers_unpinned, package = "good@1.2.3").as_str()),
             "{lines:?}"
         );
     }
@@ -3760,6 +5134,44 @@ mod tests {
         policy.writable.iter().any(|grant| grant.path == path)
     }
 
+    /// SANDBOX-12, #2917: a local server's confinement carries the state directory in force, so a
+    /// program directory inside it, or one that holds it, is not read where `BRAVEBOT_HOME` moved
+    /// it out of `~/.bravebot`. The regression it rejects: `confinement` passing no state directory
+    /// on to the program's reads, which reads the moved directory with its program. The call with
+    /// no state directory is the control that the directories are read.
+    #[test]
+    fn a_servers_confinement_does_not_read_a_state_directory_that_is_moved() {
+        let root = scratch("cli-servers-moved-state");
+        let home = root.join("home");
+        let moved = root.join("outer/state");
+        let program = installed(&moved.join("bin"), "tool");
+        std::fs::create_dir_all(&home).expect("home");
+        let kept = root.join("kept");
+        std::fs::create_dir_all(&kept).expect("the server's own directory");
+        let policy = |state: Option<&Path>| {
+            confinement(
+                Some(Prelude::MacOs),
+                &program,
+                &[moved.join("bin"), root.join("outer")],
+                &[],
+                None,
+                &kept,
+                &root.join("tmp"),
+                Some(&home),
+                state,
+                None,
+            )
+            .expect("a policy")
+        };
+
+        let without = policy(None);
+        assert!(reads(&without, &moved.join("bin")), "the control");
+        assert!(reads(&without, &root.join("outer")), "the control");
+        let with = policy(Some(&moved));
+        assert!(!reads(&with, &moved.join("bin")));
+        assert!(!reads(&with, &root.join("outer")));
+    }
+
     #[test]
     fn a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory() {
         let root = scratch("cli-servers-confinement");
@@ -3788,6 +5200,7 @@ mod tests {
             &kept,
             &temporary,
             Some(&home),
+            None,
             None,
         )
         .expect("a policy");
@@ -3828,6 +5241,7 @@ mod tests {
             &temporary,
             Some(&home),
             None,
+            None,
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
@@ -3841,6 +5255,7 @@ mod tests {
                 &kept,
                 &temporary,
                 Some(&home),
+                None,
                 None,
             )
             .is_none()
@@ -3868,6 +5283,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&linked),
+            None,
             None,
         )
         .expect("a policy");
@@ -3929,6 +5345,7 @@ mod tests {
             &root.join("tmp"),
             Some(&home),
             None,
+            None,
         )
         .expect("a policy");
 
@@ -3981,6 +5398,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&home),
+            None,
             None,
         )
         .expect("a policy");
@@ -4133,6 +5551,7 @@ mod tests {
                 &root.join("kept"),
                 &root.join("tmp"),
                 Some(&root.join("home")),
+                None,
                 None,
             )
             .expect("a policy on this platform's base");
@@ -5396,13 +6815,26 @@ while {answering}"#
         name: &str,
         declare: impl FnOnce(Declaration) -> Declaration,
     ) -> Redirected {
+        let (moved_to, second) = serving(weather, String::new());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        redirected_at(name, declare, declared_url, moved_to, first, second)
+    }
+
+    /// [`redirected_declaring`] over the servers at `declared_url` and `moved_to`, whose bodies
+    /// `first` and `second` report.
+    fn redirected_at(
+        name: &str,
+        declare: impl FnOnce(Declaration) -> Declaration,
+        declared_url: String,
+        moved_to: String,
+        first: mpsc::Receiver<String>,
+        second: mpsc::Receiver<String>,
+    ) -> Redirected {
         let root = scratch(name);
         let home = root.join("home");
         let project = root.join("project");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::create_dir_all(project.join(".bravebot")).expect("project");
-        let (moved_to, second) = serving(weather, String::new());
-        let (declared_url, first) = serving(redirecting, moved_to.clone());
         let declared = declare(Declaration::http(declared_url.clone()).expect("declaration"));
         let mut declarations = Declarations::default();
         declarations.insert("weather", &declared);
@@ -5573,6 +7005,102 @@ while {answering}"#
         let approvals = Approvals::read(&redirected.home);
         assert!(approvals.approves(&now.digest()));
         assert!(!approvals.approves(&redirected.declared.digest()));
+    }
+
+    /// The headers each request to a server reported.
+    type Reported = mpsc::Receiver<Vec<(String, String)>>;
+
+    /// A weather server declared and approved at a url that redirects its handshake to a second
+    /// one, the declaration naming a header variable of `PATH` and a bearer variable of
+    /// `bearer_variable`, and the headers each of the two is sent. `PATH` is a variable every test
+    /// run has, so the values the environment gives are the ones `reach` reads.
+    fn redirected_naming_credentials(
+        name: &str,
+        bearer_variable: &str,
+    ) -> (Redirected, Reported, Reported) {
+        let (moved_to, second) = serving_reporting_headers_answering(weather, String::new());
+        let (declared_url, first) =
+            serving_reporting_headers_answering(redirecting, moved_to.clone());
+        let bearer_variable = bearer_variable.to_string();
+        let redirected = redirected_at(
+            name,
+            |declared| {
+                declared
+                    .heading(
+                        [("X-Team".to_string(), "PATH".to_string())].into(),
+                        Some(bearer_variable),
+                    )
+                    .expect("headers")
+            },
+            declared_url,
+            moved_to,
+            mpsc::channel().1,
+            mpsc::channel().1,
+        );
+        (redirected, first, second)
+    }
+
+    /// SERVERS-11, SERVERS-18: a server moved at its handshake is started under the declaration
+    /// written, so it is reached at the address the person approved with the headers and the
+    /// bearer token the declaration names, and the declared address is sent them in the handshake
+    /// that was redirected and nothing else is. The regression it rejects is a server started at
+    /// the new address from the address alone, which sends none of them.
+    #[test]
+    fn a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with()
+    {
+        let (redirected, first, second) =
+            redirected_naming_credentials("cli-servers-move-credentials", "PATH");
+        let path = std::env::var("PATH").expect("PATH is set");
+
+        let (reached, _) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        let bearer = format!("Bearer {path}");
+        for (place, requests) in [("declared", first), ("moved", second)] {
+            let requests: Vec<_> = requests.try_iter().collect();
+            assert!(!requests.is_empty(), "nothing reached the {place} address");
+            for request in &requests {
+                assert!(
+                    request.contains(&("authorization".to_string(), bearer.clone()))
+                        && request.contains(&("x-team".to_string(), path.clone())),
+                    "a request to the {place} address went without them: {request:?}"
+                );
+            }
+        }
+        let written = std::fs::read_to_string(mcp::declarations_file(&redirected.home))
+            .expect("declarations");
+        assert!(!written.contains(&path), "a value was written: {written}");
+    }
+
+    /// SERVERS-18: a server moved at its handshake whose declaration names a bearer variable the
+    /// environment does not set is moved without an `Authorization` header and still sends the
+    /// header it does have. The regression it rejects is a move that sends a bearer header of its
+    /// own for the variable that is unset, or does not make the move.
+    #[test]
+    fn a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token() {
+        let (redirected, first, second) = redirected_naming_credentials(
+            "cli-servers-move-unset-credential",
+            "BRAVEBOT_TEST_3615_UNSET_TOKEN",
+        );
+        let path = std::env::var("PATH").expect("PATH is set");
+
+        let (reached, _) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        for (place, requests) in [("declared", first), ("moved", second)] {
+            let requests: Vec<_> = requests.try_iter().collect();
+            assert!(!requests.is_empty(), "nothing reached the {place} address");
+            for request in &requests {
+                assert!(
+                    request.contains(&("x-team".to_string(), path.clone())),
+                    "a request to the {place} address went without the header: {request:?}"
+                );
+                assert!(
+                    request.iter().all(|(name, _)| name != "authorization"),
+                    "a request to the {place} address sent a token that is not set: {request:?}"
+                );
+            }
+        }
     }
 
     /// SERVERS-11: a no starts nothing, sends nothing where the reply pointed and rewrites
@@ -6262,6 +7790,331 @@ done
         }
     }
 
+    const PINNED_IMAGE: &str =
+        "python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1";
+
+    fn in_openshell(argv: &[&str]) -> Declaration {
+        Declaration::stdio(
+            argv.iter().map(|w| w.to_string()).collect(),
+            Vec::new(),
+            None,
+        )
+        .expect("declaration")
+        .running_in(bravebot_config::mcp::Backend::OpenShell {
+            image: PINNED_IMAGE.into(),
+        })
+        .expect("an OpenShell declaration")
+    }
+
+    /// A server declared to run in OpenShell is planned with its program as the image names it:
+    /// nothing on this machine is looked up for it, so a program this machine lacks is no reason
+    /// not to start it.
+    #[test]
+    fn an_openshell_declaration_is_planned_with_its_program_as_named_in_the_image() {
+        let declaration = in_openshell(&["program-only-the-image-has", "-u", "server.py"])
+            .hosting(Some(vec!["example.com".into()]))
+            .expect("hosts");
+        let Plan::OpenShell {
+            program,
+            arguments,
+            image,
+            allowed_hosts,
+            ..
+        } = planned(&declaration, &|_| None).expect("a plan")
+        else {
+            panic!("an OpenShell declaration was not planned as one");
+        };
+        assert_eq!(program, "program-only-the-image-has");
+        assert_eq!(arguments, vec!["-u".to_string(), "server.py".to_string()]);
+        assert_eq!(image, PINNED_IMAGE);
+        assert_eq!(allowed_hosts, Some(vec!["example.com".to_string()]));
+    }
+
+    /// Nothing of this machine's environment or files is passed into a sandbox yet, so a
+    /// declaration that names a variable, a stored value, a file to read or a directory is refused
+    /// with what to remove, before anything is started.
+    #[test]
+    fn an_openshell_declaration_naming_variables_or_files_is_refused() {
+        let variable =
+            Declaration::stdio(vec!["python3".into()], vec!["GITHUB_TOKEN".into()], None)
+                .expect("declaration")
+                .running_in(bravebot_config::mcp::Backend::OpenShell {
+                    image: PINNED_IMAGE.into(),
+                })
+                .expect("an OpenShell declaration");
+        let stored = in_openshell(&["python3"])
+            .storing(
+                [("TOKEN".to_string(), "x".to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+            .expect("stored");
+        let reading = in_openshell(&["python3"])
+            .reading(vec!["/etc/hosts".into()])
+            .expect("reads");
+        for refused in [variable, stored] {
+            let why = planned(&refused, &|_| None).expect_err("refused");
+            assert!(why.contains("no variables"), "{why}");
+        }
+        let directory = Declaration::stdio(vec!["python3".into()], Vec::new(), Some("/srv".into()))
+            .expect("declaration")
+            .running_in(bravebot_config::mcp::Backend::OpenShell {
+                image: PINNED_IMAGE.into(),
+            })
+            .expect("an OpenShell declaration");
+        for refused in [reading, directory] {
+            let why = planned(&refused, &|_| None).expect_err("refused");
+            assert!(why.contains("reads only its image"), "{why}");
+            assert_eq!(shared_with_openshell(&refused), Err(why));
+        }
+        assert_eq!(shared_with_openshell(&in_openshell(&["python3"])), Ok(()));
+    }
+
+    /// A server in a sandbox reaches the hosts its declaration lists, less what the session's
+    /// own list leaves out or denies any name of, and nothing where the session closes the
+    /// network, the declaration lists no host, or a denied entry cannot be read.
+    #[cfg(unix)]
+    #[test]
+    fn an_openshell_server_reaches_only_its_declared_hosts_within_the_session() {
+        use bravebot_config::sandbox_network::HostEntry;
+        use bravebot_sandbox::network::Network;
+        let declared = vec!["example.com".to_string(), "api.github.com".to_string()];
+        assert_eq!(
+            openshell_hosts((Network::Open, None), Some(&declared)),
+            declared
+        );
+        assert!(openshell_hosts((Network::Closed, None), Some(&declared)).is_empty());
+        assert!(openshell_hosts((Network::Open, None), None).is_empty());
+        let session = Hosts {
+            allowed: Some(vec![HostEntry {
+                entry: "example.com".into(),
+                by: None,
+            }]),
+            denied: Vec::new(),
+            on_unlisted: None,
+        };
+        assert_eq!(
+            openshell_hosts((Network::Open, Some(&session)), Some(&declared)),
+            vec!["example.com".to_string()]
+        );
+        let denying = Hosts {
+            allowed: None,
+            denied: vec![HostEntry {
+                entry: "api.github.com".into(),
+                by: None,
+            }],
+            on_unlisted: None,
+        };
+        assert_eq!(
+            openshell_hosts((Network::Open, Some(&denying)), Some(&declared)),
+            vec!["example.com".to_string()],
+            "a host the session denies was granted"
+        );
+        let unreadable = Hosts {
+            denied: vec![HostEntry {
+                entry: "not a host".into(),
+                by: None,
+            }],
+            ..denying
+        };
+        assert!(openshell_hosts((Network::Open, Some(&unreadable)), Some(&declared)).is_empty());
+        let spelled = vec![
+            "Example.COM.".to_string(),
+            "under_score.example".to_string(),
+            "*.cdn.example".to_string(),
+        ];
+        assert_eq!(
+            openshell_hosts((Network::Open, None), Some(&spelled)),
+            vec!["example.com".to_string(), "*.cdn.example".to_string()],
+            "a host is passed as OpenShell spells it, and one it refuses is left out alone"
+        );
+    }
+
+    /// The whole start of a server declared for OpenShell, against OpenShell itself where
+    /// `BRAVEBOT_OPENSHELL_TESTS=1`: the session reaches it in a sandbox recorded in the state
+    /// directory, with its hosts and its list, and the sandbox goes when the session does.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_declared_for_openshell_starts_in_a_recorded_sandbox_and_goes_with_the_session() {
+        if std::env::var("BRAVEBOT_OPENSHELL_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+        const SERVER: &str = r#"
+import sys, json
+for line in sys.stdin:
+    msg = json.loads(line); i = msg.get("id")
+    if msg.get("method") == "initialize":
+        result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "boxed", "version": "0"}}
+    elif msg.get("method") == "tools/list":
+        result = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+    else:
+        continue
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": i, "result": result}) + "\n"); sys.stdout.flush()
+"#;
+        let root = scratch(&format!(
+            "cli-servers-openshell-live-{}",
+            std::process::id()
+        ));
+        let (home, project) = (root.join("home"), root.join("project"));
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&project).expect("project");
+        let declarations = serde_json::json!({"servers": {"boxed": {
+            "transport": "stdio",
+            "argv": ["python3", "-u", "-c", SERVER],
+            "backend": "openshell",
+            "image": PINNED_IMAGE,
+            "allowed_hosts": ["example.com"],
+        }}});
+        std::fs::write(home.join("mcp.json"), declarations.to_string()).expect("mcp.json");
+        let requested = vec![(project.join(".bravebot/settings.json"), "boxed".to_string())];
+        let reached = reach(
+            &requested,
+            &project,
+            &Home {
+                directory: Some(home.clone()),
+                writable: true,
+            },
+            &Managed::default(),
+            Asking::Bypass,
+            &mut nobody(),
+            Stream::Null,
+        );
+        let session = reached
+            .session()
+            .unwrap_or_else(|| panic!("not reached: {:?}", reached.notes));
+        let [(alias, sandboxed)]: [(String, crate::mcp::Sandboxed); 1] = session
+            .sandboxed()
+            .try_into()
+            .expect("one sandboxed server");
+        assert_eq!(alias, "boxed");
+        assert_eq!(sandboxed.hosts, ["example.com"]);
+        let recorded = std::fs::read_to_string(home.join(OPENSHELL_LEDGER)).expect("recorded");
+        assert!(recorded.contains(&sandboxed.name), "{recorded}");
+        let listed = || {
+            let cli = bravebot_sandbox::programs::Resolved::find(std::ffi::OsStr::new("openshell"))
+                .expect("openshell");
+            let output = bravebot_sandbox::programs::start(
+                &cli,
+                bravebot_sandbox::programs::Inherits::Only(&["HOME"]),
+                bravebot_sandbox::programs::SearchPath::Reduced,
+                bravebot_sandbox::programs::CodeSelectors::Kept,
+            )
+            .args(["sandbox", "list", "--color", "never"])
+            .output()
+            .expect("list");
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        assert!(
+            listed().contains(&sandboxed.name),
+            "the sandbox is not there"
+        );
+        drop(session);
+        drop(reached);
+        assert!(
+            !listed().contains(&sandboxed.name),
+            "the sandbox outlived the session"
+        );
+    }
+
+    /// `list` and `get` hold a server in an image to the managed layer as one, even where it could
+    /// not be planned: no allow entry names it, whatever path inside the image it runs.
+    #[test]
+    fn a_server_in_an_image_is_named_by_no_managed_allow_entry_even_unplanned() {
+        let root = scratch("cli-servers-openshell-managed");
+        let path = root.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp": {"allow": [{"command": ["/usr/local/bin/corp-server"]}]}}"#,
+        )
+        .expect("managed");
+        let managed = Managed::at(&path);
+        let in_image = |image: &str| {
+            Declaration::stdio(vec!["/usr/local/bin/corp-server".into()], Vec::new(), None)
+                .expect("declaration")
+                .running_in(bravebot_config::mcp::Backend::OpenShell {
+                    image: image.into(),
+                })
+                .expect("an OpenShell declaration")
+        };
+        for declaration in [in_image(PINNED_IMAGE), in_image("python:3.13-slim")] {
+            assert!(
+                refused_declaration(&managed, &declaration, &|_| None).is_some(),
+                "an allow entry named a server in an image: {:?}",
+                declaration.backend()
+            );
+        }
+    }
+
+    /// A server whose sandbox cannot be recorded is refused as a confinement that failed, and is
+    /// not started at all, OpenShell or not: the record is written before `openshell` is run, and
+    /// a directory where the record goes makes writing it fail on any machine.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_whose_sandbox_cannot_be_recorded_is_refused_and_not_started() {
+        let root = scratch(&format!(
+            "cli-servers-openshell-unrecorded-{}",
+            std::process::id()
+        ));
+        let (home, project) = (root.join("home"), root.join("project"));
+        std::fs::create_dir_all(home.join(OPENSHELL_LEDGER)).expect("a directory at the record");
+        std::fs::create_dir_all(&project).expect("project");
+        let declarations = serde_json::json!({"servers": {"boxed": {
+            "transport": "stdio",
+            "argv": ["python3", "server.py"],
+            "backend": "openshell",
+            "image": PINNED_IMAGE,
+        }}});
+        std::fs::write(home.join("mcp.json"), declarations.to_string()).expect("mcp.json");
+        let requested = vec![(project.join(".bravebot/settings.json"), "boxed".to_string())];
+        let reached = reach(
+            &requested,
+            &project,
+            &Home {
+                directory: Some(home.clone()),
+                writable: true,
+            },
+            &Managed::default(),
+            Asking::Bypass,
+            &mut nobody(),
+            Stream::Null,
+        );
+        assert!(
+            !reached.aliases().contains(&"boxed".to_string()),
+            "a server whose sandbox was not recorded was started"
+        );
+        assert!(
+            reached
+                .notes
+                .iter()
+                .any(|note| note.contains("boxed") && note.contains("could not be recorded")),
+            "{:?}",
+            reached.notes
+        );
+    }
+
+    /// A server whose image names no digest, a tag a hand-written declaration gave or a path, is not
+    /// started, since its approval would cover whatever the reference names later.
+    #[test]
+    fn an_openshell_declaration_whose_image_is_not_pinned_is_refused() {
+        let digest = format!("@sha256:{}", "a".repeat(64));
+        for image in [
+            "python:3.13-slim".to_string(),
+            "./server-image".to_string(),
+            "ghcr.io/owner/srv:latest".to_string(),
+            format!("./server-image{digest}"),
+            format!("../elsewhere{digest}"),
+        ] {
+            let declaration = Declaration::stdio(vec!["python3".into()], Vec::new(), None)
+                .expect("declaration")
+                .running_in(bravebot_config::mcp::Backend::OpenShell {
+                    image: image.clone(),
+                })
+                .expect("an OpenShell declaration");
+            let why = planned(&declaration, &|_| None).expect_err("refused");
+            assert!(why.contains("not pinned"), "{image}: {why}");
+        }
+    }
+
     /// SERVERS-21: a local server, the kind a program of a person's own is, carries the property
     /// through the confined launch to the session that holds it. Where this machine cannot confine
     /// a program the launch does not happen, the test says so on stderr and passes, and the plan
@@ -6481,6 +8334,108 @@ done
             &mut Vec::new(),
         );
         (started, notes)
+    }
+
+    /// As [`serving`] with the weather server, reporting the headers of each request instead of its
+    /// body, names in lower case.
+    fn serving_reporting_headers() -> (String, mpsc::Receiver<Vec<(String, String)>>) {
+        serving_reporting_headers_answering(weather, String::new())
+    }
+
+    /// As [`serving_reporting_headers`], answering each request with `answer` as [`serving`] does.
+    fn serving_reporting_headers_answering(
+        answer: fn(&str, &str) -> String,
+        to: String,
+    ) -> (String, mpsc::Receiver<Vec<(String, String)>>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0;
+                let mut sent = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                        sent.push((name.to_ascii_lowercase(), value.trim().to_string()));
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).into_owned();
+                let _ = sender.send(sent);
+                let _ = stream.write_all(answer(&body, &to).as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/mcp"), receiver)
+    }
+
+    /// SERVERS-11, SERVERS-18: a remote server started from a declaration naming a bearer variable
+    /// and a header variable sends the values the environment gave in its handshake and holds them
+    /// for a move later in the session. The regressions it rejects are a handshake that is made
+    /// without them, and one that does not hand them to the session, which leaves a server moved
+    /// during a turn to be reached with none.
+    #[test]
+    fn a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move()
+     {
+        let (url, requests) = serving_reporting_headers();
+        let declaration = Declaration::http(url)
+            .expect("declaration")
+            .heading(
+                [("X-Team".to_string(), "TEAM_HEADER".to_string())].into(),
+                Some("WEATHER_TOKEN".to_string()),
+            )
+            .expect("headers");
+        let environment = |var: &str| match var {
+            "WEATHER_TOKEN" => Some(OsString::from("secret-token")),
+            "TEAM_HEADER" => Some(OsString::from("team-value")),
+            _ => None,
+        };
+        let plan = planned(&declaration, &environment).expect("a plan");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        let [reached] = started.as_slice() else {
+            panic!("started {} servers: {notes:?}", started.len());
+        };
+        let expected = vec![
+            (
+                "Authorization".to_string(),
+                "Bearer secret-token".to_string(),
+            ),
+            ("X-Team".to_string(), "team-value".to_string()),
+        ];
+        assert_eq!(reached.sent_headers(), expected.as_slice());
+        let requests: Vec<_> = requests.try_iter().collect();
+        assert!(!requests.is_empty(), "the server was not reached");
+        for request in &requests {
+            assert!(
+                request.contains(&(
+                    "authorization".to_string(),
+                    "Bearer secret-token".to_string()
+                )) && request.contains(&("x-team".to_string(), "team-value".to_string())),
+                "a request went without them: {request:?}"
+            );
+        }
     }
 
     /// MCP-10: a remote server that declared prompts is started with the ones that can be offered, and
@@ -6712,6 +8667,7 @@ done
             None,
             &own,
             Path::new("/tmp"),
+            None,
             None,
             None,
         )

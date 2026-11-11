@@ -66,6 +66,8 @@ export class FakeSession implements AgentSession {
       status: initial.status ?? (options.trust ? 'awaiting_trust' : 'idle'),
       pending: initial.pending ?? null,
       rows: [...(initial.rows ?? [])],
+      omitted: 0,
+      resyncing: false,
       ended: null,
     }
   }
@@ -101,6 +103,8 @@ export class FakeSession implements AgentSession {
       status: patch.status ?? this.current.status,
       pending: patch.pending === undefined ? this.current.pending : patch.pending,
       rows,
+      omitted: this.current.omitted,
+      resyncing: this.current.resyncing,
       ended: this.current.ended,
     }
     this.notify()
@@ -175,8 +179,11 @@ export class FakeClient implements AgentClient {
       sessions?: FakeSession[]
       /** Makes the session `createSession` returns. */
       make?: (workspace: string, id: string) => FakeSession
+      /** What `describe()` says about listing. A client that cannot list also refuses to. */
+      sessionList?: boolean
     } = {},
   ) {
+    this.sessionList = options.sessionList ?? true
     this.configured = options.workspaces ?? [{ id: 'work', name: 'work' }]
     this.sessions = options.sessions ?? []
     this.make = options.make ?? ((workspace, id) => new FakeSession({ id, workspace }))
@@ -184,9 +191,21 @@ export class FakeClient implements AgentClient {
 
   private readonly configured: readonly { id: string; name: string }[]
   private readonly make: (workspace: string, id: string) => FakeSession
+  private readonly sessionList: boolean
+  /** How many times each of `describe` and `listSessions` was called. */
+  readonly asked = { describe: 0, listSessions: 0 }
 
   async describe(): Promise<TargetInfo> {
-    throw new Error('the app does not call describe')
+    this.asked.describe++
+    return {
+      build: null,
+      version: null,
+      configured: true,
+      defaultModel: null,
+      sessionView: { version: 1 } as TargetInfo['sessionView'],
+      actionTargets: true,
+      sessionList: this.sessionList,
+    }
   }
 
   workspaces(): readonly { id: string; name: string }[] {
@@ -201,6 +220,8 @@ export class FakeClient implements AgentClient {
   }
 
   async listSessions(): Promise<readonly SessionSummary[]> {
+    this.asked.listSessions++
+    if (!this.sessionList) throw new Error('this target does not list sessions')
     return this.sessions.map((session) => session.summary())
   }
 

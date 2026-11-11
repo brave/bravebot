@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Reading the transcript
-description: What is drawn back, the scroller Ctrl-O opens over it, and what the mouse does in it.
+description: Transcript rendering and turn status, themes and model picker, Ctrl-O scroller navigation, search and export, mouse selection and menus, info panel and files-view clicks, edit arrows and close controls.
 ---
 
 # Reading the transcript
@@ -20,9 +20,12 @@ arguments arrive, so a long file being written reads as work and not as a stall.
 the call starts, the round ends, or the request has to be sent again.
 
 **While the turn waits for a delegate's report, the working indicator reads "Waiting on d1"**, with the
-delegate's number. A planner that has only delegates left ends its round with one line saying what is
-outstanding, and that line stays in the transcript. The turn then waits and asks the planner again once
-the report arrives.
+delegate's number, or "Waiting on d1, d2" with the numbers of every delegate still working. A planner
+that has only delegates left ends its round with one line saying what is outstanding, and that line
+stays in the transcript. The turn asks the planner again as soon as the first report arrives, or as
+soon as you send a line, while the other delegates keep working. The planner then ends its round again
+with a line naming what is still outstanding, and each of those lines stays in the transcript. The
+turn does not end while a delegate is working.
 
 **In the desktop window, the sidebar's Agents entry counts the agents the open conversation has
 started.** While any is working, the entry also says how many. Choosing it opens a list with one row
@@ -34,7 +37,7 @@ A resumed session redraws what the earlier turns did: each one keeps the prompt 
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A reply that opened with the model's working leaves that block off when it
 is redrawn, as it was left off the first time. A task list stays on the turn that made it, and a later turn without one
-does not inherit it.
+does not inherit it. On a turn that has ended, a task still pending or in progress is drawn with a hollow marker and dim text, so it does not read as work still going on; finished and cancelled tasks are drawn as before.
 
 **Untrusted content is shown to you on purpose.** You are the one party allowed to read it, and the
 point of quarantine is that the decision comes to you rather than to the model. It is drawn inside a
@@ -63,18 +66,20 @@ desktop application shows the same two rows in the same confined block, under th
 
 **Colour codes in output are counted and not drawn.** A program that colours its output, such as a CI
 log, writes a code before and after each coloured word. Drawn as pictures, those buried the words.
-In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, and in the
-lines under a call the model read, the codes are left out and a row under the text says how many,
+In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, in the
+lines under a call the model read, and in the quarantined block a [one-shot run](headless.md) writes
+to stderr, the codes are left out and a row under the text says how many,
 for example `14 colour codes not drawn`. Every other control character and escape sequence, such as
 one that moves the cursor or erases a line, is still replaced by a visible picture. A prompt asking
 you to approve text, a block's heading, and a file name draw every byte, colour codes included.
 
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.
-The exception is the notes `/add-dir` and `/add-dir close` write, and the notes about the
-directories a settings file names: one that says a directory was opened or closed is drawn in the
-ink for finished, and one that refuses a path or asks for one in the ink for failed, so a directory
-that was added is not read as another error.
+The exception is the notes `/add-dir`, `/add-dir close`, `/cd`, `/checkouts remove`, `/export` and
+`/rename` write, and the notes about the directories a settings file names: one that says the
+command succeeded is drawn in the ink for finished, and one that refuses or fails in the ink for
+failed, so a directory that was added, a move, a checkout removed, a transcript exported or a
+session renamed is not read as another error.
 
 Colour is never what makes that marking hold. A colour can be imitated by the content beside it, so
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
@@ -562,7 +567,7 @@ Parts of the row that only report, such as the context reading and what a copy t
 |---|---|---|
 | a row of the `/effort`, `/config`, `/theme` and `/model` pickers | the first click moves the cursor to it, and `/theme` shows the theme under it. The second takes it, when it is on the same row | Up, Down and Enter |
 | a prompt in the search over earlier prompts | the first click moves the cursor to it and the second puts it in the box, sending nothing | Up, Down and Enter |
-| a session in the lists `--resume`, `/resume` and `bravebot sessions` open | the first click moves the cursor to it and the second resumes it, or attaches to it | Up, Down and Enter |
+| a session in the [Sessions screen](sessions-screen.md#the-mouse) or the list `bravebot sessions` opens | the first click moves the cursor to it and the second opens it as Enter does, or attaches to it. A click on a tab of the Sessions screen chooses it | Up, Down and Enter |
 | outside a picker or the search over earlier prompts | closes it, with nothing changed | Escape |
 | outside the scroller's key list | puts it away | any key |
 | the wheel over a picker, a list or the search | moves the cursor by [`tui.wheelRows`](../customize/configuration.md#tuiwheelrows) rows and stops at the ends | the arrow keys |

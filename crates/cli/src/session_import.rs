@@ -5,6 +5,7 @@
 //! and copies what is named; nothing is copied for a bare listing.
 
 use crate::exit::{Ending, fail};
+use crate::progress::{printable, printable_path};
 use bravebot_i18n::t;
 use bravebot_session::import::{self, Copied, Failed, Found, Pick};
 use std::path::PathBuf;
@@ -90,10 +91,10 @@ fn claude_code(request: Request) -> ExitCode {
                 match import::pick(&found, name) {
                     Ok(one) => picked.push(one),
                     Err(Pick::Missing) => {
-                        return fail(Ending::Argument, t!(sessions_import_missing, id = name));
+                        return fail(Ending::Argument, missing(name));
                     }
                     Err(Pick::Ambiguous) => {
-                        return fail(Ending::Argument, t!(sessions_import_ambiguous, id = name));
+                        return fail(Ending::Argument, ambiguous(name));
                     }
                 }
             }
@@ -104,11 +105,8 @@ fn claude_code(request: Request) -> ExitCode {
     let mut failed = false;
     for one in chosen {
         match import::copy(&project, one) {
-            Ok(Copied::Written) => println!(
-                "{}",
-                t!(sessions_import_copied, title = &one.title, id = &one.id)
-            ),
-            Ok(Copied::Already) => println!("{}", t!(sessions_import_there, title = &one.title)),
+            Ok(Copied::Written) => println!("{}", copied(&one.title, &one.id)),
+            Ok(Copied::Already) => println!("{}", there(&one.title)),
             Err(Failed::NoStateDirectory) => {
                 return fail(Ending::Failed, t!(sessions_no_home));
             }
@@ -116,7 +114,11 @@ fn claude_code(request: Request) -> ExitCode {
                 failed = true;
                 eprintln!(
                     "{}",
-                    t!(sessions_import_failed, title = &one.title, problem = err)
+                    t!(
+                        sessions_import_failed,
+                        title = printable(&one.title),
+                        problem = err
+                    )
                 );
             }
         }
@@ -132,33 +134,60 @@ fn list(found: &[Found], project: &std::path::Path) {
     if found.is_empty() {
         println!(
             "{}",
-            t!(sessions_import_none, directory = project.display())
+            t!(sessions_import_none, directory = printable_path(project))
         );
         return;
     }
     for one in found {
         let id: String = one.source_id.chars().take(8).collect();
         let when = bravebot_session::sessions::how_long_ago(one.updated);
-        println!(
-            "{}",
-            if one.imported {
-                t!(
-                    sessions_import_row_there,
-                    id = id,
-                    when = when,
-                    title = &one.title
-                )
-            } else {
-                t!(
-                    sessions_import_row,
-                    id = id,
-                    when = when,
-                    title = &one.title
-                )
-            }
-        );
+        println!("{}", row(one.imported, &id, &when, &one.title));
     }
     println!("{}", t!(sessions_import_how));
+}
+
+/// The line for a session no copy of which is here yet, or that is already copied. The id and the
+/// title are text another program wrote.
+fn row(imported: bool, id: &str, when: &str, title: &str) -> String {
+    if imported {
+        t!(
+            sessions_import_row_there,
+            id = printable(id),
+            when = when,
+            title = printable(title)
+        )
+    } else {
+        t!(
+            sessions_import_row,
+            id = printable(id),
+            when = when,
+            title = printable(title)
+        )
+    }
+}
+
+/// The line after a session was copied.
+fn copied(title: &str, id: &str) -> String {
+    t!(
+        sessions_import_copied,
+        title = printable(title),
+        id = printable(id)
+    )
+}
+
+/// The line for a session that was already here.
+fn there(title: &str) -> String {
+    t!(sessions_import_there, title = printable(title))
+}
+
+/// The refusal for a typed id that begins no session.
+fn missing(typed: &str) -> String {
+    t!(sessions_import_missing, id = printable(typed))
+}
+
+/// The refusal for a typed id that begins more than one session.
+fn ambiguous(typed: &str) -> String {
+    t!(sessions_import_ambiguous, id = printable(typed))
 }
 
 #[cfg(test)]
@@ -192,6 +221,46 @@ mod tests {
                 selection: Selection::Named(words("ab12 cd34"))
             })
         );
+    }
+
+    /// LAYER-3: a session's title and id are text another program wrote, so every line that
+    /// prints one draws control characters and bidirectional overrides as pictures.
+    #[test]
+    fn the_title_and_id_of_a_session_another_program_wrote_are_drawn_as_pictures() {
+        let title = "fix\u{1b}[2J\u{202e}it";
+        let id = "ab\u{1b}[31m\u{202e}cd";
+        let title_pictured = "fix\u{241b}[2J\u{2039}U+202E\u{203A}it";
+        let id_pictured = "ab\u{241b}[31m\u{2039}U+202E\u{203A}cd";
+
+        let lines = [
+            ("a row", row(false, id, "3m ago", title), true, true),
+            (
+                "a row already copied",
+                row(true, id, "3m ago", title),
+                true,
+                true,
+            ),
+            ("a copy", copied(title, id), true, true),
+            ("a session already here", there(title), true, false),
+            ("a missing id", missing(id), false, true),
+            ("an ambiguous id", ambiguous(id), false, true),
+        ];
+        for (what, line, names_title, names_id) in lines {
+            assert!(
+                !line.contains(['\u{1b}', '\u{202e}']),
+                "{what} printed a raw character: {line:?}"
+            );
+            assert_eq!(
+                line.contains(title_pictured),
+                names_title,
+                "{what} did not draw the title: {line:?}"
+            );
+            assert_eq!(
+                line.contains(id_pictured),
+                names_id,
+                "{what} did not draw the id: {line:?}"
+            );
+        }
     }
 
     #[test]

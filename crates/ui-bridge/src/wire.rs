@@ -30,7 +30,7 @@ use bravebot_agent::confirm::{
 };
 use bravebot_agent::conversation::{Address, Composed, Said};
 use bravebot_agent::diff::Change;
-use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
+use bravebot_agent::report::{Activity, CallId, Landing, Phase, Reach, Shown};
 use bravebot_agent::servers::Question;
 use bravebot_aichat::CutOff;
 use bravebot_config::mcp::Declaration;
@@ -63,7 +63,26 @@ pub fn phase(phase: Phase) -> &'static str {
         Phase::Planning => "planning",
         Phase::Thinking => "thinking",
         Phase::Compacting => "compacting",
-        Phase::Reconnecting => "reconnecting",
+        Phase::Reconnecting(_) => "reconnecting",
+    }
+}
+
+/// When a request waiting to be sent again will be sent, or `null` for every other phase and for
+/// an attempt that is already out.
+///
+/// Milliseconds from the moment the event is sent, because the two ends do not share a clock: the
+/// front end adds them to the time it received the event. The numbers are the driver's own,
+/// worked out from a count and a timer, and `gives_up_in_ms` is `null` where a count and not a
+/// window decides how long the request goes on.
+pub fn retry(phase: Phase) -> Value {
+    let millis = |span: std::time::Duration| u64::try_from(span.as_millis()).unwrap_or(u64::MAX);
+    match phase {
+        Phase::Reconnecting(Some(retry)) => json!({
+            "attempt": retry.attempt,
+            "in_ms": millis(retry.pause),
+            "gives_up_in_ms": retry.gives_up_in.map(millis),
+        }),
+        _ => Value::Null,
     }
 }
 
@@ -92,7 +111,7 @@ pub fn status(status: Status) -> &'static str {
 }
 
 /// The name a front end knows a permission mode by. The inverse of [`permission_mode`] for the
-/// three a window may choose.
+/// four a window may choose.
 pub fn permission_mode_name(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Ask => "ask",
@@ -120,8 +139,9 @@ pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
         Some("ask") => Ok(PermissionMode::Ask),
         Some("acceptEdits") => Ok(PermissionMode::AcceptEdits),
         Some("plan") => Ok(PermissionMode::Plan),
+        Some("auto") => Ok(PermissionMode::Auto),
         _ => Err(Failure::bad_request(format!(
-            "`mode` may be `ask`, `acceptEdits` or `plan`, not {value}"
+            "`mode` may be `ask`, `acceptEdits`, `plan` or `auto`, not {value}"
         ))),
     }
 }
@@ -222,11 +242,15 @@ pub fn change(change: &Change) -> Value {
 /// list of files, with the slot a reference was drawn under and a leading `./` taken off and then
 /// spelled, so a window lists a file once and draws it as the confirmation for it does.
 ///
+/// `call` is the id dispatch gave the call ([`Activity::call`]), the same on its start and its
+/// finish, so a window pairs the two by it when calls overlap. Null for a line no dispatch made.
+///
 /// `waitedSeconds` is what the call spent at a model of its own, null for the nearly all of
 /// them that asked none. Whole seconds, as `remainingSeconds` is: what it answers is whether a
 /// slow call was slow because a model was, and that question is not decided in milliseconds.
 pub fn activity(activity: &Activity) -> Value {
     json!({
+        "call": activity.call.map(CallId::get),
         "verb": activity.verb,
         "target": activity.target,
         "shownTarget": activity.shown_target(),
@@ -333,6 +357,34 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
             value
         })
         .collect()
+}
+
+/// Where a message a retrieval drew on was said, as a window finds it in its own transcript: the
+/// exchange, as the `prompt` [`recounted`] numbers its user rows by, what it was there, and its
+/// place in the record's numbering, which a window asks for its excerpts by (RETRIEVE-32). No
+/// word of the message (RETRIEVE-27).
+pub fn place(place: &bravebot_agent::report::Place) -> Value {
+    use bravebot_agent::report::Spoken;
+    let (said, nth) = match place.said {
+        Spoken::Prompt => ("prompt", None),
+        Spoken::Reply { nth } => ("reply", Some(nth)),
+        Spoken::Tool { nth } => ("tool", nth),
+        Spoken::Other => ("other", None),
+    };
+    json!({ "ordinal": place.ordinal, "prompt": place.prompt, "said": said, "nth": nth })
+}
+
+/// What each exchange's retrievals drew on, keyed by its prompt as [`recounted`] numbers it, for
+/// a window drawing a transcript it did not watch (RETRIEVE-27).
+pub fn recalled(by_prompt: &[(u32, Vec<bravebot_agent::report::Place>)]) -> Value {
+    Value::Array(
+        by_prompt
+            .iter()
+            .map(|(prompt, used)| {
+                json!({ "prompt": prompt, "used": used.iter().map(place).collect::<Vec<_>>() })
+            })
+            .collect(),
+    )
 }
 
 /// The rows of one exchange of a recounted conversation: its `prompt`th user row and what was said
@@ -442,7 +494,9 @@ fn said(said: &Said) -> Value {
                 | Composed::SkillNamed { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
+                | Composed::ModeNotice { .. }
                 | Composed::MessageSent { .. }
+                | Composed::Retrieved { .. }
                 | Composed::Written,
             text,
         } => json!({ "kind": "user", "text": text }),
@@ -466,6 +520,33 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
         Some(Value::String(word)) if word == "consolidation" => Ok(Some(Composed::Consolidation)),
         Some(other) => Err(Failure::bad_request(format!(
             "`composed` may only say `consolidation`, not {other}"
+        ))),
+    }
+}
+
+/// The longest `messageId` a `turn.send` may carry.
+pub const MESSAGE_ID_LENGTH: usize = 64;
+
+/// The id a client gave a `turn.send`
+/// ([RPCVIEW-10](../../../docs/specs/session-view.md#RPCVIEW-10)).
+///
+/// Every send from a client carries one, new for each Send action, so a send repeated after a lost
+/// answer can be told from a new one. It is required rather than optional: a client that left it
+/// out would lose that protection, and nothing would notice. It is 1 to [`MESSAGE_ID_LENGTH`]
+/// ASCII letters, digits, `-` or `_`, which a UUID is, so it is short and holds nothing that needs
+/// escaping in a log.
+pub fn message_id(value: Option<&Value>) -> Result<String, Failure> {
+    match value {
+        Some(Value::String(id))
+            if (1..=MESSAGE_ID_LENGTH).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') =>
+        {
+            Ok(id.clone())
+        }
+        _ => Err(Failure::bad_request(format!(
+            "`messageId` must be 1 to {MESSAGE_ID_LENGTH} ASCII letters, digits, `-` or `_`"
         ))),
     }
 }
@@ -905,13 +986,20 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
 ///
 /// `name` is `alias:tool`, the name a person reads and a rule matches. Each argument is its name
 /// and its value as JSON, as the planner wrote it. `mayStand` says whether answer 2 can be
-/// recorded; where it cannot, a front end does not offer it.
+/// recorded; where it cannot, a front end does not offer it. `askedForPrivateArguments` says the
+/// call is asked because its arguments are private, which is why a front end that does not offer
+/// answer 2 says no stored answer covers the call. `also` is the arguments of each later call of
+/// the same round to the same tool that the answer covers, in the same shape as `arguments`, and
+/// is empty where the call is asked on its own.
 pub fn mcp_call_request(id: u64, request: &McpCallRequest) -> Value {
-    let arguments: Vec<Value> = request
-        .arguments
-        .iter()
-        .map(|(name, value)| json!({ "name": name, "value": value }))
-        .collect();
+    let listed = |arguments: &[(String, String)]| -> Vec<Value> {
+        arguments
+            .iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect()
+    };
+    let arguments = listed(&request.arguments);
+    let also: Vec<Vec<Value>> = request.also.iter().map(|call| listed(call)).collect();
     json!({
         "request": id,
         "alias": request.alias,
@@ -920,6 +1008,8 @@ pub fn mcp_call_request(id: u64, request: &McpCallRequest) -> Value {
         "arguments": arguments,
         "description": request.description,
         "mayStand": request.may_stand,
+        "askedForPrivateArguments": request.asked_for_private_arguments,
+        "also": also,
     })
 }
 
@@ -1046,6 +1136,20 @@ pub fn answers(value: &Value) -> Vec<Answer> {
         return Vec::new();
     };
     list.iter().map(answer).collect()
+}
+
+/// What became of each question put, for the window to draw under the call (ASK-13).
+///
+/// `rows` has one `{ question, outcome }` pair per question in `asking`, worded by
+/// [`bravebot_agent::settled::pairs`] so the window says nothing of its own. For the screen only:
+/// the planner is told the answers by the call's result.
+pub fn ask_settled(asking: &Asking, answers: &[Answer]) -> Value {
+    json!({
+        "rows": bravebot_agent::settled::pairs(asking, answers)
+            .into_iter()
+            .map(|(question, outcome)| json!({ "question": question, "outcome": outcome }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn answer(value: &Value) -> Answer {

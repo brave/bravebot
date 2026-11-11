@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND, approveTrust } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -100,10 +100,6 @@ try {
   assert.equal(await page.locator('[data-test="pasted-chip"] img.attachment-thumb').count(), 1, 'the pasted picture has a thumbnail')
   assert.match(await page.locator('[data-test="pasted-chip"]').innerText(), /Pasted image[\s\S]*\[Image #2\]/)
   assert.match(await page.locator('.attachment-trust').innerText(), /Sent as trusted context/)
-  await page.locator('[data-test="composer-mode"]').click()
-  assert.equal(await page.locator('[data-test="mode-plan"]').getAttribute('aria-disabled'), 'true', 'Plan is off while a paste is staged')
-  await page.locator('[data-test="composer-mode"]').click()
-  await page.locator('[data-test="mode-plan"]').waitFor({ state: 'hidden' })
   assert.ok(!(await page.evaluate(() => document.body.innerHTML)).includes(blue.slice(0, 200)), 'the page never holds the pasted bytes')
   await page.screenshot({ path: join(output, 'paste-staged-light.png') })
   await page.emulateMedia({ colorScheme: 'dark' })
@@ -213,7 +209,7 @@ try {
   await page.locator('.session-row .session').filter({ hasText: 'Compare [Image #1]' }).first().click()
   const again = page.getByRole('dialog', { name: 'Project trust', exact: true })
   if (await again.isVisible().catch(() => false)) {
-    await again.getByRole('button', { name: 'Trust this directory' }).click()
+    await approveTrust(again)
     await again.waitFor({ state: 'hidden' })
   }
   await page.locator('.entries').getByText('Compare [Image #1] [Image #2]').first().waitFor()

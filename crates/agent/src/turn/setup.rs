@@ -12,6 +12,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
+use super::prompts::reading_a_reference;
 use super::{FOR_A_PERSON, Inputs, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held};
 use crate::confirm::Confirmer;
 use crate::report::Reporter;
@@ -112,8 +113,9 @@ pub(super) fn offered_tools<S: Sink>(
             true => tools::Running::Offered,
             false => tools::Running::Withheld,
         };
+        let reached_before = policy.delegates_reached_from(delegates);
         let mut offered =
-            tools::for_planner(scheduling, arming, delegates, task.deadlines, running);
+            tools::for_planner(scheduling, arming, &reached_before, task.deadlines, running);
         if advisor.is_some() {
             tools::offer_advisor(&mut offered);
         }
@@ -142,20 +144,17 @@ pub(super) fn offered_tools<S: Sink>(
             // table only in that case.
             //
             // So is the kinds `spawn_agent` offers where the definition named the delegates it
-            // may start, since the person's turn then starts only those (DELEGATE-30).
+            // may start, since the person's turn then starts only those (DELEGATE-30), and where
+            // it narrowed what the turn holds, since the kinds offered are the ones the turn's own
+            // capabilities reach (DELEGATE-32).
             let without_run = !addressed.tools().iter().any(|tool| tool == "run");
-            if without_run || policy.delegates() != delegates {
+            let reached = policy.delegates_reached_from(policy.delegates());
+            if without_run || reached != reached_before {
                 let running = match without_run {
                     true => tools::Running::Withheld,
                     false => running,
                 };
-                offered = tools::for_planner(
-                    scheduling,
-                    arming,
-                    policy.delegates(),
-                    task.deadlines,
-                    running,
-                );
+                offered = tools::for_planner(scheduling, arming, &reached, task.deadlines, running);
                 if advisor.is_some() {
                     tools::offer_advisor(&mut offered);
                 }
@@ -207,8 +206,18 @@ fn delegate_may_delegate(
 /// has no tool to be pointed at. The mode is read once for each answer and asked again
 /// wherever it is used, since the person can leave bypassing while the turn runs.
 pub(super) fn read_output_is(task: &Task, offers_read_output: bool) -> ReadOutputIs {
+    released_is(task, offers_read_output)
+}
+
+/// Who answers a read of what `fetch_url` or a server's tool returned: the same answer as
+/// [`read_output_is`], asked of `vet_content`, which is the release that read makes a round early.
+pub(super) fn vet_content_is(task: &Task, offers_vet_content: bool) -> ReadOutputIs {
+    released_is(task, offers_vet_content)
+}
+
+fn released_is(task: &Task, offered: bool) -> ReadOutputIs {
     let mode = task.permission_mode.get();
-    if !offers_read_output {
+    if !offered {
         ReadOutputIs::Asked
     } else if !mode.checks_before_promoting(task.auto_vetting) {
         ReadOutputIs::Unasked
@@ -356,6 +365,9 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// turn resolved, which may differ from the one the task carries (INSTR-12). `skill_mode` is the
 /// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
+/// `vetting_offered` is whether `vet_content` is among the tools the turn was offered, which
+/// decides whether the planner is sent to it for a reference it has to read. `processors` is
+/// whether the run can hand a file to a processor, which a delegate's prompt follows.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
@@ -370,6 +382,8 @@ pub(super) fn system_prompt(
     preamble: &crate::preamble::Preamble,
     started_in: crate::permission_mode::PermissionMode,
     kept_facts: &str,
+    vetting_offered: bool,
+    processors: crate::delegate::Processors,
     memory: impl Fn(bool, &str) -> String,
 ) -> Prompt {
     let mode = started_in.instruction().unwrap_or_default();
@@ -387,6 +401,8 @@ pub(super) fn system_prompt(
                     spec.prompt(),
                     &memory(spec.keeps_memory(), spec.definition()),
                     delegate_may_delegate(spec, delegates),
+                    processors,
+                    spec.budget().is_some(),
                 ),
             );
             system.push(Provenance::Driver, checkout_notice);
@@ -422,6 +438,11 @@ pub(super) fn system_prompt(
             }
             system.push(Provenance::Driver, PLANNING);
             system.push(Provenance::Driver, FOR_A_PERSON);
+            let reading =
+                reading_a_reference(vetting_offered, task.auto_vetting, task.nobody_answers);
+            if !reading.is_empty() {
+                system.push(Provenance::Driver, format!("\n\n{reading}"));
+            }
             system.push(Provenance::Driver, preamble.for_a_person.clone());
             if let Some(addressed) = addressed {
                 system.push(
@@ -429,6 +450,7 @@ pub(super) fn system_prompt(
                     crate::delegate::addressed_prompt(
                         addressed,
                         &memory(addressed.keeps_memory(), addressed.name()),
+                        processors,
                     ),
                 );
             }
@@ -465,6 +487,10 @@ pub(super) fn system_prompt(
 ///
 /// The offer with what settling it spent, which is this turn's since this turn is what asked.
 /// Adding the offer's tools to the turn's own is the caller's.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
     inputs: Inputs<'_>,
     addressed: Option<&Addressed>,
@@ -473,6 +499,7 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
     reporter: &mut R,
     subscription: &mut Option<crate::shared::Spending<'_>>,
     notices: &mut Vec<crate::skills::Notice>,
+    offers_vet_content: bool,
 ) -> Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)> {
     let Inputs {
         config,
@@ -485,6 +512,10 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         (Some(spec), _) => spec.capabilities().clone(),
         (None, Some(addressed)) => addressed.capabilities().clone(),
         (None, None) => held(task),
+    };
+    let holding = match &task.mcp {
+        Some(session) => session.in_a_turn(holding),
+        None => holding,
     };
     let holds_a_server = holding
         .iter()
@@ -520,6 +551,12 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         }
         (_, None) => None,
     };
+    // A server's tool is offered a `read` argument only where `vet_content` is on the list, since
+    // that is the release the argument asks for. Set before the size is weighed, so the weight is
+    // that of the definitions the planner is sent.
+    if let Some((offer, _)) = &mut mcp {
+        *offer = offer.clone().reading(offers_vet_content);
+    }
     // Past the size the settings name, the tools are offered by name under one `load_tool`
     // and a definition joins `offered` when the planner loads it (SERVERS-16).
     if let (Some((offer, _)), Some(threshold)) = (&mut mcp, config.defer_mcp_tools_above) {

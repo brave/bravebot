@@ -12,6 +12,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_agent::trusted::{Identity, Store};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -219,7 +221,7 @@ impl FrontEnd {
     fn turn(&mut self, session: &str) -> Value {
         self.call(
             "turn.send",
-            json!({"session": session, "prompt": "say done"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "say done"})),
         );
         loop {
             let message = self.next_message();
@@ -353,6 +355,49 @@ fn a_remembered_yes_settles_the_next_session_started_there() {
     let listed = front.call("permissions.list", json!({"session": session}));
     assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
     assert_eq!(listed["remembered"]["path"], keeping, "{listed}");
+}
+
+/// A directory whose path is three components of 255 bytes is kept like any other: the question names
+/// a record whose file name fits, a yes writes it, the next launch is not asked, and taking the answer
+/// back removes the record. The directory is made only on Unix, where a path of that length can be
+/// created.
+#[cfg(unix)]
+#[test]
+fn a_yes_about_a_directory_with_a_very_long_path_is_kept_and_forgotten() {
+    let scratch = Scratch::new("bridge-trust-remembered-long");
+    let long = ["a", "b", "c"]
+        .iter()
+        .fold(scratch.path.join("long"), |path, letter| {
+            path.join(letter.repeat(255))
+        });
+    std::fs::create_dir_all(&long).expect("a directory with a very long path");
+    if Identity::of(&long).is_none() {
+        return;
+    }
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let keeping = remember(&mut front, &long);
+    assert!(
+        Path::new(&keeping).starts_with(scratch.records()),
+        "{keeping:?}"
+    );
+    let name = keeping.file_name().expect("a file name").len();
+    assert!(name <= 255, "the record's file name is {name} bytes");
+    assert!(keeping.is_file(), "nothing was written down");
+    drop(front);
+
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, question) = front.begin(&long);
+    assert_eq!(question, None, "a remembered answer was asked again");
+    assert_eq!(opened["remembered"]["path"], keeping.to_str().unwrap());
+    let listed = front.call(
+        "permissions.revoke",
+        json!({"session": handle(&opened), "kind": "remembered"}),
+    );
+    assert_eq!(listed["remembered"], Value::Null, "{listed}");
+    assert!(!keeping.exists(), "the answer outlived being forgotten");
+    let (_, question) = front.begin(&long);
+    assert!(question.is_some(), "a forgotten answer still settled it");
 }
 
 /// One directory has one record whichever way a window names it, and it is the record the terminal
@@ -541,7 +586,7 @@ fn a_yes_is_written_once_and_an_unreadable_answer_answers_nothing() {
         front
             .refused(
                 "turn.send",
-                json!({"session": session, "prompt": "say done"})
+                message_ids::with_fresh(json!({"session": session, "prompt": "say done"}))
             )
             .contains("send trust.reply first"),
         "a refused answer answered the question"

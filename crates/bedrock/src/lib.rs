@@ -23,10 +23,13 @@ pub mod credentials;
 pub mod eventstream;
 pub mod protocol;
 
+#[cfg(test)]
+use bravebot_aichat::ATTEMPTS;
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, OpenCall, Progress, pause_after_failure, read_in_background, reply_bound,
+    Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff, pause_after_failure,
+    rate_limit_backoff, rate_limit_without_wait, read_in_background, reply_bound,
     retryable_within_ceiling,
 };
 use bravebot_config::bedrock::Bedrock;
@@ -382,12 +385,30 @@ impl Driven for BedrockClient<'_> {
     }
 
     fn asks_again(&self, attempt: u32, error: &BedrockError) -> bool {
-        worth_another_attempt(self.attempts_allowed(), attempt, error)
+        worth_another_attempt(
+            attempts_allowed(self.config.patience(), throttled_without_wait(error)),
+            attempt,
+            error,
+        )
+    }
+
+    fn retry_window(&self) -> Option<Duration> {
+        self.config.patience().retry_window()
+    }
+
+    fn of_the_connection(error: &BedrockError) -> bool {
+        matches!(error, BedrockError::Egress(e) if retryable_within_ceiling(e))
     }
 
     fn pause(&self, failures: u32, error: &BedrockError) -> Duration {
         match error {
             BedrockError::Egress(e) => pause_after_failure(self.pace.backoff, failures, e),
+            // A throttle reported inside the stream names no wait, so it is paused for as a 429
+            // that named none is.
+            BedrockError::Reported { .. } if throttled_without_wait(error) => {
+                rate_limit_backoff(self.pace.backoff, failures)
+                    .max(backoff(self.pace.backoff, failures))
+            }
             _ => backoff(self.pace.backoff, failures),
         }
     }
@@ -401,6 +422,11 @@ impl<'a> BedrockClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
         self.spent.attempts
+    }
+
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> bravebot_aichat::call::Conceded {
+        self.spent.conceded
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
@@ -425,12 +451,6 @@ impl<'a> BedrockClient<'a> {
             learned_for: String::new(),
             pace: Pace::new(BACKOFF),
         }
-    }
-
-    /// How many requests are sent for one call before its failure is the caller's: the retry count
-    /// the account's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
-    fn attempts_allowed(&self) -> u32 {
-        self.config.patience().attempts(ATTEMPTS)
     }
 
     /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
@@ -701,18 +721,10 @@ impl<'a> BedrockClient<'a> {
             plan,
             &mut progress,
             |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
-            |progress, attempt| {
+            |progress, retry| {
                 // Announced before the wait rather than after it, so the pause is explained
                 // while it is happening. Reply progress resets; completed costs remain charged.
-                progress(Progress {
-                    written: Labelled::new("", Label::untrusted_public()),
-                    output_tokens: 0,
-                    calling: None,
-                    thinking: Labelled::new("", Label::untrusted_public()),
-                    counted_by_server: false,
-                    prose: false,
-                    attempt,
-                });
+                progress(Progress::announcing(retry));
             },
         )
     }
@@ -811,7 +823,7 @@ impl<'a> BedrockClient<'a> {
                 thinking: Labelled::new(&thinking, label),
                 counted_by_server: reply.counted,
                 prose: Progress::has_prose(&reply.text),
-                attempt,
+                ..Progress::quiet(attempt)
             });
         }
 
@@ -1162,15 +1174,11 @@ fn now() -> u64 {
 ///
 /// Everything else it names is a property of the request, which a second identical one has too.
 const TRANSIENT_REPORTS: [&str; 4] = [
-    "throttlingException",
+    THROTTLE_REPORT,
     "modelStreamErrorException",
     "internalServerException",
     "serviceUnavailableException",
 ];
-
-/// How many times one request is sent before its failure is the caller's, where the account's block
-/// states no retry count.
-const ATTEMPTS: u32 = 3;
 
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
@@ -1204,8 +1212,18 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
     }
 }
 
-fn backoff(base: Duration, failures: u32) -> Duration {
-    base * 2u32.pow(failures - 1)
+/// The service's name for a throttle it reports part way through a reply.
+const THROTTLE_REPORT: &str = "throttlingException";
+
+/// Whether `error` is a rate limit that names no wait: a 429 with none ([`rate_limit_without_wait`]),
+/// or a throttle reported inside the stream, which carries no wait at all. Decided from the status
+/// or the kind the service reported, never from anything else in the reply.
+fn throttled_without_wait(error: &BedrockError) -> bool {
+    match error {
+        BedrockError::Egress(e) => rate_limit_without_wait(e),
+        BedrockError::Reported { kind } => kind == THROTTLE_REPORT,
+        _ => false,
+    }
 }
 
 /// Writes the decision to send again to the diagnostic log: which attempt, and the wait before it.
@@ -1771,6 +1789,66 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(sent.len(), 3, "a concession was offered twice");
         assert_eq!(refusals(model), Refusals::default());
+    }
+
+    /// The client reports the fields a call left out, which is what the interface says beside
+    /// the failure line of a refused request ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    /// It is the client's own record of the call, so a call that was answered the first time
+    /// reports nothing and a call that gave the level up reports exactly the level.
+    #[test]
+    fn the_client_reports_the_fields_the_last_call_gave_up() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let call = |model: &str, responses: Vec<Vec<u8>>| {
+            let request = ChatRequest::new(model, vec![Message::user("hello")])
+                .with_effort(Some(Effort::High));
+            let (http, _received) = scripted_responses(responses);
+            let config = config_for(Box::leak(model.to_string().into_boxed_str()));
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let result = client.complete(&mut policy, &request);
+            (result, client.conceded())
+        };
+
+        let (result, conceded) = call(
+            "a-model-whose-call-gave-up-the-level",
+            vec![refused_with(400), whole_reply()],
+        );
+        result.expect("the request without the level answers");
+        assert_eq!(
+            conceded.in_order().collect::<Vec<_>>(),
+            vec![Concession::Effort]
+        );
+
+        let (result, conceded) = call("a-model-answered-first-time", vec![whole_reply()]);
+        result.expect("the first request answers");
+        assert!(conceded.is_empty(), "nothing was refused");
+
+        // A second refusal of the same kind gives up the next field in the order, the assumed
+        // ceiling, and the client reports both in the order they were given up.
+        let (result, conceded) = call(
+            "a-model-whose-call-gave-up-the-level-and-the-ceiling",
+            vec![refused_with(400), refused_with(400), whole_reply()],
+        );
+        result.expect("the request without the level and the ceiling answers");
+        assert_eq!(
+            conceded.in_order().collect::<Vec<_>>(),
+            vec![Concession::Effort, Concession::Ceiling]
+        );
     }
 
     /// The record an interface reads to say a level is not in force: a model that refused the level
@@ -3365,7 +3443,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a scratch directory");
         bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
         for (streaming, base_ms) in [(false, 7), (true, 11)] {
-            let config = config();
+            let config = account_stating(Some(2), None);
             let egress = Egress::new();
             let (http, received) = refused_requests(vec![503; 3]);
             let mut client =
@@ -3410,7 +3488,9 @@ mod tests {
         }
     }
 
-    /// Real exception frames follow the existing retry policy and keep the final protocol kind.
+    /// Real exception frames follow the retry policy of their kind and keep the final protocol kind:
+    /// a throttle reported inside the stream names no wait, so it is sent as often as a 429 that
+    /// named none, and every other transient report keeps three requests.
     #[test]
     fn framed_service_exceptions_keep_their_kind_and_request_count() {
         use bravebot_core::{
@@ -3420,7 +3500,7 @@ mod tests {
         };
         for (kind, attempts) in [
             ("validationException", 1),
-            ("throttlingException", 3),
+            ("throttlingException", 6),
             ("serviceUnavailableException", 3),
             ("internalServerException", 3),
             ("PRIVATE_UNKNOWN_EXCEPTION", 1),
@@ -3431,7 +3511,8 @@ mod tests {
             let (http, received) = scripted_responses(vec![response; attempts]);
             let config = config();
             let egress = Egress::new();
-            let mut client = BedrockClient::new(&config, &egress);
+            let mut client =
+                BedrockClient::new(&config, &egress).with_backoff(Duration::from_millis(1));
             client.test_request = Some(http);
             let mut sink = RecordingSink::new();
             let mut routing = Routing::new();
@@ -3449,11 +3530,46 @@ mod tests {
             assert!(
                 matches!(error, BedrockError::Reported { kind: ref reported } if reported == kind)
             );
-            assert_eq!(client.attempts(), attempts as u32);
+            assert_eq!(client.attempts(), attempts as u32, "{kind}");
             for _ in 0..attempts {
                 received.recv_timeout(Duration::from_secs(2)).unwrap();
             }
         }
+    }
+
+    /// The pause after a throttle reported inside the stream is the longer schedule of a 429 that
+    /// named no wait, where a fault the service reports keeps the doubling from the base, and a
+    /// stated `maxRetries` replaces the count as it does for a 429.
+    #[test]
+    fn a_throttle_reported_in_the_stream_is_paused_for_on_the_rate_limit_schedule() {
+        let config = config();
+        let egress = Egress::new();
+        let client = BedrockClient::new(&config, &egress);
+        let reported = |kind: &str| BedrockError::Reported { kind: kind.into() };
+        let throttle = reported("throttlingException");
+        let pauses: Vec<u64> = (1..=6)
+            .map(|failures| client.pause(failures, &throttle).as_secs())
+            .collect();
+        assert_eq!(pauses, [8, 16, 32, 64, 120, 120]);
+        assert_eq!(
+            client.pause(1, &reported("serviceUnavailableException")),
+            BACKOFF
+        );
+        assert_eq!(
+            client.pause(2, &reported("internalServerException")),
+            BACKOFF * 2
+        );
+        assert!(client.asks_again(5, &throttle));
+        assert!(!client.asks_again(6, &throttle));
+        assert!(client.asks_again(2, &reported("serviceUnavailableException")));
+        assert!(!client.asks_again(3, &reported("serviceUnavailableException")));
+
+        let capped = account_stating(Some(1), None);
+        let capped_client = BedrockClient::new(&capped, &egress);
+        assert!(capped_client.asks_again(1, &throttle));
+        assert!(!capped_client.asks_again(2, &throttle));
+        let none = account_stating(Some(0), None);
+        assert!(!BedrockClient::new(&none, &egress).asks_again(1, &throttle));
     }
     /// One compiled-in figure for every model Bedrock fronts caps a reply far below what most of
     /// them allow, and the number the block already carries is the one the model actually has.
@@ -4716,6 +4832,16 @@ mod tests {
         config().with_patience(bravebot_config::provider::Patience {
             max_retries,
             idle_timeout: idle_ms.map(Duration::from_millis),
+            retry_window: None,
+        })
+    }
+
+    /// The configured account with the retry count and window a `provider` block would have stated.
+    fn account_stating_a_window(max_retries: Option<u32>, window_ms: u64) -> Bedrock {
+        config().with_patience(bravebot_config::provider::Patience {
+            max_retries,
+            idle_timeout: None,
+            retry_window: Some(Duration::from_millis(window_ms)),
         })
     }
 
@@ -4784,26 +4910,90 @@ mod tests {
     }
 
     /// The count is how many times a request is sent again: a stated four is five requests and not
-    /// four or six, and an account that states nothing is sent the three it always was.
+    /// four or six.
     #[test]
     fn an_account_stating_a_retry_count_is_asked_again_that_many_times() {
         for streaming in [false, true] {
-            for (stated, asked) in [(Some(4), 5), (None, ATTEMPTS)] {
-                let (http, received) = refused_requests(vec![503; 8]);
-                let (result, attempts) = asked_through(
-                    &account_stating(stated, None),
-                    &Egress::new(),
-                    http,
-                    streaming,
-                );
-                assert!(result.is_err(), "streaming {streaming}: {result:?}");
-                assert_eq!(attempts, asked, "streaming {streaming}, stated {stated:?}");
-                assert_eq!(
-                    received.try_iter().count() as u32,
-                    asked,
-                    "streaming {streaming}, stated {stated:?}"
-                );
-            }
+            let (http, received) = refused_requests(vec![503; 8]);
+            let (result, attempts) = asked_through(
+                &account_stating(Some(4), None),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(result.is_err(), "streaming {streaming}: {result:?}");
+            assert_eq!(attempts, 5, "streaming {streaming}");
+            assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
+        }
+    }
+
+    /// BACKEND-55: an account that states nothing sends a request whose connection failed again for
+    /// as long as the default window holds, so a service that recovers on the fourth request is
+    /// reached. Rejects a client still held to the three requests it used to send.
+    #[test]
+    fn an_account_stating_nothing_is_asked_again_while_the_default_window_holds() {
+        let (http, received) = scripted_responses(vec![
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            answered(),
+        ]);
+        let (result, attempts) =
+            asked_through(&account_stating(None, None), &Egress::new(), http, true);
+        assert!(
+            result.is_ok(),
+            "a service that recovered on the fourth request was given up on: {result:?}"
+        );
+        assert_eq!(attempts, 4);
+        assert_eq!(received.try_iter().count(), 4);
+    }
+
+    /// BACKEND-55: a stated window sends a failed connection again past the stated count and ends
+    /// the call when the next pause would not fit. Rejects a client that reads the count as the
+    /// whole of the limit, and one that sits out the window and past it.
+    #[test]
+    fn an_account_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window() {
+        // The count alone would stop at the second request, and the window carries on to the fifth.
+        let (http, _received) = scripted_responses(vec![
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            answered(),
+        ]);
+        let (result, attempts) = asked_through(
+            &account_stating_a_window(Some(1), 60_000),
+            &Egress::new(),
+            http,
+            true,
+        );
+        assert!(
+            result.is_ok(),
+            "the count was taken for the whole limit: {result:?}"
+        );
+        assert_eq!(attempts, 5);
+
+        for streaming in [false, true] {
+            // A service that never recovers is given up on when the window is spent, well before
+            // the sixty requests it was ready to refuse.
+            let (http, _received) = refused_requests(vec![503; 60]);
+            let started = std::time::Instant::now();
+            let (result, attempts) = asked_through(
+                &account_stating_a_window(None, 150),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(result.is_err(), "streaming {streaming}: {result:?}");
+            assert!(
+                (4..30).contains(&attempts),
+                "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "streaming {streaming}: the call outlasted its window: {:?}",
+                started.elapsed()
+            );
         }
     }
 
@@ -4840,6 +5030,50 @@ mod tests {
             waited >= Duration::from_secs(2),
             "it asked again after {waited:?}, before the two seconds the service asked for"
         );
+    }
+
+    /// A throttled request that carried no wait is sent again up to six requests, where every other
+    /// status is three: the fourth request is reached after three 429s, and a seventh is not sent.
+    #[test]
+    fn a_throttle_with_no_wait_is_asked_again_up_to_six_requests() {
+        let (http, _received) = scripted_responses(vec![
+            refused_with(429),
+            refused_with(429),
+            refused_with(429),
+            answered(),
+        ]);
+        let (result, attempts) =
+            asked_through(&account_stating(None, None), &Egress::new(), http, true);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(attempts, 4);
+
+        for streaming in [false, true] {
+            // A window of a millisecond holds none of the pauses, so the count of six decides.
+            let (http, received) = refused_requests(vec![429; 8]);
+            let (result, attempts) = asked_through(
+                &account_stating_a_window(None, 1),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(result.is_err(), "streaming {streaming}: {result:?}");
+            assert_eq!(attempts, 6, "streaming {streaming}");
+            assert_eq!(received.try_iter().count(), 6, "streaming {streaming}");
+
+            // A stated count replaces the longer default, and zero sends once.
+            for (stated, sent) in [(0u32, 1usize), (2, 3)] {
+                let (http, received) = refused_requests(vec![429; 8]);
+                let (result, attempts) = asked_through(
+                    &account_stating(Some(stated), None),
+                    &Egress::new(),
+                    http,
+                    streaming,
+                );
+                assert!(result.is_err(), "streaming {streaming}: {result:?}");
+                assert_eq!(attempts as usize, sent, "streaming {streaming}, {stated}");
+                assert_eq!(received.try_iter().count(), sent, "streaming {streaming}");
+            }
+        }
     }
 
     /// A wait past the ceiling is not sat through: the request is not sent again, and the failure
@@ -5010,5 +5244,170 @@ mod tests {
             result.is_err(),
             "a quiet reply was waited on past the stated 300 ms: {result:?}"
         );
+    }
+
+    /// DIAG-7: `stream_once` reads its body with [`read_in_background`], a thread of its own
+    /// rather than the caller's, and nothing had pinned that a body it cuts still reaches the
+    /// diagnostic log the way `bravebot-net`'s and `bravebot-aichat`'s own cut bodies already do,
+    /// or that one cut after the turn was stopped does not.
+    ///
+    /// The stop arrives from a thread of the test's own, a second and a half after the reply
+    /// began and well before the long idle bound the stopped case is given, so what ends the read
+    /// is the stop and not the clock. The unstopped case is given a short idle bound instead, so
+    /// the same cut connection produces a genuine body failure for it to log.
+    #[test]
+    fn a_streams_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        use std::io::{BufRead, Read, Write};
+
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        for stopped in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            // A retry the cut does not itself end (the unstopped case) reaches this server again,
+            // so every connection is answered the same cut way rather than only the first.
+            std::thread::spawn(move || {
+                while let Ok((mut stream, _)) = listener.accept() {
+                    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    if reader.read_exact(&mut body).is_err() {
+                        return;
+                    }
+
+                    let frame = eventstream::tests::frame(
+                        "contentBlockDelta",
+                        br#"{"contentBlockIndex":0,"delta":{"text":"partial"}}"#,
+                    );
+                    // Announced far larger than what follows, and nothing follows the one frame:
+                    // the client is left waiting for a body that never finishes arriving.
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                        frame.len() * 50
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&frame);
+                    let _ = stream.flush();
+                    std::thread::sleep(Duration::from_secs(60));
+                }
+            });
+
+            let config = config();
+            let bound = if stopped {
+                Duration::from_secs(4)
+            } else {
+                Duration::from_millis(400)
+            };
+            let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+                idle: bound,
+                reply: bound,
+                ..bravebot_net::Timeouts::default()
+            });
+            let cancel = Cancel::new();
+            let pressed = cancel.clone();
+            if stopped {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(1_500));
+                    pressed.cancel();
+                });
+            }
+            let mut client = BedrockClient::new(&config, &egress)
+                .with_cancel(cancel)
+                .with_backoff(Duration::from_millis(1));
+            client.test_request = Some(Request::post(
+                format!("http://{address}/converse"),
+                b"{}".to_vec(),
+            ));
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+
+            let dir = tempfile::tempdir().expect("a scratch directory");
+            bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
+            let result = client.complete_streaming(
+                &mut policy,
+                &ChatRequest::new("opus-arn", vec![]),
+                |_| {},
+            );
+            if stopped {
+                // `complete_streaming` returns as soon as the outer loop notices the stop, which
+                // is quicker than the background thread's own read gives up on the connection. If
+                // the cancel token had not reached that read, it would still be waiting out the
+                // idle bound on its own and would write a stray failure when that runs out, after
+                // this call already returned (DIAG-7's known cost). Outlasting the bound here is
+                // what would catch that line arriving late.
+                std::thread::sleep(bound + Duration::from_millis(500));
+            }
+            let log: String = std::fs::read_dir(dir.path().join("logs"))
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+                        .collect()
+                })
+                .unwrap_or_default();
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+            if stopped {
+                assert!(
+                    matches!(result, Err(BedrockError::Cancelled)),
+                    "stopped: {stopped}: {result:?}"
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "stopped: {stopped}: a cut stream did not fail"
+                );
+            }
+            // Scoped to this test's own host: the diagnostic log's state is process-wide, so a
+            // transport failure an unrelated test makes while this one holds it configured would
+            // otherwise be counted as this test's own.
+            let host = format!("host={address}");
+            let cut = log
+                .lines()
+                .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+                .count();
+            if stopped {
+                assert_eq!(
+                    cut, 0,
+                    "stopped: {stopped}: a request the person stopped was logged as a failure: {log}"
+                );
+            } else {
+                assert_eq!(
+                    cut,
+                    client.attempts() as usize,
+                    "stopped: {stopped}: each cut attempt should have logged its own failure: {log}"
+                );
+                assert!(
+                    cut > 0,
+                    "stopped: {stopped}: a cut body was not logged: {log}"
+                );
+            }
+        }
     }
 }

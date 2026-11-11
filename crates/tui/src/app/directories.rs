@@ -34,21 +34,23 @@ pub(super) fn remove_checkout(
 ) {
     use bravebot_agent::workspace::Unremoved;
     let Some(listed) = kept.into_iter().find(|listed| listed.id == id) else {
-        session.note(t!(checkouts_no_such, id = id));
+        session.note_refused(t!(checkouts_no_such, id = id));
         return;
     };
     if listed.worked_in && ask(&listed) != crate::confirm::Answer::Approve {
-        session.note(t!(checkouts_kept, id = id));
+        session.note_refused(t!(checkouts_kept, id = id));
         return;
     }
     let path = listed.path.display().to_string();
     match remove(id) {
-        Ok(()) => session.note(t!(checkouts_removed, id = id, path = &path)),
-        Err(Unremoved::NoSuch) => session.note(t!(checkouts_no_such, id = id)),
+        Ok(()) => session.note_done(t!(checkouts_removed, id = id, path = &path)),
+        Err(Unremoved::NoSuch) => session.note_refused(t!(checkouts_no_such, id = id)),
         Err(Unremoved::WorkedFrom) => {
-            session.note(t!(checkouts_worked_from, id = id, path = &path))
+            session.note_refused(t!(checkouts_worked_from, id = id, path = &path))
         }
-        Err(Unremoved::Stuck) => session.note(t!(checkouts_not_removed, id = id, path = &path)),
+        Err(Unremoved::Stuck) => {
+            session.note_refused(t!(checkouts_not_removed, id = id, path = &path))
+        }
     }
 }
 
@@ -78,9 +80,13 @@ pub(super) fn add_directory(
 
     // The workspace refuses a name that is not absolute, and what `~` and a relative name mean is
     // the session's to say, so the name is made absolute here.
-    let outcome = named_directory(workspace.root(), directory)
-        .and_then(|named| workspace.add_directory(&named));
-    session.set_reference_sources(workspace.reference_sources());
+    let outcome = named_directory(
+        workspace.root(),
+        directory,
+        bravebot_agent::home::profile().as_deref(),
+    )
+    .and_then(|named| workspace.add_directory(&named));
+    session.adopt_workspace(workspace);
     match outcome {
         Ok(added) => {
             trust.trust(&bravebot_agent::workspace::key_of(&added));
@@ -119,9 +125,13 @@ pub(super) fn close_directory(
         session.note_refused(t!(session_close_dir_needs_a_path));
         return false;
     }
-    let outcome = named_directory(workspace.root(), directory)
-        .and_then(|named| workspace.close_added_directory(&named));
-    session.set_reference_sources(workspace.reference_sources());
+    let outcome = named_directory(
+        workspace.root(),
+        directory,
+        bravebot_agent::home::profile().as_deref(),
+    )
+    .and_then(|named| workspace.close_added_directory(&named));
+    session.adopt_workspace(workspace);
     match outcome {
         Ok(closed) => {
             let directory = closed.display().to_string();
@@ -177,19 +187,24 @@ pub(super) fn change_directory(
     ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
 ) -> Changed {
     if directory.is_empty() {
-        session.note(t!(session_cd_needs_a_path));
+        session.note_refused(t!(session_cd_needs_a_path));
         return Changed::Stayed;
     }
 
     // Against where the session is now, which is what changing directory means everywhere else: a
     // command that only took an absolute path would refuse `/cd crates/tui` and `/cd ..`, which are
     // the two ways anybody would think to say it.
-    let moved = match named_directory(workspace.root(), directory)
-        .and_then(|named| workspace.change_root(&named))
+    let left = workspace.root().to_path_buf();
+    let moved = match named_directory(
+        workspace.root(),
+        directory,
+        bravebot_agent::home::profile().as_deref(),
+    )
+    .and_then(|named| workspace.change_root(&named))
     {
         Ok(moved) => moved,
         Err(problem) => {
-            session.note(t!(
+            session.note_refused(t!(
                 session_directory_not_changed,
                 directory = directory,
                 problem = problem
@@ -223,12 +238,12 @@ pub(super) fn change_directory(
     *servers = None;
     session.now_in_workspace(&moved.root);
     session.adopt_repository(crate::issue_link::Repository::of(&moved.root));
-    session.set_reference_sources(workspace.reference_sources());
+    session.adopt_workspace(workspace);
     // An MCP server is not a tree's, so it stays; answer 2 is about a project, so it moves.
     if let Some(mcp) = &session.servers.session {
         mcp.now_in_workspace(&moved.root);
     }
-    session.note(t!(
+    session.note_done(t!(
         session_directory_changed,
         directory = moved.root.display().to_string()
     ));
@@ -251,6 +266,9 @@ pub(super) fn change_directory(
         Some(_) => Whence::Unasked,
         None => Whence::Asked,
     };
+    // Before the rules are read for the new root: a `--settings` file in the directory just left, or
+    // in its checkout, stays the checkout's file wherever the session goes (PERM-14).
+    rules.sources.leave(&left);
     if rules.read_for(session, &moved.root, whence, id, ask) {
         Changed::Moved
     } else {
@@ -269,82 +287,31 @@ pub(super) enum Changed {
     Left,
 }
 
-/// The name a person or a settings file gave a directory, as an absolute path.
+/// [`bravebot_agent::workspace::named_directory`], with a leading `~` expanded against `home`
+/// first (TRUST-9): read first, so `~/notes` is the home directory's `notes`, and where no home
+/// directory is known it is a name under the working directory, exactly as a name with no leading
+/// `~` is, since the caller reads nothing else into it either. `home` is a parameter, rather than
+/// read from [`bravebot_agent::home::profile`] here, so a test can hold it fixed; every real
+/// caller passes that function's answer, so that a `~` somebody types and a `~` the planner writes
+/// in a command line name the same file (CMDLINE-4). Two readings of the environment are two
+/// answers waiting to differ.
 ///
-/// A leading `~` is the home directory first, and then a relative name means a path under the
-/// working directory `root`. That order keeps `~/notes` the home directory and not a directory
-/// called `~` under the project, and it is the order `/cd` and a settings file's names are read in.
-/// `../shared` in a settings file says the directory it wants is next to the project rather than
-/// next to wherever the agent happened to be started from, and `/add-dir`, `/add-dir close` and
-/// `/cd` take a name against the working directory the session is in the same way.
-///
-/// The leading `.` and `..` of a relative name are cleaned against `root` here, and the remaining
-/// components are appended in order. The path of `root` is canonical, so it holds no link for a
-/// `..` to step over, and `../notes` becomes `<parent of root>/notes`, which is the spelling an
-/// opened directory is recorded under and so the one `/add-dir close` matches before it asks the
-/// file system where the name leads. A `..` after a name is left alone, since that name may be a
-/// link and the file system takes the `..` from the link's target (TRUST-10).
-///
-/// A relative name against a `root` that is not text is refused. The `String` this returns becomes
-/// a reach grant and a trust key, and a rendering of `root` that replaces the bytes it cannot show
-/// names another directory (PATH-002). A name that is already absolute needs no `root`.
+/// `--add-dir`, a settings file's names, and `/cd`, `/add-dir` and `/add-dir close` here all take a
+/// name against the working directory the same way, through the one implementation in
+/// `bravebot-agent` (CLI-11, SHARE-001).
 pub(super) fn named_directory(
     root: &std::path::Path,
     typed: &str,
+    home: Option<&std::path::Path>,
 ) -> Result<String, bravebot_agent::WorkspaceError> {
-    use std::path::Component;
-
-    let expanded = expand_home(typed);
-    if std::path::Path::new(&expanded).is_absolute() {
-        return Ok(expanded);
-    }
-    let not_text = || bravebot_agent::WorkspaceError::Invalid {
-        path: typed.to_string(),
-        reason: t!(session_directory_root_not_text),
+    let expanded = match bravebot_agent::workspace::expand_home(typed, home) {
+        Ok(Some(path)) => path.to_string_lossy().into_owned(),
+        // No home to expand `~` against is not a refusal here, the way it is for a file tool's own
+        // read of `~` (TRUST-9): the name is read as it was typed, as a name under the working
+        // directory, and resolved exactly as any other.
+        Ok(None) | Err(_) => typed.to_string(),
     };
-    if root.to_str().is_none() {
-        return Err(not_text());
-    }
-
-    let mut resolved = root.to_path_buf();
-    let mut components = std::path::Path::new(&expanded).components().peekable();
-    while let Some(leading) = components.peek() {
-        match leading {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                resolved.pop();
-            }
-            _ => break,
-        }
-        components.next();
-    }
-    resolved.extend(components);
-    resolved
-        .into_os_string()
-        .into_string()
-        .map_err(|_| not_text())
-}
-
-/// Replace a leading `~` with the user's home directory.
-///
-/// Only a leading one, and only when it is the whole first segment, so a directory genuinely called
-/// `~notes` is left alone. Without a home to expand to, the path is passed through as it was typed,
-/// and the caller reads it as a name under the working directory.
-///
-/// The directory comes from [`bravebot_agent::home::profile`] rather than from `HOME` read here,
-/// so that a `~` somebody types and a `~` the planner writes in a command line name the same file
-/// (CMDLINE-4). Two readings of the environment are two answers waiting to differ.
-pub(super) fn expand_home(directory: &str) -> String {
-    let Some(rest) = directory.strip_prefix('~') else {
-        return directory.to_string();
-    };
-    if !(rest.is_empty() || rest.starts_with('/')) {
-        return directory.to_string();
-    }
-    match bravebot_agent::home::profile() {
-        Some(home) => format!("{}{rest}", home.display()),
-        None => directory.to_string(),
-    }
+    bravebot_agent::workspace::named_directory(root, &expanded)
 }
 
 /// What becomes of the directories a settings file named.
@@ -390,8 +357,12 @@ pub(super) fn named_to_open(
 ) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     for directory in named {
-        match named_directory(workspace.root(), directory)
-            .and_then(|candidate| workspace.resolve_directory(&candidate))
+        match named_directory(
+            workspace.root(),
+            directory,
+            bravebot_agent::home::profile().as_deref(),
+        )
+        .and_then(|candidate| workspace.resolve_directory(&candidate))
         {
             Ok(path) => {
                 let shown = path.display().to_string();

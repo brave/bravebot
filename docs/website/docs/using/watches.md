@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: Watching a file
-description: Ask to be told when one file changes, and have a turn begin by itself when it does.
+description: Arm file watches that start turns on changes, choose eligible paths, understand events and firing times, approve watches, inspect or stop them, and check limits and session lifetime.
 ---
 
 # Watching a file

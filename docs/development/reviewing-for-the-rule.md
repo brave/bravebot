@@ -43,9 +43,16 @@ that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md
 `make check-spec` fails on a new one until somebody records it there, which is where a reviewer
 is asked whether it belongs. The gates themselves are pinned the same way, because a reshape
 releases content to a closure the driver wrote and hands back a value that is still labelled, so
-a new call site needs no `declassify` of its own and would otherwise move nothing. So is
-`note_for` in `crates/agent/src/tools.rs`, the one function that takes a closure from its caller
-and forwards it to a gate: a new caller of it writes such a closure without touching the gate.
+a new call site needs no `declassify` of its own and would otherwise move nothing. The eight
+functions that lower confidentiality for a write into the workspace or give bytes a trusted label
+(`declassify_into_workspace`, `declassify_written_into_workspace`,
+`declassify_checkout_into_workspace`, `promote_a_tool_list`, `promote_a_server_move`,
+`adopt_edited_body`, `promote_vetted` and `promote_vetted_picture`) are counted per file in
+[specs/labels.md](../specs/labels.md) as well, so a new caller of one fails `make check-spec`.
+Nothing checks the destination or the grant a caller passes, so a reviewer reads the new caller.
+`note_for` in `crates/agent/src/tools.rs` is pinned the same way. It is the one function that takes
+a closure from its caller and forwards it to a gate: a new caller of it writes such a closure
+without touching the gate.
 
 **4. A `Labelled` built by hand.** Never construct one to give a value a better label than its
 inputs had. That is laundering, whichever crate it happens in. If a value derived from
@@ -56,14 +63,16 @@ data, so it is used everywhere legitimately, and only a reader can say which is 
 that count and `make check-spec` fails until somebody records it, which puts the question in front
 of a reviewer without answering it.
 
-Nine places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
+Ten places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
 the search in `bravebot-agent`, the fifth is the wording of the `lsp` diagnostics sentence from
 the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_git`, also in
 `bravebot-agent`, the seventh is the text-or-binary sniff and decoding of a read of an unvouched
 file, in `Workspace::survey`, `Workspace::read` and `Workspace::page`, the eighth is the
 choice of which parts of a tool result are taken, in `ToolResult::output` and `ContentBlock::picture`
-in `crates/mcp/src/protocol.rs`, and the ninth is the read of a processor's answer for one number,
-in `bravebot_choice::number_in` in `crates/choice/src/number.rs`. All nine are named under
+in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number,
+in `bravebot_choice::number_in` in `crates/choice/src/number.rs`, and the tenth is the trigger
+listener's reading of a request's framing, path, signature and body length, in
+`crates/cli/src/trigger.rs`. All ten are named under
 Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
 indistinguishable from a violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
 quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
@@ -102,8 +111,15 @@ the planner for any value of it, or a reader whose failure depends on what the a
 violation of shape 1. A second function that releases an answer's text to another crate's function
 is one of shape 3 and moves a pinned count. A `Carried` turned into a number in `bravebot-core` or
 `bravebot-agent` is one of shape 3 as well, and moves the count of `Carried::into_wire`.
+The tenth is the trigger listener in `crates/cli/src/trigger.rs`, which is not the driver and holds
+no `declassify`. It decides from the request line and headers only: the framing refusals of
+`parse_head` (method, version, `Transfer-Encoding`, `Content-Length`, a path that is not a name),
+the `Content-Length` against the cap, the path as a name among the person's own entries, and the
+signature against the person's secret. The body is carried to the run's standard input and read by
+nothing, so a branch on any byte of the body, or a header or path suffix that selects a trigger, an
+event, a flag, a directory or a limit, is a violation of shape 1.
 
-A count that comes from file-type metadata is not one of the nine. A listing or a search tells the
+A count that comes from file-type metadata is not one of the ten. A listing or a search tells the
 planner how many symbolic links its walk did not enter. The walk reads each directory entry's file
 type, which is not file content, and counts the links. The planner is given a number with no name
 and nothing to branch on, and nothing in the driver branches on it: the count is released beside
@@ -111,6 +127,31 @@ the other shape facts of the result (the cap, the unreadable-directory flag) thr
 `declassify` in `list_files` and `search`, which adds no use of `declassify` to the source. A change that put a link's
 name or target in that sentence, or that read the target to decide what to say, would be a violation
 of shape 1 or 3 and is not covered by this paragraph.
+
+A measurement of file names, lengths and modification times that the driver compares and reduces to
+one bool is not a branch on untrusted content, for the same reason an exit status is not. The work
+record's write signal for a `run` line (`crates/agent/src/workspace/tree_mark.rs`) is one: the
+driver opens no file, reads no content or name into a decision (the only name match is against a
+fixed list of skipped directories), and the result is one fact. A program can make that fact true
+or false by what it writes, as it can with its exit status. A reviewer who sees a new measurement of
+this kind checks the same three things: no file is opened, no name or content appears in a
+condition, and one bounded fact comes out. A measurement that fails any of them is a violation of
+shape 1 or 3 and is not covered by this paragraph.
+
+The choice of a candidate spelling in `read_file` (READ-11, `Workspace::respelled_when_missing`) is
+a measurement of the same kind. The candidates are built from the name the planner typed alone,
+each is probed by path for whether it is a regular file, and the first that is one is chosen. No
+directory is listed, no filename read from disk enters a condition, and the result is one bounded
+fact: which of a fixed few variations of the typed name is there. The spelling chosen carries the
+label of the typed argument. The hint that a space may differ in kind is added by `read_file` from
+the typed name only, and is not added for a read through a reference.
+
+The session view's byte bound (RPCVIEW-9) and the host's queue bound (HOST-8) in `bravebot-ui-bridge`
+are measurements of the same kind, outside the driver. Each takes only the serialized length of a row
+or a line, adds it to a running total, and compares the total with a fixed budget. No content is read
+or altered, and the result is one bounded fact: how many of the oldest rows to drop, or whether the
+connection is too far behind. A label, a kind or any part of a payload in that comparison would be a
+violation of shape 1 or 3 and is not covered by this paragraph.
 
 `load_skill` also names the directory a project skill's link lands on inside the workspace. That
 path is file-name content, so the rules and the trust map are asked about it first, and only a path

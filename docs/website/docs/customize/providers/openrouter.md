@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: OpenRouter
-description: Reach models through OpenRouter with a key, which models are offered, and how to name one.
+description: Configure an OpenRouter API key, discover its offered models and select a model by name.
 ---
 
 # Reaching a model through OpenRouter

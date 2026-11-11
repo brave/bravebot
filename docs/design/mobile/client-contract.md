@@ -1,7 +1,5 @@
 # Client interface and prototype contract
 
-Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
-
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
 ## Code location and reuse
@@ -20,7 +18,7 @@ The execution owner computes session view state in one shared Rust implementatio
 
 Expose that view through an additive, negotiated bridge capability. Existing callers retain their current protocol. The new client requires the capability and refuses an older runtime that lacks it; it does not reconstruct the view from legacy events. The local proof therefore includes a small Rust bridge addition as well as the TypeScript adapter. It preserves legacy behavior but is not a claim that the unmodified RPC already provides the new view.
 
-An initial view supplies the current state before updates begin; stage 4a adds bounded history snapshots for recovery at one sequence boundary. Subsequent updates carry replacement rows and authoritative status fields with stable IDs and sequence numbers. TypeScript applies those replacements, detects sequence gaps, and requests resynchronization once supported. It does not infer session state from content or implement a second domain reducer. Before stage 4a, a lost connection ends the transcript view without claiming history recovery; stage 3's control snapshot can still restore current control state. Drafts, selection, focus, scrolling, and connection indicators stay client-local; an optimistic send stays separate until Rust reports acceptance with its message ID.
+An initial view supplies the current state before updates begin. A snapshot of the current state and the most recent rows, at one sequence boundary, recovers a client that missed an update or takes a session over, and says how many earlier rows it leaves out. Subsequent updates carry replacement rows and authoritative status fields with stable IDs and sequence numbers. TypeScript applies those replacements, detects sequence gaps, and requests resynchronization. It does not infer session state from content or implement a second domain reducer. A lost connection ends the transcript view without claiming history recovery until the client takes the session over again. Drafts, selection, focus, scrolling, and connection indicators stay client-local; an optimistic send stays separate until Rust reports acceptance with its message ID.
 
 Rust also supplies reusable approval field descriptions and presentation-only label/control-character transforms. Native components draw the supplied segments and trusted markings and still need tests for legibility, accessibility, and complete approval details. Every supported approval field must be displayed or explicitly excluded with a reason. Shared fixtures verify serialization and bindings against the single Rust implementation, rather than keep two implementations of its rules in step.
 
@@ -117,8 +115,8 @@ A failed request carries an `outcome`: `rejected` when the request was refused a
 `unknown` when it may have reached the bridge (a lost connection, a failed write, a deadline, or the
 bridge reporting an `internal` error), so the
 caller must look at the current state before trying again. At most 256 requests wait for an answer at
-once and one request is at most 8 MiB; beyond that a request is refused before it is written. Cancel
-and close are exempt from the first limit, so a caller can always stop work. Parameters that cannot be
+once and one request line is at most 8 Mi characters; beyond that a request is refused before it is written. Cancel
+and close are exempt from the count of waiting requests, so a caller can always stop work. They are still subject to the size limit and the deadline. Parameters that cannot be
 written fail the request instead of throwing. A request
 unanswered past its deadline (30 seconds by default) ends the connection and stops the
 child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
@@ -132,8 +130,10 @@ listeners, other sessions, the rest of the data being read, the request it belon
 shutdown. A diagnostic hook that throws does not lose the message being read.
 
 A startup that breaks the protocol (a malformed or out-of-order initial view, a repeated row id)
-refuses the session for good, even if a valid initial view follows. Startup trust questions are
-held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
+refuses the session for good, even if a valid initial view follows. A startup trust question that
+arrives before the response naming its session is held only while a session is being created. Other
+events for an unknown session are dropped. At most 64 sessions' worth are held, earliest first, and
+at most 256 events for each.
 
 **Local program.** `scripts/local-client.ts` drives one fresh session from a terminal: it requires an
 explicit `--trust yes|no`, answers an approval only as `--decide approve|reject|prompt` says (a
@@ -188,7 +188,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | List and open sessions | The target's sessions, newest first, and one of them opened by id. | `AgentClient.listSessions()` and `openSession(id)`, gated by `TargetInfo.sessionList`. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`, sending nothing. A target that has them says what each session shows in a `SessionSummary` and does not make the app read row content. |
 | Attach/view | Current control state and subscription for an authorized live session. | New host registry and snapshot operation; never `session.open` on a live record. |
 | Take control | Explicit authorized handoff using expected controller epoch. | New atomic host transition; old-epoch actions fail. |
-| Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |
+| Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send` with a required `messageId`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |
 | Answer | Typed reply to the exact session/turn/question under current control. | Existing reply kinds plus new bridge target checks; phone subset below. |
 | Cancel | Apply cancellation to an exact active turn or run. | Expected-target validation on `turn.cancel`; the target is never reused, unlike a turn number. |
 | Close | Enter `closing`; reach `closed` only after writer shutdown. | Existing `session.close` acknowledges before the worker necessarily finishes; add completion evidence. |
@@ -200,7 +200,7 @@ Local host trust controls and embedded trust remain explicit typed capabilities.
 
 Local OS-user identity is not sufficient proof that a person controls a client: an approved unconfined command can run as the same user. Resolve the [local control boundary](architecture.md#local-control-boundary) before exposing live-session control. The initial local proof does not establish protection against same-user programs.
 
-Define and test the application allowlist before exposing the local listener; add remote field/kind restrictions before enabling remote clients. Do not reuse the broader Electron or Android prototype lists wholesale. The Android work at the [pinned revision](README.md#project-findings) provides input restrictions and Node source-consistency checks to build on; these do not test JNI or Kotlin runtime behavior. Assess their fit for the narrower remote API and add runtime integration coverage. The listener checks the connection role, authorized workspace/session, control epoch, and exact action target before dispatch.
+Define and test the application allowlist before exposing the local listener; add remote field/kind restrictions before enabling remote clients. Do not reuse the broader Electron or Android prototype lists wholesale. The Android work on [android-shell](README.md#current-mobile-status) provides input restrictions and Node source-consistency checks to build on; these do not test JNI or Kotlin runtime behavior. Assess their fit for the narrower remote API and add runtime integration coverage. The listener checks the connection role, authorized workspace/session, control epoch, and exact action target before dispatch.
 
 The initial remote operations are target description, authorized workspace/live-session listing, create, attach, detach, take control, send, supported replies, cancel, close, and message-status lookup. Their names are application operations, not arbitrary bridge method strings. Listing is scoped to explicit authorized project IDs; raw `session.list` across all directories is unavailable. Saved open, forks, watches, manifests, settings, hooks, permissions editing, diagnostics, file operations, exports, and raw bridge dispatch are denied.
 
@@ -220,7 +220,7 @@ Reject unknown request fields. Unknown additive event fields may be ignored, but
 
 ## Send identity and uncertain outcomes
 
-Protect `send` with a client-generated message ID scoped to target, host instance, and live session. Before sending, the client saves that ID, original text, and target in a small protected pending-message record. This is not a generic mutation journal. Keep credentials separate; delete settled entries according to a defined retention rule and clear sensitive local pending data when revocation is learned, as best effort.
+Protect `send` with a client-generated message ID scoped to target, host instance, and live session. Every `turn.send` carries one, and a request without one is refused, so no caller is left unprotected by leaving it out. A client generates a new ID for each Send action. Before sending, the client saves that ID, original text, and target in a small protected pending-message record. This is not a generic mutation journal. Keep credentials separate; delete settled entries according to a defined retention rule and clear sensitive local pending data when revocation is learned, as best effort.
 
 The host records the normalized submission before bridge dispatch. States distinguish dispatching, accepted with turn identity, rejected, terminal outcome, and unknown. A duplicate ID with the same content returns the recorded state without dispatch; different content under the same ID is rejected. A send acknowledgement means the bridge accepted the turn, not that an effect completed or its history was saved.
 

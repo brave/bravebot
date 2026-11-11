@@ -10,7 +10,10 @@ and [the spec](../../docs/specs/session-view.md).
 src/common   wire types, framing, correlation, view application, AgentClient interface
              (no Node, DOM, Electron or JNI)
 src/node     the child-process adapter
+src/dev-relay  a client over the development relay (no Node, DOM, Electron or JNI)
 scripts      local-client: drives one session from a terminal
+             dev-relay, websocket: the development relay that bravebot-host runs as its client
+             dev-relay-demo: the host and the relay against a stub model, for trying the app
 test-fixtures  wire-contract.json (written by a Rust test) and scenarios/ (language-independent)
 tests        node:test suites, including ones that run a real bravebot-rpc
 ```
@@ -68,12 +71,33 @@ Before you use it:
 - If an answer cannot be sent, the program cancels the turn, and if the bridge does not end it within
   `--grace` seconds (default 10) it gives up and exits non-zero.
 
+## The development relay
+
+The relay lets an app on a phone or emulator drive `bravebot-host` for the stage-3d experiment. It is a development transport for synthetic data. It does not resolve U1 or authorize control of a real session.
+
+```sh
+bravebot-host --sessions-root <root> --workspace <dir> -- "$(command -v node)" dist/scripts/dev-relay.js --workspace <dir>
+```
+
+The host runs `dist/scripts/dev-relay.js` as its client. The relay listens on 127.0.0.1 on a port the system picks and prints the port and a six-digit code for this launch on standard error. Nothing else records the code, and it is not part of the address. It takes one WebSocket connection, and the first message must be the code. A wrong code, or none within a minute, ends the relay. After the code it sends the host's workspaces and then passes the channel through unchanged. When either end closes the relay exits, and typing `launch` to the host starts a new one with a new port and code. Any program on the computer that can reach 127.0.0.1 can reach the port, and only the code keeps it out.
+
+`@brave/agent-client/dev-relay` is the app's end. `connectDevRelay({ port, code, open })` takes the WebSocket constructor from the caller and resolves with a client and an `ended` promise. It is a separate export so a release build need not import it.
+
+To try it with synthetic data:
+
+```sh
+make check-agent-client    # builds bravebot-host and dist/
+node packages/agent-client/dist/scripts/dev-relay-demo.js --host "$PWD/target/debug/bravebot-host"
+```
+
+The demo makes a scratch home, workspace and sessions root, starts a stub model, and removes the scratch directory when the host stops. The prompts `plan:hello` and `plan:write` give a reply and a write to approve. [mobile/README.md](../../mobile/README.md#connect-to-a-host) covers the tunnel and the app.
+
 ## Check
 
-`make check-agent-client` from the repository root builds `bravebot-rpc`, installs, type-checks
-(the common code with no ambient types), builds and runs the tests. Inside the package,
-`pnpm run check` does the same once `bravebot-rpc` is built; set `BRAVEBOT_RPC` to use a binary
-other than `target/debug/bravebot-rpc`. The tests use an empty home, a scratch project and a model
+`make check-agent-client` from the repository root builds `bravebot-rpc` and `bravebot-host`,
+installs, type-checks (the common code with no ambient types), builds and runs the tests. Inside the
+package, `pnpm run check` does the same once both are built; set `BRAVEBOT_RPC` or `BRAVEBOT_HOST` to
+use a binary other than the one in `target/debug`. The tests use an empty home, a scratch project and a model
 service of their own, and read no credentials or settings.
 
 If the Rust view types change, regenerate the contract file with

@@ -13,6 +13,7 @@ governs:
   - crates/config/src/import.rs
   - crates/cli/src/mcp.rs
   - crates/agent/src/servers.rs
+  - crates/agent/src/images.rs
   - crates/core/src/capability.rs
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
@@ -21,12 +22,14 @@ governs:
   - crates/agent/src/mcp.rs
   - crates/agent/src/permission_mode.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/main.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/confirm/mcp.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/status.rs
   - crates/tui/src/mcp_command.rs
   - crates/ui-bridge/src/connectors.rs
+  - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/turn.rs
 documented-by:
   - docs/website/docs/customize/mcp-servers.md
@@ -559,10 +562,12 @@ not seen, and a changed argv is a server they have not seen.
 
 A program named rather than given as a path is looked for only in `PATH` entries a stage may not
 write, and a file that is a link into such a directory is not taken
-([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). The digest holds the name, so an approval of the
-name must not start a file a confined stage wrote into an activated virtualenv's `bin` or a
-`node_modules/.bin` ahead of the installation the person was shown. A name found only in such a
-directory is not found, as for any absent program.
+([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). Those entries include the checkout holding a
+directory the session was opened on, added or moved to, the nearest of it and its ancestors with a
+`.git`, so a session opened below a checkout's root does not search the checkout's `bin`. The digest holds the
+name, so an approval of the name must not start a file a confined stage wrote into an activated
+virtualenv's `bin`, a `node_modules/.bin` or the `bin` of the checkout ahead of the installation the
+person was shown. A name found only in such a directory is not found, as for any absent program.
 
 **Why.** Same reason [CMDLINE-3](tools/command-line.md#CMDLINE-3) binds an endorsement to the
 compiled plan rather than the line: the thing a person read has to be the thing that runs, and an
@@ -590,6 +595,7 @@ rewritten. The session's question says *that* the declaration changed and not wh
 digest is kept of what was approved, and a digest names no field.
 
 `verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_planted_in_a_directory_a_stage_may_write`
+`verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_in_the_bin_of_the_checkout_holding_the_session`
 `verified-by: bravebot_config::mcp::a_digest_covers_the_program_every_argument_the_names_and_the_directory`
 `verified-by: bravebot_config::mcp::a_digest_covers_every_stored_value_and_every_file_it_may_read`
 `verified-by: bravebot_config::mcp::a_declaration_storing_no_value_digests_as_it_did_before_values_could_be_stored`
@@ -628,15 +634,39 @@ an approval prompt.
 
 The runners are `npx`, `bunx`, `npm exec`, `pnpm dlx` and `yarn dlx` for Node, and `uvx`,
 `uv tool run` and `pipx run` for Python, recognised by the name of the declared program whatever
-directory it is given in. The package is the one a `--package` or `-p` flag names for Node, or
-`--from` or `--spec` for Python, and otherwise the first word that is not a flag or the value of a
-flag known to take one, such as `--registry` or `--with`. A flag the reading does not know may take
-the next word, so where one comes before the package the prompt says which package runs is not
-known, rather than name a word that may not be it. A Node package is pinned where the version after
-its last `@` is one exact release, `@scope/name@1.4.2`, and a Python one where `==` or `@` is
-followed by one; a tag such as `latest`, a range, and no version at all are each unpinned. An exact
-release is numbers joined by dots, with a pre-release or build suffix allowed after them, and for
-Node it is three numbers, since npm reads `@1.2` as every `1.2.x`.
+directory it is given in. `npm exec` is also read under the spellings npm resolves to it, `exe` and
+`x`; `ex` is not one, since npm reads it as `explain` or `explore`. The word that names the
+sub-command (`exec`, `dlx`, `tool` then `run`, `run`) is looked for after the program's own options,
+which are skipped with the value each takes: `npm --loglevel=silent exe`, `npm --loglevel silent x`
+and `pnpm --dir app dlx` are runners. Those options are listed per program. An option the list does
+not know, in front of a word that could be the sub-command, may take that word as its value, so the
+prompt says which package runs is not known; with no such word after it the line is not a runner.
+An option written with an `=` is skipped whatever it is, since its value is attached. For Node, an
+option written `--no-` and a name is skipped as a switch when the program has switches listed. The
+`--package` of `npm`, given before the sub-command, is a package flag as it is after it: `npm
+--package=evil@latest x bin` installs `evil@latest` and runs `bin` in it. `yarn` has no options
+listed, so an option before `dlx` that has no `=` is one the reading does not know.
+
+The packages are every one the line installs. A `--package` or `-p` flag for Node, and a `--from` or
+`--spec` flag for Python, names one each time it is given, with the value after a space or an `=`.
+Once such a flag is given, the first word after the flags is the command to run in it and is not a
+package, and the words after that command are the command's own and are not read. With no such flag
+that first word is the package. For Python, each `--with` or `-w` also names a package and leaves
+the first word where it was, because `uvx` installs and runs what `--with` names as it does the main
+package. The reading over-names where it is unsure: a word that turns out not to be a package costs
+one more line at the question, and a package left out would be drawn as pinned. Other flags before
+the command are skipped with the value each takes, such as `--registry`. A flag the reading does not
+know may take the next word, so where one comes before the command the prompt says which package
+runs is not known, after naming the packages read before it, rather than name a word that may not
+be one.
+
+A Node package is pinned where the version after its last `@` is one exact release,
+`@scope/name@1.4.2`, and a Python one where `==` or `@` is followed by one; a tag such as `latest`,
+a range, and no version at all are each unpinned. An exact release is numbers joined by dots, with a
+pre-release or build suffix allowed after them, and for Node it is three numbers, since npm reads
+`@1.2` as every `1.2.x`. A line is unpinned where any one of its packages is, and the prompt draws
+one line for each package that is, in the order the words name them, so `npx -y -p good@1.2.3 -p
+evil bin` is drawn with `evil` unpinned and `good@1.2.3` not.
 
 Both questions draw these lines: the one `bravebot mcp add` and `approve` ask, and the one a session
 asks. What is read is the words the person declared and nothing else, so this says what the line asks
@@ -646,6 +676,10 @@ calls one, is drawn as a plain program.
 `verified-by: bravebot_agent::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
 `verified-by: bravebot_agent::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
 `verified-by: bravebot_agent::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
+`verified-by: bravebot_agent::servers::every_package_a_runner_line_installs_is_read_and_each_unpinned_one_is_named`
+`verified-by: bravebot_agent::servers::a_runner_line_that_installs_two_packages_draws_the_one_that_floats`
+`verified-by: bravebot_agent::servers::a_runner_line_with_two_packages_draws_the_unpinned_one_at_the_question`
+`verified-by: bravebot_agent::servers::an_npm_alias_is_drawn_as_the_npm_exec_runner_it_is_and_install_is_not`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
 `verified-by: bravebot_ui_bridge::wire::a_server_question_carries_the_declaration_and_no_stored_value`
 
@@ -675,7 +709,8 @@ per [SERVERS-8](#SERVERS-8).
 Answer 2 records the alias, the tool and the project path. It reaches that one tool of that one
 server in that one project, and says nothing about the same tool elsewhere, another tool of the same
 server, or the arguments a later call carries. A server whose declaration says every call is asked
-about is offered no answer 2 ([SERVERS-21](#SERVERS-21)).
+about is offered no answer 2 ([SERVERS-21](#SERVERS-21)), and neither is a call asked because its
+arguments are private (the paragraph on labelled arguments below).
 
 A permission rule decides first, exactly as it does for a command line
 ([PERM-2](permissions.md#PERM-2)): a standing answer removes the default prompt and does not overrule
@@ -768,7 +803,39 @@ on ([LABEL-8](labels.md#LABEL-8)), so every later call asks whatever a rule or a
 says, and a one-shot run refuses it. A resumed session keeps this, and undoing the turn that let
 the content out ends it. A workspace file the planner reads does not reach it.
 
+A call asked for this reason is offered no answer 2, as in [PROMPT-6](prompting.md#PROMPT-6), because
+no stored answer covers it: the terminal draws answer 2 as not offered, saying the call is asked
+because something read earlier was private and no stored answer covers it, and binds no key for it.
+The plain interface, the desktop card and the editor prompt say the same, from
+`askedForPrivateArguments` on `mcp-call.request`, which the agent sets from the label of the
+arguments and from nothing in them. An answer 2 that arrives anyway is a yes to that call, and
+nothing is written to `mcp-tools`. A call that is also to a server declared to ask every call gives
+the declaration's reason, which holds for every later call ([SERVERS-21](#SERVERS-21)). Bypassing
+answers such a call as it answers any other, with answer 1 ([SERVERS-13](#SERVERS-13)).
+
+**Calls to one tool in one round are asked once.** When the planner makes several calls to the same
+tool in one round, the question about the first lists the arguments of each later call to that tool,
+as the planner wrote them, under a line saying the answer also covers them. A yes makes each of
+them and a no refuses each of them, in the words of a refusal the person made. Each call shows what
+it would show if asked alone, and the person reads every argument before answering. A later call is
+found by its position in the round and the alias and tool it names, and never by comparing its
+arguments with anything, since the planner's arguments may derive from private content
+([LABEL-5](labels.md#LABEL-5)). A later call is covered only by an answer given under the same
+label of arguments, so a call that is private asks again when the answer was given for public ones.
+A call covered by an earlier answer is recorded as covered by that answer, with nobody asked, and
+not as asking ([TRACE-1](trace.md#TRACE-1)); a refusal by that answer is recorded as the refusal it
+is.
+A call to a server declared to ask every call ([SERVERS-21](#SERVERS-21)) and a call that names a
+choice a processor made ([MCP-14](mcp.md#MCP-14)) are asked on their own and are never listed. An
+answer 2 given to the first question is recorded as for any call and covers later calls to the tool
+as a stored answer does. The terminal, the plain interface, the editor and the desktop card draw
+the list from `also` on `mcp-call.request`.
+
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
+`verified-by: bravebot_agent::mcp::answer_two_is_not_offered_or_recorded_for_a_call_asked_for_private_arguments`
+`verified-by: bravebot_tui::confirm::mcp::a_call_asked_for_private_arguments_is_drawn_with_its_own_reason_for_offering_no_lasting_answer`
+`verified-by: bravebot_approval::lib::a_call_asked_for_private_arguments_says_so_and_a_declaration_wins`
+`verified-by: bravebot_ui_bridge::acp::a_call_asked_for_private_arguments_reads_to_the_editor_with_its_reason`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
@@ -776,6 +843,16 @@ the content out ends it. A workspace file the planner reads does not reach it.
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
 `verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
+`verified-by: bravebot_agent::mcp::one_yes_covers_the_later_calls_to_the_same_tool_listed_in_its_question`
+`verified-by: bravebot_agent::mcp::one_no_refuses_the_later_calls_listed_in_its_question`
+`verified-by: bravebot_agent::mcp::a_call_covered_by_an_earlier_answer_is_not_recorded_as_asking`
+`verified-by: bravebot_core::policy::an_mcp_call_covered_by_an_earlier_answer_is_recorded_as_covered_not_as_asking`
+`verified-by: bravebot_agent::mcp::a_private_call_is_asked_again_after_an_answer_given_for_public_arguments`
+`verified-by: bravebot_agent::mcp::answer_two_to_a_question_that_listed_later_calls_is_recorded_for_the_tool`
+`verified-by: bravebot_agent::mcp::bypassing_answers_every_call_of_a_round_unasked`
+`verified-by: bravebot_agent::browser_group_servers::a_call_naming_a_choice_is_never_listed_in_an_earlier_question`
+`verified-by: bravebot_agent::mcp::a_server_asked_every_call_is_asked_about_each_call_of_a_round_on_its_own`
+`verified-by: bravebot_approval::lib::a_call_lists_the_later_calls_its_answer_also_covers`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 `verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
@@ -864,15 +941,29 @@ That list is put to the person at the start of the first turn they ask for, or o
 tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
 none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
 as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
-drawn above the list.
+drawn above the list. The checks of every list to be put are made at the same time, no more than
+eight at one moment (the number of reads one round makes, [TURN-10](turns.md#TURN-10)) and the next
+begun, in the order the servers are declared, as one is joined. The wait before the planner is asked
+is therefore about one check's and not the sum of them, and the questions are drawn in the order the
+servers are declared, each when the one before it is answered. Which lists are checked depends on
+the servers and the mode, never on what a list or a check says. A turn that spends a subscription
+makes the checks one after another, since the credential is lent to one request at a time. The
+time a person takes over the questions is charged to them as it was when the checks were made one
+after another, and the time spent waiting on a check is not. A turn stopped at a question leaves
+every list it has not put unasked, and the checks already made are still charged.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again, unless the server announces that its tools changed ([MCP-12](mcp.md#MCP-12)). A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
-same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
-decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
-`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. The answer, a yes or a no, belongs to the MCP session the process started, so
-the terminal's `/clear`, `/branch` and `/resume` keep it and the conversation after them is
+asked again, unless the server announces that its tools changed ([MCP-12](mcp.md#MCP-12)). A turn
+stopped at the question has not answered it, so the next turn asks again. The time the question
+keeps the turn waiting is charged as time spent waiting on the person and is reported once the
+question is settled, so a turn stopped at it keeps that time
+([SESSION-12](sessions.md#SESSION-12)). Nothing is recorded, so a later process asks again about a
+list that is the same: the driver has no way to tell that it is, short of deciding from the
+server's bytes, and a decision taken from them is the one thing the driver may not do
+([LABEL-8](labels.md#LABEL-8)). A `tools` line in `mcp-approved` is passed over and dropped the next
+time the file is written. The answer, a yes or a no, belongs to the MCP session the process started,
+so the terminal's `/clear`, `/branch` and `/resume` keep it and the conversation after them is
 offered the list that was vouched for without the question again ([CMD-14](commands.md#CMD-14));
 only a new process asks. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
 server and not for its list.
@@ -902,6 +993,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::a_list_in_pages_is_read_to_its_last_page_and_no_further_than_the_bound`
 `verified-by: bravebot_mcp::stdio::a_list_in_pages_is_offered_whole`
 `verified-by: bravebot_mcp::protocol::printing_a_listing_does_not_print_what_the_server_said`
+`verified-by: bravebot_agent::mcp::the_time_taken_to_answer_the_list_is_charged_to_the_person`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_keeps_the_time_it_waited`
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
 `verified-by: bravebot_config::mcp::a_tool_word_is_what_a_function_name_may_be`
@@ -913,6 +1006,11 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::the_checks_of_every_unasked_list_are_made_together_and_the_questions_drawn_in_server_order`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_first_of_several_lists_leaves_the_others_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another`
+`verified-by: bravebot_agent::mcp::the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once`
+`verified-by: bravebot_agent::mcp::no_more_checks_are_made_at_once_than_the_reads_of_one_round`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
 `verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
@@ -1088,7 +1186,9 @@ the lookup of the programs bravebot starts itself, as a stage's rows are
 ([SANDBOX-30](sandboxing.md#SANDBOX-30)). A server is code we did not write, and a program it
 writes there would start with the person's access, which the confinement withholds from the server.
 The rows are recorded as the server is launched, and a server that is only described records none.
-The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record.
+The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record, and the
+record holds the checkout of each directory the session opens, adds or moves to
+([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **A server is given no directory inside a git repository.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, and a relative
@@ -1099,7 +1199,9 @@ itself, a `HEAD` file beside `objects` and `refs` directories. `add` refuses it 
 writes nothing, and a session refuses a declaration that names one before anybody is asked, with a
 line naming the directory and the repository it is in. On macOS a row the server may write does
 not reach a `.git` beneath it either, whatever its case ([SANDBOX-14](sandboxing.md#SANDBOX-14)),
-so a server cannot make one in its own home or the temporary directory and write into it.
+so a server cannot make one in its own home or the temporary directory and write into it. The same
+holds for a `.husky` or `.bravebot` beneath a row and for `.gitmodules`, `.gitconfig` and
+`.pre-commit-config.yaml`, which git or a hook runner reads as code to run.
 
 **A server has a home directory of its own**, and `HOME` names it unless the declaration names
 `HOME`, in which case the person's value is handed over as any other named variable is. A runner
@@ -1267,6 +1369,15 @@ digest recorded in `mcp-approved` is that of the declaration written, and it is 
 session then holds for the server, so a second move in the session finds the declaration the first
 one wrote. A server moved as the session starts is started under the declaration written.
 
+The connection a move makes sends the headers and the bearer token the declaration names, as the
+server's first connection did, with the values the environment gave when the session started the
+server. That holds for the handshake at the new address, the call made again there and every later
+call in the session, including after a second move. They go only to the socket the person approved
+([SERVERS-18](#SERVERS-18)), and a declaration that names none sends none. The prompt for a move
+during a turn does not name the headers or the bearer token that will be sent to the new
+destination. The question put to the person about the declaration at the handshake names them. This
+is a known cost.
+
 A project entry in `mcp-projects` answers for what a checkout requests and never for where a server
 went, so it does not answer this question. Where the session writes nothing, the prompt says so and a
 yes moves the server until the session ends. A vouched list is not carried to the new declaration,
@@ -1306,6 +1417,15 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
 `verified-by: bravebot_agent::mcp::a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces`
 `verified-by: bravebot_agent::mcp::a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote`
+`verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
+`verified-by: bravebot_agent::mcp::a_server_declared_without_credentials_is_moved_without_any`
+`verified-by: bravebot_agent::mcp::a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_move_leaves_the_tools_the_session_holds_for_the_server_as_they_were`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move`
 `verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_keeps_everything_but_its_address`
 `verified-by: bravebot_config::mcp::a_move_changes_the_address_of_a_remote_declaration_and_nothing_else`
 `verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
@@ -1611,6 +1731,8 @@ content.
 `verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_bounds_the_declaration_it_replaces_gave`
+`verified-by: bravebot_agent::mcp::a_move_to_a_server_slower_than_the_startup_bound_is_not_made`
+`verified-by: bravebot_agent::mcp::a_moved_server_is_held_to_the_call_bound_it_had`
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
 
@@ -1726,6 +1848,14 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move`
+`verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
+`verified-by: bravebot_agent::mcp::a_server_declared_without_credentials_is_moved_without_any`
+`verified-by: bravebot_agent::mcp::a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token`
 
 ## Testing this with the weather server
 
@@ -1822,7 +1952,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [backends.md](backends.md) | [BACKEND-38](backends.md#BACKEND-38), the managed file pins the names that decide where a request goes, and "every other name in the file decides nothing" | Extended by two names that are not destinations, `mcp.allow` and `mcp.deny`, which keep a server from starting and add none, for [SERVERS-12](#SERVERS-12)'s reason. **Applied**. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
 | [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). **Applied**: `Mcp(weather:*)` is `Mcp(weather)`, and a name is matched whole, so `Mcp(weather)` does not cover `weather2`. |
-| [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy, and not reached: nothing labels a planner's arguments private yet. |
+| [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy and reached once the planner has been shown content let out of quarantine ([SERVERS-7](#SERVERS-7)); a call asked for that reason is offered no answer 2. |
 | [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else, and told of the fourth it refuses, whether a server moved. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
 | [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers, once more | Narrowed by one call: a call to a server whose declaration says every call is asked about ([SERVERS-21](#SERVERS-21)) is not answered. **Applied** in `Confining::confirm_mcp_call`. |
 | [delegation.md](delegation.md) | [DELEGATE-10](delegation.md#DELEGATE-10), a delegate's call to a server's tool is put to the person | Narrowed by one call: a delegate's call to a server declared to ask every call is refused with nobody asked ([SERVERS-21](#SERVERS-21)). **Applied**. |
@@ -1868,7 +1998,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   thing the declaration names. Digesting the resolved path would make an approval machine-specific,
   which is either the correct reading of what was approved or a re-approval every time a toolchain
   moves. [SERVERS-5](#SERVERS-5) keeps the name in the digest and closes the planting case another
-  way, by not searching a directory a stage may write (#2777).
+  way, by not searching a directory a stage may write or the checkout holding a directory the
+  session opened (#2777, #3893).
 
 ## Known costs
 
@@ -1887,6 +2018,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
   better. For the distribution form nearly every server uses, the digest binds the argv and the argv
   names a package whose contents change. The only real fix is pinning with an integrity hash, which
   the package ecosystems support and this declaration format does not yet express.
+- **A runner's options are listed, not discovered.** [SERVERS-6](#SERVERS-6) skips the options a
+  runner takes before its sub-command from a list kept here for each program. The `npm` list is
+  taken from npm's own option definitions and the `pnpm` list from its help text. The `uv` and
+  `pipx` lists are written from the options those tools document and are not read from an installed
+  tool, and `yarn` has none. An option missing from a list is read as one the reading does not know,
+  so the prompt says which package runs is not known, and a line is never drawn as pinned for want
+  of an entry. The short `-w` of `uvx --with` is read as `--with` on that documentation; if a uv
+  release gives `-w` another meaning, `uvx -w x pkg==1.0.0` is drawn with `x` as one more package.
+- **A runner outside the list is drawn as a plain program.** `pnpx`, `bun x` and `pnpm create`, which
+  fetch a package and run it, are not among the runners SERVERS-6 reads, so a server declared with
+  one gets no runner line and no unpinned-package line. Pinning is the person's to check there.
 - **A person who approves a server has approved a program.** Beyond the confinement
   [MCP-3](mcp.md#MCP-3) requires and the capability [SERVERS-9](#SERVERS-9) grants, there is no audit
   of what it does once it runs. A confined process with a network capability is still a program
@@ -1924,9 +2066,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   [CHECK-10](vetting.md#CHECK-10)'s check of a list nobody vouched for, then refuses the list.
   Nothing tells the turn that its questions will be refused rather than asked, so the check is a
   model call whose word nobody reads.
-- **A call carrying private data is not told apart yet.** The policy asks about one whatever is
-  standing, and nothing labels a planner's arguments private, so a standing answer or an `allow`
-  rule answers every call today ([SERVERS-7](#SERVERS-7)).
+- **A call carrying private data is asked only after content left quarantine.** The policy asks
+  about one whatever is standing, and the arguments are labelled private only once the planner has
+  been shown content let out of quarantine, such as a vetted answer. A workspace file it read does
+  not label them, so a standing answer or an `allow` rule answers a call after that read
+  ([SERVERS-7](#SERVERS-7)).
 - **The full-screen interface asks before it asks about the directory.** The server question is put
   on the plain terminal before that interface takes the screen, and the question about trusting the
   directory is asked inside it. A server can therefore start for a session whose directory is then
@@ -1938,9 +2082,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   runner whose program loads from somewhere other than the installation it came from, such as a
   version manager's shim that hands over to a program elsewhere in the home, is not given that
   somewhere, and does not start confined.
-- **The full-screen interface discards a server's stderr.** It owns the screen, and a server's
-  diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
-  the plain interface pass it through to their own stderr.
+- **No interface shows a server's stderr.** A server's diagnostics are discarded in the full-screen
+  interface, the plain interface, a one-shot run and the desktop application ([SERVERS-25](#SERVERS-25)).
+  A server that fails says only what its failure's code and method say, and the way to read its
+  own output is to run it by hand.
 - **A server too slow for its handshake is left out.** A stdio server that has not answered
   `initialize`, `tools/list` or, where it declared prompts, `prompts/list` within its startup bound is
   stopped and left out of the session ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request
@@ -1959,8 +2104,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   process's memory while it does.
 - **A Windows server's grants are changes to the filesystem.** A grant for the server's home, its
   directory and the directories its program is found in changes the access list of each, so a run
-  that ends without cleanup leaves the entries behind. A server there may also start a
-  subprocess, since the container has no mechanism to deny one ([SANDBOX-5](sandboxing.md#SANDBOX-5)).
+  that ends without cleanup leaves the entries behind.
 - **Only the directories above a server's directory are searched for a repository.** A directory
   holding checkouts is not refused, so the server may write their work trees, a hook a relative
   `core.hooksPath` points at among them, on every platform.
@@ -1970,7 +2114,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   before the server started or the server made it, and git run there later runs what the server
   wrote. On every platform a directory a server lays out as a repository itself, with no `.git` in
   its path, is not refused once the server is running.
-- **On macOS a server cannot make a work tree.** No `.git` is writable to it, so a server or a
+- **On macOS a server cannot make a work tree.** No protected name is writable to it, so a server or a
   runner that clones a repository into its home or the temporary directory fails there, and on
   every platform a server meant to work on a git repository cannot be given one.
 - **A person whose home directory is a git work tree** has every directory in it refused as a
@@ -1989,10 +2133,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   before the model is asked anything, and the window says it is starting servers while it does. A
   turn or run stopped while they start starts none of them, and the next turn or run asks again. A
   reopened or forked session starts its own, since what a session started is not written to its
-  record. A server's stderr is discarded, as the full-screen interface discards it.
+  record. A server's stderr is discarded, as in every other front end.
 
 <a id="SERVERS-19"></a>
-### SERVERS-19: `/mcp` shows the servers, starts one that is not running, and turns one off for the session
+### SERVERS-19: `/mcp` shows the servers, starts one that is not running, turns one off for the session, and removes one
 
 The full-screen interface has `/mcp`. Bare or as `list`, it names each server the session runs with
 how its tools stand, as `/status` does ([SERVERS-14](#SERVERS-14)), and each server the settings
@@ -2006,7 +2150,21 @@ refuses ([SERVERS-4](#SERVERS-4), [SERVERS-5](#SERVERS-5), [SERVERS-12](#SERVERS
 the person before the next turn plans ([SERVERS-8](#SERVERS-8)). A server the session already runs
 keeps its process and what was answered about its list. `disable <alias>` stops the server's
 process, drops the grant naming it ([SERVERS-9](#SERVERS-9)) and offers none of its tools. It writes
-nothing, so the next session starts the server as before.
+nothing, so the next session starts the server as before. The list ends with a line naming
+`remove <alias>`, which is how a person who declined a server's tools finds the way to stop being
+asked about it.
+
+`remove <alias>` runs `bravebot mcp disable <alias>` and then `bravebot mcp remove <alias>`, the
+program run as itself in the directory the session works in, and says what each printed. The first
+takes the request out of each settings file that asks for the server, the second deletes its
+declaration and approval, so no later session starts it. The request goes first because a
+declaration removed under a request that stays is reported at every start as a server nobody
+declared. When the second succeeds, the server is stopped in this session and its grant dropped as
+`disable` does. When it fails, the server keeps running and the failure is said. The alias must be
+one (letters, digits, `-` and `_`, starting with a letter or digit), so a word such as `--help` is never an argument of the program, and
+nothing is run in an incognito session or where there is no state directory, because the program
+cannot know the session is incognito. The command line stays the one writer of a declaration and of
+the settings files that request one ([layering](layering.md)).
 
 An alias the settings do not request is not started and not turned off by being named. Nothing a
 server sent decides what `/mcp` does: the person names the alias. Typed during a turn, `/mcp` waits
@@ -2030,6 +2188,9 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::a_start_the_person_refuses_joins_nothing_and_clears_the_turn_off`
 `verified-by: bravebot_tui::mcp_command::reconnecting_a_running_server_says_so_and_changes_nothing`
 `verified-by: bravebot_tui::mcp_command::turning_off_a_running_server_removes_it_and_the_last_leaves_none`
+`verified-by: bravebot_tui::mcp_command::removing_a_server_withdraws_the_request_then_deletes_the_declaration_and_stops_it`
+`verified-by: bravebot_tui::mcp_command::a_removal_that_fails_leaves_the_server_running_and_says_why`
+`verified-by: bravebot_tui::mcp_command::a_removal_runs_no_program_for_a_word_that_is_no_alias_or_where_nothing_may_be_written`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
 
@@ -2039,9 +2200,9 @@ callable that the person turned off.
 At the end of its report, `/status` has a `Server policy` line naming each local server the session
 started, and under it one line each for what the policy holds of egress (none, this machine only,
 any address, or only the proxy that applies the session's host list), whether the server may start
-subprocesses, and the directory it starts in. Where the platform refuses a write to a `.git` beneath
-a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a `.git` line
-says so, since a row that reads `write` does not reach one. Then comes one line for each path the
+subprocesses, and the directory it starts in. Where the platform refuses a write to a protected name
+beneath a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a
+`protected names` line says so, since a row that reads `write` does not reach one. Then comes one line for each path the
 policy names, labelled `read`, `write` or `read, write` for what the row grants, and the paths that
 were wanted and are in no row because this platform names no path that is not on disk
 ([SANDBOX-9](sandboxing.md#SANDBOX-9)), under a `left out` line giving that reason. A write row
@@ -2119,7 +2280,7 @@ A call to a tool of such a server is put to the person before a rule or an earli
   not read, and neither is an answer 2 recorded for the tool in this project, whether it was given
   before the declaration said so or not. An `ask` rule asks as it does for any call. A `deny` rule
   still refuses the call before anybody is asked, and private arguments ask as
-  [SERVERS-7](#SERVERS-7) says.
+  [SERVERS-7](#SERVERS-7) says, and the declaration's reason is the one drawn where both apply.
 - **No answer to it lasts.** The terminal draws answer 2 as not offered, saying every call to this
   server is asked about, and binds no key for it. The plain interface says so under the call. An
   answer 2 that arrives anyway is a yes to that call, and nothing is written to `mcp-tools`.
@@ -2182,6 +2343,7 @@ answer 2 for the tool, which gives up the property for that server.
 `verified-by: bravebot_agent::servers::a_local_server_declared_to_ask_every_call_is_held_as_one`
 `verified-by: bravebot_agent::servers::a_server_asked_every_call_is_still_asked_every_call_after_it_moves`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_declaration_asking_every_call`
+`verified-by: bravebot_agent::mcp::a_server_asked_every_call_is_still_asked_after_it_moves_during_a_turn`
 `verified-by: bravebot_agent::mcp::a_server_asked_every_call_asks_though_a_rule_and_answer_two_allow_it`
 `verified-by: bravebot_agent::mcp::a_deny_rule_refuses_a_call_to_a_server_asked_every_call_before_anybody_is_asked`
 `verified-by: bravebot_agent::mcp::an_answer_that_would_stand_is_not_recorded_for_a_server_asked_every_call`
@@ -2251,3 +2413,143 @@ an earlier answer or a rule, so the pairs need it.
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_that_names_choice_arguments_keeps_them_and_approves_them`
 `verified-by: bravebot_browser::install::the_declaration_of_the_input_group_declares_the_element_number_of_its_three_tools_as_taking_a_choice`
 `verified-by: bravebot_browser::install::the_declared_choices_are_the_tools_whose_schema_takes_an_element_number`
+
+<a id="SERVERS-23"></a>
+### SERVERS-23: a local declaration may say it runs in an OpenShell sandbox made from one pinned image
+
+A stdio declaration may hold `"backend": "openshell"` and `"image": "<reference>"`, both or neither.
+`image` without `backend`, a `backend` other than `openshell`, or an image that is empty, longer than
+512 characters, starts with `-` or holds whitespace or a control character is a problem of that entry.
+A remote server cannot declare one. Both are part of the digest where `backend` is set, so a
+declaration that names neither digests as it did before, and changing either asks
+[SERVERS-4](#SERVERS-4)'s question again naming `backend`.
+
+`bravebot mcp add <alias> --openshell <image> -- <program> [args...]` writes the pair. The program is
+looked for in the image, so no `PATH` is asked for. A variable, a stored value, `--dir` or `--http`
+beside it, or an argument naming a file on this machine that the declaration would be granted, is
+refused by the check a session refuses it with, in its sentence, and nothing is written. An
+image named by a tag is pinned before anything is written: its registry is asked, through the egress
+gate and with no credential but the anonymous pull token Docker Hub and GHCR issue, for the manifest
+the tag names, as an index first, and the reference is written as `<image>@sha256:<digest>`, the
+digest being the sha256 of the manifest's bytes. Only that digest is released from what the registry
+sent. A reference that already carries a digest is written as typed. Where the registry cannot be
+reached, refuses, or the image is private, the add stops and says to give the image with its digest.
+
+The question, `get` and `list` say that the server runs in an OpenShell sandbox, from what image, and
+that its tools are offered to manifest runs only, under its row and no other's.
+
+**Why.** The image is the server's filesystem and its program, so it is part of what the person
+approves. A tag names whatever its registry points it at, so an approval of a tag would cover an image
+the person never saw once the tag moved.
+
+`verified-by: bravebot_config::mcp::a_backend_and_its_image_are_part_of_the_digest_and_native_digests_as_before`
+`verified-by: bravebot_config::mcp::a_backend_names_the_field_that_changed_and_survives_the_file`
+`verified-by: bravebot_config::mcp::a_backend_is_openshell_with_one_image_and_belongs_to_a_local_server`
+`verified-by: bravebot_cli::mcp::the_openshell_flag_names_the_image_of_a_local_server_and_asks_for_no_path`
+`verified-by: bravebot_cli::mcp::an_openshell_server_whose_arguments_name_a_file_here_is_refused_before_anything_is_written`
+`verified-by: bravebot_cli::mcp::list_and_get_say_which_server_runs_in_openshell_and_from_what_image`
+`verified-by: bravebot_agent::images::a_reference_is_read_as_a_registry_reads_it`
+`verified-by: bravebot_agent::images::what_is_not_a_reference_is_refused`
+`verified-by: bravebot_agent::images::a_pinned_reference_is_kept_and_nothing_is_fetched`
+`verified-by: bravebot_agent::images::the_digest_is_the_sha256_of_the_manifest_and_a_token_is_read_under_either_name`
+
+<a id="SERVERS-24"></a>
+### SERVERS-24: a session starts an OpenShell server in its own sandbox and offers its tools to manifest runs only
+
+A session that starts a server declared with `"backend": "openshell"` ([SERVERS-23](#SERVERS-23))
+creates one sandbox for it from the declared image ([SANDBOX-33](sandboxing.md#SANDBOX-33)), named
+`bb-` and twelve random letters and digits, and starts the program in it. The sandbox may reach the hosts the declaration's
+`allowed_hosts` names, less any the session's own host list leaves out and any it denies a name of,
+since an OpenShell policy can only allow, and none where the session's network is closed, the
+declaration names no host, or a denied entry cannot be read. Each host is passed in lower case
+with no trailing dot, and a name OpenShell does not take, such as one with `_` in it, is left out
+alone. A declaration that names a variable, a stored
+value, a file to read or a directory is not started, and the person is told what to remove. Nor is one whose image
+carries no digest, as a declaration written by hand may give a tag or a path: an approval of a
+reference that names no digest would cover whatever it names later, and the person is told to add
+the server again with `mcp add`, which pins it. Where
+OpenShell is not installed or the sandbox cannot be created with its policy confirmed, the server is
+not started and the person is told why. It is never started outside the sandbox in its place.
+
+The session holds the sandbox for as long as it holds the server, and deletes it when it lets the
+server go, a failed handshake included. A process ended by a signal deletes nothing, so each sandbox is recorded, with the process and
+the machine that made it, in `openshell-sandboxes` in the state directory before it is created, and
+the first OpenShell start of every process deletes each sandbox this machine recorded whose process is
+no longer running, and says which. A sandbox of a running process, one another machine recorded, as
+where two machines share a state directory, and one in no record, as another machine's on a shared
+gateway, is not touched. Where nothing may be written to the state directory, as in an
+incognito session, nothing is recorded or deleted.
+
+The managed layer ([SERVERS-12](#SERVERS-12)) matches such a server by the program and arguments as
+the image names them. A `mcp.deny` entry naming them refuses it, and no `mcp.allow` entry names it,
+since an allow entry names a command on this machine and the image, which the person chose, decides
+what is at that path inside it. Where `mcp.allow` is in force, a server in OpenShell is not started.
+
+Only a manifest run calls such a server. A turn's grants leave it out, so a turn neither puts its list
+to the person nor offers its tools, its prompts are neither listed nor fetched, and a manifest run puts the list before it plans
+([MANIFEST-15](manifest.md#MANIFEST-15)). `/status` draws it under the server-policy heading: the
+sandbox and its image, the hosts it may reach or none, that it reads only its image, and that its
+tools are offered to manifest runs only.
+
+Where any server is declared for OpenShell, `doctor` names those servers under `openshell`, with
+the version `openshell --version` gives and whether `openshell status` says its gateway is connected,
+and fails where the program is not found, is older than 0.1.7, or its gateway is not connected. Where
+no server is declared for it, `doctor` says nothing of OpenShell.
+
+**Why.** A manifest run fixes every call before it reads anything, so the hosts a server may reach and
+the tools it may be asked for are known when the sandbox is made, and nothing a server returns can
+widen them. A turn reads replies and decides again, and how this backend should serve a turn is not
+settled yet. Starting the program outside the sandbox would run it with the person's own access under
+an approval given for a sandbox.
+
+`verified-by: bravebot_agent::servers::an_openshell_declaration_is_planned_with_its_program_as_named_in_the_image`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_naming_variables_or_files_is_refused`
+`verified-by: bravebot_agent::servers::an_openshell_declaration_whose_image_is_not_pinned_is_refused`
+`verified-by: bravebot_agent::servers::an_openshell_server_reaches_only_its_declared_hosts_within_the_session`
+`verified-by: bravebot_config::managed::an_allow_list_names_no_server_in_an_image_and_a_deny_entry_still_does`
+`verified-by: bravebot_agent::servers::a_server_declared_for_openshell_starts_in_a_recorded_sandbox_and_goes_with_the_session`
+`verified-by: bravebot_sandbox::hosts::a_denied_entry_overlapping_a_rule_at_all_denies_some_name_of_it`
+`verified-by: bravebot_agent::mcp::a_turn_puts_no_list_and_offers_no_tool_of_a_server_only_a_manifest_run_calls`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls`
+`verified-by: bravebot_tui::status::a_server_in_an_openshell_sandbox_says_what_it_runs_in_and_may_reach`
+`verified-by: bravebot_sandbox::openshell::only_a_recorded_sandbox_of_an_ended_process_is_left_behind`
+`verified-by: bravebot_sandbox::openshell::a_record_holds_this_process_and_a_sweep_keeps_a_running_one`
+`verified-by: bravebot_sandbox::openshell::a_name_is_random_and_fits_openshell`
+`verified-by: bravebot_mcp::openshell::a_recorded_sandbox_of_an_ended_process_is_removed_and_no_other`
+`verified-by: bravebot_sandbox::openshell::the_version_and_the_gateway_are_read_from_what_openshell_prints`
+`verified-by: bravebot_cli::mcp::doctor_is_told_the_servers_declared_for_openshell_and_no_others`
+
+<a id="SERVERS-25"></a>
+### SERVERS-25: a stdio server's stderr is discarded in every front end
+
+What a stdio server writes to its standard error is not shown. The full-screen interface, the plain
+interface (`--plain`), a one-shot run (`-p`) and the desktop application each start the server with
+its stderr going nowhere, a server in an OpenShell sandbox ([SERVERS-24](#SERVERS-24)) included.
+Nothing reads it, so none of it reaches the terminal, the run's stderr, a message the planner is
+sent or a record. A server's own words are shown only where this spec draws them behind the margin
+with control characters replaced ([SERVERS-8](#SERVERS-8), [LAYER-3](layering.md#LAYER-3)).
+
+**Why.** A terminal acts on the escape sequences in the bytes it is given. The plain interface and a
+one-shot run draw the questions of [SERVERS-4](#SERVERS-4) and [SERVERS-8](#SERVERS-8), and every
+notice, on the stream a server's stderr would share, so an approved server that wrote there could set
+the window title, write the clipboard (OSC 52) and erase the rows of a question the person is about
+to answer. The question is what the person approves on, and a server is third-party code that the
+approval does not vouch for beyond its tools.
+
+**A known cost.** A server's diagnostics are lost to the person, so a server that does not start is
+read by running it by hand.
+
+A server in an OpenShell sandbox receives the stream it is given like any other
+([SERVERS-24](#SERVERS-24)).
+
+**What the tests pin.** `--plain` and `-p` are pinned by running a server that writes escape
+sequences and reading the transcript. The OpenShell backend is pinned by a fake `openshell` that
+records whether its own stderr is the null device. The full-screen interface (the start in
+`crates/cli/src/main.rs` and `/mcp` in `crates/tui/src/mcp_command.rs`) and the desktop application
+(`crates/ui-bridge/src/bridge.rs`) also pass `Stream::Null`, and no test pins those three call
+sites, since each starts a confined server inside a front end that has no harness for reading what
+the server wrote. A change of one of them to `Stream::Inherited` is found by a reviewer.
+
+`verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
+`verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`

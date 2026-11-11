@@ -198,10 +198,51 @@ pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> St
     }
 }
 
+/// What a person is told beside a read that bypass kept back because auto-vetting is on and a
+/// check did not pass it.
+///
+/// Beside [`processor_model_refusal`] for the same reason: the planner-facing module that refuses
+/// the read may not look a message up, and this sentence is for the screen only. It names no
+/// verdict and carries nothing the check wrote.
+pub fn vetting_kept_back() -> String {
+    bravebot_i18n::t!(vetting_kept_back).to_string()
+}
+
+/// What a person is told when the session is in bypass with auto-vetting on, which is when a read
+/// can be refused with nobody asked.
+pub fn vetting_in_bypass() -> String {
+    bravebot_i18n::t!(session_vetting_in_bypass).to_string()
+}
+
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_core::vetting::Checking;
 use bravebot_i18n::t;
+
+/// Which call a line is about, so a finish is drawn on its own call's line when calls overlap.
+///
+/// Delegates run alongside each other and alongside the turn, and their calls are reported through
+/// the same reporter, so the order lines arrive in does not say which start a finish ends.
+///
+/// Taken from a counter in this process when dispatch begins a call, and never from the call: the
+/// id a model service gives a call comes back in its reply and can be missing, and a call's target
+/// can be content from outside, so pairing on either would let a reply decide which line a result
+/// is drawn on. Unique within the process, which holds every session a host runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CallId(u64);
+
+impl CallId {
+    /// An id no other call in this process has.
+    pub fn next() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The id as a number, for a wire.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// One thing the turn did, shaped for the person watching.
 ///
@@ -211,6 +252,11 @@ use bravebot_i18n::t;
 /// content is allowed to reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Activity {
+    /// The call this line is about, the same on its start and its finish.
+    ///
+    /// `None` only for a line no dispatch made, such as one a test or a resumed session draws.
+    /// Every call dispatch begins has one.
+    pub call: Option<CallId>,
     /// What is being done, in the driver's own word.
     ///
     /// A literal chosen by the dispatch table rather than anything the model wrote, so a call
@@ -236,6 +282,14 @@ pub struct Activity {
     /// audiences: the verb is a word in the reader's own language, and this is what a program
     /// matches on. A surface that offered only the verb would have a script keying off French.
     pub tool: String,
+    /// The name of the catalogue entry a `load_skill` call resolved to, as the catalogue spells
+    /// it. `None` for every other call and for a `load_skill` that was refused or resolved to no
+    /// entry.
+    ///
+    /// The driver's own string, taken from the entry the catalogue returned and never from the
+    /// call's arguments, so a program counting loads of a skill compares names the driver holds
+    /// and not the model's word for one ([`Activity::target`] is that, and is only drawn).
+    pub skill: Option<String>,
     /// What came of it, in a few words. `None` while the call is still running, which is what
     /// makes an unfinished line distinguishable from one that finished with nothing to say.
     pub note: Option<String>,
@@ -273,11 +327,13 @@ impl Activity {
     /// A call that has begun and has not finished.
     pub fn running(verb: &'static str, target: impl Into<String>) -> Self {
         Self {
+            call: None,
             verb,
             target: target.into(),
             names_a_file: false,
             why: String::new(),
             tool: String::new(),
+            skill: None,
             note: None,
             failed: false,
             changes: Vec::new(),
@@ -287,9 +343,21 @@ impl Activity {
         }
     }
 
+    /// Say which call this line is about.
+    pub fn for_call(mut self, call: CallId) -> Self {
+        self.call = Some(call);
+        self
+    }
+
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
     pub fn of_tool(mut self, tool: &str) -> Self {
         self.tool = tool.to_string();
+        self
+    }
+
+    /// Say which catalogue entry a `load_skill` call resolved to, by the catalogue's own name.
+    pub fn loading_skill(mut self, skill: Option<String>) -> Self {
+        self.skill = skill;
         self
     }
 
@@ -424,10 +492,14 @@ pub struct Written {
     pub numbers: Vec<crate::diff::Numbered>,
 }
 
+/// When a failed request will be sent again, as the driver announces it.
+pub use bravebot_aichat::call::Retry;
+
 /// What the turn is waiting on.
 ///
-/// The driver's own words, chosen from the round number and nothing else. A wait that says what
-/// it is a wait for is the difference between a slow turn and an apparently stuck one.
+/// The driver's own words, chosen from the round number and nothing else, and for a request being
+/// sent again the numbers of its pause. A wait that says what it is a wait for is the difference
+/// between a slow turn and an apparently stuck one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     /// The first call to the model. It has the task and nothing else, so what it is doing is
@@ -443,8 +515,10 @@ pub enum Phase {
     /// The request failed in transit and is being sent again.
     ///
     /// Worth its own word because the pause looks like the others and is not one: nothing is
-    /// being worked out, and what the model had written has been thrown away.
-    Reconnecting,
+    /// being worked out, and what the model had written has been thrown away. Carries the pause
+    /// while it is being waited out, so a screen can say when the next attempt goes, and nothing
+    /// once that attempt is out.
+    Reconnecting(Option<Retry>),
 }
 
 impl Phase {
@@ -463,7 +537,7 @@ impl Phase {
             Self::Planning => "Planning",
             Self::Thinking => "Thinking",
             Self::Compacting => "Compacting",
-            Self::Reconnecting => "Reconnecting",
+            Self::Reconnecting(_) => "Reconnecting",
         }
     }
 }
@@ -896,6 +970,46 @@ pub struct SentMessage {
     pub text: String,
 }
 
+/// Where a message a retrieval sent excerpts of was said, as a transcript places it: the exchange it
+/// belongs to and what it was there. Positions only, so the interface draws the row from its own
+/// copy of the transcript and no excerpt crosses twice
+/// ([RETRIEVE-27](../../../docs/specs/retrieval.md#RETRIEVE-27)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Place {
+    /// The message's place in the record's numbering.
+    pub ordinal: u32,
+    /// The exchange it belongs to, as the ordinal of the prompt that began it among the things the
+    /// person said, or `None` before the first.
+    pub prompt: Option<u32>,
+    /// What the message was in that exchange.
+    pub said: Spoken,
+}
+
+/// What a message a retrieval drew on was, within its exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Spoken {
+    /// The prompt itself.
+    Prompt,
+    /// The `nth` thing the model said in the exchange, counting from zero.
+    Reply { nth: u32 },
+    /// The result of the exchange's `nth` call, counting from zero, where the call is known.
+    Tool { nth: Option<u32> },
+    /// Something composed for the exchange, an attachment or an imported line.
+    Other,
+}
+
+/// What a retrieval in a turn drew on, or why there was none
+/// ([RETRIEVE-27](../../../docs/specs/retrieval.md#RETRIEVE-27)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retrieved {
+    /// The messages the excerpts came from, once each, in the order they were said.
+    pub used: Vec<Place>,
+    /// About how many tokens the excerpts came to.
+    pub tokens: u64,
+    /// Why the round could not retrieve and summarised instead, where it could not.
+    pub fell_back: Option<crate::retrieval::Unavailable>,
+}
+
 pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
@@ -920,7 +1034,8 @@ pub trait Reporter {
     /// turn runs. Not sent for a delegate, whose conversation is not the session's.
     fn exchange_forked(&mut self, _fork: crate::aside::Fork) {}
 
-    /// The parent is about to join a delegate, which may already have finished.
+    /// The parent is about to wait for delegates, or to join this one, which may already have
+    /// finished. Called once for each delegate the wait covers.
     fn delegate_waiting(&mut self, _delegate: DelegateId) {}
 
     /// The submitted prompt was appended at this position in the recounted conversation.
@@ -957,6 +1072,10 @@ pub trait Reporter {
     /// driver taking a decision from untrusted bytes, and an empty line is the interface's to
     /// leave undrawn.
     fn narration(&mut self, _text: String) {}
+
+    /// A round of a turn retrieved, or could not and summarised instead (RETRIEVE-27). Positions
+    /// and counts only, never the excerpts.
+    fn retrieved(&mut self, _retrieved: Retrieved) {}
 
     /// A summary of the conversation could not be made, so the turn goes on with the history it has.
     ///
@@ -1044,7 +1163,7 @@ pub trait Reporter {
     ///
     /// Sent after the kernel has decided, which is why it is not part of the finished call: what
     /// happens to a result is settled by its label, after the tool that produced it has returned.
-    fn landed(&mut self, _landing: Landing) {}
+    fn landed(&mut self, _call: Option<CallId>, _landing: Landing) {}
 
     /// A tool call has begun.
     ///
@@ -1053,10 +1172,11 @@ pub trait Reporter {
     /// nothing at all until it finished.
     fn tool_started(&mut self, _activity: Activity) {}
 
-    /// The call [`Reporter::tool_started`] last announced has finished.
+    /// A call [`Reporter::tool_started`] announced has finished.
     ///
-    /// Paired by position rather than by an identifier because dispatch runs one call at a
-    /// time: there is never a second call in flight for this to be ambiguous between.
+    /// Paired with its start by [`Activity::call`], which both carry. Delegates' calls are reported
+    /// through the same reporter as the turn's, so the latest start is not necessarily the one a
+    /// finish ends.
     fn tool_finished(&mut self, _activity: Activity) {}
 
     /// The command the call [`Reporter::tool_started`] last announced can be moved to the
@@ -1218,6 +1338,8 @@ pub struct RecordingReporter {
     pub returned: Vec<Returned>,
     /// Where each result went.
     pub landed: Vec<Landing>,
+    /// The call each entry of `landed` is about, in the same order.
+    pub landed_calls: Vec<Option<CallId>>,
     /// Everything the person said mid-turn, in the order it reached the planner.
     pub interjected: Vec<String>,
     /// Every message from another session, in the order it reached the planner.
@@ -1236,6 +1358,8 @@ pub struct RecordingReporter {
     pub requests: Vec<crate::request_view::RequestView>,
     /// Every exchange a turn published at a round boundary, in order.
     pub forks: Vec<crate::aside::Fork>,
+    /// What each round that retrieved drew on, in order.
+    pub retrieved: Vec<Retrieved>,
 }
 
 impl Reporter for RecordingReporter {
@@ -1277,6 +1401,10 @@ impl Reporter for RecordingReporter {
 
     fn narration(&mut self, text: String) {
         self.narration.push(text);
+    }
+
+    fn retrieved(&mut self, retrieved: Retrieved) {
+        self.retrieved.push(retrieved);
     }
 
     fn streaming(&mut self, text: String) {
@@ -1339,7 +1467,8 @@ impl Reporter for RecordingReporter {
         self.returned.push(returned);
     }
 
-    fn landed(&mut self, landing: Landing) {
+    fn landed(&mut self, call: Option<CallId>, landing: Landing) {
+        self.landed_calls.push(call);
         self.landed.push(landing);
     }
 

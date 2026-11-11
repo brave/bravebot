@@ -10,12 +10,15 @@
 //! (curl fails to resolve or connect) and cannot create files, while still being able
 //! to exec and read permitted paths.
 
-use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy, with_their_resolved_spelling};
+use crate::policy::{
+    Capabilities, ConfinementLevel, PROTECTED_DIRECTORIES, PROTECTED_FILES, SandboxPolicy,
+    with_their_resolved_spelling,
+};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
@@ -59,6 +62,125 @@ fn mach_services(policy: &SandboxPolicy) -> impl Iterator<Item = &'static &'stat
 /// Refuses a write to any path with a `.git` component, in either case, since the default
 /// volume opens `.GIT` when git asks for `.git`.
 const GIT_DIRECTORY_WRITE: &str = "(deny file-write* (regex #\"/\\.[Gg][Ii][Tt](/|$)\"))\n";
+
+/// A name as a regular expression that matches every spelling `bravebot_core::protected::is_protected`
+/// reads as the name: either letter case, and the letters whose case mapping reaches an ASCII
+/// one, which are `\u{17f}` for `s`, `\u{131}` for `i` and the Kelvin sign `\u{212a}` for `k`. A
+/// volume that folds case opens each of them as the name.
+///
+/// Trailing dots and spaces and a `\` separator are not matched: they spell another name on this
+/// platform.
+fn name_pattern(name: &str) -> String {
+    let mut out = String::new();
+    for letter in name.chars() {
+        match letter {
+            's' => out.push_str("(s|S|\u{17f})"),
+            'i' => out.push_str("(i|I|\u{131})"),
+            'k' => out.push_str("(k|K|\u{212a})"),
+            '.' => out.push_str("\\."),
+            letter if letter.is_ascii_alphabetic() => {
+                out.push('[');
+                out.push(letter.to_ascii_lowercase());
+                out.push(letter.to_ascii_uppercase());
+                out.push(']');
+            }
+            letter => out.push(letter),
+        }
+    }
+    out
+}
+
+/// `text` with every character a regular expression reads as syntax escaped.
+fn regex_literal(text: &str) -> String {
+    let mut out = String::new();
+    for letter in text.chars() {
+        if ".[]()*+?{}|\\^$".contains(letter) {
+            out.push('\\');
+        }
+        out.push(letter);
+    }
+    out
+}
+
+/// The refusals of [`PROTECTED_DIRECTORIES`] and [`PROTECTED_FILES`] a policy that writes carries.
+///
+/// A name other than `.git` is refused at any path, and a row that is itself inside such a
+/// directory, such as a server's home under `~/.bravebot`, is granted again with the names
+/// beneath it refused again. The `.git` refusal comes last so that no row re-grants it. One
+/// pattern for every row would be a profile the kernel refuses to compile once a policy has a few
+/// hundred rows, which is why only the rows that need it carry their own.
+fn protected_name_rules(policy: &SandboxPolicy) -> String {
+    let mut out = format!(
+        "(deny file-write* (regex {}))\n",
+        quote(&format!("/({})(/|$)", other_names_pattern()))
+    );
+    let rows: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let refused = with_their_resolved_spelling(&policy.unwritable);
+    for row in with_their_resolved_spelling(&rows) {
+        // A row at a refused path is withdrawn and not lifted, and a refusal beneath a row wins
+        // over the grant, so both are said again after it.
+        if !seen.contains(&row) && is_inside_a_protected_name(&row) && !refused.contains(&row) {
+            out.push_str(&format!(
+                "(allow file-write* (subpath {}))\n",
+                quote(&row.to_string_lossy())
+            ));
+            out.push_str(&protected_names_write(&row));
+            for path in refused.iter().filter(|path| path.starts_with(&row)) {
+                out.push_str(&format!(
+                    "(deny file-write* (subpath {}))\n",
+                    quote(&path.to_string_lossy())
+                ));
+            }
+            seen.push(row);
+        }
+    }
+    out.push_str(GIT_DIRECTORY_WRITE);
+    out
+}
+
+/// The names other than `.git` as one alternation.
+fn other_names_pattern() -> String {
+    PROTECTED_DIRECTORIES
+        .iter()
+        .chain(PROTECTED_FILES.iter())
+        .filter(|name| **name != ".git")
+        .map(|name| name_pattern(name))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Whether a component of `row` is one of the names other than `.git`, under the same folding
+/// [`name_pattern`] matches.
+fn is_inside_a_protected_name(row: &Path) -> bool {
+    row.components().any(|part| {
+        let part = part
+            .as_os_str()
+            .to_string_lossy()
+            .to_lowercase()
+            .replace(['\u{17f}'], "s")
+            .replace(['\u{131}'], "i");
+        PROTECTED_DIRECTORIES
+            .iter()
+            .chain(PROTECTED_FILES.iter())
+            .any(|name| *name != ".git" && *name == part)
+    })
+}
+
+/// Refuses a write to a path beneath `row` with a component in [`PROTECTED_DIRECTORIES`] or
+/// [`PROTECTED_FILES`] (SANDBOX-14).
+///
+/// Only the part of the path beneath the row is read, so a row that is itself inside such a
+/// directory, such as a server's home under `~/.bravebot`, is writable under itself.
+fn protected_names_write(row: &Path) -> String {
+    let row = row.to_string_lossy();
+    let pattern = format!(
+        "^{}/(.*/)?({})(/|$)",
+        regex_literal(row.trim_end_matches('/')),
+        other_names_pattern()
+    );
+    format!("(deny file-write* (regex {}))\n", quote(&pattern))
+}
 
 /// The program a confined process is reached through where the environment would not
 /// survive the journey otherwise.
@@ -211,10 +333,13 @@ impl SeatbeltSandbox {
         }
 
         // A repository's configuration and hooks are commands git runs, unconfined, the next time
-        // anybody runs git there. Seatbelt lets the last matching rule decide, so this follows the
-        // rows it narrows.
+        // anybody runs git there, and so are a `.husky` script, a `.pre-commit-config.yaml` and
+        // the project's own `.bravebot` settings. Seatbelt lets the last matching rule decide, so
+        // these follow the rows they narrow. The `.git` refusal holds at any path; the others are
+        // read beneath each write row, so a row that is itself inside one of those directories
+        // stays writable.
         if !policy.writable.is_empty() && !policy.git_directories_writable {
-            out.push_str(GIT_DIRECTORY_WRITE);
+            out.push_str(&protected_name_rules(policy));
         }
 
         // Looking at a path answers what it is and not what it holds: this allows stat and
@@ -337,6 +462,9 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
                 &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
                 crate::programs::Inherits::All,
                 crate::programs::SearchPath::Inherited,
+                // `xcode-select -p`: its own variable, `DEVELOPER_DIR`, is removed below, and no
+                // other is known to select code (SANDBOX-30, empty-list starts).
+                crate::programs::CodeSelectors::Checked(&[]),
             );
             command
                 .arg("-p")
@@ -512,6 +640,8 @@ impl SeatbeltSandbox {
             &crate::programs::Resolved::written_in_source(SANDBOX_EXEC),
             crate::programs::Inherits::All,
             crate::programs::SearchPath::Inherited,
+            // The program it confines runs under the profile, and `sandbox-exec` is the system's.
+            crate::programs::CodeSelectors::Kept,
         );
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(
@@ -1829,6 +1959,83 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// A granted row whose name is later replaced by a link to a directory outside the grants:
+    /// Seatbelt matches the path a process ends up opening, so the row gives the link's target
+    /// nothing. SANDBOX-28 relies on this for the window between a stage's policy being built and
+    /// its program opening the row. The control is the same row left as the directory, which is
+    /// read and written, so the refusals mean something. The regression it rejects is a profile
+    /// that resolves the row's name when the program starts and so attaches the grant to the
+    /// target.
+    #[test]
+    fn a_granted_row_replaced_by_a_link_gives_its_target_nothing() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let scratch = crate::testutil::scratch_dir("bravebot-sandbox-row-relinked");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("kept")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(scratch.join("shared"))
+            .expect("the scratch directory is creatable");
+        std::fs::create_dir_all(scratch.join("outside"))
+            .expect("the scratch directory is creatable");
+        let scratch = scratch
+            .canonicalize()
+            .expect("the scratch directory is there");
+        std::fs::write(scratch.join("kept").join("file"), "kept").expect("writable");
+        std::fs::write(scratch.join("outside").join("file"), "outside").expect("writable");
+        // The name is made to lead elsewhere after the policy names it.
+        std::fs::remove_dir_all(scratch.join("shared")).expect("removable");
+        std::os::unix::fs::symlink(scratch.join("outside"), scratch.join("shared"))
+            .expect("the scratch link is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(scratch.join("kept"))
+            .allow_read(scratch.join("shared"))
+            .allow_write(scratch.join("kept"))
+            .allow_write(scratch.join("shared"));
+        let run = |program: &str, path: PathBuf| {
+            sandbox
+                .spawn(
+                    OsStr::new(program),
+                    &[path.into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .success()
+        };
+
+        assert!(
+            run("/bin/cat", scratch.join("kept").join("file")),
+            "a granted directory was not read, so the refusals below mean nothing"
+        );
+        assert!(
+            run("/usr/bin/touch", scratch.join("kept").join("new")),
+            "a granted directory was not written, so the refusals below mean nothing"
+        );
+        assert!(
+            !run("/bin/cat", scratch.join("shared").join("file")),
+            "a row replaced by a link read the link's target"
+        );
+        assert!(
+            !run("/usr/bin/touch", scratch.join("shared").join("new")),
+            "a row replaced by a link wrote the link's target"
+        );
+        assert!(
+            !scratch.join("outside").join("new").exists(),
+            "the target was written"
+        );
+        assert!(
+            !run("/bin/cat", scratch.join("outside").join("file")),
+            "the target was read by its own name"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// A confined process stops a child it started, so a test runner or a `timeout` that gives up
     /// on a child does not wait on it until it ends by itself.
     #[test]
@@ -2468,10 +2675,205 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The other names a person's own tools run later (a `.husky` hook, `.pre-commit-config.yaml`,
+    /// `.gitmodules`, `.gitconfig`, the project's `.bravebot/`) are held back the way `.git` is, in
+    /// either case and including the letters a case-folding volume reads as the name. Every
+    /// refused write is attempted before any is asserted, so a failure lists every name that was
+    /// written. The `.git` hook is the control: it was refused before this change.
+    #[test]
+    fn a_write_row_does_not_reach_the_other_protected_names_beneath_it() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-protected-names");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git").join("hooks"))
+            .expect("the scratch directory is creatable");
+        // Each directory a refused path below is written in exists, so a refusal is the
+        // sandbox's and not a missing parent.
+        for parent in [
+            dir.join(".husky"),
+            dir.join(".bravebot"),
+            dir.join("sub").join(".husky"),
+            dir.join("sub").join(".bravebot"),
+            dir.join(".HUSKY"),
+            dir.join(".hu\u{17f}ky"),
+            dir.join(".hus\u{212a}y"),
+        ] {
+            std::fs::create_dir_all(&parent).expect("the scratch directory is creatable");
+        }
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir);
+        let cp = |target: &Path| {
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+
+        assert_eq!(
+            cp(&dir.join(".git").join("hooks").join("pre-commit")),
+            Some(TOUCH_FAILED),
+            "the control was written"
+        );
+        let refused = [
+            dir.join(".husky").join("pre-commit"),
+            dir.join("sub").join(".husky").join("pre-commit"),
+            dir.join(".HUSKY").join("pre-commit"),
+            dir.join(".hu\u{17f}ky").join("pre-commit"),
+            dir.join(".hus\u{212a}y").join("pre-commit"),
+            dir.join(".pre-commit-config.yaml"),
+            dir.join(".Pre-Commit-Config.YAML"),
+            dir.join(".gitmodules"),
+            dir.join(".GITMODULES"),
+            dir.join(".gitconfig"),
+            dir.join(".bravebot").join("settings.json"),
+            dir.join("sub").join(".bravebot").join("settings.json"),
+        ];
+        let written: Vec<_> = refused
+            .iter()
+            .filter(|target| cp(target) == Some(0) || target.exists())
+            .collect();
+        assert!(written.is_empty(), "these were written: {written:?}");
+
+        for allowed in [
+            dir.join(".husky-not"),
+            dir.join(".gitignore"),
+            dir.join(".gitattributes"),
+            dir.join(".bravebotx"),
+            dir.join("notes.pre-commit-config.yaml"),
+            dir.join("sub").join("file"),
+        ] {
+            assert_eq!(cp(&allowed), Some(0), "{} was refused", allowed.display());
+            assert!(allowed.exists(), "{} was not written", allowed.display());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write row that is itself inside a protected directory, such as a server's home under
+    /// `~/.bravebot`, stays writable under itself, and a protected name beneath it is still
+    /// refused. A refusal read from the whole path would refuse every write under the row.
+    #[test]
+    fn a_write_row_inside_a_protected_directory_is_writable_under_itself() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let parent = crate::testutil::scratch_dir("bravebot-sandbox-protected-row");
+        let _ = std::fs::remove_dir_all(&parent);
+        let dir = parent.join(".bravebot").join("mcp-home");
+        std::fs::create_dir_all(dir.join(".husky")).expect("the scratch directory is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir);
+        let touch = |target: &Path| {
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+
+        assert_eq!(touch(&dir.join("state")), Some(0), "the row was refused");
+        assert!(dir.join("state").exists());
+        assert_eq!(
+            touch(&dir.join(".husky").join("pre-commit")),
+            Some(TOUCH_FAILED),
+            "a protected name beneath the row was written"
+        );
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// A path a person refused beneath a write row that is inside a protected directory stays
+    /// refused, and so does a row at the refused path itself: the re-grant that keeps the row
+    /// writable must not lift the person's refusal.
+    #[test]
+    fn a_refused_path_under_a_row_inside_a_protected_directory_stays_refused() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let parent = crate::testutil::scratch_dir("bravebot-sandbox-protected-row-refused");
+        let _ = std::fs::remove_dir_all(&parent);
+        let dir = parent.join(".bravebot").join("mcp-home");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).expect("the scratch directory is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir)
+            .allow_write(&locked)
+            .deny_write(&locked);
+        let touch = |target: &Path| {
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+        };
+
+        assert_eq!(touch(&dir.join("state")), Some(0), "the row was refused");
+        assert_eq!(
+            touch(&locked.join("file")),
+            Some(TOUCH_FAILED),
+            "a path the person refused was written"
+        );
+        assert!(!locked.join("file").exists());
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// The profile refuses the same names `bravebot_core::protected::is_protected` accepts is
+    /// pinned in `bravebot-agent`, which sees both crates. This pins that the profile is built
+    /// from the shared list: a name added to the list reaches the profile.
+    #[test]
+    fn every_name_in_the_shared_list_is_in_the_profile() {
+        let profile = SeatbeltSandbox::profile(
+            &SandboxPolicy::strict()
+                .allow_read("/usr")
+                .allow_write("/work"),
+        );
+        for name in PROTECTED_DIRECTORIES.iter().chain(PROTECTED_FILES.iter()) {
+            assert!(
+                profile.contains(&name_pattern(name).replace('\\', "\\\\")),
+                "{name} is not in the profile"
+            );
+        }
+    }
+
     /// A caller running a program a person asked to run against a repository may lift the
-    /// withholding, and the lifting reaches the `.git` and nothing else: the control that gives
-    /// the refusal above its meaning, since a profile dropping every write refusal passes the
-    /// writes below just as readily.
+    /// withholding, and the lifting reaches every protected name a write row covers (a `.git` and
+    /// a `.husky` here) and no path outside the rows: the control that gives the refusals above
+    /// their meaning, since a profile dropping every write refusal passes the writes below just
+    /// as readily.
     #[test]
     fn a_policy_allowing_git_directory_writes_reaches_a_git_directory() {
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
@@ -2479,6 +2881,7 @@ int main(int argc, char **argv) {
         let dir = crate::testutil::scratch_dir("bravebot-sandbox-git-directory-allowed");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".git")).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(dir.join(".husky")).expect("the scratch directory is creatable");
 
         let policy = SandboxPolicy::strict()
             .allow_read("/usr")
@@ -2501,6 +2904,20 @@ int main(int argc, char **argv) {
 
         assert!(status.success(), "a write under .git was refused");
         assert!(target.exists(), "the write created nothing");
+        let hook = dir.join(".husky").join("pre-commit");
+        let hooked = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/touch"),
+                &[hook.display().to_string().into()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert!(hooked.success(), "a write under .husky was refused");
+        assert!(hook.exists(), "the write created nothing");
         let outside = dir.parent().expect("a parent").join("bravebot-not-granted");
         let refused = sandbox
             .spawn(
@@ -2933,7 +3350,7 @@ int main(int argc, char **argv) {
             ),
             (
                 "the run base",
-                crate::base::run_base(prelude, &temporary, Some(&home)),
+                crate::base::run_base(prelude, &temporary, Some(&home), None),
             ),
         ];
         let mut live = Command::new("/bin/sleep")
@@ -3279,7 +3696,8 @@ int main(int argc, char **argv) {
                 .expect("the scratch home is creatable");
             std::fs::write(&file, "contents").expect("the scratch home is writable");
         }
-        let policy = crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let policy =
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let code = |program: &str, path: PathBuf| {
             exit_code_under(
                 &policy,
@@ -3346,7 +3764,7 @@ int main(int argc, char **argv) {
         std::fs::create_dir_all(cache.join("mds")).expect("the scratch cache is creatable");
         let cache = cache.canonicalize().expect("the scratch cache is there");
         let policy = crate::base::with_security_cache(
-            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None),
             &cache,
         );
         let code = |path: PathBuf| {
@@ -3397,6 +3815,7 @@ int main(int argc, char **argv) {
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             crate::base::Prelude::MacOs,
             &home,
+            None,
         );
         let at = |path: PathBuf| path.display().to_string();
         let code = |program: &str, path: PathBuf| {
@@ -3457,6 +3876,7 @@ int main(int argc, char **argv) {
         let policy = crate::scope::Scope::Remote.grant(
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         let at = |path: PathBuf| path.display().to_string();
@@ -3549,8 +3969,9 @@ int main(int argc, char **argv) {
         )
         .expect("the scratch home is writable");
         let policy = crate::scope::Scope::Remote.grant(
-            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         let code = |path: PathBuf| {
@@ -3644,7 +4065,7 @@ int main(int argc, char **argv) {
         std::fs::write(&message, "a commit").expect("the scratch directory is writable");
 
         let run_base =
-            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
         let sign = |policy: &SandboxPolicy| {
             let _ = std::fs::remove_file(temporary.join("message.sig"));
@@ -3673,6 +4094,7 @@ int main(int argc, char **argv) {
         let key_only = crate::scope::Scope::Signing.grant(
             run_base(),
             &home,
+            None,
             &crate::signing::Place::default(),
         );
         assert_ne!(sign(&key_only), Some(0), "signed with no agent");
@@ -3746,7 +4168,7 @@ int main(int argc, char **argv) {
         std::fs::write(&message, "a commit").expect("the scratch directory is writable");
 
         let run_base =
-            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home), None);
         let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
         let sign = |policy: &SandboxPolicy, key: &str| {
             let _ = std::fs::remove_file(temporary.join("message.sig"));
@@ -3771,12 +4193,13 @@ int main(int argc, char **argv) {
             )
         };
         let without_the_agent = crate::scope::Scope::Signing
-            .grant(run_base(), &home, &crate::signing::Place::default())
+            .grant(run_base(), &home, None, &crate::signing::Place::default())
             .allow_write(&socket);
         let asking_the_agent = crate::scope::Scope::Signing
             .grant(
                 run_base(),
                 &home,
+                None,
                 &crate::signing::Place {
                     agent: Some(socket.clone()),
                     ..crate::signing::Place::default()

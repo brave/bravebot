@@ -10,6 +10,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -257,7 +259,7 @@ impl Window {
     fn turn(&mut self, params: Value) -> Value {
         let mut params = params;
         params["session"] = json!(self.session);
-        let sent = self.call("turn.send", params);
+        let sent = self.call("turn.send", message_ids::with_fresh(params));
         assert!(sent.get("ok").is_some(), "the turn was refused: {sent}");
         self.ended()
     }
@@ -393,7 +395,9 @@ fn a_definition_that_is_no_slug_is_refused_before_a_turn_starts() {
         let session = window.session.clone();
         let refused = window.call(
             "turn.send",
-            json!({"session": session, "prompt": "SLUG-TURN", "definition": named}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": "SLUG-TURN", "definition": named}),
+            ),
         );
         assert!(
             refused.get("error").is_some(),
@@ -518,7 +522,9 @@ fn an_address_that_is_no_slug_is_refused_before_a_turn_starts() {
         let session = window.session.clone();
         let refused = window.call(
             "turn.send",
-            json!({"session": session, "prompt": "ADDRESS-SLUG-TURN", "address": named}),
+            message_ids::with_fresh(
+                json!({"session": session, "prompt": "ADDRESS-SLUG-TURN", "address": named}),
+            ),
         );
         assert!(
             refused.get("error").is_some(),

@@ -67,6 +67,13 @@ const MANAGED_DIR: &str = "/etc/bravebot";
 /// id: a layer that names a destination grants nothing, and a credential is the one value here that
 /// would.
 ///
+/// All eight names are read from the person's layers alone (BACKEND-33): a project or local file in
+/// a checkout cannot name the host that receives a conversation, the host the premium credential is
+/// presented to, or the AWS account. The test `no_pinnable_name_is_decided_by_a_checkouts_files` in
+/// `settings.rs` fails when a name is added here without being placed in the person-only lists of
+/// `env_var`, and `the_persons_own_files_decide_every_pinnable_name` checks that the person's own
+/// files decide every name here.
+///
 /// The names this layer answers for that are not variables are the server lists and the two
 /// `permissions` keys that only refuse, each read in its own field: what they have in common with
 /// the list here is that none of them can widen anything.
@@ -105,6 +112,9 @@ const RUN_NETWORK: &str = "run.network";
 /// Where it turns crash reports off, and the name `doctor` reports the pin by (CRASH-4).
 const CRASH_REPORTS_KEY: &str = "crashReports";
 
+/// Where it turns retrieval off, and the name `doctor` reports the pin by (RETRIEVE-23).
+const RETRIEVAL_KEY: &str = "retrieval.enabled";
+
 /// Where the rules it refuses are listed, and the name `doctor` reports each list by (PERM-19).
 const RULES_DENY: &str = "permissions.deny";
 
@@ -119,6 +129,10 @@ pub enum Server<'a> {
     Local(&'a [String]),
     /// A remote server, by the url it was declared with.
     Remote(&'a str),
+    /// A server run inside a container image, by the program as the image names it, then its
+    /// arguments. No allow entry names one, since an allow entry names a command on this machine and
+    /// the image, which the person chose, decides what is at that path inside it.
+    InImage(&'a [String]),
 }
 
 /// One entry of `mcp.allow` or `mcp.deny`.
@@ -134,7 +148,9 @@ impl Rule {
     /// Whether this entry names `server`, whose url's host, where it has one, is `host`.
     fn names(&self, server: Server<'_>, host: Option<&str>) -> bool {
         match (self, server) {
-            (Rule::Command(argv), Server::Local(started)) => argv.as_slice() == started,
+            (Rule::Command(argv), Server::Local(started) | Server::InImage(started)) => {
+                argv.as_slice() == started
+            }
             (Rule::Host(entry), Server::Remote(_)) => host.is_some_and(|host| {
                 match entry.strip_prefix("*.") {
                     // A label and a dot before the rest, so `*.corp.example` is neither
@@ -323,14 +339,16 @@ pub struct Managed {
     hosts: crate::sandbox_network::Hosts,
     /// The host keys it gave a value they cannot read, which pin nothing.
     hosts_unreadable: Vec<&'static str>,
-    /// Whether it wrote `crashReports` as `false` (CRASH-4).
+    /// Which of `crashReports` (CRASH-4) and `retrieval.enabled` (RETRIEVE-23) it wrote as
+    /// `false`, in that order.
     ///
     /// Read from this layer for the reason the keys above are: a key that can only turn a report
     /// off takes nothing from the person at the machine, so an administrator asking for it is not
-    /// choosing for them. Only `false` is a pin. `true` is not read, since this layer cannot turn
-    /// on what the person turned off, and a value that is not a boolean is absence, as it is in
-    /// the person's own file.
-    crash_reports_off: bool,
+    /// choosing for them, and turning retrieval off sends nothing anywhere. Only `false` is a pin.
+    /// `true` is not read, since this layer cannot turn on what the person turned off, and
+    /// retrieval on would send a person's conversation to another service on a choice that is not
+    /// theirs. A value that is not a boolean is absence, as it is in the person's own file.
+    turned_off: Vec<&'static str>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -391,7 +409,17 @@ impl Managed {
         Self {
             narrowing,
             narrowing_unreadable,
-            crash_reports_off: root.get(CRASH_REPORTS_KEY) == Some(&serde_json::Value::Bool(false)),
+            turned_off: [
+                (CRASH_REPORTS_KEY, root.get(CRASH_REPORTS_KEY)),
+                (
+                    RETRIEVAL_KEY,
+                    root.get("retrieval").and_then(|block| block.get("enabled")),
+                ),
+            ]
+            .into_iter()
+            .filter(|(_, value)| *value == Some(&serde_json::Value::Bool(false)))
+            .map(|(key, _)| key)
+            .collect(),
             rules: crate::settings::managed_rules(&root),
             hosts,
             hosts_unreadable,
@@ -461,11 +489,12 @@ impl Managed {
     /// (SERVERS-12).
     ///
     /// The alias is not compared, because the person declaring a server chooses it. A deny entry
-    /// is read before the allow list, so a server both name is denied.
+    /// is read before the allow list, so a server both name is denied. A server in an image is
+    /// matched by a deny entry as a local one is, and by no allow entry.
     pub fn refuses(&self, server: Server<'_>) -> Option<(&Path, Refusal<'_>)> {
         let host = match server {
             Server::Remote(url) => plain_host(url),
-            Server::Local(_) => None,
+            Server::Local(_) | Server::InImage(_) => None,
         };
         let refusal = match self
             .denied
@@ -483,9 +512,10 @@ impl Managed {
                 .allowed
                 .as_ref()
                 .filter(|allowed| {
-                    !allowed
-                        .iter()
-                        .any(|rule| rule.names(server, host.as_deref()))
+                    matches!(server, Server::InImage(_))
+                        || !allowed
+                            .iter()
+                            .any(|rule| rule.names(server, host.as_deref()))
                 })
                 .map(|_| Refusal::NotAllowed),
         };
@@ -519,7 +549,13 @@ impl Managed {
     /// Whether this layer turned crash reports off, which the person's own file cannot undo
     /// (CRASH-4).
     pub fn crash_reports_off(&self) -> bool {
-        self.crash_reports_off
+        self.turned_off.contains(&CRASH_REPORTS_KEY)
+    }
+
+    /// Whether this layer turned retrieval off, which the person's own file cannot undo
+    /// (RETRIEVE-23).
+    pub fn retrieval_off(&self) -> bool {
+        self.turned_off.contains(&RETRIEVAL_KEY)
     }
 
     /// The keys it named as something other than a boolean, which are absence.
@@ -578,7 +614,7 @@ impl Managed {
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
-            .chain(self.crash_reports_off.then_some(CRASH_REPORTS_KEY))
+            .chain(self.turned_off.iter().copied())
             .chain((!self.rules.deny.is_empty()).then_some(RULES_DENY))
             .chain((!self.rules.ask.is_empty()).then_some(RULES_ASK))
             .chain(self.network.is_some().then_some(RUN_NETWORK))
@@ -998,6 +1034,28 @@ mod tests {
         }
     }
 
+    /// RETRIEVE-23: `retrieval.enabled: false` is a pin and is named among them. `true` and a value
+    /// that is not a boolean pin nothing, so the layer can only turn retrieval off.
+    #[test]
+    fn a_managed_retrieval_false_is_a_pin_and_nothing_else_is() {
+        let off = scratch(
+            "managed-retrieval-off",
+            r#"{"retrieval": {"enabled": false}}"#,
+        );
+        assert!(off.retrieval_off());
+        assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["retrieval.enabled"]);
+        for (name, text) in [
+            ("on", r#"{"retrieval": {"enabled": true}}"#),
+            ("quoted", r#"{"retrieval": {"enabled": "false"}}"#),
+            ("bare", r#"{"retrieval": false}"#),
+            ("absent", "{}"),
+        ] {
+            let managed = scratch(&format!("managed-retrieval-{name}"), text);
+            assert!(!managed.retrieval_off(), "{text}");
+            assert!(managed.is_empty(), "{text}");
+        }
+    }
+
     /// PERM-19: `deny` and `ask` are read from the managed file, as text or as an object, and named
     /// among what it pinned. The failure this rejects is a file whose rules are ignored, which leaves
     /// an administrator with nothing to write, or one whose `ask` list is dropped.
@@ -1203,11 +1261,37 @@ mod tests {
         {"command": ["/usr/local/bin/approved-server", "--stdio"]}
     ]}}"#;
 
+    /// A server in an image is named by no allow entry, since the image decides what is at a path
+    /// inside it, and a deny entry still names it by its argv.
+    #[test]
+    fn an_allow_list_names_no_server_in_an_image_and_a_deny_entry_still_does() {
+        let argv = vec![
+            "/usr/local/bin/approved-server".to_string(),
+            "--stdio".to_string(),
+        ];
+        let allowing = scratch("managed-allow-image", CORP);
+        assert!(allowing.refuses(Server::Local(&argv)).is_none());
+        assert!(matches!(
+            allowing.refuses(Server::InImage(&argv)),
+            Some((_, Refusal::NotAllowed))
+        ));
+        let denying = scratch(
+            "managed-deny-image",
+            r#"{"mcp": {"deny": [{"command": ["/usr/local/bin/approved-server", "--stdio"]}]}}"#,
+        );
+        assert!(matches!(
+            denying.refuses(Server::InImage(&argv)),
+            Some((_, Refusal::Denied(_)))
+        ));
+        let open = scratch("managed-open-image", r#"{"mcp": {}}"#);
+        assert!(open.refuses(Server::InImage(&argv)).is_none());
+    }
+
     /// An allow list is the form that holds: the person chooses an alias and cannot choose what
     /// the list names, so a server it does not name is not started whatever it is called.
     #[test]
     fn an_allow_list_starts_only_what_it_names() {
-        let managed = scratch("managed-allow", CORP);
+        let managed = scratch("managed-allow-list", CORP);
         for url in [
             "https://mcp.corp.example/mcp",
             "https://a.b.corp.example:8443/",

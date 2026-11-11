@@ -343,15 +343,32 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
             started_as: _,
             args,
             environment,
+            expansions,
             routes: _,
         } = step;
-        for spelling in [program.as_str(), &resolved.to_string_lossy()] {
+        // A program a wrapper runs reaches what it reaches without one, so the words left after
+        // each leading wrapper are read too, each program with the arguments it is given and
+        // not the wrapper's. The table of wrappers is the one a deny or ask rule is matched
+        // through (PERM-20); the file a wrapper resolved to is not looked through, and a
+        // program that only runs another by another way (`xargs`, `npx`, `docker exec`) is read
+        // by its own name alone.
+        let argv: Vec<&str> = std::iter::once(program.as_str())
+            .chain(args.iter().map(String::as_str))
+            .collect();
+        let resolved = resolved.to_string_lossy();
+        let mut called: Vec<(&str, &[&str])> = vec![
+            (program.as_str(), &argv[1..]),
+            (resolved.as_ref(), &argv[1..]),
+        ];
+        let inner = crate::permissions::wrapped_commands(&argv);
+        called.extend(inner.iter().map(|words| (words[0], &words[1..])));
+        for (spelling, given) in called {
             let name = program_name(spelling);
             for entry in REACHING {
-                let called = entry.program.eq_ignore_ascii_case(name);
-                let spending = entry.spends.is_empty()
-                    || args.iter().any(|arg| entry.spends.contains(&arg.as_str()));
-                if called && spending {
+                let named = entry.program.eq_ignore_ascii_case(name);
+                let spending =
+                    entry.spends.is_empty() || given.iter().any(|arg| entry.spends.contains(arg));
+                if named && spending {
                     found(entry.authority, entry.program);
                 }
             }
@@ -360,7 +377,22 @@ pub fn spent_by(plan: &Plan) -> Vec<Spent> {
         // read as well as its arguments: `DOCKER_HOST` and `SSH_AUTH_SOCK` are said there rather
         // than in an argument, and the point of an assignment is that it decides what the program
         // reaches.
-        let written = args.iter().map(String::as_str).chain(
+        // What an expansion names is read as an assignment is: its name, and the text and the
+        // variable it is written with. The value is not known here and never is; a command inside
+        // one is a step of the plan and read in its turn.
+        let expanded: Vec<&str> = expansions
+            .iter()
+            .flat_map(|expansion| {
+                std::iter::once(expansion.name.as_str()).chain(expansion.parts.iter().filter_map(
+                    |part| match part {
+                        crate::command::ValuePart::Text(text) => Some(text.as_str()),
+                        crate::command::ValuePart::Variable(name) => Some(name.as_str()),
+                        crate::command::ValuePart::Substitution { .. } => None,
+                    },
+                ))
+            })
+            .collect();
+        let written = args.iter().map(String::as_str).chain(expanded).chain(
             environment
                 .iter()
                 .flat_map(|(name, value)| [name.as_str(), value.as_str()]),
@@ -486,16 +518,15 @@ pub fn at_host(host: &str) -> Option<Spent> {
     })
 }
 
-/// The last component of a program as a line spelled it, without the extension Windows writes.
+/// The last component of a program as a line spelled it, read as a rule reads the program word:
+/// without the trailing dots, `::$DATA` suffix and `.exe`, `.com`, `.cmd` or `.bat` Windows ignores
+/// ([`crate::permissions::without_suffixes`], which the wrapper table is read through).
 ///
 /// A path and a bare name are the same claim about which authority a program reaches, so
 /// `/usr/bin/docker`, `./docker` and `docker` are one answer.
 fn program_name(spelled: &str) -> &str {
     let named = spelled.rsplit(['/', '\\']).next().unwrap_or(spelled);
-    match named.len().checked_sub(4) {
-        Some(stem) if named[stem..].eq_ignore_ascii_case(".exe") => &named[..stem],
-        _ => named,
-    }
+    crate::permissions::without_suffixes(named).unwrap_or(named)
 }
 
 #[cfg(test)]
@@ -535,6 +566,7 @@ mod tests {
             started_as: PathBuf::from(format!("/usr/bin/{}", program_name(program))),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }
@@ -592,6 +624,110 @@ mod tests {
                 named: "git",
             }]
         );
+    }
+
+    fn names(program: &str, args: &[&str]) -> Vec<Spent> {
+        spent_by(&plan(vec![step(program, args)]))
+    }
+
+    /// A program run by a wrapper reaches what it reaches without one, so `timeout 30 docker ps`
+    /// is granted as `docker ps` is. The wrapper is read from the table PERM-20 reads a deny rule
+    /// through, so a nested one is read the same way.
+    #[test]
+    fn a_program_under_a_wrapper_is_named_as_it_is_without_one() {
+        let daemon = names("docker", &["ps"]);
+        assert_eq!(
+            daemon,
+            vec![Spent {
+                authority: Authority::ContainerDaemon,
+                named: "docker",
+            }]
+        );
+        for (wrapper, args) in [
+            ("timeout", &["30", "docker", "ps"][..]),
+            ("timeout", &["--signal", "KILL", "30", "docker", "ps"]),
+            ("env", &["docker", "ps"]),
+            ("env", &["-i", "A=1", "docker", "ps"]),
+            ("nice", &["docker", "ps"]),
+            ("nice", &["-n", "5", "docker", "ps"]),
+            ("time", &["docker", "ps"]),
+            ("nohup", &["docker", "ps"]),
+            ("stdbuf", &["-o", "L", "docker", "ps"]),
+            ("command", &["docker", "ps"]),
+            ("timeout", &["5", "nice", "env", "docker", "ps"]),
+        ] {
+            assert_eq!(names(wrapper, args), daemon, "{wrapper} {args:?}");
+        }
+        assert_eq!(
+            names("nice", &["gh", "api", "user"]),
+            vec![Spent {
+                authority: Authority::LoggedInTool,
+                named: "gh",
+            }]
+        );
+    }
+
+    /// The wrapper's own words are not the program's arguments. `git` is named for `push` only,
+    /// so the words it is given decide it, and `-f push` is the value of `time`'s `-f` option.
+    #[test]
+    fn a_program_under_a_wrapper_is_judged_by_its_own_arguments() {
+        let git = vec![Spent {
+            authority: Authority::LoggedInTool,
+            named: "git",
+        }];
+        assert_eq!(names("timeout", &["5", "git", "push"]), git);
+        assert_eq!(names("nice", &["-n", "5", "git", "fetch"]), git);
+        assert!(names("timeout", &["5", "git", "log"]).is_empty());
+        assert!(names("time", &["-f", "push", "git", "log"]).is_empty());
+        assert!(names("timeout", &["30", "ls"]).is_empty());
+    }
+
+    /// The wrapper is spelled as PERM-20 reads it: in any case and with `.exe` or `.com` (the other
+    /// spellings are in the test below).
+    #[test]
+    fn a_wrapper_is_read_in_any_case_and_with_an_extension() {
+        let daemon = names("docker", &["ps"]);
+        assert_eq!(names("TIMEOUT", &["30", "docker", "ps"]), daemon);
+        assert_eq!(names("timeout.exe", &["30", "docker", "ps"]), daemon);
+        assert_eq!(names("Env.COM", &["docker", "ps"]), daemon);
+        // The program under the wrapper, and a program with no wrapper, fold `.com` as well.
+        assert_eq!(names("timeout", &["30", "docker.com", "ps"]), daemon);
+        assert_eq!(names("timeout", &["30", "DOCKER.EXE", "ps"]), daemon);
+        assert_eq!(names("docker.com", &["ps"]), daemon);
+    }
+
+    /// The program word is read as the permission rules read it (PERM-5): without trailing dots,
+    /// a `::$DATA` suffix, and `.cmd` or `.bat` as well as `.exe` and `.com`. One fold serves both,
+    /// so a spelling the rules cover is a spelling that names the authority too (CRED-5).
+    #[test]
+    fn a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them() {
+        let daemon = names("docker", &["ps"]);
+        assert_ne!(daemon, names("ls", &[]));
+        for program in [
+            "docker.",
+            "docker.exe.",
+            "docker::$DATA",
+            "docker.exe::$DATA",
+            "DOCKER.CMD",
+            "docker.bat",
+            "C:\\bin\\docker.bat",
+        ] {
+            assert_eq!(names(program, &["ps"]), daemon, "{program}");
+            assert_eq!(
+                names("timeout", &["30", program, "ps"]),
+                daemon,
+                "{program}"
+            );
+        }
+        for wrapper in [
+            "timeout.",
+            "timeout.exe.",
+            "timeout::$DATA",
+            "TIMEOUT.CMD",
+            "timeout.bat",
+        ] {
+            assert_eq!(names(wrapper, &["30", "docker", "ps"]), daemon, "{wrapper}");
+        }
     }
 
     /// The metadata service is reached by address rather than by a program, so the address is
@@ -662,6 +798,25 @@ mod tests {
                 named: "SSH_AUTH_SOCK",
             }]
         );
+    }
+
+    /// An assignment decides what a program reaches; an expansion is read the same way, by its
+    /// name and by the text and variable it is written with (CMDLINE-17).
+    #[test]
+    fn an_expansion_in_front_of_a_program_names_what_it_reaches() {
+        let mut forwarded = step("make", &["deploy"]);
+        forwarded.expansions = vec![crate::command::Expansion {
+            name: "SSH_AUTH_SOCK".to_string(),
+            parts: vec![crate::command::ValuePart::Variable("AGENT".to_string())],
+        }];
+        assert_eq!(
+            spent_by(&plan(vec![forwarded])),
+            vec![Spent {
+                authority: Authority::AgentSocket,
+                named: "SSH_AUTH_SOCK",
+            }]
+        );
+        assert!(spent_by(&plan(vec![step("make", &["deploy"])])).is_empty());
     }
 
     /// Two tools in one line are two grants, because approving it grants both.

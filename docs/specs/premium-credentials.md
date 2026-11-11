@@ -71,9 +71,11 @@ in front of an `@` is userinfo, not the host. An override holding a query or a f
 by the configuration, which keeps the host compiled in ([PREM-11](#PREM-11)), so the string requests
 are sent to and the string the decision reads are never two different hosts.
 
-**Why.** The Brave suffix test is what keeps a key off other hosts. A settings file in a checkout
-can set the premium endpoint override ([BACKEND-35](backends.md#BACKEND-35)), so the test has to hold
-for every value that file can hold. A key that reaches a host other than Brave's can be read there,
+**Why.** The Brave suffix test is what keeps a key off other hosts. The override is read from the
+person's own layers, the environment and the build, and not from a settings file in a checkout
+([BACKEND-33](backends.md#BACKEND-33)), so the test is not what keeps a cloned repository from
+choosing the host. It stays as the check on every value those sources can hold, a person's own
+included. A key that reaches a host other than Brave's can be read there,
 and it stays usable until Brave revokes it. A host that is not Brave's is a local model server or a
 private deployment somebody chose, and no key belongs near one.
 
@@ -181,6 +183,10 @@ reads "the premium key could not be used", gives the reason, and says to run
 `bravebot auth login brave` to replace the key or `bravebot auth logout brave` to send requests to
 the free endpoint instead. It does not mention an AWS sign-in.
 
+A request that carried the key and was refused with a 401 or a 403 is said with the same two
+commands, after its status and its count of tries ([BACKEND-37](backends.md#BACKEND-37)). Whether a
+request carried the key is known to the client that made it, and is not read from the reply.
+
 **Why.** The free endpoint answers a premium model name by substituting a weaker model rather than
 by failing, with a 200 and an ordinary reply. A request that silently lost its key would therefore
 still return something that reads like an answer, and the only other symptom of the downgrade is the
@@ -191,6 +197,9 @@ the premium host chose, and the key is a bearer secret meant for the host it was
 `verified-by: bravebot_aichat::client::an_unusable_premium_key_fails_rather_than_downgrading`
 `verified-by: bravebot_aichat::client::a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_agent::backend::each_backend_keeps_its_own_explanation`
+`verified-by: bravebot_session::sessions::a_refused_premium_key_names_the_commands_that_replace_or_forget_it`
+`verified-by: bravebot_aichat::client::a_client_reports_the_premium_key_only_when_a_request_carried_it`
+`verified-by: bravebot_agent::backend::a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend`
 
 <a id="PREM-11"></a>
 ### PREM-11: the premium host is compiled in, an override that is malformed is not used, and the key is held only with a host
@@ -206,9 +215,10 @@ in.
 
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is an optional override of the host. It is resolved by the order
 every other name is ([BACKEND-35](backends.md#BACKEND-35)): an exported variable, then the build,
-then a settings file's `env` block. It is a base the request path is appended to. A value that is
-not an `http://` or `https://` address, or that holds a query or a fragment, is not used, and the
-host compiled in stands. A port and a path are part of the base and are kept.
+then the `env` block of the person's own settings file. A project or local file in a checkout is not
+read for it ([BACKEND-33](backends.md#BACKEND-33)). It is a base the request path is appended to. A
+value that is not an `http://` or `https://` address, or that holds a query or a fragment, is not
+used, and the host compiled in stands. A port and a path are part of the base and are kept.
 
 The configuration holds the stored key ([PREM-14](#PREM-14)) only together with a premium host. On a
 build with none, a key that is stored is dropped rather than held, and a build with a host and no key
@@ -231,6 +241,7 @@ the free endpoint is a deployment the key does not belong to.
 `verified-by: bravebot_config::lib::a_malformed_premium_endpoint_is_not_used`
 `verified-by: bravebot_config::lib::a_premium_endpoint_with_a_query_or_a_fragment_is_discarded`
 `verified-by: bravebot_config::lib::a_premium_endpoint_with_a_port_and_a_path_is_kept`
+`verified-by: bravebot_config::lib::a_checkouts_endpoints_reach_neither_host_and_the_persons_own_sources_do`
 `verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
 `verified-by: bravebot_agent::subscription::a_key_is_presented_only_to_a_premium_host_that_is_braves`
 
@@ -322,6 +333,12 @@ use of and that only Brave's premium service revokes, which is the Held tier.
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_config::lib::a_premium_key_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
+`verified-by: bravebot_agent::key_entry::a_brave_key_is_stored_private_replacing_the_one_there`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_key_is_refused_in_order_before_it_is_typed`
+`verified-by: bravebot_ui_bridge::key_entry_tests::an_unreadable_file_is_refused_and_left_as_it_is`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_brave_key_is_stored_and_one_stored_is_replaced_only_when_asked`
+`verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
 
 <a id="PREM-15"></a>
 ### PREM-15: `import-leo-creds` is retired, says so, and starts no work
@@ -374,6 +391,19 @@ prints one line, never the key:
 A turn reads a file that cannot be read as no key, so its premium requests go to the free endpoint.
 `bravebot doctor` says so on a `premium key` line that names the file and ends in failure.
 
+**The window's key window.** The desktop window's Accounts settings store the same key in the same
+file, through the store the command uses, from a key window its main process owns. The page that
+draws the Brave Premium row may only ask. The main process asks the bridge, before anything is
+typed, whether a key can be kept, and the refusals are the command's, in the same order and with
+sentences of the window's own that name no file: an incognito session, nowhere to keep a key, and a
+file that cannot be read as a key, which is left as it is. The conditions about a terminal do not
+apply, since the key window is where the key is typed. The key is typed in a field that draws
+nothing of it, goes from the key window to the main process and from there to the bridge on its
+standard input ([CRED-24](credential-protection.md#CRED-24)), and is never sent to the page. A key
+that is stored is replaced only where the key window said so before it was typed, and whether one
+is stored is learned from the bridge, never from the page; the button that saves says Replace key
+there, which is the yes. Nothing typed stores nothing. No answer the bridge gives carries the key.
+
 **Why.** The key is typed at a hidden prompt rather than passed as an argument or read from a
 variable, because an argument is readable by other programs on the machine and kept in the shell's
 history, and a variable is inherited by every program started. A key asked for on a redirected stream
@@ -389,8 +419,8 @@ that never used the premium tier has no use for the file, and `doctor` is where 
 `verified-by: bravebot_cli::brave::a_yes_and_no_key_typed_leaves_the_stored_key`
 `verified-by: bravebot_cli::brave::an_unreadable_file_is_refused_and_left`
 `verified-by: bravebot_cli::brave::the_sign_in_is_refused_where_a_key_cannot_be_asked_for_or_kept`
-`verified-by: bravebot_cli::brave::forgetting_removes_the_file_and_is_repeatable`
-`verified-by: bravebot_cli::brave::the_standing_follows_the_file`
+`verified-by: bravebot_agent::accounts::forgetting_removes_only_the_credential_named`
+`verified-by: bravebot_agent::accounts::the_brave_key_stands_as_its_file_does`
 `verified-by: bravebot_cli::running::auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept`
 `verified-by: bravebot_cli::running::auth_logout_brave_forgets_the_key_and_only_that_one`
 `verified-by: bravebot_cli::running::auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero`
@@ -400,10 +430,11 @@ that never used the premium tier has no use for the file, and `doctor` is where 
 ## Requirements and limits
 
 - The build must reach a Brave backend, which gives it the premium host compiled in
-  ([PREM-11](#PREM-11)), and a key must be stored with `bravebot auth login brave`. Without both,
-  premium is unavailable and requests go to the free endpoint.
-- Storing a key needs a terminal and nothing else: no browser, no Brave profile and no desktop
-  session. A platform that has neither a file mode nor an access-control list to restrict the file
+  ([PREM-11](#PREM-11)), and a key must be stored with `bravebot auth login brave` or the desktop
+  window's key window ([PREM-16](#PREM-16)). Without both, premium is unavailable and requests go to
+  the free endpoint.
+- Storing a key needs a terminal or the desktop window, and nothing else: no browser and no Brave
+  profile. A platform that has neither a file mode nor an access-control list to restrict the file
   to the account has the key refused ([PREM-14](#PREM-14)).
 - The key is a bearer secret in a file the account owns. It is not encrypted at rest, and anything
   running as the person can read it, as it can read the gateway keys.

@@ -54,6 +54,47 @@ pub(crate) const RULES_FILE: &str = "rules.md";
 /// one set of instructions under two names, and reading both would state everything twice.
 const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAUDE.md"];
 
+/// Whether `directory` lists an entry whose name is `name`, byte for byte.
+///
+/// A volume that folds case answers an open of `agents.md` for `AGENTS.md`, so a name joined to a
+/// path and tested with `is_file` cannot tell the two apart. The directory's own listing holds the
+/// spelling the entry was made with. Only entry names are compared, never what a file holds.
+pub(crate) fn lists_entry_named(directory: &Path, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+    names_include(entries.flatten().map(|entry| entry.file_name()), name)
+}
+
+/// Whether one of `listed`, the entry names a directory listing gave, is `name` byte for byte.
+pub(crate) fn names_include(
+    listed: impl IntoIterator<Item = std::ffi::OsString>,
+    name: &str,
+) -> bool {
+    listed
+        .into_iter()
+        .any(|entry| entry.as_encoded_bytes() == name.as_bytes())
+}
+
+/// Whether `directory` holds a file spelled exactly `name` (INSTR-1). A link to a file counts, as
+/// it does for `is_file`.
+pub(crate) fn holds_file_named(directory: &Path, name: &str) -> bool {
+    lists_entry_named(directory, name) && directory.join(name).is_file()
+}
+
+/// Whether `relative`, a `/`-separated path under `root`, names a file with every component spelled
+/// exactly as an entry of the directory before it, so `.claude/CLAUDE.md` is not `.CLAUDE/claude.md`.
+fn holds_file_spelled(root: &Path, relative: &str) -> bool {
+    let mut at = root.to_path_buf();
+    for part in relative.split('/') {
+        if !lists_entry_named(&at, part) {
+            return false;
+        }
+        at.push(part);
+    }
+    at.is_file()
+}
+
 /// How long a file may be and still be read as a pointer to the real one.
 ///
 /// A pointer is a sentence. Anything longer is a document that happens to cite another, and
@@ -216,6 +257,12 @@ pub fn compose_in<S: Sink>(
     let mut standing = Prompt::default();
     // What the sources admitted so far cost, for the combined word of INSTR-15.
     let mut standing_bytes = 0;
+    // The text of the source admitted last, as it reaches the prompt, and its place on disk when it
+    // is a file with one, so a nested `AGENTS.md` that repeats it is left out (INSTR-14). Only the
+    // last source is kept: skipping a repeat of an earlier one could change which text ends the
+    // prompt. Both have passed the trust gate.
+    let mut last_text: Option<String> = None;
+    let mut last_file: Option<std::path::PathBuf> = None;
     // Neither file is read in a safe session. What the command line named is the person's words for
     // this run and stays.
     let safe = bravebot_core::safe::engaged();
@@ -232,6 +279,7 @@ pub fn compose_in<S: Sink>(
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
         admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
+        last_text = Some(text.trim().to_string());
         standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
         standing.push(Provenance::TrustedFile(origin), text.trim());
         standing.push(Provenance::Driver, "\n\n");
@@ -254,6 +302,7 @@ pub fn compose_in<S: Sink>(
         ) {
             let origin = format!("~/.bravebot/projects/{}/{RULES_FILE}", project.dir);
             admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
+            last_text = Some(text.trim().to_string());
             standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
             standing.push(Provenance::TrustedFile(origin), text.trim());
             standing.push(Provenance::Driver, "\n\n");
@@ -261,6 +310,7 @@ pub fn compose_in<S: Sink>(
         }
     }
     for rule in &rules.home {
+        last_text = Some(rule.text.trim().to_string());
         stand_rule(
             &mut standing,
             rule,
@@ -280,6 +330,8 @@ pub fn compose_in<S: Sink>(
                 &mut standing_bytes,
                 &mut preamble.notices,
             );
+            last_text = Some(found.text.trim().to_string());
+            last_file = sources.root().join(&found.origin).canonicalize().ok();
             standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
             standing.push(
                 Provenance::TrustedFile(found.origin.to_string()),
@@ -291,6 +343,8 @@ pub fn compose_in<S: Sink>(
         Err(notice) => preamble.notices.push(notice),
     }
     for rule in &rules.project {
+        last_text = Some(rule.text.trim().to_string());
+        last_file = None;
         stand_rule(
             &mut standing,
             rule,
@@ -302,6 +356,14 @@ pub fn compose_in<S: Sink>(
         for relative in nested_agents_files(sources) {
             match read_nested_agents(policy, sources, &relative) {
                 Ok(Some(text)) => {
+                    // Only a file that passed the gate is compared, with text that passed it.
+                    let file = sources.root().join(&relative).canonicalize().ok();
+                    let same_file = file.is_some() && file == last_file;
+                    if same_file || last_text.as_deref() == Some(text.trim()) {
+                        continue;
+                    }
+                    last_text = Some(text.trim().to_string());
+                    last_file = file;
                     admit_by_size(&relative, &text, &mut standing_bytes, &mut preamble.notices);
                     standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
                     standing.push(Provenance::TrustedFile(relative), text.trim());
@@ -859,6 +921,14 @@ pub fn state_rule_files(
     ]
     .into_iter()
     .filter(|file| file.try_exists().unwrap_or(false))
+    .filter(
+        |file| match file.file_name().and_then(|name| name.to_str()) {
+            Some(AGENTS_FILE) => file
+                .parent()
+                .is_some_and(|parent| lists_entry_named(parent, AGENTS_FILE)),
+            _ => true,
+        },
+    )
     .filter(|file| {
         !workspaces
             .iter()
@@ -878,7 +948,7 @@ fn read_home_agents<S: Sink>(
     notices: &mut Vec<Notice>,
 ) -> Option<String> {
     let file = home.join(AGENTS_FILE);
-    if !file.is_file() {
+    if !holds_file_named(home, AGENTS_FILE) {
         return None;
     }
     if workspaces
@@ -962,13 +1032,15 @@ fn read_project_rules<S: Sink>(
 /// written to, workspace-relative and shallowest first (INSTR-14).
 ///
 /// Which directories is the driver's record of the paths the planner named, and only the existence
-/// of a file is asked here, so nothing a file holds decides which file is looked for.
+/// of a file is asked here, so nothing a file holds decides which file is looked for. The entry
+/// must be spelled `AGENTS.md` in the directory's listing, whatever the volume folds, so a docs
+/// page called `agents.md` stays an ordinary file.
 fn nested_agents_files(workspace: &Workspace) -> Vec<String> {
     workspace
         .touched_directories()
         .into_iter()
+        .filter(|directory| holds_file_named(&workspace.root().join(directory), AGENTS_FILE))
         .map(|directory| format!("{directory}/{AGENTS_FILE}"))
-        .filter(|relative| workspace.root().join(relative).is_file())
         .collect()
 }
 
@@ -1046,7 +1118,7 @@ fn pick_workspace_agents<S: Sink>(
 ) -> Result<Option<Picked>, Notice> {
     let Some(name) = WORKSPACE_AGENT_FILES
         .iter()
-        .find(|name| workspace.root().join(name).is_file())
+        .find(|name| holds_file_spelled(workspace.root(), name))
     else {
         return Ok(None);
     };
@@ -1404,6 +1476,27 @@ fn pointer_target(text: &str, from: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// INSTR-1: a listing that holds `agents.md` is not one that holds `AGENTS.md`. Decided on
+    /// the names alone, so it holds on a host whose volume does not fold case as well. Rejects a
+    /// comparison that ignores case, which is what a case-folding volume does to an open.
+    #[test]
+    fn a_listed_name_matches_only_in_the_same_case() {
+        let names = |listed: &[&str]| {
+            listed
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(!names_include(names(&["agents.md"]), "AGENTS.md"));
+        assert!(!names_include(names(&["Agents.MD", "x.md"]), "AGENTS.md"));
+        assert!(names_include(
+            names(&["agents.md", "AGENTS.md"]),
+            "AGENTS.md"
+        ));
+        assert!(!names_include(names(&[]), "AGENTS.md"));
+    }
 
     /// How Windows names a build, and the shape a planner reads a version in: three numbers, no
     /// padding and nothing else. The call that produces them cannot run here, so this is what

@@ -117,9 +117,35 @@ jobs:
         with:
           tool: cargo-nextest@0.9.146
 
+      # The opener's tests run the installed `xdg-open` under generic, GNOME and KDE settings. The
+      # KDE test fails on CI when `xdg-open` or `kde-open` (kde-cli-tools) is missing.
+      - name: Install the browser opener's programs
+        timeout-minutes: 15
+        run: |
+          for attempt in 1 2 3 4; do
+            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y --no-install-recommends xdg-utils libglib2.0-bin kde-cli-tools'; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or timed out" >&2
+            sleep 5
+          done
+          exit 1
+
       # Everything but the usability suite, which the step after next runs once with its output.
       - name: Test
         run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'
+
+      # Ubuntu's default ptrace_scope of 1 refuses pidfd_getfd against any process that is not the caller's
+      # descendant, so in the Test step the control-channel attacker copies nothing from its control
+      # process either and the run cannot show that the bridge and the host refuse it. At 0 the
+      # attacker a hook starts has to copy from the control process, and the bridge's and the host's
+      # non-dumpable mark is what stops it. The attacker an approved command starts is confined, and
+      # the confinement refuses pidfd_getfd against every process.
+      - name: Run the control-channel attack where the kernel allows same-user ptrace
+        run: |
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+          cargo nextest run -p bravebot-ui-bridge --test control_boundary --locked --no-fail-fast
+          sudo sysctl -w kernel.yama.ptrace_scope=1
 
       # nextest does not run doctests.
       - name: Doctests
@@ -434,6 +460,18 @@ jobs:
 
       - name: Check that every file stating the version agrees
         run: make check-versions
+
+  # Whether every call of programs::start and programs::start_against states CodeSelectors, and
+  # each variable in a CODE_SELECTORS list has a test that keeps a safe value and a test that
+  # removes one a stage may write. Standard library Python, so it needs no toolchain.
+  code-selectors:
+    name: Code selectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check that every code-selecting variable has its tests
+        run: make check-code-selectors
 
   # Builds against the declared minimum toolchain. The pinned cross-build container
   # ships an older Rust than most developers have locally, so without this a feature
@@ -923,6 +961,11 @@ jobs:
   # and the step reads how many ran, because a filter that matches nothing, after a rename,
   # passes. A pair test added over `held_names()` belongs in the list. Target as in the windows
   # job above.
+  #
+  # The job also runs the tests that pin how a `deny` or `ask` command rule folds the spellings of a
+  # program that Windows ignores, and refuses an 8.3 short name (#3926). They pass on every host,
+  # but a test that passes on the Linux host does not show the name handling is the same on a
+  # Windows host.
   names-windows:
     name: Awkward names on Windows
     runs-on: windows-latest
@@ -975,6 +1018,20 @@ jobs:
             tests::every_awkward_name_is_offered_and_read_back_as_the_file_it_is \
             | tee "$RUNNER_TEMP/mentions.log"
           grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/mentions.log"
+
+      - name: Test how a command rule folds the spellings of a program
+        run: |
+          tests=(
+            ambient::tests::a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them
+            permissions::tests::a_restricting_rule_covers_the_program_under_the_names_windows_ignores
+            permissions::tests::an_allow_rule_grants_none_of_the_names_windows_ignores
+            permissions::tests::the_fold_leaves_a_name_that_is_not_the_program_alone
+            permissions::tests::a_short_name_program_is_reported_only_where_a_command_rule_restricts
+            policy::tests::a_short_name_program_is_refused_at_both_gates_only_under_a_restricting_rule
+          )
+          cargo test -p bravebot-core --locked --lib -- --exact "${tests[@]}" \
+            | tee "$RUNNER_TEMP/rules.log"
+          grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/rules.log"
 
   # The installers a release ships, built as a release builds them from the cross-built helpers,
   # and each installed on a runner of its own architecture by the job after this one. Beside each

@@ -13,7 +13,7 @@
 // persisted layout with every other driver, so it puts the columns back before it leaves.
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, TRUST_APPROVE } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE, approveTrust, trustQuestion } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -194,7 +194,7 @@ if (hasSessions) {
   await page.locator('.session').first().click()
   await page.waitForTimeout(1200)
   if (await page.locator('.trust').isVisible().catch(() => false)) {
-    await page.locator(TRUST_APPROVE).click()
+    await approveTrust(trustQuestion(page))
     await page.waitForTimeout(500)
   }
   let open = await readMenu()

@@ -124,15 +124,31 @@ pub struct Checked {
     pub reason: Option<Labelled<String>>,
     /// What the check cost, so a turn can report the whole of what it spent.
     pub usage: Usage,
+    /// Whether a reply arrived. False where the check could not be made, so no request completed.
+    pub completed: bool,
 }
 
-/// Run one check to completion.
+/// A check the person stopped before it finished.
 ///
-/// **Every way this can fail is a verdict of inconclusive, and there is no error to return.** A
-/// timeout, a refusal in transit, a backend that is down: none of them says anything about the
-/// content, and every one of them has to land on the prompt that says the check did not complete.
-/// Handing a caller an error would leave that conversion to a `?`, which is how a rule stops
-/// holding, and there is a prompt waiting for a word either way.
+/// Not a verdict. Nothing was learned about the content, and nobody is to be asked about it: the
+/// turn is over, and the slot stays as it was so that the next turn can ask for it again. It is
+/// told apart from a failure by the kind of the backend's error, which is the person's own action,
+/// and by nothing the content or the reply held.
+pub struct Stopped {
+    /// How many requests were sent before the stop, where that is known.
+    pub attempts: Option<u32>,
+    /// What the attempts that completed cost.
+    pub usage: Usage,
+}
+
+/// Run one check to completion, or until the person stops the turn.
+///
+/// **Every way this can fail except a stop is a verdict of inconclusive.** A timeout, a refusal in
+/// transit, a backend that is down: none of them says anything about the content, and every one of
+/// them has to land on the prompt that says the check did not complete. Nothing but a stop is
+/// handed to a caller as an error, and a stop is not a failure of the check: a caller that treated
+/// it as an inconclusive verdict would refuse a read the person never got to answer, and the
+/// reference would read as kept back for good.
 ///
 /// Announced as it goes, because every way this can end is slow: the whole slot is sent, on the
 /// session's own model, uncached. The pair of reports is made here rather than at the three call
@@ -142,7 +158,7 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
     chat: &mut Chat<'_>,
     reporter: &mut R,
     spec: &VettingSpec,
-) -> Checked {
+) -> Result<Checked, Stopped> {
     // Assembled inside the kernel, so the bytes are never in a variable this function could
     // examine. What comes back is wrapped and stays wrapped until the line that hands it over.
     let input = policy.compose_vetting_input(spec);
@@ -190,25 +206,36 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
 
     let completion = match answered {
         Ok(completion) => completion,
+        // Decided from the kind of the error, which is the person's own action, before the
+        // catch-all below. A cancel flag read here instead could be set after a real failure.
+        Err(error) if error.is_cancelled() => {
+            policy.vetting_stopped(spec);
+            return Err(Stopped {
+                attempts: error.diagnosis().attempts,
+                usage: error.completed_usage().unwrap_or_default(),
+            });
+        }
         Err(_) => {
             // Through the kernel, exactly as a reply that could not be read goes. The word
             // decides a refusal wherever nothing draws a prompt, and a trail that recorded one
             // inconclusive and not the other would tell a reader a check objected when it never
             // ran. The account is the driver's own sentence; nothing here has seen a reply.
-            return Checked {
+            return Ok(Checked {
                 verdict: policy.vetting_did_not_complete(spec, "the check could not be made"),
                 reason: None,
                 usage: Usage::default(),
-            };
+                completed: false,
+            });
         }
     };
 
     let (verdict, reason) = policy.vetting_verdict(spec, completion.content);
-    Checked {
+    Ok(Checked {
         verdict,
         reason,
         usage: completion.usage,
-    }
+        completed: true,
+    })
 }
 
 /// A copy of the picture a person is asked about, which they open in their own viewer.

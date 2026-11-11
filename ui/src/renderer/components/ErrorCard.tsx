@@ -1,13 +1,16 @@
 import type { CutOff } from '../../shared/protocol'
 import { failureSummary } from '../failure'
 import { Alert, Button, Collapse } from '../nala'
+import { signInWayOf } from '../../shared/accounts'
 import { FailureSentence } from './FailureSentence'
+import { SignInButton } from './SignInButton'
 
 /**
  * A failure, titled from the category the agent sent and never from the words in the detail.
  * Where the failure was one of a ChatGPT or an xAI account's, the sentence the bridge sent for it is the
  * wording instead, so the words of that failure are the bridge's and not a second table here. The
- * command it names arrives as `accountCommand` and is drawn as code.
+ * command it names arrives as `accountCommand` and is drawn as code, with "Sign in" beside it where
+ * the window can start that sign-in itself (CHATGPT-15, XAI-20).
  *
  * The detail is prose: a backend's own diagnostic, sometimes translated, sometimes quoting
  * something a model wrote. Matching on it is what the wire protocol forbids in as many words,
@@ -21,13 +24,15 @@ export function ErrorCard({ detail, onRetry, onModel, category, accountMessage, 
   detail: string; onRetry?: () => void; onModel?: () => void
 }): React.JSX.Element {
   const classified = failureSummary(category ?? '', cutOff, accountMessage)
+  const way = accountMessage ? signInWayOf(accountCommand) : null
   const technical = `${detail}${attempts != null ? `\nRequests attempted: ${attempts}` : ''}${status != null ? `\nHTTP status: ${status}` : ''}`
   return (
-    <Alert type="error" className="error-card" data-test="error-card" hasActions={Boolean(onRetry || onModel)}>
+    <Alert type="error" className="error-card" data-test="error-card" hasActions={Boolean(onRetry || onModel || way)}>
       <span slot="title">{classified.title}</span>
       <p>{accountMessage ? <FailureSentence text={classified.description} command={accountCommand} /> : classified.description}</p>
-      {(onRetry || onModel) && (
+      {(onRetry || onModel || way) && (
         <div slot="actions" className="error-actions">
+          {way && <SignInButton way={way} />}
           {onRetry && <Button size="small" kind="outline" onClick={onRetry} data-test="error-retry">Draft continuation</Button>}
           {onModel && <Button size="small" kind="plain" onClick={onModel} data-test="error-model">Choose another model</Button>}
         </div>

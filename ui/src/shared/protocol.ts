@@ -16,6 +16,13 @@
 
 export type Intent = 'create' | 'overwrite' | 'edit'
 export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
+/**
+ * A failed request waiting to be sent again, in the `phase` event: which attempt follows, and how
+ * long from the event until it goes and until the request is given up on (VIEW-43). The two ends
+ * share no clock, so these are spans and not times. `gives_up_in_ms` is `null` where a count and not
+ * a window decides how long the request goes on.
+ */
+export type RetryEvent = { attempt: number; in_ms: number; gives_up_in_ms: number | null }
 /** A wait the window shows: the agent's phase, or a first turn starting the session's MCP servers. */
 export type Waiting = Phase | 'starting-servers'
 
@@ -36,6 +43,8 @@ export type Change =
   | { kind: 'elided'; lines: number }
 
 export interface Activity {
+  /** The id dispatch gave the call, the same on its start and its finish. `null` for a line no dispatch made. */
+  call: number | null
   verb: string
   target: string
   /** `target` spelled so a file's name that is blank or ends in whitespace is visible (PROMPT-1). Draw this and not `target`; match a call to its confirmation on `target`. */
@@ -311,13 +320,13 @@ export interface OpenedSession extends SessionSettled {
 /**
  * How much a session's next turn asks before it acts, as `session.mode` names it.
  *
- * Three of the agent's four. Bypassing every check is reachable only through the command-line
+ * Four of the agent's five. Bypassing every check is reachable only through the command-line
  * flag, and the bridge refuses it from a window (MODE-11).
  */
-export type PermissionMode = 'ask' | 'acceptEdits' | 'plan'
+export type PermissionMode = 'ask' | 'acceptEdits' | 'plan' | 'auto'
 
 /** The order the mode shortcut walks, ending back at the first. */
-export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan']
+export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan', 'auto']
 
 /**
  * What a program the agent runs is held to, as `session.sandbox` names it.
@@ -361,6 +370,14 @@ export interface ModelOption {
   id: string
   name: string
   provider: string
+  /**
+   * The service the row came from, named by where the bridge took it and never by what a listing
+   * said: `brave`, `bedrock`, `chatgpt`, `xai`, `gateway:<id>`, or `default` for the configured model
+   * no service listed. The same key `accountProviderKey` gives an account row.
+   */
+  providerKey: string
+  /** Whether the model takes an effort level. False only where its service said it does not. */
+  readsEffort: boolean
   premium: boolean
   contextWindow: number | null
   /** Provider-reported capabilities; absent when the backend does not report them. */
@@ -376,6 +393,17 @@ export interface ModelCatalogue {
    * warning that names none. Absent from a bridge that sends none.
    */
   warningCommands?: (string | null)[]
+}
+
+/** An effort level `/effort` and the model picker record, cheapest first. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type EffortLevel = typeof EFFORT_LEVELS[number]
+
+/** `effort.get`: the level recorded, the level a turn here asks for, and whether a checkout's settings outrank a pick. */
+export interface EffortReport {
+  recorded: EffortLevel | null
+  inForce: EffortLevel | null
+  outranked: boolean
 }
 
 /** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */
@@ -813,6 +841,10 @@ export interface McpToolsRequest {
  * One call to an MCP server's tool (SERVERS-7). `name` is `alias:tool`. Each argument's value is
  * JSON, as the model wrote it. Three answers: no, yes, and yes without asking again about this
  * tool in this project, which is `remember` on the reply and offered only where `mayStand`.
+ * `askedForPrivateArguments` says the call is asked because its arguments are private, which is
+ * why `mayStand` is false for it: no stored answer covers such a call. `also` is the arguments of
+ * each later call of the same round to the same tool that the answer covers, empty where the call
+ * is asked on its own.
  */
 export interface McpCallRequest {
   request: number
@@ -822,6 +854,8 @@ export interface McpCallRequest {
   arguments: { name: string; value: string }[]
   description: string | null
   mayStand: boolean
+  askedForPrivateArguments: boolean
+  also: { name: string; value: string }[][]
 }
 
 /**
@@ -1011,6 +1045,14 @@ export interface AskRequest {
 }
 
 /**
+ * What became of each question put, worded by the kernel, sent once the series is settled
+ * (ASK-13). For the screen only: nothing here is sent back to the planner.
+ */
+export interface AskSettled {
+  rows: { question: string; outcome: string }[]
+}
+
+/**
  * One answer.
  *
  * Declining is a first-class answer rather than an error: a question nobody wants to answer
@@ -1036,7 +1078,10 @@ export interface EventMap {
   'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
-  phase: { phase: Phase }
+  /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
+  'schedule.ran': import('./schedule').ScheduleAnswer
+  /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
+  phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }
   /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */
   thinking: { text: string }
@@ -1055,7 +1100,8 @@ export interface EventMap {
    * printed, its note or its report is sent (VIEW-35).
    */
   agents: { agents: AgentEntry[]; started: number; working: number }
-  landed: { landing: Landing }
+  /** `call` is the id of the call whose result this places, the same as on its `tool.started`; `null` where no dispatch made the line. */
+  landed: { call: number | null; landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }
@@ -1085,6 +1131,7 @@ export interface EventMap {
   'manifest.done': ManifestDone
   'manifest.error': ManifestError
   'ask.request': AskRequest
+  'ask.settled': AskSettled
   'turn.done': TurnDone
   'turn.error': TurnError
 }

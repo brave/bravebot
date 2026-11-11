@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Sandbox settings
-description: Withhold variables from a program the agent runs, close its network or hold it to a list of hosts, and move the paths it reads and writes.
+description: Configure run.scrubEnv, run.network, sandbox.network and sandbox.filesystem to withhold environment variables, restrict hosts and paths, and hold back the temporary directory.
 ---
 
 # Sandbox settings
@@ -67,7 +67,7 @@ thing to switch off by near-miss.
 `open` is the default: every program the agent runs keeps the network. `closed` takes it from every
 program except those that carry a reason to have it: a package manager that fetches (`cargo`, `npm`,
 `pip`, `go`, `mvn`, `gradle`), a `git` or `gh` command that talks to a remote, `curl`, `ssh`, and
-a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. Those directories include the toolchain caches and every path you let programs write. `cat`, `grep`, `make`, `python3` and a test
+a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. Those directories include the checkout holding each directory of the session (the nearest folder with a `.git`, unless it is your home folder or holds it), the toolchain caches and every path you let programs write. `cat`, `grep`, `make`, `python3` and a test
 run get none, so what they read cannot be sent anywhere.
 
 `--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
@@ -111,8 +111,13 @@ and bypass mode and a session nobody is at refuse as `refuse` does. `/clear`, `/
 begin a session that asks about those hosts again. A stage with the network points its proxy settings at a local proxy that applies the list, and
 on macOS and Linux it may connect only to that proxy, so a program that ignores the proxy settings
 is still held to the list. On Linux that needs the same kernel support as `run.network`, and a stage
-is refused, naming this setting, where the kernel lacks it. On Windows a stage is refused while a list
-is set, naming this setting. On macOS a `run` that asks for `loopback` is then given the right to
+is refused, naming this setting, where the kernel lacks it. On Linux the proxy listens on a unix socket
+under your runtime directory (`XDG_RUNTIME_DIR`) where that is an absolute path outside the temporary
+directory that can be written, and under the temporary directory otherwise. The forwarder that carries a
+stage's connections to it relays only to the proxy's own listener. The system removes the runtime
+directory when your last login session ends and nothing lingers, and a session that outlives it has no
+socket for its proxies: a stage held to a list then reaches nothing, and the proxy is not made again.
+On Windows a stage is refused while a list is set, naming this setting. On macOS a `run` that asks for `loopback` is then given the right to
 listen, and a step with network access still connects to the proxy's port alone. A step with no
 network access is not held to the proxy, so `loopback` lets it connect to a port of this machine as
 it does without a list. On Linux the request changes nothing. A list that is set, even an empty one,

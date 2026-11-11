@@ -28,6 +28,11 @@ pub enum Made {
     SymbolicLink,
     /// The first segment of `alias` is a symbolic link to the first segment of `name`.
     LinkedDirectory,
+    /// `alias` is `name` beneath a second absolute path to the working directory, which macOS
+    /// gives every directory under `/System/Volumes/Data`. The file is made under `name`, the
+    /// workspace holds the second path open beside the working directory, and [`spelling`] gives
+    /// the alias a test asks about. Skipped where the volume has no second path.
+    SecondPathToTheTree,
 }
 
 /// Something that decides what to do with a file by its name.
@@ -45,6 +50,11 @@ pub enum Consumer {
     /// the alias, when the directory spelled as the name is one a stage may write (SANDBOX-30).
     /// Asked of the rows that spell a directory another way.
     ProgramLookup,
+    /// Whether a value of `BROWSER` or an `XDG_` directory variable, spelled as the alias, is judged
+    /// as the directory a stage may write when the directory spelled as the name is one
+    /// (SANDBOX-30). Asked of the rows that spell a directory another way, for each kind of value
+    /// the variables hold: a path, a list of paths and a list of commands.
+    CodeSelectorValue,
 }
 
 pub struct Alias {
@@ -60,18 +70,6 @@ pub struct Alias {
     /// Consumers that do not treat the alias as the name, each with the issue that tracks it.
     pub unhandled: &'static [(Consumer, &'static str)],
 }
-
-const LINK: &[(Consumer, &str)] = &[
-    (Consumer::TrustRead, "#2328"),
-    (Consumer::TrustWrite, "#2328"),
-    (Consumer::WriterReservation, "#2328"),
-];
-
-const HARD_LINK: &[(Consumer, &str)] = &[
-    (Consumer::TrustRead, "#2328"),
-    (Consumer::TrustWrite, "#2328"),
-    (Consumer::WriterReservation, "#2328"),
-];
 
 pub const ALIASES: &[Alias] = &[
     Alias {
@@ -160,7 +158,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "src/linked.json",
         made: Made::SymbolicLink,
         skippable: false,
-        unhandled: LINK,
+        unhandled: &[],
     },
     Alias {
         kind: "symbolic link on the way",
@@ -168,7 +166,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "linked/fetched.json",
         made: Made::LinkedDirectory,
         skippable: false,
-        unhandled: LINK,
+        unhandled: &[],
     },
     Alias {
         kind: "hard link",
@@ -176,9 +174,41 @@ pub const ALIASES: &[Alias] = &[
         alias: "src/linked.json",
         made: Made::HardLink,
         skippable: false,
-        unhandled: HARD_LINK,
+        unhandled: &[],
+    },
+    // The alias is the part below the second path; `spelling` puts the path in front of it.
+    Alias {
+        kind: "another path to the same tree",
+        name: "src/fetched.json",
+        alias: "src/fetched.json",
+        made: Made::SecondPathToTheTree,
+        skippable: true,
+        unhandled: &[],
     },
 ];
+
+/// The second absolute path to the working directory `root`, for a row that is made of one, and
+/// `None` for every other row and for a host whose volume has no second path.
+///
+/// The directory the workspace is built over is the canonical one, so the path is made from
+/// `root` canonicalized.
+pub fn second_path(root: &Path, row: &Alias) -> Option<String> {
+    if !matches!(row.made, Made::SecondPathToTheTree) || !cfg!(target_os = "macos") {
+        return None;
+    }
+    let canonical = root.canonicalize().ok()?;
+    let second = Path::new("/System/Volumes/Data").join(canonical.strip_prefix("/").ok()?);
+    second.to_str().map(str::to_string)
+}
+
+/// The second name a test asks about, as a string it can type: `alias` for a row made under the
+/// working directory, and `alias` beneath [`second_path`] for a second path to the tree.
+pub fn spelling(root: &Path, row: &Alias) -> String {
+    match second_path(root, row) {
+        Some(second) => format!("{second}/{}", row.alias),
+        None => row.alias.to_string(),
+    }
+}
 
 /// Make the file under `root` and its second name, and say whether the volume opens that name.
 ///
@@ -194,8 +224,20 @@ pub fn prepare(root: &Path, row: &Alias) -> bool {
         .expect("directory");
     std::fs::write(&stored_path, CONTENT).expect("file");
     std::fs::write(root.join(CONTROL), CONTENT).expect("control file");
+    if matches!(row.made, Made::SecondPathToTheTree) {
+        // The second name is the same file beneath another absolute path, so it opens where the
+        // volume has one and not otherwise. The row is skippable for that reason.
+        let opens = second_path(root, row)
+            .is_some_and(|second| Path::new(&second).join(row.alias).exists());
+        assert!(
+            opens || row.skippable,
+            "{}: the volume has no second path to the tree, and the row may not be skipped",
+            row.kind
+        );
+        return opens;
+    }
     match row.made {
-        Made::ByTheVolume | Made::StoredAsTheAlias => {}
+        Made::ByTheVolume | Made::StoredAsTheAlias | Made::SecondPathToTheTree => {}
         #[cfg(unix)]
         Made::HardLink => {
             std::fs::hard_link(&stored_path, root.join(other)).expect("hard link");
@@ -298,7 +340,9 @@ const NOT_ON_WINDOWS: &[&str] = &[
 ///
 /// Each differs from another name here, or in `AWKWARD_NAMES`, only where a step that turns a name
 /// into a key could drop the difference: whitespace inside a name, a character Unicode gives no
-/// width, or a bidirectional control. None repeats a name or a group of another.
+/// width, a bidirectional control, or a sharp s against the two letters full case folding makes of
+/// it (`cla\u{df}.md`, `class.md`). No name repeats a name of another entry, and a group is
+/// repeated only by the pair a refusal joins on purpose, listed in [`JOINED_BY_FOLDING`].
 pub const WINDOWS_NAMES: &[(&str, &str)] = &[
     ("ab.md", "no character inside"),
     ("a b.md", "one space inside"),
@@ -310,7 +354,24 @@ pub const WINDOWS_NAMES: &[(&str, &str)] = &[
     ("a\u{feff}b.md", "zero-width no-break space inside"),
     ("a\u{202e}b.md", "right-to-left override inside"),
     ("a\u{2066}b.md", "left-to-right isolate inside"),
+    ("cla\u{df}.md", "sharp s and two s"),
+    ("class.md", "sharp s and two s"),
 ];
+
+/// The groups `WINDOWS_NAMES` repeats on purpose, each of two names. A volume that folds case with
+/// the full mapping (APFS) opens `cla\u{df}.md` and `class.md` as one file, and NTFS holds them
+/// apart. A trust cannot tell which, so it reaches only the spelling it names, while a refusal and a
+/// writer in flight reach both where the volume folds case, whichever way it folds (TRUST-2). The
+/// pair is one group for the tests that ask what a refusal reaches, and two names for the tests that
+/// ask what a trust reaches. A volume that does not fold case holds the pair apart in both.
+const JOINED_BY_FOLDING: &[&str] = &["sharp s and two s"];
+
+/// Whether a refusal or a writer in flight about one of two names that the volume holds apart
+/// reaches the other: they are one group, and a group in [`JOINED_BY_FOLDING`] is joined only where
+/// the volume folds case. Every other group is joined whatever the volume does.
+pub fn joined(first_group: &str, second_group: &str, folds_case: bool) -> bool {
+    first_group == second_group && (folds_case || !JOINED_BY_FOLDING.contains(&first_group))
+}
 
 /// The names a test makes files of: `AWKWARD_NAMES` and `WINDOWS_NAMES`, less the names a Windows
 /// host does not hold when the host is Windows.
@@ -326,12 +387,24 @@ pub fn held_names() -> Vec<(&'static str, &'static str)> {
             .iter()
             .enumerate()
             .all(|(index, (name, group))| {
-                AWKWARD_NAMES
-                    .iter()
-                    .chain(&WINDOWS_NAMES[..index])
-                    .all(|(other, other_group)| other != name && other_group != group)
+                let repeats_a_name_or_group =
+                    |(other, other_group): &(&str, &str)| other == name || other_group == group;
+                // A group of `WINDOWS_NAMES` is checked against `AWKWARD_NAMES` always, and
+                // against the rest of `WINDOWS_NAMES` unless it is a joined pair, where two
+                // names carry it and no third.
+                !AWKWARD_NAMES.iter().any(repeats_a_name_or_group)
+                    && WINDOWS_NAMES[..index].iter().all(|(other, other_group)| {
+                        other != name
+                            && (other_group != group
+                                || (JOINED_BY_FOLDING.contains(group)
+                                    && WINDOWS_NAMES
+                                        .iter()
+                                        .filter(|(_, held)| held == group)
+                                        .count()
+                                        == 2))
+                    })
             }),
-        "WINDOWS_NAMES repeats a name or a group of another name"
+        "WINDOWS_NAMES repeats a name, or a group that is not a joined pair"
     );
     AWKWARD_NAMES
         .iter()

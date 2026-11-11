@@ -516,6 +516,8 @@ fn a_call(may_stand: bool) -> bravebot_agent::confirm::McpCallRequest {
         description: None,
         may_stand,
         asked_every_call: false,
+        asked_for_private_arguments: false,
+        also: Vec::new(),
     }
 }
 
@@ -1472,6 +1474,8 @@ fn the_window_refuses_a_call_asked_every_time_without_asking() {
     let (decision, asked) =
         confirm_a_call_with_an_approving_window(bravebot_agent::confirm::McpCallRequest {
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
             ..a_call(false)
         });
     assert!(!asked, "a card was drawn for it");
@@ -1500,6 +1504,8 @@ fn the_window_refuses_a_call_a_choice_fills_without_asking() {
             description: None,
             may_stand: false,
             asked_every_call,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let (decision, asked) = confirm_a_call_with_an_approving_window(request(false));
         assert!(asked, "{number}: the control was not put to the window");

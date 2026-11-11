@@ -126,6 +126,8 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
         )
     };
 
+    let plan_mode_told = snapshot.plan_mode_told_after_cut(&messages, &archive);
+
     Some(Cut {
         before: Snapshot {
             messages,
@@ -146,8 +148,18 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
             // child ends earlier than they did. False costs at most one needless line to the
             // planner, where true could withhold one a turn needed.
             asked_to_write: false,
+            // Recomputed from the notices the child keeps: true when the newest one still in its
+            // request says plan mode is on, false when the cut took it away or the newest says
+            // plan mode ended. A record written before the notices were tagged has no tag to
+            // read, so its flag is carried as it stands.
+            plan_mode_told,
             // Carried verbatim, like the integrity and for the same reason on the other axis.
             holds: snapshot.holds.clone(),
+            // Dropped, as the measurement is: the child sends its whole history until a turn of
+            // its own is over budget.
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
         },
         prompt: wanted,
     })
@@ -175,7 +187,11 @@ mod tests {
             archive: Vec::new(),
             measured: 4096,
             asked_to_write: true,
+            plan_mode_told: false,
             holds: "public".into(),
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
         }
     }
 
@@ -479,6 +495,118 @@ mod tests {
             cut.before.references, 3,
             "but the names handed out are remembered"
         );
+    }
+
+    /// A record written before plan-mode notices were tagged holds nothing a cut can read, so its
+    /// flag is all there is to say about the kept messages. A cut that reset it would leave the
+    /// child's planner reading a kept notice as current, with nothing to retract it when the child
+    /// starts outside plan mode. The child is the conversation restored from the cut, and a turn
+    /// that starts outside plan mode retracts the notice when that conversation reports the flag
+    /// (MODE-8), so the flag is read from the restored conversation. That the turn then retracts is
+    /// pinned in the agent's tests listed under MODE-8.
+    #[test]
+    fn a_cut_leaves_the_child_recording_that_its_last_plan_mode_notice_said_plan_mode_is_on() {
+        let mut before = snapshot(vec![Message::user("first"), Message::user("second")]);
+        before.plan_mode_told = true;
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+
+        assert!(
+            cut.before.plan_mode_told,
+            "the cut lost the record that the last notice said plan mode is on"
+        );
+        assert!(
+            Conversation::restored(cut.before).plan_mode_told(),
+            "the child's conversation does not report the notice it keeps as plan mode being on"
+        );
+    }
+
+    /// A plan-mode notice, as the turn that pushed it tagged it.
+    fn a_mode_notice(plan: bool) -> Stored {
+        let mut notice = Stored::plain(Message::user(if plan { "plan on" } else { "plan off" }));
+        notice.composed = Some(Composed::ModeNotice { plan });
+        notice
+    }
+
+    /// A cut in front of the exchange that held the plan-mode notice leaves the child without it,
+    /// so the child has nothing to retract even though the parent's flag is set.
+    ///
+    /// The fault this rejects: the parent's flag carried into the child unchanged, which has a
+    /// child that never saw plan mode told that it ended.
+    #[test]
+    fn a_cut_that_takes_the_plan_mode_notice_away_leaves_the_child_with_nothing_to_retract() {
+        let mut before = snapshot(vec![Message::user("first"), Message::user("second")]);
+        before.messages.push(a_mode_notice(true));
+        before.plan_mode_told = true;
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+
+        assert!(!cut.before.plan_mode_told);
+        assert!(!Conversation::restored(cut.before).plan_mode_told());
+    }
+
+    /// The parent ended plan mode after the point the cut is taken at, so its flag is clear, but the
+    /// notice the child keeps still says plan mode is on. The child has to retract it.
+    ///
+    /// The fault this rejects: the parent's flag carried into the child unchanged, which leaves the
+    /// child reading its kept notice as current.
+    #[test]
+    fn a_cut_that_keeps_a_plan_mode_notice_the_parent_later_retracted_leaves_the_child_to_retract_it()
+     {
+        let mut before = snapshot(vec![Message::user("first")]);
+        before.messages.push(a_mode_notice(true));
+        before.messages.push(Stored::plain(Message::user("second")));
+        before.messages.push(a_mode_notice(false));
+        before.plan_mode_told = false;
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+
+        assert!(cut.before.plan_mode_told);
+        assert!(Conversation::restored(cut.before).plan_mode_told());
+    }
+
+    /// A cut inside the archive takes back what compaction removed, including a notice in it, and
+    /// the child's request holds it again.
+    #[test]
+    fn a_cut_inside_the_archive_reads_the_notices_it_puts_back() {
+        let mut before = snapshot(vec![Message::user("third")]);
+        before.archive = vec![
+            Stored::plain(Message::user("first")),
+            a_mode_notice(true),
+            Stored::plain(Message::user("second")),
+        ];
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+        assert!(cut.before.archive.is_empty());
+        assert!(cut.before.plan_mode_told);
+
+        let cut = super::cut(&before, &drawn(&before), 0).expect("a first prompt");
+        assert!(!cut.before.plan_mode_told);
+    }
+
+    /// A plan-mode notice is house-keeping for the planner, so it is not a place to cut and shifts
+    /// no ordinal. Its words here are those of the prompt that follows it, so a walk that took it
+    /// for a prompt would land in front of the notice and not in front of the prompt.
+    #[test]
+    fn a_plan_mode_notice_is_not_a_fork_point() {
+        let mut before = snapshot(vec![Message::user("first"), Message::assistant("one")]);
+        before.messages.push(Stored {
+            message: Message::user("second").into(),
+            composed: Some(Composed::ModeNotice { plan: true }),
+            address: None,
+            source: None,
+        });
+        before.messages.push(Stored::plain(Message::user("second")));
+        let said = drawn(&before);
+        assert_eq!(prompts(&said), vec!["first", "second"]);
+
+        let cut = cut(&before, &said, 1).expect("a second prompt");
+        assert_eq!(cut.prompt, "second");
+        assert_eq!(
+            texts(&cut.before.messages),
+            vec!["first", "one", "second"],
+            "the cut fell in front of the notice"
+        );
+        assert!(matches!(
+            cut.before.messages[2].composed,
+            Some(Composed::ModeNotice { .. })
+        ));
     }
 
     /// The parent's record of a write says what its last turns did, and a fork ends before them.

@@ -63,6 +63,7 @@ permissions-check-deny = refuser
 permissions-check-ask = demander
 permissions-check-allow = autoriser
 permissions-check-none = aucune règle ne correspond, les contrôles ordinaires décident
+permissions-check-short-name = refusé, car une règle de commande est en vigueur et un nom court 8.3 ne peut pas lui être comparé
 permissions-check-rule = règle
 permissions-check-file = fichier
 permissions-check-reason = raison
@@ -185,6 +186,7 @@ cli-option-json = Afficher un objet de résultat sur stdout au lieu de la répon
 cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'exécution, puis l'objet de résultat
 cli-option-input-format = Lire des tours sur stdin en lignes JSON avec lines (implique --json-stream)
 cli-option-trust-input-lines = Tenir les lignes de stdin pour vos propres mots et non ceux d'un programme (demande --input-format lines)
+cli-option-approve-input-lines = Laisser le programme qui envoie les lignes approuver ou refuser chaque écriture, exécution ou récupération une fois l'appel montré (demande --input-format lines)
 cli-option-output-schema = Exiger que la réponse respecte le schéma JSON de ce fichier ; avec --json, la valeur est dans « structured »
 cli-option-goal = Travailler vers cette condition : après chaque tour, un juge dit si elle est remplie, et le travail est renvoyé jusqu'à ce qu'elle le soit ; termine avec le statut 7 si elle ne l'est jamais
 cli-option-max-rounds = Arrêter l'exécution quand l'agent demande plus de cycles d'appels d'outils que ce nombre, avec le statut 8
@@ -318,6 +320,8 @@ cli-goal-failed = l'objectif n'a pas pu être vérifié : { $problem }
 cli-output-schema-needs-a-path = --output-schema demande le chemin d'un fichier de schéma JSON
 cli-input-format-unknown = --input-format accepte lines
 cli-trust-input-lines-needs-lines = --trust-input-lines demande --input-format lines
+cli-approve-input-lines-needs-lines = --approve-input-lines demande --input-format lines
+cli-approve-input-lines-not-with = --approve-input-lines est incompatible avec { $flag } : { $flag } répond déjà aux questions auxquelles le programme répondrait, et une ligne de commande qui donne les deux ne dit pas laquelle était voulue
 cli-input-lines-not-with-a-manifest = --input-format lines ne va pas avec --mode manifest : une exécution planifiée a une seule tâche et aucun tour à ajouter
 cli-input-lines-no-prompt = aucune ligne prompt n'est arrivée avant la fin de l'entrée
 cli-input-lines-session-lost = la session que cette exécution poursuit n'est plus lisible, donc le tour n'a pas été exécuté : { $problem }
@@ -615,6 +619,13 @@ doctor-settings-provider-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-provider-port-refused =
     provider { $id } n'est pas utilisé : son baseURL écrit un port qui n'est pas un nombre jusqu'à 65535 (trouvé "{ $port }")
+doctor-region-refused =
+    la région Bedrock « { $region } » provenant de { $source } n'est pas utilisée : une région s'écrit en lettres minuscules, chiffres et tirets, comme us-east-1
+doctor-region-source-exported = la variable AWS_REGION exportée dans l'environnement
+doctor-region-source-env-block = AWS_REGION dans le bloc env d'un fichier de paramètres
+doctor-region-source-env-block-of = AWS_REGION dans le bloc env de { $path }
+doctor-region-source-managed = AWS_REGION imposée par le fichier de la machine
+doctor-region-source-provider-entry = options.region de l'entrée amazon-bedrock sous provider
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -646,6 +657,9 @@ doctor-settings-language-ignored =
     language dans { $path } n'est pas appliqué : il n'est lu que depuis ~/.bravebot/settings.json
 doctor-settings-language-unmatched =
     language { $language } dans ~/.bravebot/settings.json ne désigne aucun catalogue, il choisit donc { $reference } ; les catalogues sont { $available }
+doctor-settings-retrieval-ignored =
+    retrieval dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-ask-idle-ignored =
     askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -707,8 +721,8 @@ sandbox-rule-climbs = il sort du dossier dont il est lu, ou contient .. là où 
 sandbox-rule-glob-on-a-write = un joker s'applique aux lectures et pas aux écritures
 sandbox-rule-confines-nothing = une écriture sur le dossier personnel ou sur tout le système de fichiers ne confine rien
 sandbox-rule-private-key = aucune liste n'ajoute d'accès à ~/.ssh, où se trouve une clé privée
-sandbox-rule-state-directory = aucune liste n'ajoute d'accès à ~/.bravebot, où se trouvent les clés de la passerelle, sauf pour lire ~/.bravebot/sessions
-sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou ~/.bravebot
+sandbox-rule-state-directory = aucune liste n'ajoute d'accès au dossier d'état, où se trouvent les clés de la passerelle (~/.bravebot, ou le dossier que BRAVEBOT_HOME désigne à la place), sauf pour lire son dossier sessions
+sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou le dossier d'état
 sandbox-rule-too-broad = son joker a regardé plus du disque qu'un motif ne le peut, donc ce qu'il désigne est inconnu
 sandbox-rule-overridden = une autre entrée décide de ce chemin : un refus au même chemin, ou un refus écrit par le fichier géré
 sandbox-rule-cannot-subtract = cette plateforme ne peut pas retenir un chemin situé dans un dossier accordé à chaque étape, donc une étape est refusée au lieu d'être lancée avec le chemin accessible
@@ -1120,6 +1134,7 @@ chatgpt-failed-listener =
     impossible d'attendre le navigateur sur l'adresse de boucle locale, donc aucun navigateur n'a été ouvert et rien n'a été modifié
 chatgpt-failed-timed-out =
     le navigateur n'est pas revenu à bravebot à temps, donc la connexion s'est arrêtée et rien n'a été enregistré ; un navigateur sur une autre machine n'atteint le port de boucle locale de celle-ci que si le port nommé ci-dessus lui est redirigé
+chatgpt-failed-cancelled = la connexion a été annulée, donc rien n'a été enregistré
 chatgpt-failed-no-code =
     le navigateur n'a renvoyé aucun code d'autorisation, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
 chatgpt-failed-no-client =
@@ -1204,6 +1219,7 @@ xai-failed-expired =
     le code a cessé de fonctionner avant d'être utilisé, donc rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
 xai-failed-timed-out =
     le code n'a pas été utilisé pendant le temps où bravebot en attend un, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
+xai-failed-cancelled = la connexion a été annulée, donc rien n'a été enregistré
 xai-failed-code = xAI n'a pas donné de code pour se connecter : { $reason } ; rien n'a été enregistré
 xai-failed-exchange = la connexion n'a pas pu être terminée : { $reason } ; rien n'a été enregistré
 xai-failed-clock =
@@ -1533,6 +1549,11 @@ delegate-stopped-narration = vous avez arrete ce delegue, il doit donc conclure 
 
 delegate-budget-narration = ce delegue a depense son budget de { $budget } jetons, il doit donc conclure avec ce qu'il a
 
+delegate-rounds-narration = { $rounds ->
+    [one] cela fait { $rounds } tour d'appels d'outils sans reponse, ce tour doit donc conclure avec ce qu'il a
+   *[other] cela fait { $rounds } tours d'appels d'outils sans reponse, ce tour doit donc conclure avec ce qu'il a
+    }
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = proposer ces outils au modèle ?
@@ -1601,8 +1622,8 @@ mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été lai
 
 mcp-move-title = déclarer ce serveur là où pointe sa réponse ?
 mcp-start-title = démarrer { $alias } ?
-command-mcp = Lister les serveurs MCP, en redémarrer un, ou en désactiver un
-mcp-command-usage = /mcp accepte list, reconnect [alias] ou disable <alias>
+command-mcp = Lister les serveurs MCP, en redémarrer un, en désactiver un ou en supprimer un
+mcp-command-usage = /mcp accepte list, reconnect [alias], disable <alias> ou remove <alias>
 mcp-command-none = Aucun serveur MCP n'est demandé ici, et aucun ne fonctionne
 mcp-command-running = Serveurs MCP en cours d'exécution :
 mcp-command-not-running = Serveurs MCP demandés ici et arrêtés :
@@ -1615,6 +1636,9 @@ mcp-command-reconnected = { $alias } fonctionne. Ses outils vous sont présenté
 mcp-command-disabled = { $alias } est désactivé pour cette session. Rien n'a été écrit.
 mcp-command-already-off = { $alias } est déjà désactivé
 mcp-command-needs-an-alias = /mcp { $command } demande l'alias d'un serveur
+mcp-command-not-an-alias = { $alias } n'est pas le nom d'un serveur MCP
+mcp-command-no-state-directory = Il n'y a pas de répertoire d'état, donc aucun serveur MCP n'est déclaré et aucun ne peut être supprimé
+mcp-command-remove-hint = /mcp remove <alias> supprime la déclaration et l'approbation d'un serveur et le retire des fichiers de réglages qui le demandent, si bien qu'aucune session ne le démarre
 mcp-move-declared = { $alias } est déclaré à { $url }
 mcp-move-destination = et sa réponse pointe vers { $url }
 mcp-move-reaching = qui atteint { $authority }
@@ -2371,7 +2395,7 @@ status-server-policy-subprocesses = sous-processus
 status-server-policy-subprocesses-allowed = autorisés
 status-server-policy-subprocesses-refused = refusés
 status-server-policy-starts-in = démarre dans
-status-server-policy-git = .git
+status-server-policy-git = noms protégés
 status-server-policy-git-held-back = non écrit sous une ligne en écriture
 status-server-policy-read = lecture
 status-server-policy-write = écriture
@@ -2437,6 +2461,7 @@ status-time = Temps
 status-time-inference = sur le modèle
 status-time-tools = exécution des outils
 status-time-stalled = en attente de vous
+status-time-file-wait = en attente d'accès aux fichiers
 status-time-overhead = non attribué
 status-cache = Cache du prompt, dernier tour
 status-cache-read = servi depuis le cache
@@ -2548,9 +2573,12 @@ indicator-checking = { $lines ->
    *[other] Vérification de { $lines } lignes
     }
 indicator-waiting-on-delegate = En attente de { $delegate }
+indicator-reconnecting-in = Reconnexion, prochain essai dans { $wait }
+indicator-reconnecting-until = Reconnexion, prochain essai dans { $wait }, abandon dans { $left }
 indicator-hook = Exécution du hook : { $program } ({ $moment })
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF
+indicator-answering = Réponse à votre question /btw
 indicator-stopping = Arrêt en cours
 indicator-stopping-delegates = { $count ->
     [one] Arrêt en cours, en attente de { $count } délégué
@@ -2630,6 +2658,13 @@ ask-key-change = modifier une réponse
 ask-review-title = vérifiez vos réponses
 ask-review-heading = Rien n'a encore été envoyé.
 ask-review-skipped = (passée)
+# Dit sous l'appel une fois les questions réglées, un bloc par question posée : la question, puis
+# ce qu'elle est devenue (ASK-13).
+ask-settled-heading = { $tag } : { $question }
+ask-settled-chose = choisi : { $labels }
+ask-settled-typed = répondu : { $words }
+ask-settled-skipped = passée
+ask-settled-closed = fermée faute de réponse dans le temps imparti
 
 
 ## Confier la ligne à un éditeur
@@ -2753,6 +2788,7 @@ command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
 command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
+command-schedule = Lister, ajouter, suspendre, reprendre, supprimer ou lancer des entrées planifiées
 command-plan = Passer en mode plan, et commencer une tâche si vous en donnez une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
@@ -3116,14 +3152,18 @@ session-vetting-on =
     demander (~/.bravebot/vetting)
 session-vetting-in-force =
     une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
+session-vetting-in-bypass =
+    le contournement est actif avec la vérification automatique : le contenu qu'une vérification juge dangereux ou ne peut pas évaluer est refusé, et non soumis à votre décision
+vetting-kept-back =
+    la vérification automatique a retenu ceci : le contournement ne demande rien à personne et refuse ce qu'une vérification juge dangereux ou ne peut pas évaluer. Quitter le contournement vous poserait la question. Pour désactiver la vérification automatique, écrivez off dans ~/.bravebot/vetting et ne passez pas --vet
 update-available =
     une version plus récente de bravebot est disponible (celle-ci est { $running }) ; pour la
     mettre à jour : { $command }
 update-how = pour mettre à jour : { $command }
 update-not-installed-by-us =
-    cette copie n'a été installée ni par le paquet npm ni par le script d'installation ; il n'y a
-    donc pas de commande de mise à jour pour elle. Une version compilée depuis les sources se met
-    à jour en récupérant les sources et en recompilant.
+    il n'y a pas de commande de mise à jour pour cette copie : elle n'a été installée ni par le
+    paquet npm, ni par le script d'installation, ni par Homebrew, WinGet, apt ou dnf. Une version
+    compilée depuis les sources se met à jour en récupérant les sources et en recompilant.
 crash-reports-notice =
     si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
     votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
@@ -3167,9 +3207,25 @@ failure-rate-limited-for =
     }
 failure-unavailable = le service n'a pas pu répondre
 failure-refused = le service a rejeté la requête
+failure-with-backend = { $what }, envoyée vers { $backend }
+failure-with-model = { $what }, avec le modèle { $model }
+failure-with-conceded = { $what }, les nouvelles tentatives ayant retiré { $fields }
+failure-refused-next = Choisissez un autre modèle avec `/model`, ou lancez `bravebot doctor` pour voir le point d'accès et l'endroit où le journal de diagnostic est conservé
+failure-backend-aichat = le point d'accès Brave
+failure-backend-bedrock = AWS Bedrock
+failure-backend-gateway = une passerelle configurée
+failure-backend-chatgpt = le compte ChatGPT
+failure-backend-xai = le compte xAI
+failure-conceded-cache-ttl = la durée du cache (promptCacheTtl)
+failure-conceded-breakpoints = les repères du cache
+failure-conceded-effort = le niveau d'effort (/effort)
+failure-conceded-ceiling = la limite de réponse supposée (BRAVEBOT_OUTPUT_BUDGET)
+failure-conceded-arguments = les arguments d'outil en flux
+failure-conceded-thinking = la réflexion affichée
 failure-transport = la requête n'est pas passée
 failure-incomplete = la réponse s'est arrêtée avant la fin
 failure-undecodable = la réponse n'a pas pu être lue
+failure-unrecognised = le service a répondu par un échec que cette version ne reconnaît pas
 failure-too-long = le modèle a atteint sa limite de sortie
 failure-too-long-at = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève
 failure-too-long-in-call = le modèle a atteint sa limite de sortie de { $tokens } jetons, que BRAVEBOT_OUTPUT_BUDGET relève, au milieu d'un appel à { $tool }, qui n'a donc pas été fait
@@ -3181,6 +3237,14 @@ failure-workspace = l'espace de travail n'a pas pu être utilisé
 failure-internal = un problème est survenu ici
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, après { $attempts } tentatives
+failure-with-next = { $what }. { $next }
+failure-unauthorized-next = Lancez `bravebot auth status` pour voir la connexion ou la clé utilisée, et `bravebot doctor` pour voir le point d'accès
+failure-premium-key-next = Lancez `bravebot auth login brave` pour remplacer la clé premium, ou `bravebot auth logout brave` pour envoyer les requêtes au point d'accès gratuit à la place. `bravebot auth status` montre la clé utilisée
+# Dit en dernier après une limite de débit. La première phrase est pour une requête vers une entrée
+# `provider`, qui peut indiquer `maxRetries` dans ses options, et la seconde pour tout service sans
+# entrée où l'indiquer.
+failure-rate-limited-entry-next = Augmentez `maxRetries` dans les options de cette entrée de fournisseur pour attendre plus longtemps, ou définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle
+failure-rate-limited-next = Définissez `fallbackModel` dans ~/.bravebot/settings.json pour que le tour passe à un autre modèle, ou réessayez plus tard
 failure-account-not-signed-in = pas connecté à un compte ChatGPT. Lancez `bravebot auth login chatgpt` pour vous connecter
 failure-account-ended = la connexion ChatGPT a pris fin. Lancez `bravebot auth login chatgpt` pour vous reconnecter
 failure-account-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT. Lancez `bravebot auth login chatgpt` pour vous reconnecter
@@ -3274,6 +3338,78 @@ desktop-xai-renewal-transport = La connexion xAI n'a pas pu être renouvelée pa
 desktop-xai-fell-back-rate-limited = Ce tour passe de { $from } à { $to } parce que la connexion xAI n'a pas pu être renouvelée pendant que xAI limite les requêtes.
 desktop-xai-fell-back-unavailable = Ce tour passe de { $from } à { $to } parce que la connexion xAI n'a pas pu être renouvelée pendant que xAI est indisponible.
 desktop-xai-fell-back = Ce tour passe de { $from } à { $to } parce que le compte xAI n'a pas pu être utilisé.
+desktop-accounts-name-brave = Service premium de Brave
+desktop-accounts-name-bedrock = Amazon Bedrock
+desktop-accounts-name-bedrock-profile = Amazon Bedrock ({ $profile })
+desktop-accounts-name-gateways = Passerelles
+desktop-accounts-name-chatgpt = Compte ChatGPT
+desktop-accounts-name-xai = Compte xAI
+desktop-accounts-misconfigured = Les réglages n'ont pas pu être lus, donc ceci n'a pas pu être vérifié.
+desktop-accounts-nowhere = Cet ordinateur n'a pas de répertoire d'état bravebot où garder une connexion.
+desktop-accounts-brave-unreadable = La clé premium enregistrée n'a pas pu être lue, donc déconnectez-vous, puis saisissez-la à nouveau.
+desktop-accounts-chatgpt-unreadable = La connexion ChatGPT enregistrée n'a pas pu être lue, donc reconnectez-vous ou déconnectez-vous.
+desktop-accounts-xai-unreadable = La connexion xAI enregistrée n'a pas pu être lue, donc reconnectez-vous ou déconnectez-vous.
+desktop-accounts-bedrock-lapsed = La session AWS a pris fin, donc reconnectez-vous.
+desktop-accounts-bedrock-no-profile = L'AWS CLI n'a pas de profil de ce nom.
+desktop-accounts-bedrock-no-cli = L'AWS CLI n'est pas installée.
+desktop-accounts-bedrock-undecodable = La réponse de l'AWS CLI n'a pas pu être lue.
+desktop-accounts-bedrock-timed-out = L'AWS CLI n'a pas répondu à temps, donc actualisez pour redemander.
+desktop-accounts-gateway-none-configured = Les réglages gérés de cet ordinateur n'autorisent aucune passerelle.
+desktop-accounts-gateway-unrecorded = Une clé est enregistrée pour ce service, mais aucun réglage ne le nomme, donc aucune session ne l'envoie.
+desktop-accounts-gateway-absent = Aucune clé n'est définie pour cette passerelle.
+desktop-accounts-keys-unreadable = Le fichier des clés de passerelle n'a pas pu être lu, donc il a été laissé tel quel.
+desktop-accounts-not-checked = Non vérifié.
+desktop-accounts-not-removed = La connexion n'a pas pu être retirée de cet ordinateur.
+desktop-accounts-sign-in-nowhere = Rien ne peut être enregistré sur cet ordinateur, donc la connexion n'a pas commencé.
+desktop-accounts-sign-in-misconfigured = Les réglages n'ont pas pu être lus, donc la connexion n'a pas commencé.
+desktop-accounts-sign-in-chatgpt-is-a-gateway = Une passerelle des réglages s'appelle chatgpt, donc le compte ChatGPT ne peut pas aussi être connecté.
+desktop-accounts-sign-in-xai-is-a-gateway = Une passerelle des réglages s'appelle xai, donc le compte xAI ne peut pas aussi être connecté.
+desktop-accounts-sign-in-stored = Une connexion est déjà enregistrée, donc elle a été laissée telle quelle.
+desktop-accounts-openai-refused = OpenAI a refusé la connexion, donc rien n'a été enregistré.
+desktop-accounts-openai-rate-limited = OpenAI limite les requêtes, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-openai-unavailable = Le service de connexion d'OpenAI est indisponible, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-openai-incomplete = La réponse d'OpenAI était incomplète, donc rien n'a été enregistré.
+desktop-accounts-openai-transport = OpenAI n'a pas pu être joint, donc rien n'a été enregistré. Vérifiez la connexion et réessayez.
+desktop-accounts-chatgpt-listener = Le navigateur n'a pas pu être attendu sur cet ordinateur, donc la connexion n'a pas commencé.
+desktop-accounts-chatgpt-timed-out = Le navigateur n'est pas revenu à temps, donc rien n'a été enregistré.
+desktop-accounts-chatgpt-not-completed = Le navigateur n'a pas terminé la connexion, donc rien n'a été enregistré. Réessayez.
+desktop-accounts-chatgpt-client-changed = Le navigateur a renvoyé un autre client que celui enregistré, donc rien n'a changé. Déconnectez-vous, puis reconnectez-vous.
+desktop-accounts-chatgpt-no-use-scope = La connexion n'a pas autorisé bravebot à utiliser l'abonnement, donc rien n'a été enregistré. Reconnectez-vous et autorisez-le.
+desktop-accounts-xai-refused = xAI a refusé la connexion, donc rien n'a été enregistré.
+desktop-accounts-xai-rate-limited = xAI limite les requêtes, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-xai-unavailable = xAI est indisponible, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-xai-incomplete = La réponse de xAI n'a pas pu être lue, donc rien n'a été enregistré.
+desktop-accounts-xai-transport = xAI n'a pas pu être joint, donc rien n'a été enregistré. Vérifiez la connexion et réessayez.
+desktop-accounts-xai-denied = xAI a refusé la connexion, donc rien n'a été enregistré.
+desktop-accounts-xai-expired = Le code n'a pas été utilisé à temps, donc rien n'a été enregistré.
+desktop-accounts-clock = L'horloge de cet ordinateur est réglée avant 1970, donc rien n'a été enregistré. Réglez l'horloge et réessayez.
+desktop-accounts-not-stored = La connexion n'a pas pu être enregistrée sur cet ordinateur.
+desktop-accounts-cancelled = Connexion annulée.
+desktop-accounts-key-incognito = Une session incognito ne garde rien sur le disque, donc aucune clé ne peut être enregistrée.
+desktop-accounts-key-nowhere = Cet ordinateur n'a pas de répertoire d'état bravebot où garder une clé.
+desktop-accounts-key-brave-unreadable = La clé premium enregistrée n'a pas pu être lue, donc elle a été laissée telle quelle. Déconnectez-vous pour la retirer, puis saisissez à nouveau la clé.
+desktop-accounts-key-misconfigured = Les réglages n'ont pas pu être lus, donc aucune clé ne peut être enregistrée.
+desktop-accounts-key-not-offered = Ces réglages ne proposent aucune passerelle de ce nom pour laquelle enregistrer une clé.
+desktop-accounts-key-cannot-record = Une clé pour ce service n'est envoyée qu'une fois que vos réglages le nomment, et ils ne peuvent pas être modifiés pour le nommer, donc aucune clé n'a été demandée.
+desktop-accounts-key-empty = Aucune clé n'a été saisie, donc rien n'a été enregistré.
+desktop-accounts-key-stored-already = Une clé est déjà enregistrée, donc elle a été laissée telle quelle.
+desktop-accounts-key-not-stored = La clé n'a pas pu être enregistrée sur cet ordinateur.
+desktop-accounts-key-not-recorded = La clé est enregistrée, mais vos réglages n'ont pas pu être modifiés pour nommer ce service, donc aucune session ne l'envoie tant qu'ils ne le font pas.
+
+desktop-accounts-sign-in-bedrock-pinned-off = Les réglages gérés de cet ordinateur désactivent Bedrock pour tous les utilisateurs, et aucun bloc de fournisseur amazon-bedrock ne nomme de compte AWS, donc il n'y a rien à quoi se connecter.
+desktop-accounts-sign-in-bedrock-off = { $switch } a une autre valeur que 1, ce qui désactive Bedrock, et aucun bloc de fournisseur amazon-bedrock ne nomme de compte AWS, donc il n'y a rien à quoi se connecter.
+desktop-accounts-sign-in-no-aws-account = Aucun compte AWS n'est configuré pour Bedrock, donc il n'y a rien à quoi se connecter. Définissez { $region } et un modèle dans l'une de { $tiers }.
+desktop-accounts-sign-in-aws-gone = Les réglages ne nomment plus ce compte AWS, donc la connexion n'a pas commencé.
+desktop-accounts-aws-no-cli = L'AWS CLI n'est pas installée, donc la connexion n'a pas commencé.
+desktop-accounts-aws-no-profile = L'AWS CLI n'a pas de profil de ce nom, donc la connexion n'a pas commencé.
+desktop-accounts-aws-not-completed = La connexion à AWS n'a pas abouti.
+desktop-accounts-aws-undecodable = La réponse de l'AWS CLI n'a pas pu être lue, donc la session n'a pas pu être vérifiée.
+desktop-accounts-aws-still-signed-out = L'AWS CLI a terminé la connexion, et le profil ne donne toujours aucun identifiant pour signer une requête.
+desktop-accounts-bedrock-recorded = Vos réglages définissent maintenant { $switch }=1, donc une session utilise Bedrock sans qu'il soit exporté.
+desktop-accounts-bedrock-not-recorded = { $switch }=1 n'a pas pu être écrit dans vos réglages, donc il doit encore être exporté pour qu'une session utilise Bedrock.
+desktop-accounts-bedrock-not-recorded-incognito = Une session incognito n'enregistre rien, donc { $switch }=1 doit encore être exporté pour qu'une session utilise Bedrock.
+desktop-accounts-bedrock-overruled = Un fichier de réglages donne à { $switch } une autre valeur que 1, donc une session utilise Bedrock seulement là où { $switch }=1 est exporté.
+desktop-accounts-bedrock-left = Vos réglages nomment déjà { $switch }, donc ils ont été laissés tels quels, et une session utilise Bedrock seulement là où { $switch }=1 est exporté ou là où les réglages d'un projet le définissent.
 
 
 ## Répéter une consigne
@@ -3509,6 +3645,8 @@ queued-run = lancée dans votre shell
 queued-carried-out-after = après { $line }
 queued-a-prompt = l'invite précédente
 queued-a-shell-line = la ligne de shell précédente
+queued-remove = retirer
+queued-clear-all = tout retirer
 
 
 ## Coller, déposer et joindre
@@ -3595,6 +3733,8 @@ btw-needs-a-question = /btw prend la question à poser, que la conversation ne l
 btw-stopped = la question a été arrêtée
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
+btw-asked-beside-a-turn = réponse à votre question /btw en cours à côté du tour ; { $chord } ouvre la réponse quand elle est prête
+btw-answered-beside-a-turn = votre question /btw a reçu une réponse ; { $chord } l'ouvre
 
 # Ce que la session dit d'une exécution planifiée lancée depuis elle. Le plan, chaque étape et la
 # réponse s'affichent au fur et à mesure ; il ne reste donc à dire qu'une exécution commence, où
@@ -4352,6 +4492,9 @@ hover-back = cliquer pour quitter cette vue
 hover-reply = cliquer pour copier cette réponse
 hover-block = cliquer pour copier ce bloc
 hover-queued = cliquer pour reprendre cette invite dans la zone de saisie
+hover-queued-command = cliquer pour retirer cette commande de la file
+hover-queued-remove = cliquer pour retirer ceci de la file
+hover-queued-clear = cliquer pour retirer tout ce qui attend
 hover-call-toggle = cliquer pour déplier ou replier cet appel
 hover-call-open = cliquer pour ouvrir le défilement sur cet appel
 hover-delegate = cliquer pour ouvrir la vue de ce délégué
@@ -4422,9 +4565,82 @@ ui-settings-language-unsaved = Impossible d'enregistrer la langue.
 ui-settings-language-unread = Impossible de lire le réglage de langue.
 ui-settings-restart = Redémarrer
 ui-settings-restart-running = Un tour est encore en cours. Redémarrez une fois qu'il est terminé ou arrêté.
+ui-accounts-heading = Comptes
+ui-accounts-signed-in = Connecté
+ui-accounts-key-stored = Clé enregistrée
+ui-accounts-key-from-environment = Clé fournie par l'environnement
+ui-accounts-no-key-needed = Aucune clé nécessaire
+ui-accounts-not-signed-in = Non connecté
+ui-accounts-unusable = Inutilisable
+ui-accounts-misconfigured = La configuration est illisible
+ui-accounts-with-cli = Avec l'outil en ligne de commande bravebot :
+ui-accounts-copy-command = Copier la commande
+ui-accounts-sign-out = Se déconnecter
+ui-accounts-sign-out-title = Se déconnecter de { $name } ?
+ui-accounts-sign-out-body = bravebot oublie cette connexion sur cet ordinateur. Les tours qui l'utilisent s'arrêtent jusqu'à ce que vous vous reconnectiez.
+ui-accounts-sign-out-gateway-body = La clé reste valable chez { $host } tant que vous ne l'y révoquez pas.
+ui-accounts-signed-out = Déconnecté de { $name }.
+ui-accounts-sign-out-failed = Impossible de se déconnecter de { $name }.
+ui-accounts-environment-note = Voici les connexions que cette application voit. Une clé définie seulement dans l'environnement d'un terminal n'est pas vue ici.
+ui-accounts-unread = L'agent n'a pas listé ses connexions. Recompilez ou réinstallez l'application, puis actualisez.
+ui-accounts-sign-in = Se connecter
+ui-accounts-waiting = En attente de la fin de votre connexion…
+ui-accounts-requesting-code = Demande d'un code…
+ui-accounts-port = Port { $port }
+ui-accounts-stops-waiting = L'attente s'arrête à { $time }.
+ui-accounts-show-sign-in-window = Afficher la fenêtre de connexion
+ui-accounts-cancel = Annuler
+ui-accounts-cancelled = Connexion annulée.
+ui-accounts-signed-in-to = Connecté à { $name }.
+ui-accounts-sign-in-failed = Impossible de se connecter à { $name }.
+ui-accounts-sign-in-busy = Une autre connexion est déjà en cours.
+ui-accounts-setup-heading = Se connecter à un service
+ui-accounts-setup-pointer = Connectez-vous à un compte ChatGPT, xAI ou AWS, ou saisissez la clé de Brave Premium, d’OpenRouter ou d’une autre passerelle, sous Comptes, plus haut.
+ui-accounts-enter-key = Saisir la clé
+ui-accounts-replace-key = Remplacer la clé
+ui-accounts-key-window-open = Saisissez la clé dans sa fenêtre.
+ui-accounts-show-key-window = Afficher la fenêtre de la clé
+ui-accounts-key-stored-for = Clé enregistrée pour { $name }.
+ui-accounts-key-not-stored-for = Impossible d'enregistrer la clé pour { $name }.
+ui-unconfigured-title = Connecter un service de modèles
+ui-unconfigured-subtitle = L'agent n'a encore aucun service de modèles utilisable. Vous pouvez continuer à parcourir les conversations et à rédiger des brouillons.
+ui-unconfigured-body = Connectez-vous à un compte, ou configurez une passerelle ou AWS Bedrock, dans les réglages de l'agent.
+ui-unconfigured-open-settings = Ouvrir les réglages de l'agent
+ui-unconfigured-continue = Continuer la navigation
+ui-unconfigured-details = Détails techniques
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton
 gcloud-no-reason = la CLI Google Cloud n'a donné aucune raison
 gcloud-login-incomplete = la connexion n'a pas abouti
 doctor-gateway-token-google-cloud = aucun requis (la CLI Google Cloud fournit un jeton d'accès)
+schedule-usage = schedule accepte add, list, remove, pause, resume et clear avec un numéro, pending avec ou sans numéro, run-now avec un numéro, ou history avec ou sans numéro
+schedule-add-usage = schedule add accepte --cron et cinq champs entre guillemets, --prompt et le texte, et peut y ajouter --dir et un répertoire, --scheduler et crontab, launchd ou systemd, --deliver-to et le chemin absolu d'un programme, et --accept-edits ou --dangerously-skip-permissions
+schedule-add-needs-a-terminal = schedule add se tape dans un terminal, pour qu'une exécution ne puisse pas ajouter une entrée qui s'exécutera de nouveau.
+schedule-add-mode-on-the-command-line = une entrée ajoutée ici ne peut que lire. Pour que son exécution puisse écrire, ajoutez-la avec bravebot schedule add en ligne de commande et donnez-y --accept-edits ou --dangerously-skip-permissions.
+schedule-command-unclosed-quote = /schedule : un guillemet est ouvert et jamais fermé.
+schedule-command-running = Exécution lancée en arrière-plan ; le résultat s'affichera ici à la fin.
+schedule-cron-invalid = L'expression cron demande cinq champs composés uniquement de chiffres et de * / , -, chacun dans sa plage et sans pas nul, par exemple "0 9 * * 1-5".
+schedule-prompt-invalid = La consigne est vide, trop longue, ou commence par -.
+schedule-directory-invalid = Le nom du répertoire contient un saut de ligne.
+schedule-destination-invalid = --deliver-to demande le chemin absolu d'un programme qui existe et qui est un fichier, sans caractère de contrôle.
+schedule-destination-to = livre à { $path }
+schedule-destination-none = ne livre nulle part
+schedule-delivery-not-started = la planification { $id } s'est exécutée, mais son résultat n'a pas été livré : { $path } n'a pas pu être lancé.
+schedule-delivery-failed = la planification { $id } s'est exécutée, mais son résultat n'a pas été livré : { $path } s'est terminé avec un statut d'échec.
+schedule-delivery-timed-out = la planification { $id } s'est exécutée, mais son résultat n'a pas été livré : { $path } tournait encore après { $seconds } secondes et a été arrêté.
+schedule-no-store = Il n'y a pas de répertoire d'état où garder l'entrée.
+schedule-failed = L'entrée n'a pas pu être écrite.
+schedule-install-failed = Le planificateur n'a pas pu être lu ou modifié, donc aucune entrée n'a été ajoutée ni retirée. Une entrée demande le programme crontab, launchctl ou systemctl, selon celui pour lequel elle a été créée.
+schedule-job-unwritable = L'expression ne peut pas être écrite pour ce planificateur : elle donne plus d'heures qu'une tâche launchd n'en contient, ou le chemin du programme contient un caractère de contrôle.
+schedule-added = Planification { $id } ajoutée.
+schedule-limit-read = lit et rapporte seulement : toute écriture est refusée, car personne n'est là pour répondre
+schedule-limit-accept-edits = peut écrire des fichiers : les modifications sont acceptées, rien d'autre n'est accepté
+schedule-limit-bypass = peut tout faire : toute question reçoit la réponse oui
+schedule-none = Aucune planification n'est définie.
+schedule-row = { $id }  { $cron }  { $scheduler }  { $directory }  { $limit }  { $prompt }
+schedule-missing = La planification { $id } n'existe pas.
+schedule-removed = Planification { $id } retirée.
+schedule-ran = la planification { $id } s'est exécutée, statut { $status }, session { $session }
+schedule-history-none = Aucune exécution planifiée n'est enregistrée.
+schedule-history-row = { $id }  { $when }  statut { $status }  session { $session }  jetons { $tokens }

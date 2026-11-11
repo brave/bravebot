@@ -44,6 +44,7 @@
 
 use bravebot_agent::conversation::Snapshot;
 use bravebot_agent::workspace::Workspace;
+use bravebot_aichat::protocol::Cached;
 use bravebot_core::command::Spelling;
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
@@ -115,9 +116,10 @@ pub struct Aside {
     pub kept: bool,
 }
 
-/// How a session's tokens divide into those the model read and those it wrote.
+/// How a session's tokens divide into those the model read and those it wrote, and how many of
+/// those read the service answered out of its own cache or wrote into it.
 ///
-/// Kept as two running totals beside [`Record::tokens`] rather than as a second total, because
+/// Kept as running totals beside [`Record::tokens`] rather than as a second total, because
 /// a charge that reports no split still adds to the total. What the two figures leave out of the
 /// total is tokens whose split is not known, which is every token of a record written before the
 /// split was kept.
@@ -130,26 +132,61 @@ pub struct Split {
     /// Tokens the model wrote.
     #[serde(default)]
     pub written: u64,
+    /// Of [`Split::read`], the tokens the service served out of its prompt cache and the tokens it
+    /// wrote into the cache. The cache hit rate of the session is `cache.read_tokens / read`.
+    ///
+    /// Zero for a charge whose service stated no cache figure, which reads the same as a charge
+    /// whose cache missed ([`bravebot_aichat::protocol::Cached`]). Left out of the record while
+    /// both are zero, and zero for a record written before it was kept.
+    #[serde(default, skip_serializing_if = "no_cache_figure")]
+    pub cache: Cached,
+}
+
+fn no_cache_figure(cache: &Cached) -> bool {
+    !cache.any()
 }
 
 impl Split {
     /// The split of `tokens` of which the model wrote `written`. A figure past the total reads as
-    /// the whole of it written.
+    /// the whole of it written. Carries no cache figure; [`Split::with_cache`] adds one.
     pub fn of(tokens: u64, written: u64) -> Self {
         Self {
             read: tokens.saturating_sub(written),
             written,
+            cache: Cached::default(),
         }
         .within(tokens)
     }
 
+    /// This split with the cache figures the charge's requests reported.
+    pub fn with_cache(self, cache: Cached) -> Self {
+        Self { cache, ..self }
+    }
+
+    /// The split of what `spent` came to: its total, what the model wrote and what the cache served.
+    pub fn of_spent(spent: bravebot_agent::Spent) -> Self {
+        Self::of(spent.tokens, spent.output_tokens).with_cache(spent.cached)
+    }
+
+    /// The split of a finished turn's `outcome`.
+    pub fn of_outcome(outcome: &bravebot_agent::Outcome) -> Self {
+        Self::of(outcome.tokens, outcome.output_tokens).with_cache(outcome.cached)
+    }
+
+    /// The split of one request's `usage`, for the requests made beside the work.
+    pub fn of_usage(usage: bravebot_aichat::protocol::Usage) -> Self {
+        Self::of(usage.total(), usage.completion_tokens).with_cache(usage.cached)
+    }
+
     /// This split cut to fit inside `tokens`, so that the tokens it leaves out never wrap past zero.
-    /// Written is kept first and read takes what is left.
+    /// Written is kept first and read takes what is left. The cache figures are kept as they are:
+    /// they are read for information and no arithmetic is done on them.
     pub fn within(self, tokens: u64) -> Self {
         let written = self.written.min(tokens);
         Self {
             read: self.read.min(tokens - written),
             written,
+            cache: self.cache,
         }
     }
 
@@ -158,6 +195,7 @@ impl Split {
     pub fn add(&mut self, other: Split) {
         self.read = self.read.saturating_add(other.read);
         self.written = self.written.saturating_add(other.written);
+        self.cache.add(other.cache);
     }
 }
 
@@ -706,22 +744,58 @@ pub enum StoredOutcome {
 }
 
 impl StoredOutcome {
+    /// How turn `turn` ended in `error`, in the words the interface uses for it. A turn that ended
+    /// on the read of a file the person named says which file and why (NAME-13), as the screen does.
+    ///
+    /// `model` is the model name the person configured or chose for the turn (see
+    /// [`failure_reason_with_model`]).
+    pub fn ended_by(turn: usize, error: &bravebot_agent::TurnError, model: Option<&str>) -> Self {
+        match (error.ending(), named_failure(error)) {
+            (bravebot_agent::Ending::Failed(_), Some(reason)) => Self::Failed { reason },
+            (ending, _) => Self::ended(turn, ending, error.cut_off(), model),
+        }
+    }
+
     /// How turn `turn` ended, in the words the interface uses for it.
     pub fn ended(
         turn: usize,
         ending: bravebot_agent::Ending,
         cut_off: Option<&bravebot_aichat::CutOff>,
+        model: Option<&str>,
     ) -> Self {
         match ending {
             bravebot_agent::Ending::Done => Self::Completed,
             bravebot_agent::Ending::Failed(diagnosis) => Self::Failed {
-                reason: failure_reason(diagnosis, cut_off),
+                reason: failure_reason_with_model(diagnosis, cut_off, model),
             },
             bravebot_agent::Ending::Stopped { .. } => Self::Cancelled {
                 reason: t!(turn_cancelled, turn = turn),
             },
         }
     }
+}
+
+/// The failure line a turn that ended in `error` shows: the file and the reason where the read of
+/// a file the person named ended it (NAME-13), and the sentence for the category otherwise.
+///
+/// `model` is the model name the person configured or chose for the turn, which a refused request
+/// names ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+pub fn failure_line(
+    error: &bravebot_agent::TurnError,
+    diagnosis: bravebot_agent::Diagnosis,
+    model: Option<&str>,
+) -> String {
+    named_failure(error)
+        .unwrap_or_else(|| failure_reason_with_model(diagnosis, error.cut_off(), model))
+}
+
+/// The failure line for a turn that ended on the read of a file the person named with `@`: the
+/// name as they typed it and why it could not be read (NAME-13). `None` for every other ending,
+/// which is worded by [`failure_reason`] from the category alone.
+pub fn named_failure(error: &bravebot_agent::TurnError) -> Option<String> {
+    error
+        .named_file()
+        .map(|(name, why)| bravebot_agent::named::refusal(name, why))
 }
 
 /// Compose a localized failure reason from safe fields, without raw backend error text.
@@ -732,8 +806,24 @@ pub fn failure_reason(
     diagnosis: bravebot_agent::Diagnosis,
     cut_off: Option<&bravebot_aichat::CutOff>,
 ) -> String {
+    failure_reason_with_model(diagnosis, cut_off, None)
+}
+
+/// As [`failure_reason`], for a turn that ran on `model`: the name the person configured or chose,
+/// which a refused request names beside the backend that sent it
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+///
+/// A separate argument rather than a field of the diagnosis, because the diagnosis is a small `Copy`
+/// value built from a backend's structured error, and the name is the driver's own state that no
+/// error holds. It is the name as configured and never one a reply, a header or an address held, and
+/// it is spelled safe to draw here ([`model_words`]), since the person's settings file may hold
+/// anything and this line is stored, exported and drawn.
+pub fn failure_reason_with_model(
+    diagnosis: bravebot_agent::Diagnosis,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+    model: Option<&str>,
+) -> String {
     use bravebot_agent::Category;
-    use bravebot_aichat::OpenCall;
     // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8), with the
     // status of a refusal that came with one after it, as the one-shot run says it: from the one
     // function both call. No count of tries follows, since the sentence says what to do and the
@@ -761,32 +851,12 @@ pub fn failure_reason(
         Category::Transport => t!(failure_transport).into(),
         Category::Incomplete => t!(failure_incomplete).into(),
         Category::Undecodable => t!(failure_undecodable).into(),
+        Category::Unrecognised => t!(failure_unrecognised).into(),
         // The one category that says a number. It is this program's own configured ceiling, not
         // anything the service reported, and without it the sentence names no remedy.
         // What the reply was writing is said as well, since a reply that spent the ceiling on one
         // file's worth of argument is asked for in parts, and one that spent it thinking is not.
-        Category::TooLong => match (diagnosis.ceiling, cut_off) {
-            (None, _) => t!(failure_too_long).into(),
-            (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
-            (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
-                (
-                    Some(OpenCall {
-                        tool: Some(tool), ..
-                    }),
-                    _,
-                ) => t!(
-                    failure_too_long_in_call,
-                    tokens = tokens,
-                    tool = tool.as_str()
-                )
-                .into(),
-                (Some(OpenCall { tool: None, .. }), _) => {
-                    t!(failure_too_long_in_a_call, tokens = tokens).into()
-                }
-                (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
-                (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
-            },
-        },
+        Category::TooLong => too_long_words(diagnosis.ceiling, cut_off),
         Category::Unconfigured => t!(failure_unconfigured).into(),
         Category::Blocked => t!(failure_blocked).into(),
         Category::Workspace => t!(failure_workspace).into(),
@@ -796,12 +866,162 @@ pub fn failure_reason(
     if let Some(status) = diagnosis.status {
         said = t!(failure_with_status, what = said, status = status);
     }
+    // The backend a refused request went to, a closed word chosen by this program from the variant
+    // that sent it (BACKEND-37).
+    if diagnosis.category == Category::Refused
+        && let Some(backend) = diagnosis.backend
+    {
+        said = t!(
+            failure_with_backend,
+            what = said,
+            backend = backend_words(backend)
+        );
+    }
+    // The model the turn ran on, as the person configured or chose it. It is the driver's own state
+    // and is said whatever the backend, so nothing a service wrote can reach this word.
+    if diagnosis.category == Category::Refused
+        && let Some(model) = model.filter(|model| !model.is_empty())
+    {
+        said = t!(failure_with_model, what = said, model = model_words(model));
+    }
+    // The request fields the call left out after the service refused the request, in the order it
+    // gave them up, so the last is the one the service was refusing when the call ended. Each is a
+    // word of this program's, named by the closed set of fields it can leave out, and none of it
+    // came from a reply (BACKEND-37).
+    if diagnosis.category == Category::Refused && !diagnosis.conceded.is_empty() {
+        let fields = diagnosis
+            .conceded
+            .in_order()
+            .map(concession_words)
+            .collect::<Vec<_>>()
+            .join(", ");
+        said = t!(failure_with_conceded, what = said, fields = fields);
+    }
     // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
     // the silence it replaces, and one attempt is what an unremarkable failure took.
     if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
         said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
+    // A failure this build cannot name has no remedy of its own, so it ends with the step a refused
+    // request does: another model, or the endpoint and the log location (BACKEND-37).
+    if matches!(
+        diagnosis.category,
+        Category::Refused | Category::Unrecognised
+    ) {
+        said = t!(
+            failure_with_next,
+            what = said,
+            next = t!(failure_refused_next)
+        );
+    }
+    // A rate limit ends with the settings that lengthen the wait or move the turn to another model.
+    // Which of the two sentences is chosen by whether the backend that sent the request has a
+    // `provider` entry, a fact the driver set from the variant, and nothing the service wrote is in
+    // either (BACKEND-37). A wait past the longest one the client sits through ends the call on its
+    // first request, so no `maxRetries` changes the outcome and only the other two remedies are
+    // named (BACKEND-54).
+    if diagnosis.category == Category::RateLimited {
+        let past_the_ceiling = diagnosis
+            .retry_after
+            .is_some_and(|wait| wait > bravebot_aichat::LONGEST_WAIT);
+        let next = if diagnosis.retry_setting && !past_the_ceiling {
+            t!(failure_rate_limited_entry_next)
+        } else {
+            t!(failure_rate_limited_next)
+        };
+        said = t!(failure_with_next, what = said, next = next);
+    }
+    // After the status and the count, so a refused credential says what was refused first and
+    // what to do about it last. The commands are this program's own words, chosen by the category
+    // and by whether the request carried the premium key, and nothing the service wrote is in them
+    // (BACKEND-37).
+    if diagnosis.category == Category::Unauthorized {
+        let next: std::borrow::Cow<'_, str> = if diagnosis.premium_key {
+            t!(failure_premium_key_next).into()
+        } else {
+            t!(failure_unauthorized_next).into()
+        };
+        said = t!(failure_with_next, what = said, next = next);
+    }
     t!(session_error, problem = said)
+}
+
+/// The sentence for a reply that spent its ceiling, naming the ceiling where it is known and what
+/// the reply was writing where the cut-off says. See [`failure_reason_with_model`].
+fn too_long_words(
+    ceiling: Option<u64>,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+) -> std::borrow::Cow<'static, str> {
+    use bravebot_aichat::OpenCall;
+    match (ceiling, cut_off) {
+        (None, _) => t!(failure_too_long).into(),
+        (Some(tokens), None) => t!(failure_too_long_at, tokens = tokens).into(),
+        (Some(tokens), Some(cut_off)) => match (&cut_off.call, cut_off.thought) {
+            (
+                Some(OpenCall {
+                    tool: Some(tool), ..
+                }),
+                _,
+            ) => t!(
+                failure_too_long_in_call,
+                tokens = tokens,
+                tool = tool.as_str()
+            )
+            .into(),
+            (Some(OpenCall { tool: None, .. }), _) => {
+                t!(failure_too_long_in_a_call, tokens = tokens).into()
+            }
+            (None, true) => t!(failure_too_long_thinking, tokens = tokens).into(),
+            (None, false) => t!(failure_too_long_at, tokens = tokens).into(),
+        },
+    }
+}
+
+/// A model name as a failure line says it: every character that would draw as nothing or act on a
+/// terminal is written out as a visible one.
+///
+/// The name comes from the person's configuration or from `/model`, so it is not a service's
+/// words, but a settings file may hold any characters and the line is drawn in the status area,
+/// written to the session record and exported ([VIEW-4](../../../docs/specs/terminal-transcript.md#VIEW-4)).
+/// A control character becomes its Unicode picture (U+2400 and after), or U+FFFD where it has none;
+/// a character that draws as nothing is spelled by [`bravebot_core::invisible::spelled`].
+fn model_words(model: &str) -> String {
+    bravebot_core::invisible::spelled(model.to_string())
+        .text
+        .chars()
+        .map(|c| match c {
+            '\u{7f}' => '\u{2421}',
+            c if (c as u32) < 0x20 => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
+            c if c.is_control() => '\u{fffd}',
+            c => c,
+        })
+        .collect()
+}
+
+/// The words for a backend, as a failure line names it.
+fn backend_words(backend: bravebot_agent::BackendKind) -> &'static str {
+    use bravebot_agent::BackendKind;
+    match backend {
+        BackendKind::Aichat => t!(failure_backend_aichat),
+        BackendKind::Bedrock => t!(failure_backend_bedrock),
+        BackendKind::Gateway => t!(failure_backend_gateway),
+        BackendKind::Chatgpt => t!(failure_backend_chatgpt),
+        BackendKind::Xai => t!(failure_backend_xai),
+    }
+}
+
+/// The words for a request field that was left out, with the setting a person changes where one
+/// exists.
+fn concession_words(concession: bravebot_aichat::call::Concession) -> &'static str {
+    use bravebot_aichat::call::Concession;
+    match concession {
+        Concession::CacheTtl => t!(failure_conceded_cache_ttl),
+        Concession::Breakpoints => t!(failure_conceded_breakpoints),
+        Concession::Effort => t!(failure_conceded_effort),
+        Concession::Ceiling => t!(failure_conceded_ceiling),
+        Concession::ArgumentsAsWritten => t!(failure_conceded_arguments),
+        Concession::ThinkingShown => t!(failure_conceded_thinking),
+    }
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -1442,6 +1662,7 @@ pub fn manifest_usage(
             output_tokens: done.output_tokens,
             context_tokens: done.context_tokens,
             cached: done.cached,
+            requests: done.timing.activity.requests,
             timing: done.timing,
         })
         .or(retained)
@@ -1495,7 +1716,7 @@ pub fn record_manifest_run(
     let programs = TrustedPrograms::new();
     let usage = manifest_usage(outcome, retained);
     let tokens = usage.map_or(0, |s| s.tokens);
-    let split = usage.map_or(Split::default(), |s| Split::of(s.tokens, s.output_tokens));
+    let split = usage.map_or(Split::default(), Split::of_spent);
     // One turn, so the breakdown and the total say the same thing. Written anyway, because a
     // reader comparing runs should not have to special-case where the figure came from.
     let spend = BTreeMap::from([(1, tokens)]);
@@ -1874,7 +2095,7 @@ pub fn charge_failed_turn(
         return false;
     }
     *tokens += spent.tokens;
-    split.add(Split::of(spent.tokens, spent.output_tokens));
+    split.add(Split::of_spent(spent));
     *spend.entry(turn).or_insert(0) += spent.tokens;
     let timing = timing.entry(turn).or_default();
     timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
@@ -2808,27 +3029,22 @@ impl Handle {
     /// ordinary tools. What goes in it is gate names, labels and paths: the audit says what was
     /// allowed and why, never what the content was.
     pub fn append_audit(&self, turn: usize, events: &[crate::audit::Stamped]) {
-        let Some(directory) = self.directory() else {
-            return;
-        };
-
-        let mut body = String::new();
-        for stamped in events {
-            // The event's own time, not this moment. A turn is written down once, at the end, so
-            // stamping here made every event in it share a second and left the trail unable to
-            // say which came first or how long anything took.
-            let line = serde_json::json!({
-                "at": stamped.at,
-                "turn": turn,
-                "event": crate::audit::as_json(&stamped.event, stamped.from),
-            });
-            body.push_str(&line.to_string());
-            body.push('\n');
+        if let Some(directory) = self.directory() {
+            append_audit_in(&directory, &self.id, turn, events);
         }
+    }
 
-        let path = directory.join(format!("{}.audit.jsonl", self.id));
-        let _ = bravebot_agent::home::append_to_file(&path)
-            .and_then(|mut file| file.write_all(body.as_bytes()));
+    /// What keeping this session's vectors caught up with `snapshot`, its record as turn `turn`
+    /// saved it, takes. Nothing in an incognito session.
+    pub fn index_job(
+        &self,
+        snapshot: bravebot_agent::conversation::Snapshot,
+        turn: usize,
+    ) -> Option<crate::indexer::Job> {
+        let directory = self.directory()?;
+        Some(crate::indexer::Job::new(
+            &directory, &self.id, snapshot, turn,
+        ))
     }
 
     /// Drop what the turns from `from_turn` on decided.
@@ -2859,6 +3075,20 @@ impl Handle {
         let _ = bravebot_agent::home::write_file(&path, kept.as_bytes());
     }
 
+    /// Cut from this session's vectors the rows naming messages a rewind took out of the record,
+    /// which now has `record_length` ordinals ([`crate::vectors::record_length`]).
+    ///
+    /// Without it, the messages the session goes on to add would take the ordinals of the ones
+    /// that went, and the rows written for those would name the wrong words.
+    pub fn truncate_vectors(&self, record_length: u32) {
+        if let Some(directory) = self.directory() {
+            let path = crate::vectors::path_of(&directory, &self.id);
+            if crate::vectors::truncate(&path, record_length).is_err() {
+                crate::vectors::remove(&path).ok();
+            }
+        }
+    }
+
     /// Remove what this session wrote, for a rewind that went back past its first turn.
     ///
     /// A record of a session with no turns in it is a session nobody can resume into anything,
@@ -2874,6 +3104,7 @@ impl Handle {
                 self.id,
                 crate::search::INDEX_EXTENSION
             )));
+            crate::vectors::remove(&crate::vectors::path_of(&directory, &self.id)).ok();
         }
         self.wrote = false;
         self.title = before.to_string();
@@ -2883,6 +3114,33 @@ impl Handle {
     fn directory(&self) -> Option<PathBuf> {
         writable_project_directory(&self.project)
     }
+}
+
+/// [`Handle::append_audit`] for session `id` in `directory`, the directory its record is in.
+pub(crate) fn append_audit_in(
+    directory: &Path,
+    id: &str,
+    turn: usize,
+    events: &[crate::audit::Stamped],
+) {
+    let mut body = String::new();
+    for stamped in events {
+        // The event's own time, not this moment. A turn is written down once, at the end, so
+        // stamping here made every event in it share a second and left the trail unable to
+        // say which came first or how long anything took.
+        let line = serde_json::json!({
+            "at": stamped.at,
+            "turn": turn,
+            "event": crate::audit::as_json(&stamped.event, stamped.from),
+        });
+        body.push_str(&line.to_string());
+        body.push('\n');
+    }
+
+    let path = directory.join(format!("{id}.audit.jsonl"));
+    bravebot_agent::home::append_to_file(&path)
+        .and_then(|mut file| file.write_all(body.as_bytes()))
+        .ok();
 }
 
 /// Sessions for this project, newest first.
@@ -3196,12 +3454,19 @@ pub(crate) fn delete_in(directory: &Path, id: &str) -> Result<(), Deletion> {
     if std::fs::symlink_metadata(&record).is_err() {
         return Err(Deletion::NotFound);
     }
+    let vectors = crate::vectors::path_of(directory, id);
     for beside in [
         directory.join(format!("{id}.audit.jsonl")),
         directory.join(format!("{id}.{}", crate::search::INDEX_EXTENSION)),
+        vectors.clone(),
         directory.join(format!("{id}.tmp")),
     ] {
-        match std::fs::remove_file(&beside) {
+        let removed = if beside == vectors {
+            crate::vectors::remove(&beside)
+        } else {
+            std::fs::remove_file(&beside)
+        };
+        match removed {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(Deletion::Failed(error)),
@@ -3297,6 +3562,7 @@ fn remove_project_records_unwritten_since(
         } else if let Some(id) = name
             .strip_suffix(".audit.jsonl")
             .or_else(|| name.strip_suffix(".tmp"))
+            .or_else(|| name.strip_suffix(&format!(".{}", crate::vectors::EXTENSION)))
         {
             let no_record = std::fs::symlink_metadata(directory.join(format!("{id}.json")))
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
@@ -3937,11 +4203,17 @@ mod tests {
         let spent = bravebot_agent::Spent {
             tokens: 107,
             output_tokens: 40,
+            cached: Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -3974,9 +4246,13 @@ mod tests {
             split,
             Split {
                 read: 67,
-                written: 40
+                written: 40,
+                cache: Cached {
+                    read_tokens: 60,
+                    written_tokens: 10,
+                },
             },
-            "the failed turn's split was not charged with its total"
+            "the failed turn's split was not charged with its total and its cache figures"
         );
         assert_eq!(spend.get(&1), Some(&107));
         assert_eq!(
@@ -3986,7 +4262,106 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
+                ..Default::default()
             })
+        );
+    }
+
+    /// A failed or stopped turn keeps no messages of its own, so the counts of what it did before
+    /// it ended are in no other place. They are charged with its time, once, and are the same
+    /// tokens its split was charged with.
+    #[test]
+    fn a_failed_turn_keeps_the_counts_of_what_it_did_beside_its_time() {
+        use bravebot_agent::timing::{Activity, Timing};
+
+        let (mut tokens, mut split, mut spend, mut timing) = Default::default();
+        let activity = Activity {
+            requests: 3,
+            written_tokens: 40,
+            cache_read_tokens: 60,
+            cache_written_tokens: 10,
+            compactions: 1,
+        };
+        let spent = bravebot_agent::Spent {
+            tokens: 107,
+            output_tokens: 40,
+            cached: Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
+            requests: 3,
+            timing: Timing {
+                inference_ms: 11,
+                activity,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(charge_failed_turn(
+            &mut tokens,
+            &mut split,
+            &mut spend,
+            &mut timing,
+            2,
+            spent,
+            std::time::Duration::from_millis(500)
+        ));
+        let kept = timing
+            .get(&2)
+            .expect("the turn has a timing entry")
+            .activity;
+        assert_eq!(kept, activity, "the failed turn's counts were not kept");
+        assert_eq!(
+            (kept.written_tokens, kept.cache_read_tokens),
+            (split.written, split.cache.read_tokens),
+            "the counts and the split are the same tokens"
+        );
+
+        // A later charge to the same turn, such as a question asked during it, adds its counts
+        // to the turn's and does not replace them.
+        let mut again = timing[&2];
+        again.add_measured(spent.timing);
+        assert_eq!(again.activity.requests, 6);
+    }
+
+    /// A record from before the counts were kept has none for a turn, and a turn with none leaves
+    /// the key out of the file, so the file of a session that never counted is the file it was.
+    #[test]
+    fn a_record_keeps_a_turns_counts_and_a_turn_without_them_reads_as_none_counted() {
+        let body = serde_json::json!({
+            "id": "1-2",
+            "directory": "/tmp/x",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "turns": 2,
+            "tokens": 3_400,
+            "timing": {
+                "1": {"wall_ms": 10, "activity": {"requests": 4, "written_tokens": 9, "cache_read_tokens": 30, "cache_written_tokens": 2, "compactions": 1}},
+                "2": {"wall_ms": 5}
+            },
+            "conversation": {
+                "messages": [],
+                "context": "trusted",
+                "references": 0,
+                "archive": [],
+                "measured": 0,
+            },
+        });
+
+        let record: Record = serde_json::from_value(body).expect("parses");
+        assert_eq!(record.timing[&1].activity.requests, 4);
+        assert_eq!(record.timing[&1].activity.compactions, 1);
+        assert!(record.timing[&2].activity.is_empty());
+
+        let written = serde_json::to_value(&record).expect("serialises");
+        assert_eq!(written["timing"]["1"]["activity"]["cache_read_tokens"], 30);
+        assert!(
+            written["timing"]["2"].get("activity").is_none(),
+            "an empty count was written: {}",
+            written["timing"]["2"]
         );
     }
 
@@ -4039,6 +4414,83 @@ mod tests {
         assert!(said(Some(Duration::from_secs(121))).contains("about 3 minutes"));
         assert!(said(Some(Duration::from_secs(5))).contains("about 1 minute"));
         assert!(said(Some(Duration::from_secs(5))).contains("(HTTP 429)"));
+    }
+
+    /// BACKEND-37: a rate-limited line ends with the next step. A request to a provider entry is
+    /// told to raise `maxRetries` in that entry and to set `fallbackModel`; a request to any
+    /// backend with no entry is told only `fallbackModel` and to try later, because there is no
+    /// `maxRetries` to raise. Other categories do not carry the sentence.
+    ///
+    /// The faults this rejects: no next step, `maxRetries` named for the Brave endpoint or a
+    /// tier-variable account, and the same sentence for a rate limit and a refusal.
+    #[test]
+    fn a_rate_limit_ends_with_the_setting_that_lengthens_the_wait() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let rate_limited = || {
+            Diagnosis::of(Category::RateLimited)
+                .with_status(429)
+                .after(7)
+        };
+
+        let entry = failure_reason(rate_limited().with_retry_setting(), None);
+        assert!(entry.contains("`maxRetries`"), "{entry}");
+        assert!(entry.contains("`fallbackModel`"), "{entry}");
+        assert!(entry.starts_with("error: "), "{entry}");
+
+        let no_entry = failure_reason(rate_limited(), None);
+        assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(no_entry.contains("`fallbackModel`"), "{no_entry}");
+        assert!(no_entry.contains("try again later"), "{no_entry}");
+
+        let unavailable = failure_reason(
+            Diagnosis::of(Category::Unavailable)
+                .with_status(503)
+                .with_retry_setting(),
+            None,
+        );
+        assert!(!unavailable.contains("maxRetries"), "{unavailable}");
+    }
+
+    /// BACKEND-37, BACKEND-54: a 429 that asked for a wait past the longest one the client sits
+    /// through ends the call on its first request, so a rate-limited line for it never tells the
+    /// person to raise `maxRetries`, even for a request to a provider entry. A wait the client
+    /// would sit through (the ceiling itself included) keeps the sentence that names it.
+    ///
+    /// The fault this rejects: choosing the sentence from the provider entry alone, which sends a
+    /// person to raise a count that has no effect on a call that is never sent again.
+    #[test]
+    fn a_rate_limit_past_the_longest_wait_is_not_told_to_raise_max_retries() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::LONGEST_WAIT;
+        use std::time::Duration;
+
+        let said = |wait: Duration, entry: bool| {
+            let mut diagnosis = Diagnosis::of(Category::RateLimited)
+                .with_status(429)
+                .asking_for_a_wait_of(wait);
+            if entry {
+                diagnosis = diagnosis.with_retry_setting();
+            }
+            failure_reason(diagnosis, None)
+        };
+
+        let past = said(LONGEST_WAIT + Duration::from_secs(1), true);
+        assert!(!past.contains("maxRetries"), "{past}");
+        assert!(past.contains("`fallbackModel`"), "{past}");
+        assert!(past.contains("try again later"), "{past}");
+        assert!(past.contains("about 3 minutes"), "{past}");
+
+        let at = said(LONGEST_WAIT, true);
+        assert!(at.contains("`maxRetries`"), "{at}");
+        assert!(at.contains("`fallbackModel`"), "{at}");
+
+        let under = said(Duration::from_secs(5), true);
+        assert!(under.contains("`maxRetries`"), "{under}");
+
+        let no_entry = said(LONGEST_WAIT + Duration::from_secs(1), false);
+        assert!(!no_entry.contains("maxRetries"), "{no_entry}");
+        assert!(no_entry.contains("try again later"), "{no_entry}");
     }
 
     /// A refusal that names the account, with neither a status nor a wait.
@@ -4191,6 +4643,9 @@ mod tests {
                 attempts,
                 usage: None,
                 context_tokens: None,
+                conceded: Default::default(),
+                backend: None,
+                retry_setting: false,
                 cause: Box::new(BackendError::from(ChatError::Account(failure))),
             };
             failure_reason(error.diagnosis(), None)
@@ -4292,16 +4747,173 @@ mod tests {
                     .after(3),
                 None
             ),
-            "error: the service would not accept the credentials (HTTP 401), after 3 attempts"
+            "error: the service would not accept the credentials (HTTP 401), after 3 attempts. Run \
+             `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see \
+             the endpoint"
         );
         assert_eq!(
             failure_reason(Diagnosis::of(Category::Refused), None),
-            "error: the service rejected the request"
+            "error: the service rejected the request. Choose another model with `/model`, or run \
+             `bravebot doctor` to see the endpoint and where the diagnostic log is kept"
         );
         assert_eq!(
             failure_reason(Diagnosis::of(Category::Transport).after(0), None),
             "error: the request did not get through"
         );
+    }
+
+    /// BACKEND-37: a refused request says which backend it went to and which request fields the
+    /// retries left out, in the order they were given up, after the status and before the count, and ends
+    /// with the next step. The words are the driver's own.
+    ///
+    /// The regressions it rejects are the fields printed for a category other than refused, the
+    /// fields printed when none was given up, the order reversed, a field named twice, the backend
+    /// left out, and the next step placed before the count.
+    #[test]
+    fn a_refused_request_names_its_backend_and_the_fields_the_retries_left_out() {
+        use bravebot_agent::{BackendKind, Category, Diagnosis};
+        use bravebot_aichat::call::{Conceded, Concession};
+
+        let mut given = Conceded::default();
+        for concession in [
+            Concession::ThinkingShown,
+            Concession::Effort,
+            Concession::Ceiling,
+            Concession::Effort,
+        ] {
+            given.push(concession);
+        }
+        let refused = Diagnosis::of(Category::Refused)
+            .with_status(400)
+            .after(4)
+            .with_conceded(given)
+            .on_backend(BackendKind::Bedrock);
+        assert_eq!(
+            failure_reason(refused, None),
+            "error: the service rejected the request (HTTP 400), sent to AWS Bedrock, with \
+             the retries leaving out shown thinking, the effort level (/effort), the assumed reply \
+             limit (BRAVEBOT_OUTPUT_BUDGET), after 4 attempts. Choose another model with \
+             `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log \
+             is kept"
+        );
+        // A refusal that gave up nothing says nothing about fields.
+        let plain = failure_reason(
+            Diagnosis::of(Category::Refused)
+                .with_status(400)
+                .after(1)
+                .on_backend(BackendKind::Aichat),
+            None,
+        );
+        assert!(!plain.contains("leaving out"), "{plain}");
+        assert!(plain.contains("sent to the Brave endpoint"), "{plain}");
+        assert!(!plain.contains("attempts"), "{plain}");
+        // Only the refused category says them.
+        for category in [
+            Category::Unavailable,
+            Category::Transport,
+            Category::Internal,
+        ] {
+            let line = failure_reason(
+                Diagnosis::of(category)
+                    .after(2)
+                    .with_conceded(given)
+                    .on_backend(BackendKind::Bedrock),
+                None,
+            );
+            assert!(!line.contains("leaving out"), "{category:?}: {line}");
+            assert!(!line.contains("sent to"), "{category:?}: {line}");
+            assert!(!line.contains("/model"), "{category:?}: {line}");
+        }
+    }
+
+    /// BACKEND-37: an unauthorized failure names the commands that show the credential and the
+    /// endpoint, in the driver's own words, after the status and the count of tries. A failure of
+    /// any of the other eleven categories names neither command.
+    ///
+    /// The regressions it rejects are a remedy added to every category, one dropped when the
+    /// status or the count is present, and one placed before the status.
+    #[test]
+    fn an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let remedy = "Run `bravebot auth status` to see the sign-in or key in use, and \
+                      `bravebot doctor` to see the endpoint";
+        for diagnosis in [
+            Diagnosis::of(Category::Unauthorized),
+            Diagnosis::of(Category::Unauthorized).with_status(403),
+            Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(1),
+        ] {
+            let line = failure_reason(diagnosis, None);
+            assert!(line.ends_with(remedy), "{line}");
+        }
+        assert_eq!(
+            failure_reason(
+                Diagnosis::of(Category::Unauthorized)
+                    .with_status(403)
+                    .after(2),
+                None
+            ),
+            format!(
+                "error: the service would not accept the credentials (HTTP 403), after 2 \
+                 attempts. {remedy}"
+            )
+        );
+        for category in [
+            Category::RateLimited,
+            Category::Unavailable,
+            Category::Transport,
+            Category::Incomplete,
+            Category::Undecodable,
+            Category::TooLong,
+            Category::Unconfigured,
+            Category::Blocked,
+            Category::Workspace,
+            Category::Internal,
+        ] {
+            let line = failure_reason(Diagnosis::of(category).with_status(401), None);
+            assert!(
+                !line.contains("bravebot auth status"),
+                "{category:?}: {line}"
+            );
+            assert!(!line.contains("bravebot doctor"), "{category:?}: {line}");
+        }
+    }
+
+    /// BACKEND-37, PREM-10: a refused request that carried the premium key names the commands that
+    /// replace the key or send requests to the free endpoint, and not the generic pair.
+    ///
+    /// The regressions it rejects are the generic sentence for a premium key, the premium sentence
+    /// for every unauthorized failure, and one that drops the status or the count.
+    #[test]
+    fn a_refused_premium_key_names_the_commands_that_replace_or_forget_it() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let line = failure_reason(
+            Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(3)
+                .with_premium_key(),
+            None,
+        );
+        assert_eq!(
+            line,
+            "error: the service would not accept the credentials (HTTP 401), after 3 attempts. \
+             Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout \
+             brave` to send requests to the free endpoint instead. `bravebot auth status` shows \
+             the key in use"
+        );
+        let generic = failure_reason(
+            Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(3),
+            None,
+        );
+        assert!(!generic.contains("auth login brave"), "{generic}");
+        // A premium key on a failure of another category adds nothing.
+        let other = failure_reason(Diagnosis::of(Category::Transport).with_premium_key(), None);
+        assert_eq!(other, "error: the request did not get through");
     }
 
     /// A reply stopped part way through a call and one stopped while it was thinking want
@@ -4354,10 +4966,10 @@ mod tests {
         use bravebot_aichat::{CutOff, OpenCall};
 
         assert!(matches!(
-            StoredOutcome::ended(1, Ending::Done, None),
+            StoredOutcome::ended(1, Ending::Done, None, None),
             StoredOutcome::Completed
         ));
-        match StoredOutcome::ended(3, Ending::Stopped { attempts: None }, None) {
+        match StoredOutcome::ended(3, Ending::Stopped { attempts: None }, None, None) {
             StoredOutcome::Cancelled { reason } => assert_eq!(reason, t!(turn_cancelled, turn = 3)),
             other => panic!("a stop was recorded as {other:?}"),
         }
@@ -4370,13 +4982,90 @@ mod tests {
             }),
             thought: false,
         };
-        match StoredOutcome::ended(2, Ending::Failed(diagnosis), Some(&cut_off)) {
+        match StoredOutcome::ended(2, Ending::Failed(diagnosis), Some(&cut_off), None) {
             StoredOutcome::Failed { reason } => {
                 assert_eq!(reason, failure_reason(diagnosis, Some(&cut_off)));
                 assert!(reason.contains("write_file"), "{reason}");
             }
             other => panic!("a failure was recorded as {other:?}"),
         }
+    }
+
+    /// BACKEND-37: a failure the service reported and this build cannot name is said in its own
+    /// sentence, that the service answered with a failure this build does not recognise, ends with
+    /// the step a refused request ends with, and is not the sentence for a reply that stopped.
+    ///
+    /// The regressions it rejects are the cut-off sentence kept for it, a sentence with no next
+    /// step, and one that said the model or the backend of a refused request.
+    #[test]
+    fn an_unrecognised_failure_is_said_in_its_own_sentence_with_the_refused_next_step() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let said = failure_reason(Diagnosis::of(Category::Unrecognised), None);
+        assert_eq!(
+            said,
+            "error: the service answered with a failure this build does not recognise. Choose \
+             another model with `/model`, or run `bravebot doctor` to see the endpoint and where \
+             the diagnostic log is kept"
+        );
+        let cut_off = failure_reason(Diagnosis::of(Category::Incomplete), None);
+        assert!(!said.contains("stopped before"), "{said}");
+        assert!(!cut_off.contains("recognise"), "{cut_off}");
+    }
+
+    /// BACKEND-37: a refused request names the model the turn ran on, the name the person
+    /// configured or chose, after the backend and before the count. The name is stored in the
+    /// record with the rest of the reason, and a control character in it is written out.
+    ///
+    /// The regressions it rejects are the model left out of the line or of the stored reason, the
+    /// model said for a category other than refused, an empty name printed as a gap, and a name
+    /// holding an escape or a line break reaching the line unchanged.
+    #[test]
+    fn a_refused_request_names_the_model_the_turn_ran_on() {
+        use bravebot_agent::{BackendKind, Category, Diagnosis, Ending};
+
+        let refused = Diagnosis::of(Category::Refused)
+            .with_status(400)
+            .after(3)
+            .on_backend(BackendKind::Aichat);
+        assert_eq!(
+            failure_reason_with_model(refused, None, Some("claude-sonnet-x")),
+            "error: the service rejected the request (HTTP 400), sent to the Brave endpoint, \
+             using the model claude-sonnet-x, after 3 attempts. Choose another model with \
+             `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log \
+             is kept"
+        );
+        // The stored reason is the same line, and a line that names no model is as it was.
+        match StoredOutcome::ended(1, Ending::Failed(refused), None, Some("claude-sonnet-x")) {
+            StoredOutcome::Failed { reason } => {
+                assert!(
+                    reason.contains("using the model claude-sonnet-x"),
+                    "{reason}"
+                )
+            }
+            other => panic!("a failure was recorded as {other:?}"),
+        }
+        assert_eq!(
+            failure_reason_with_model(refused, None, None),
+            failure_reason(refused, None)
+        );
+        assert!(!failure_reason(refused, None).contains("using the model"));
+        let empty = failure_reason_with_model(refused, None, Some(""));
+        assert!(!empty.contains("using the model"), "{empty}");
+        // Only the refused category says it.
+        let transport =
+            failure_reason_with_model(Diagnosis::of(Category::Transport), None, Some("m"));
+        assert!(!transport.contains("using the model"), "{transport}");
+        // A name from a settings file may hold any characters. None that acts on a terminal or
+        // draws as nothing reaches the line.
+        let hostile =
+            failure_reason_with_model(refused, None, Some("a\u{1b}[2Jb\nc\u{7f}d\u{85}e\u{200b}f"));
+        assert!(!hostile.chars().any(char::is_control), "{hostile:?}");
+        assert!(!hostile.contains('\u{200b}'), "{hostile:?}");
+        assert!(
+            hostile.contains("a\u{241b}[2Jb\u{240a}c\u{2421}d\u{fffd}e"),
+            "{hostile:?}"
+        );
     }
 
     /// The name is printed on the way out and pasted into a command, so it has to be the shape a
@@ -4429,6 +5118,25 @@ mod tests {
     #[test]
     fn a_path_with_nothing_in_it_still_names_a_directory() {
         assert_eq!(key_for(Path::new("/")), "root");
+    }
+
+    /// The session directory of a deep working directory has to be a name a file system takes, or
+    /// no session could be written for it. The path is rooted at `/`, so the test runs on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn a_working_directory_too_deep_for_a_file_name_still_has_a_session_directory() {
+        let deep = Path::new("/")
+            .join("a".repeat(255))
+            .join("b".repeat(255))
+            .join("c".repeat(255));
+        let key = key_for(&deep);
+        assert!(key.len() <= 200, "{} bytes", key.len());
+        assert_eq!(key, bravebot_agent::home::key_for(&deep));
+        let home = tempfile::tempdir().expect("a scratch directory");
+        let directory = home.path().join(&key);
+        std::fs::create_dir(&directory).expect("a directory named by the key is created");
+        std::fs::write(directory.join(format!("{}.jsonl", new_id())), "{}\n")
+            .expect("a record in it is written");
     }
 
     #[test]
@@ -5737,6 +6445,7 @@ mod tests {
         record.split = Split {
             read: 600,
             written: 300,
+            ..Default::default()
         };
         let mut written = serde_json::to_value(record).expect("serialises");
         let fields = written.as_object_mut().expect("an object");
@@ -5761,7 +6470,7 @@ mod tests {
         save_a_turn_session(&mut handle);
         let trust = TrustStore::new(&root);
         let snapshot = a_record().conversation;
-        let mut carry_on = |tokens: u64, written: u64| {
+        let mut carry_on = |tokens: u64, written: u64, cached: Cached| {
             let record = load(&root, handle.id()).expect("written");
             assert!(handle.save_continuation(
                 record,
@@ -5769,7 +6478,7 @@ mod tests {
                     conversation: &snapshot,
                     prompt: "next",
                     tokens,
-                    split: Split::of(tokens, written),
+                    split: Split::of(tokens, written).with_cache(cached),
                     model: "m",
                     trust: &trust,
                     begins: 0,
@@ -5783,22 +6492,44 @@ mod tests {
             load(&root, handle.id()).expect("written")
         };
 
-        let first = carry_on(100, 30);
+        let first = carry_on(
+            100,
+            30,
+            Cached {
+                read_tokens: 60,
+                written_tokens: 10,
+            },
+        );
         assert_eq!(
             first.split,
             Split {
                 read: 70,
-                written: 30
+                written: 30,
+                cache: Cached {
+                    read_tokens: 60,
+                    written_tokens: 10
+                },
             }
         );
 
-        let second = carry_on(30, 20);
+        let second = carry_on(
+            30,
+            20,
+            Cached {
+                read_tokens: 25,
+                written_tokens: 5,
+            },
+        );
         assert_eq!(second.tokens, 130);
         assert_eq!(
             second.split,
             Split {
                 read: 80,
-                written: 50
+                written: 50,
+                cache: Cached {
+                    read_tokens: 85,
+                    written_tokens: 15
+                },
             },
             "the second turn's split did not add to the first's"
         );
@@ -5814,6 +6545,10 @@ mod tests {
         stored.split = Split {
             read: 60,
             written: 20,
+            cache: Cached {
+                read_tokens: 45,
+                written_tokens: 5,
+            },
         };
         let mut record = a_record();
         record.rewind = vec![stored];
@@ -5826,7 +6561,11 @@ mod tests {
             point.snapshot.split,
             Split {
                 read: 60,
-                written: 20
+                written: 20,
+                cache: Cached {
+                    read_tokens: 45,
+                    written_tokens: 5
+                },
             }
         );
         assert_eq!(
@@ -5846,6 +6585,7 @@ mod tests {
         stored.split = Split {
             read: 60,
             written: 20,
+            ..Default::default()
         };
         let mut written = serde_json::to_value(stored).expect("serialises");
         let fields = written.as_object_mut().expect("an object");
@@ -5872,6 +6612,10 @@ mod tests {
         let retained = Some(bravebot_agent::Spent {
             tokens: 90,
             output_tokens: 25,
+            cached: Cached {
+                read_tokens: 40,
+                written_tokens: 8,
+            },
             ..Default::default()
         });
 
@@ -5889,7 +6633,146 @@ mod tests {
             load(&root, &id).unwrap().split,
             Split {
                 read: 65,
-                written: 25
+                written: 25,
+                cache: Cached {
+                    read_tokens: 40,
+                    written_tokens: 8
+                },
+            }
+        );
+    }
+
+    /// The cache figures are written inside the split, and only when the split has some. A split
+    /// written with the key always would change every record whose service states no cache, and one
+    /// that never wrote it would lose the figures this field exists to keep. The names are what
+    /// somebody reading the file looks for.
+    #[test]
+    fn a_split_writes_its_cache_figures_only_when_it_has_some() {
+        let without = Split {
+            read: 600,
+            written: 300,
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(without).expect("serialises"),
+            serde_json::json!({"read": 600, "written": 300})
+        );
+
+        let with = without.with_cache(Cached {
+            read_tokens: 500,
+            written_tokens: 40,
+        });
+        let written = serde_json::to_value(with).expect("serialises");
+        assert_eq!(
+            written["cache"],
+            serde_json::json!({"read_tokens": 500, "written_tokens": 40})
+        );
+        assert_eq!(
+            serde_json::from_value::<Split>(written).expect("reads back"),
+            with
+        );
+    }
+
+    /// Every record written before the cache figures were kept has a split without them, and it
+    /// must still resume, with the figures read as not recorded rather than with an error that
+    /// loses the session. The read and written counts beside them are kept.
+    #[test]
+    fn a_record_from_before_the_cache_figures_reads_them_as_none_recorded() {
+        let mut record = a_record();
+        record.tokens = 900;
+        record.split = Split {
+            read: 600,
+            written: 300,
+            cache: Cached {
+                read_tokens: 500,
+                written_tokens: 40,
+            },
+        };
+        let mut written = serde_json::to_value(record).expect("serialises");
+        let split = written["split"].as_object_mut().expect("an object");
+        split
+            .remove("cache")
+            .expect("the cache figures are written");
+
+        let old: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert_eq!((old.split.read, old.split.written), (600, 300));
+        assert_eq!(old.split.cache, Cached::default());
+    }
+
+    /// A record edited by hand can state one of the two cache figures. It reads with the other at
+    /// zero, as a service that states one of them is read, and does not lose the session.
+    #[test]
+    fn a_cache_figure_stating_one_half_reads_the_other_as_zero() {
+        let split: Split = serde_json::from_value(
+            serde_json::json!({"read": 10, "written": 2, "cache": {"read_tokens": 7}}),
+        )
+        .expect("reads");
+
+        assert_eq!(
+            split.cache,
+            Cached {
+                read_tokens: 7,
+                written_tokens: 0
+            }
+        );
+    }
+
+    /// Splits are added as charges arrive, and a figure read back from a record can be any number.
+    /// Adding replaces neither the read and written counts nor the cache figures with the
+    /// latest charge's, and a largest-possible figure saturates instead of overflowing.
+    #[test]
+    fn adding_a_split_sums_its_cache_figures_and_saturates() {
+        let mut total = Split::of(100, 30).with_cache(Cached {
+            read_tokens: 40,
+            written_tokens: 5,
+        });
+        total.add(Split::of(50, 10).with_cache(Cached {
+            read_tokens: 25,
+            written_tokens: 0,
+        }));
+        assert_eq!((total.read, total.written), (110, 40));
+        assert_eq!(
+            total.cache,
+            Cached {
+                read_tokens: 65,
+                written_tokens: 5
+            }
+        );
+
+        total.add(Split::default().with_cache(Cached {
+            read_tokens: u64::MAX,
+            written_tokens: u64::MAX,
+        }));
+        assert_eq!(
+            total.cache,
+            Cached {
+                read_tokens: u64::MAX,
+                written_tokens: u64::MAX
+            }
+        );
+    }
+
+    /// `stats` cuts every split to its record's total, and the cache figures it counts beside the
+    /// read and written columns come from the cut split.
+    #[test]
+    fn cutting_a_split_to_its_total_keeps_the_cache_figures() {
+        let cut = Split {
+            read: 900,
+            written: 900,
+            cache: Cached {
+                read_tokens: 3,
+                written_tokens: 1,
+            },
+        }
+        .within(100);
+
+        assert_eq!((cut.read, cut.written), (0, 100));
+        assert_eq!(
+            cut.cache,
+            Cached {
+                read_tokens: 3,
+                written_tokens: 1
             }
         );
     }
@@ -6580,7 +7463,11 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                plan_mode_told: false,
                 holds: "public".to_string(),
+                retrieval_cut: 0,
+                left_out: 0,
+                pinned: Vec::new(),
             },
             manifest: None,
             rewind: Vec::new(),
@@ -6919,6 +7806,8 @@ mod tests {
                     inference_ms: 37,
                     tools_ms: 19,
                     stalled_ms: 11,
+                    file_wait_ms: 0,
+                    ..Default::default()
                 },
                 ..Default::default()
             }),
@@ -7258,6 +8147,39 @@ mod tests {
         std::fs::remove_file(&directory).expect("unblock the directory");
     }
 
+    /// RETRIEVE-6: a session whose records can be written keeps its vectors beside its record,
+    /// and one whose records cannot, as in an incognito session, has no pass to run at all, so
+    /// the endpoint is never asked.
+    #[test]
+    fn only_a_session_that_writes_records_has_vectors_to_keep() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-index-job");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let mut conversation = bravebot_agent::conversation::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("keep this"));
+        let embedders: crate::indexer::Embedders =
+            Box::new(|_| Some(Box::new(bravebot_aichat::embeddings::FakeEmbedder::new(2))));
+
+        let job = handle
+            .index_job(conversation.snapshot(), 1)
+            .expect("a pass to run");
+        assert_eq!(
+            crate::indexer::run(&embedders, &|| true, &job),
+            crate::indexer::Pass::CaughtUp { written: 1 }
+        );
+        let path = crate::vectors::path_in(&root, handle.id()).expect("a writable directory");
+        assert!(path.exists(), "the vectors are not beside the record");
+
+        let directory = project_directory(&root).expect("dir");
+        std::fs::remove_dir_all(&directory).expect("remove the records");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+        assert!(handle.index_job(conversation.snapshot(), 2).is_none());
+        std::fs::remove_file(&directory).expect("unblock the directory");
+    }
+
     /// SESSION-31: a manifest run is refused as `--fork` refuses it, and writes no copy.
     #[test]
     fn branching_a_manifest_run_is_refused() {
@@ -7594,6 +8516,77 @@ mod tests {
 
         assert!(!entry(&gone).exists(), "what the session said outlived it");
         assert!(entry(&kept).exists());
+    }
+
+    /// RETRIEVE-6: the vectors beside a record go with it, and another session's stay.
+    #[test]
+    fn deleting_a_session_removes_its_vectors() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-vectors");
+        let (gone, kept) = two_sessions_with_trails(&root);
+        let model = crate::vectors::Model {
+            endpoint: "https://embed.example/v1/embeddings".to_string(),
+            id: "embed-small-v1".to_string(),
+            dimensions: 2,
+        };
+        let entry = |id: &str| crate::vectors::path_in(&root, id).expect("a writable directory");
+        for id in [&gone, &kept] {
+            crate::vectors::Writer::create(&entry(id), &model).expect("create");
+        }
+
+        delete(&root, &gone).expect("the session was not deleted");
+
+        assert!(!entry(&gone).exists(), "the vectors outlived their record");
+        assert!(entry(&kept).exists());
+    }
+
+    /// RETRIEVE-6: a rewind cuts the rows naming the messages it took out of the record, through
+    /// the session it is made in.
+    #[test]
+    fn a_rewound_session_cuts_its_vectors_to_the_record() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-rewind-vectors");
+        let (id, _) = two_sessions_with_trails(&root);
+        let handle = Handle::resuming(
+            &root,
+            &load(&root, &id).expect("the record"),
+            Front::Terminal,
+            A_BUILD,
+        )
+        .expect("the record is free");
+        let model = crate::vectors::Model {
+            endpoint: "https://embed.example/v1/embeddings".to_string(),
+            id: "embed-small-v1".to_string(),
+            dimensions: 2,
+        };
+        let path = crate::vectors::path_in(&root, &id).expect("a writable directory");
+        let mut writer = crate::vectors::Writer::create(&path, &model).expect("create");
+        for ordinal in 0..4 {
+            writer
+                .append(&crate::vectors::Row {
+                    ordinal,
+                    chunk: 0,
+                    speaker: crate::vectors::Speaker::Person,
+                    range: 0..4,
+                    digest: 0,
+                    vector: vec![1.0, 0.0],
+                })
+                .expect("append");
+        }
+
+        handle.truncate_vectors(2);
+
+        let crate::vectors::Opened::Current(index) = crate::vectors::open(&path, &model, 2) else {
+            panic!("the vectors were not cut to the record");
+        };
+        assert_eq!(
+            index.rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
     }
 
     /// Two projects can hold a session each, and a delete is made in one of them.

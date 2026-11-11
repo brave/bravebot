@@ -1381,6 +1381,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.accept_completion();
             Action::Redraw
         }
+        // A file named with `@` that the turn could not read is said so and not sent, with the
+        // line left in the box, as the desktop window does (NAME-9).
+        KeyCode::Enter if session.refuse_unsendable_names() => Action::Redraw,
         KeyCode::Enter => match session.submit() {
             Some(prompt) => Action::Submit(prompt),
             None => Action::None,
@@ -1841,6 +1844,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return Action::Redraw;
     }
 
+    // And a name the turn could not read is refused before the line is queued, as at rest, since a
+    // queued line is sent later with nobody looking (NAME-9).
+    if key.code == KeyCode::Enter
+        && session.answer_while_working(|session| session.refuse_unsendable_names())
+    {
+        return Action::Redraw;
+    }
+
     // After the arm that starts a line, so Shift-Enter still writes a paragraph, and before the
     // ladder, where Enter means nothing. A second turn still must not begin while the first is in
     // flight; what changes is that the line no longer waits in the box for the person to notice
@@ -2215,8 +2226,13 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         // A delegate's block opens that delegate's view as the watch key does (MOUSE-10, MOUSE-23).
         Hit::Delegate(index) => session.watch_delegate(index),
         // A prompt waiting behind the turn comes back into the box, with the ones typed after it, as
-        // Up takes them all (MOUSE-28).
-        Hit::Queued(place) => session.unqueue_from(place),
+        // Up takes them all. A command a click queued has nothing to put there, so the click removes
+        // it, and so do the words on the row (MOUSE-28).
+        Hit::Queued(place) if session.queued_comes_back(place) => session.unqueue_from(place),
+        Hit::Queued(place) | Hit::Discard(crate::state::Discard::One(place)) => {
+            session.discard_queued(place)
+        }
+        Hit::Discard(crate::state::Discard::All) => session.discard_queued_all(),
         // The marker that leads a finished reply copies that reply, as `/copy` does (MOUSE-26), and
         // the word at the right of a fenced block's header copies the block alone (MOUSE-27). What
         // is copied is the entry's own words, so a reply the screen cut across rows copies as the
@@ -2394,6 +2410,7 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Reply(_)
         | Hit::Block(..)
         | Hit::Queued(_)
+        | Hit::Discard(_)
         | Hit::Popup(_)
         | Hit::PopupRows(_)
         | Hit::Match(_)

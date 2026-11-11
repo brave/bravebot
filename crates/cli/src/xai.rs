@@ -9,6 +9,7 @@
 //! refusals that need no answer, the address and the code, and the sentence for each way it ends.
 
 use crate::exit::{Ending, fail};
+use bravebot_agent::accounts;
 use bravebot_agent::xai::said_of_class;
 use bravebot_config::Config;
 use bravebot_i18n::t;
@@ -16,6 +17,7 @@ use bravebot_net::Transport;
 use bravebot_skus::xai::{Account, AccountError, Announcement, Defect, Hosts, SignInError};
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
 
 /// What decides whether `bravebot auth login xai` may start, none of which needs an answer.
 struct Facts {
@@ -59,7 +61,14 @@ pub(crate) fn login() -> ExitCode {
     let config = match Config::from_env() {
         _ if incognito => None,
         Ok(config) => Some(config),
-        Err(problem) => return fail(Ending::Configuration, problem),
+        Err(problem) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
+            return fail(
+                Ending::Configuration,
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = problem)),
+            );
+        }
     };
     let named_by_a_gateway = config
         .as_ref()
@@ -75,6 +84,7 @@ pub(crate) fn login() -> ExitCode {
     let signed_in = bravebot_skus::xai::sign_in(
         &Hosts::compiled_in(),
         Transport::shared().agent_config_builder(),
+        &AtomicBool::new(false),
         announce,
     );
     match signed_in {
@@ -143,16 +153,19 @@ fn announce_to(announcement: &Announcement<'_>, shown: &mut impl Write) {
 /// Allowed in an incognito session, since it leaves less behind, and not an error where nothing is
 /// stored. What it removes is the copy: no request is made to xAI, so nothing ends there.
 pub(crate) fn logout() -> ExitCode {
-    match Account::forget() {
-        Ok(true) => {
+    match accounts::forget(&accounts::Way::Xai, None) {
+        Ok(forgot) if forgot.was_there => {
             println!("{}", t!(xai_forgotten));
             ExitCode::SUCCESS
         }
-        Ok(false) => {
+        Ok(_) => {
             println!("{}", t!(xai_nothing_to_forget));
             ExitCode::SUCCESS
         }
-        Err(refused) => fail(Ending::Failed, said_of_account(&refused)),
+        Err(accounts::ForgetError::Account(refused)) => {
+            fail(Ending::Failed, said_of_account(&refused))
+        }
+        Err(other) => unreachable!("the xAI account is only ever not removed: {other:?}"),
     }
 }
 
@@ -170,12 +183,13 @@ fn said_of_sign_in(stopped: &SignInError) -> String {
         SignInError::Exchange(class) => t!(xai_failed_exchange, reason = said_of_class(*class)),
         SignInError::Clock => t!(xai_failed_clock).into(),
         SignInError::Store(failure) => said_of_account(failure),
+        SignInError::Cancelled => t!(xai_failed_cancelled).into(),
     }
 }
 
 /// The sentence for why the stored sign-in could not be read, written or removed, with the remedy
 /// where signing in again or forgetting it is one.
-fn said_of_account(failure: &AccountError) -> String {
+pub(crate) fn said_of_account(failure: &AccountError) -> String {
     match failure {
         AccountError::Nowhere { detail } => t!(
             xai_account_nowhere,
@@ -221,13 +235,16 @@ pub(crate) fn standing() -> Standing {
 }
 
 fn standing_of(loaded: Result<Option<Account>, AccountError>) -> Standing {
-    match loaded {
-        Ok(Some(account)) => Standing::SignedIn {
-            expires: account.expires(),
-        },
-        Ok(None) => Standing::NotSignedIn,
-        Err(AccountError::Nowhere { .. }) => Standing::Nowhere,
-        Err(other) => Standing::Unusable(said_of_account(&other)),
+    use accounts::{Held, Why};
+    let loaded = loaded.map(|account| account.map(|account| account.expires()));
+    match accounts::account(accounts::Way::Xai, loaded).standing {
+        accounts::Standing::SignedIn(Held::Account { expires }) => Standing::SignedIn { expires },
+        accounts::Standing::NotSignedIn(Why::Nowhere) => Standing::Nowhere,
+        accounts::Standing::Unusable(Why::Xai(failure)) => {
+            Standing::Unusable(said_of_account(&failure))
+        }
+        accounts::Standing::NotSignedIn(Why::NothingStored) => Standing::NotSignedIn,
+        other => unreachable!("a stored account stands in no other way, not {other:?}"),
     }
 }
 
@@ -399,6 +416,7 @@ mod tests {
             SignInError::Exchange(Class::Refused),
             SignInError::Exchange(Class::Incomplete),
             SignInError::Clock,
+            SignInError::Cancelled,
         ];
         let mut said: Vec<String> = stops.iter().map(said_of_sign_in).collect();
         let all = said.clone();
@@ -449,15 +467,21 @@ mod tests {
         assert!(unusable.contains("bravebot auth login xai"), "{unusable}");
         assert!(unusable.contains("bravebot auth logout xai"), "{unusable}");
         assert!(!unusable.contains('\u{1b}'), "{unusable:?}");
+        assert!(
+            unusable.contains("\u{241b}[2Jdenied"),
+            "the escape was not drawn as a picture: {unusable:?}"
+        );
         assert!(unusable.contains("xai-account.json"), "{unusable}");
 
         let unwritable = said_of_account(&AccountError::Unwritable {
             detail: detail.clone(),
         });
         assert!(!unwritable.contains('\u{1b}'), "{unwritable:?}");
+        assert!(unwritable.contains("\u{241b}[2Jdenied"), "{unwritable:?}");
         assert!(unwritable.contains("nothing was changed"), "{unwritable}");
         let nowhere = said_of_account(&AccountError::Nowhere { detail });
         assert!(!nowhere.contains('\u{1b}'), "{nowhere:?}");
+        assert!(nowhere.contains("\u{241b}[2Jdenied"), "{nowhere:?}");
 
         let mut defects: Vec<String> = [
             Defect::Empty,

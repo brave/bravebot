@@ -14,6 +14,11 @@
 //! must not manage is to change what the client reads from the bridge, take what the client sends
 //! to it, or answer for the client.
 //!
+//! The same attack runs against the local host (`bravebot-host`), which holds the near end of the
+//! channel in its own process and gives the client's end to a program it starts. There the client
+//! is this test binary run again as `relay_entry`, which copies the channel to a socket in a
+//! private directory of the test's, and the attacker is aimed at the host and at the relay.
+//!
 //! The witnesses are on the disk and on the wire: whether the write happened, and what the client
 //! received. The attacker's own report shows how far it got, so that a pass is not a run in which
 //! it never tried.
@@ -25,8 +30,11 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use bravebot_ui_bridge::control_link::{self, Linked};
 use serde_json::{Value, json};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::mem::ManuallyDrop;
@@ -38,6 +46,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
+use support::{Client, Host, Start};
 
 #[allow(
     dead_code,
@@ -45,6 +54,7 @@ use std::time::{Duration, Instant};
 )]
 #[path = "../../agent/test-support/pipelines.rs"]
 mod pipelines;
+mod support;
 
 const PATIENCE: Duration = Duration::from_secs(60);
 const RACE_STARTS: usize = 400;
@@ -52,6 +62,13 @@ const FORGED: &str = "FORGED-BY-A-TOOL";
 const ATTACK_DIR: &str = "CONTROL_ATTACK_DIR";
 /// `O_NONBLOCK`, so that opening a descriptor path never waits for a peer.
 const NONBLOCK: i32 = libc::O_NONBLOCK;
+
+/// The client the host starts. Does nothing unless it was started as one.
+#[test]
+#[ignore = "run by the host as its client"]
+fn relay_entry() {
+    support::relay();
+}
 
 /// The attacker. It runs in the test binary started again, and does nothing in an ordinary run.
 ///
@@ -218,6 +235,37 @@ fn judge_pidfd(pidfd: &Value) -> Pidfd {
         (Some(worked), Some(0)) if worked > 0 => Pidfd::Refused,
         _ => Pidfd::NotExercised,
     }
+}
+
+/// Whether this kernel lets a process of the same user copy descriptors out of one that is not its
+/// descendant and has not marked itself non-dumpable, so the attack must work against `control`.
+#[cfg(target_os = "linux")]
+fn the_attack_must_work() -> bool {
+    scope_lets_the_attack_work(
+        std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn the_attack_must_work() -> bool {
+    false
+}
+
+/// Yama's `ptrace_scope` 0, or a kernel without Yama, lets a process reach any other of the same
+/// user that has not marked itself non-dumpable. 1 limits it to descendants and 2 and 3 to
+/// `CAP_SYS_PTRACE` or nobody, so the attack fails against `control` too.
+fn scope_lets_the_attack_work(scope: Option<&str>) -> bool {
+    scope.is_none_or(|scope| scope.trim() == "0")
+}
+
+#[test]
+fn the_attack_must_work_where_the_kernel_lets_a_process_reach_its_peers() {
+    assert!(scope_lets_the_attack_work(None));
+    assert!(scope_lets_the_attack_work(Some("0\n")));
+    assert!(!scope_lets_the_attack_work(Some("1\n")));
+    assert!(!scope_lets_the_attack_work(Some("3\n")));
 }
 
 #[test]
@@ -487,12 +535,74 @@ fn a_planner(
     })
 }
 
-/// The bridge, started over an anonymous socket pair, and the client's end of it.
+/// What a test asks of the process that serves its client, the bridge or the host, and of the
+/// client's end of the channel.
+trait Front {
+    /// The process that holds the near end of the channel.
+    fn server_pid(&self) -> u32;
+    /// The process that holds the client's end.
+    fn client_pid(&self) -> u32;
+    fn send(&mut self, method: &str, params: Value) -> u64;
+    fn call(&mut self, method: &str, params: Value) -> Value;
+    /// A session in `project` whose directory the person declined to trust, so a write in it is
+    /// put to the client, with the client able to answer.
+    fn open_session(&mut self, project: &Path) -> String;
+    /// The next question that is not the startup question, or the end of the turn.
+    fn question(&mut self) -> Value;
+    /// Every line the client was sent so far, as it arrived.
+    fn received(&self) -> Vec<String>;
+    /// What the server wrote to its standard error, which is a socket as it is under Node.
+    fn complaints(&self) -> Vec<String>;
+
+    /// Everything the server sent. It answers requests in order, so once it has answered a request
+    /// sent after the work being checked, every line it wrote before that answer has arrived.
+    fn everything_received(&mut self) -> Vec<String> {
+        self.call("agent.info", json!({}));
+        self.received()
+    }
+}
+
+/// Whether `message` is a question other than the startup question, or the end of a turn.
+fn is_a_question_or_an_end(message: &Value) -> bool {
+    message["event"].as_str().is_some_and(|event| {
+        (event.ends_with(".request") && event != "trust.request")
+            || event == "turn.done"
+            || event == "turn.error"
+    })
+}
+
+/// A socket to give a program as its standard error, and the lines it writes there.
+fn a_complaints_socket() -> (Stdio, Arc<Mutex<Vec<String>>>) {
+    let (complaints_in, complaints_out) =
+        bravebot_sandbox::process::creating_a_channel(|| UnixStream::pair().expect("a pair"));
+    let complaints = Arc::new(Mutex::new(Vec::new()));
+    let collecting = Arc::clone(&complaints);
+    std::thread::spawn(move || {
+        for line in BufReader::new(complaints_in).lines().map_while(Result::ok) {
+            collecting.lock().expect("not poisoned").push(line);
+        }
+    });
+    (
+        Stdio::from(std::os::fd::OwnedFd::from(complaints_out)),
+        complaints,
+    )
+}
+
+/// What the server is told of the model service at `endpoint`.
+fn model_service(endpoint: &str) -> [(&'static str, &OsStr); 3] {
+    [
+        ("BRAVE_AI_CHAT_ENDPOINT", OsStr::new(endpoint)),
+        ("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", OsStr::new(endpoint)),
+        ("BRAVEBOT_DEFAULT_MODEL", OsStr::new("stub-model")),
+    ]
+}
+
+/// The bridge, started over an anonymous socket pair, and the client's end of it, which this test
+/// process holds.
 struct FrontEnd {
     child: Child,
     channel: UnixStream,
     said: mpsc::Receiver<String>,
-    /// What the bridge wrote to its standard error, which is a socket as it is under Node.
     complaints: Arc<Mutex<Vec<String>>>,
     held: std::cell::RefCell<std::collections::VecDeque<Value>>,
     /// Every line the bridge sent, as it arrived, whether or not it was JSON.
@@ -509,19 +619,9 @@ impl FrontEnd {
             .env("BRAVEBOT_LOCALE", "en-US")
             .env("SERVICES_KEY_AICHAT", "a-services-key")
             .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-            .env("BRAVE_AI_CHAT_ENDPOINT", endpoint)
-            .env("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", endpoint)
-            .env("BRAVEBOT_DEFAULT_MODEL", "stub-model");
-        let (complaints_in, complaints_out) =
-            bravebot_sandbox::process::creating_a_channel(|| UnixStream::pair().expect("a pair"));
-        command.stderr(Stdio::from(std::os::fd::OwnedFd::from(complaints_out)));
-        let complaints = Arc::new(Mutex::new(Vec::new()));
-        let collecting = Arc::clone(&complaints);
-        std::thread::spawn(move || {
-            for line in BufReader::new(complaints_in).lines().map_while(Result::ok) {
-                collecting.lock().expect("not poisoned").push(line);
-            }
-        });
+            .envs(model_service(endpoint));
+        let (stderr, complaints) = a_complaints_socket();
+        command.stderr(stderr);
         let Linked { child, channel } = control_link::launch(command).expect("the bridge starts");
         let reading = channel.try_clone().expect("the channel clones");
         let (sender, said) = mpsc::channel();
@@ -541,23 +641,6 @@ impl FrontEnd {
             seen: Default::default(),
             next: 0,
         }
-    }
-
-    fn send(&mut self, method: &str, params: Value) -> u64 {
-        self.next += 1;
-        let id = self.next;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
-        writeln!(self.channel, "{line}").expect("the request is written");
-        id
-    }
-
-    fn call(&mut self, method: &str, params: Value) -> Value {
-        let id = self.send(method, params);
-        let answered = self.until(|message| message["id"] == id);
-        answered
-            .get("ok")
-            .cloned()
-            .unwrap_or_else(|| panic!("{method} failed: {answered}"))
     }
 
     /// The next message `wanted` accepts. A message it does not accept is kept for a later wait.
@@ -584,23 +667,54 @@ impl FrontEnd {
         }
         panic!("the bridge never said what the test was waiting for");
     }
+}
 
-    /// Everything the bridge sent so far. The bridge answers requests in order, so once it has
-    /// answered a request sent after the work being checked, every line it wrote before that
-    /// answer has arrived.
-    fn everything_received(&mut self) -> Vec<String> {
-        self.call("agent.info", json!({}));
+impl Front for FrontEnd {
+    fn server_pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn client_pid(&self) -> u32 {
+        std::process::id()
+    }
+
+    fn send(&mut self, method: &str, params: Value) -> u64 {
+        self.next += 1;
+        let id = self.next;
+        let line = json!({"id": id, "method": method, "params": params}).to_string();
+        writeln!(self.channel, "{line}").expect("the request is written");
+        id
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send(method, params);
+        let answered = self.until(|message| message["id"] == id);
+        answered
+            .get("ok")
+            .cloned()
+            .unwrap_or_else(|| panic!("{method} failed: {answered}"))
+    }
+
+    fn open_session(&mut self, project: &Path) -> String {
+        let opened = self.call(
+            "session.new",
+            json!({"directory": project.display().to_string()}),
+        );
+        let session = opened["session"].as_str().expect("a handle").to_string();
+        self.call("trust.reply", json!({"session": session, "trusted": false}));
+        session
+    }
+
+    fn question(&mut self) -> Value {
+        self.until(is_a_question_or_an_end)
+    }
+
+    fn received(&self) -> Vec<String> {
         self.seen.borrow().clone()
     }
 
-    fn question(&self) -> Value {
-        self.until(|message| {
-            message["event"].as_str().is_some_and(|event| {
-                (event.ends_with(".request") && event != "trust.request")
-                    || event == "turn.done"
-                    || event == "turn.error"
-            })
-        })
+    fn complaints(&self) -> Vec<String> {
+        self.complaints.lock().expect("not poisoned").clone()
     }
 }
 
@@ -608,6 +722,116 @@ impl Drop for FrontEnd {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// The local host, with the client it started over its anonymous channel. That client is this test
+/// binary run again as `relay_entry`, which holds the client's end and copies it to a socket the
+/// test listens on.
+struct Hosted {
+    client: Client,
+    host: Host,
+    relay_pid: u32,
+    complaints: Arc<Mutex<Vec<String>>>,
+    /// Where the relay's socket is, a path short enough for a socket's address. Dropped after the
+    /// host, which removes the socket.
+    _relay_directory: tempfile::TempDir,
+}
+
+impl Hosted {
+    fn start(scratch: &Scratch, endpoint: &str) -> Self {
+        let relay_directory = tempfile::tempdir().expect("a directory for the relay");
+        let root = scratch.path.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        // The host uses a root that already exists only if others cannot reach it.
+        std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
+        let (stderr, complaints) = a_complaints_socket();
+        let host = Host::launch(Start {
+            home: &scratch.home(),
+            sessions_root: &root,
+            workspace: &scratch.project(),
+            relay: &relay_directory.path().join("relay.sock"),
+            settings: None,
+            current_dir: None,
+            environment: &model_service(endpoint),
+            stdout: Stdio::null(),
+            stderr,
+        });
+        let client = host.client();
+        let relay_pid = the_relay_of(host.child.id());
+        Self {
+            client,
+            host,
+            relay_pid,
+            complaints,
+            _relay_directory: relay_directory,
+        }
+    }
+}
+
+/// The process id of the relay the host `host` started as its client.
+fn the_relay_of(host: u32) -> u32 {
+    let found = bravebot_sandbox::process::starting_a_program(|| {
+        Command::new("pgrep")
+            .args(["-P", &host.to_string(), "-f", support::RELAY_TEST])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+    })
+    .expect("pgrep runs");
+    let listed = String::from_utf8_lossy(&found.stdout);
+    let pids: Vec<u32> = listed
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect();
+    assert_eq!(
+        pids.len(),
+        1,
+        "the host's relay is not one process: {listed}"
+    );
+    pids[0]
+}
+
+impl Front for Hosted {
+    fn server_pid(&self) -> u32 {
+        self.host.child.id()
+    }
+
+    fn client_pid(&self) -> u32 {
+        self.relay_pid
+    }
+
+    fn send(&mut self, method: &str, params: Value) -> u64 {
+        self.client.send(method, params)
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        self.client.call(method, params)
+    }
+
+    fn open_session(&mut self, project: &Path) -> String {
+        let opened = self.call("session.new", json!({"directory": project}));
+        let session = opened["session"].as_str().expect("a handle").to_string();
+        // A host's session puts its questions only to a client that has its view (HOST-10).
+        self.call(
+            "session.view.start",
+            json!({"session": session, "version": 1}),
+        );
+        self.call("trust.reply", json!({"session": session, "trusted": false}));
+        session
+    }
+
+    fn question(&mut self) -> Value {
+        self.client.until(is_a_question_or_an_end)
+    }
+
+    fn received(&self) -> Vec<String> {
+        self.client.inbox.written()
+    }
+
+    fn complaints(&self) -> Vec<String> {
+        self.complaints.lock().expect("not poisoned").clone()
     }
 }
 
@@ -627,20 +851,21 @@ fn start_attacker_command(attack_dir: &Path) -> String {
 }
 
 /// A write waiting for the client's answer.
-struct Waiting {
-    front: FrontEnd,
+struct Waiting<F> {
+    front: F,
     session: String,
     request: Value,
-    rpc_pid: u32,
 }
 
-/// Open a session and ask for a turn that makes `write_file` the second thing it does after
-/// `first`, approving `first` if asked to, and stop with the write waiting for an answer.
-fn until_a_write_is_waiting(
+/// Start the server with `start`, open a session and ask for a turn that makes `write_file` the
+/// second thing it does after `first`, approving `first` if asked to, and stop with the write
+/// waiting for an answer.
+fn until_a_write_is_waiting<F: Front>(
     scratch: &Scratch,
+    start: fn(&Scratch, &str) -> F,
     first: Option<(&'static str, Value)>,
     approve_first: bool,
-) -> Waiting {
+) -> Waiting<F> {
     let endpoint = a_planner(move |this_turn| match (&first, this_turn) {
         (Some(call), 0) => Some(call.clone()),
         (Some(_), 1) | (None, 0) => Some((
@@ -649,17 +874,11 @@ fn until_a_write_is_waiting(
         )),
         _ => None,
     });
-    let mut front = FrontEnd::start(scratch, &endpoint);
-    let rpc_pid = front.child.id();
-    let opened = front.call(
-        "session.new",
-        json!({"directory": scratch.project().display().to_string()}),
-    );
-    let session = opened["session"].as_str().expect("a handle").to_string();
-    front.call("trust.reply", json!({"session": session, "trusted": false}));
+    let mut front = start(scratch, &endpoint);
+    let session = front.open_session(&scratch.project());
     front.send(
         "turn.send",
-        json!({"session": session, "prompt": "do the work"}),
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
     );
     let mut question = front.question();
     if approve_first {
@@ -676,14 +895,13 @@ fn until_a_write_is_waiting(
         front,
         session,
         request: question["data"]["request"].clone(),
-        rpc_pid,
     }
 }
 
 /// Lets the detached attacker loose against the waiting write and returns what it reported.
-fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
+fn let_the_attacker_try<F: Front>(scratch: &Scratch, waiting: &Waiting<F>) -> Value {
     let dir = scratch.attack();
-    // Started here, so it is the bridge's equal in the attacker's eyes: a process of the same user
+    // Started here, so it is the server's equal in the attacker's eyes: a process of the same user
     // that the attacker did not start. It ends when its input does, so nothing has to signal it.
     let mut control = bravebot_sandbox::process::starting_a_program(|| {
         Command::new("cat")
@@ -696,7 +914,7 @@ fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
     std::fs::write(
         dir.join("target"),
         json!({"session": waiting.session, "request": waiting.request,
-            "rpc_pid": waiting.rpc_pid, "client_pid": std::process::id(),
+            "rpc_pid": waiting.front.server_pid(), "client_pid": waiting.front.client_pid(),
             "control_pid": control.id(), "inherited": inherited_sockets()})
         .to_string(),
     )
@@ -709,11 +927,10 @@ fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
         }
         assert!(
             Instant::now() < deadline,
-            "the attacker never reported; bridge messages: {:?}; bridge stderr: {:?}",
+            "the attacker never reported; messages: {:?}; stderr: {:?}",
             waiting
                 .front
-                .seen
-                .borrow()
+                .received()
                 .iter()
                 .filter_map(|line| serde_json::from_str::<Value>(line).ok())
                 .filter(|message| matches!(
@@ -721,7 +938,7 @@ fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
                     Some("quarantined" | "tool.finished" | "turn.error")
                 ))
                 .collect::<Vec<_>>(),
-            waiting.front.complaints.lock().expect("not poisoned")
+            waiting.front.complaints()
         );
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -730,14 +947,29 @@ fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
     report
 }
 
+/// What started the attacker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartedBy {
+    /// A hook, which runs unconfined, so the attacker has the person's own access.
+    Hook,
+    /// An approved command, which is confined where the server confines commands. The
+    /// confinement can refuse `pidfd_getfd` against every process, the control one included.
+    Command,
+}
+
 /// Everything that must hold once the attacker has tried: it tried, it was detached from the
-/// bridge, it reached no channel, the write is still waiting, and only the client's answer
+/// server, it reached no channel, the write is still waiting, and only the client's answer
 /// finishes it.
-fn the_client_alone_decides(scratch: &Scratch, mut waiting: Waiting, report: &Value) {
+fn the_client_alone_decides<F: Front>(
+    scratch: &Scratch,
+    mut waiting: Waiting<F>,
+    report: &Value,
+    started_by: StartedBy,
+) {
     assert_ne!(
         report["ppid"].as_u64().unwrap(),
-        u64::from(waiting.rpc_pid),
-        "the attacker was a child of the bridge: {report}"
+        u64::from(waiting.front.server_pid()),
+        "the attacker was a child of the server: {report}"
     );
     assert_eq!(
         report["saw_request"], waiting.request,
@@ -760,13 +992,21 @@ fn the_client_alone_decides(scratch: &Scratch, mut waiting: Waiting, report: &Va
     assert_eq!(report["stolen"], 0, "a tool read from a channel: {report}");
     match judge_pidfd(&report["pidfd"]) {
         Pidfd::Breached(copied) => {
-            panic!("a tool copied {copied} descriptors out of the bridge: {report}")
+            panic!("a tool copied {copied} descriptors out of the server: {report}")
         }
         Pidfd::Refused => {}
-        Pidfd::NotExercised => eprintln!(
-            "pidfd_getfd was not exercised (unavailable here, or it fails against any process); \
-             the bridge's refusal of it is not shown by this run: {report}"
-        ),
+        Pidfd::NotExercised => {
+            assert!(
+                started_by == StartedBy::Command || !the_attack_must_work(),
+                "pidfd_getfd copied nothing out of the control process though this kernel lets an \
+                 unconfined process reach its peers, so the attack did not run: {report}"
+            );
+            eprintln!(
+                "pidfd_getfd was not exercised (unavailable here, refused by the kernel's ptrace \
+                 policy against any process, or by the command's confinement); the server's \
+                 refusal of it is not shown by this run: {report}"
+            );
+        }
     }
     assert_eq!(
         scratch.written("approved.txt"),
@@ -774,7 +1014,7 @@ fn the_client_alone_decides(scratch: &Scratch, mut waiting: Waiting, report: &Va
         "a write landed without the client's answer: {report}"
     );
 
-    // The client's own answer is still the one that counts: it reaches the bridge, which finishes
+    // The client's own answer is still the one that counts: it reaches the server, which finishes
     // the turn and writes the file.
     waiting.front.call(
         "confirm.reply",
@@ -788,15 +1028,10 @@ fn the_client_alone_decides(scratch: &Scratch, mut waiting: Waiting, report: &Va
     );
 
     let received = waiting.front.everything_received();
-    let complaints = waiting
-        .front
-        .complaints
-        .lock()
-        .expect("not poisoned")
-        .clone();
+    let complaints = waiting.front.complaints();
     assert!(
         complaints.iter().all(|line| !line.contains(FORGED)),
-        "a tool wrote into the bridge's standard error: {complaints:?}"
+        "a tool wrote into the server's standard error: {complaints:?}"
     );
     assert!(
         received.iter().all(|line| !line.contains(FORGED)),
@@ -806,15 +1041,12 @@ fn the_client_alone_decides(scratch: &Scratch, mut waiting: Waiting, report: &Va
         received
             .iter()
             .all(|line| serde_json::from_str::<Value>(line).is_ok()),
-        "the client was sent something that is not the bridge's: {received:?}"
+        "the client was sent something that is not the server's: {received:?}"
     );
 }
 
-/// A hook runs unconfined with the person's own access. The one it starts is not a child of the
-/// bridge, and the bridge's own channel is not among the things it can reach or alter.
-#[test]
-fn a_program_a_hook_leaves_running_cannot_reach_the_channel() {
-    let scratch = Scratch::new("control-boundary-hook");
+/// A hook that starts the attacker detached, written to the scratch home.
+fn a_hook_that_starts_the_attacker(scratch: &Scratch) {
     let hooks = json!({"hooks": [{"on": "turn-started",
         "run": ["/bin/sh", "-c", start_attacker_command(&scratch.attack())]}]});
     std::fs::write(
@@ -822,9 +1054,26 @@ fn a_program_a_hook_leaves_running_cannot_reach_the_channel() {
         hooks.to_string(),
     )
     .unwrap();
-    let waiting = until_a_write_is_waiting(&scratch, None, false);
+}
+
+/// A `run` call whose command starts the attacker detached.
+fn a_command_that_starts_the_attacker(scratch: &Scratch) -> Option<(&'static str, Value)> {
+    let command = start_attacker_command(&scratch.attack());
+    Some((
+        "run",
+        json!({"command": format!("/bin/sh -c \"{}\"", command.replace('"', "\\\""))}),
+    ))
+}
+
+/// A hook runs unconfined with the person's own access. The one it starts is not a child of the
+/// bridge, and the bridge's own channel is not among the things it can reach or alter.
+#[test]
+fn a_program_a_hook_leaves_running_cannot_reach_the_channel() {
+    let scratch = Scratch::new("control-boundary-hook");
+    a_hook_that_starts_the_attacker(&scratch);
+    let waiting = until_a_write_is_waiting(&scratch, FrontEnd::start, None, false);
     let report = let_the_attacker_try(&scratch, &waiting);
-    the_client_alone_decides(&scratch, waiting, &report);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Hook);
 }
 
 /// A command the person approved, started by the bridge's own `run` tool, and the process it
@@ -833,17 +1082,33 @@ fn a_program_a_hook_leaves_running_cannot_reach_the_channel() {
 #[test]
 fn a_program_an_approved_command_leaves_running_cannot_reach_the_channel() {
     let scratch = Scratch::new("control-boundary-run");
-    let command = start_attacker_command(&scratch.attack());
-    let waiting = until_a_write_is_waiting(
-        &scratch,
-        Some((
-            "run",
-            json!({"command": format!("/bin/sh -c \"{}\"", command.replace('"', "\\\""))}),
-        )),
-        true,
-    );
+    let first = a_command_that_starts_the_attacker(&scratch);
+    let waiting = until_a_write_is_waiting(&scratch, FrontEnd::start, first, true);
     let report = let_the_attacker_try(&scratch, &waiting);
-    the_client_alone_decides(&scratch, waiting, &report);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Command);
+}
+
+/// The host holds the near end of its client's channel, and the client's end is held by a
+/// program the host started. A program a hook the host runs leaves behind reaches neither, and
+/// only the client's answer lands.
+#[test]
+fn a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel() {
+    let scratch = Scratch::new("control-boundary-host-hook");
+    a_hook_that_starts_the_attacker(&scratch);
+    let waiting = until_a_write_is_waiting(&scratch, Hosted::start, None, false);
+    let report = let_the_attacker_try(&scratch, &waiting);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Hook);
+}
+
+/// As [`a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel`], for a command a
+/// session of the host was approved to run, which is confined where the host confines commands.
+#[test]
+fn a_program_an_approved_command_the_host_runs_leaves_running_cannot_reach_the_channel() {
+    let scratch = Scratch::new("control-boundary-host-run");
+    let first = a_command_that_starts_the_attacker(&scratch);
+    let waiting = until_a_write_is_waiting(&scratch, Hosted::start, first, true);
+    let report = let_the_attacker_try(&scratch, &waiting);
+    the_client_alone_decides(&scratch, waiting, &report, StartedBy::Command);
 }
 
 fn cat() -> Command {

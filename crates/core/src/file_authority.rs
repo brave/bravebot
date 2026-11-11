@@ -1,12 +1,18 @@
 //! File decisions shared by a run and its delegates.
 //!
-//! Capture holds the short access lock across reading bytes and assigning their label.
+//! Capture holds the short access lock across the decision it protects: the bytes a capture reads
+//! and the label it gives them, or the revision check, trust lookup and reservation of an effect
+//! entering. A capture does not hold it across a walk of a tree or across work that needs no
+//! agreement with a decision, such as reading a backup of a path already reserved.
 //! An entered effect publishes distrust before releasing that lock. Long effects keep a
 //! path reservation, so unrelated captures proceed while that path remains quarantined.
 //!
 //! The lock is shared by captures that only read and exclusive for everything that enters or
 //! completes an effect. Readers exclude effects and are excluded by them; they do not exclude
 //! each other, because a reader changes no decision.
+//!
+//! Every delegate is seeded with the parent's one authority (`with_own_waits`), so the file
+//! decisions are single and only the record of time spent waiting for the lock is the delegate's own.
 
 use crate::label::Integrity;
 use crate::trust::TrustStore;
@@ -35,8 +41,17 @@ impl State {
     /// Equivalent spellings share a slot whatever the volume does with them, because the slot only
     /// refuses a second writer and stales an approval. Reaching a file the volume holds apart costs
     /// a refusal of a write that could have gone ahead, never a write that should have been refused.
+    ///
+    /// Where case is folded the key goes through the one-letter fold first, which joins `\u{df}`
+    /// with `\u{1e9e}`: the map reads a refusal about either as about the other, so a writer to
+    /// one is a second writer to the other.
     fn slot(&self, key: &str) -> String {
-        crate::trust::canonical_form(key, self.trust.folds_case()).into_owned()
+        match self.trust.folds_case() {
+            true => {
+                crate::trust::canonical_form(&crate::trust::fold_simple(key), true).into_owned()
+            }
+            false => crate::trust::canonical_form(key, false).into_owned(),
+        }
     }
 
     /// Look up only whole-segment ancestors, including the special root rules.
@@ -89,6 +104,17 @@ struct Shared {
 pub struct FileAuthority {
     shared: Arc<Shared>,
     root: Option<Arc<str>>,
+    waits: Arc<Mutex<Vec<Wait>>>,
+}
+
+/// A span during which one capture was blocked from entering the boundary, on the monotonic clock.
+///
+/// Two instants and nothing else: no path, label or bytes, so it may be carried, summed and shown
+/// without a release.
+#[derive(Debug, Clone, Copy)]
+pub struct Wait {
+    pub start: std::time::Instant,
+    pub end: std::time::Instant,
 }
 
 impl FileAuthority {
@@ -105,7 +131,54 @@ impl FileAuthority {
                 }),
             }),
             root: None,
+            waits: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// This authority, deciding the same things, that records the waits of its own captures apart
+    /// from every other handle's.
+    ///
+    /// For a delegate: the figure a turn reports is the time that turn waited, and a delegate's wait
+    /// is not the wait of the turn that started it (DELEGATE-18).
+    #[must_use]
+    pub fn with_own_waits(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            root: self.root.clone(),
+            waits: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// How many blocked spans this handle's log holds, to read what a stretch of work added with
+    /// [`FileAuthority::waits_after`].
+    pub fn wait_mark(&self) -> usize {
+        self.log().len()
+    }
+
+    /// The spans recorded after `mark`, oldest first: every capture through this handle's log that
+    /// was blocked entering the boundary since then.
+    pub fn waits_after(&self, mark: usize) -> Vec<Wait> {
+        self.log().iter().skip(mark).copied().collect()
+    }
+
+    /// Every span in this handle's log, for a delegate to hand back when it ends.
+    pub fn all_waits(&self) -> Vec<Wait> {
+        self.log().clone()
+    }
+
+    /// Add spans a delegate that this handle's holder joined was blocked for, so they reach the
+    /// holder's own parent when the holder ends. Durations only.
+    pub fn record_waits(&self, spans: impl IntoIterator<Item = Wait>) {
+        self.log().extend(spans);
+    }
+
+    fn log(&self) -> std::sync::MutexGuard<'_, Vec<Wait>> {
+        self.waits.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn waited(&self, start: std::time::Instant) {
+        let end = std::time::Instant::now();
+        self.log().push(Wait { start, end });
     }
 
     /// This authority, with a relative name read beneath `root` instead of the map's own root.
@@ -119,6 +192,7 @@ impl FileAuthority {
         Self {
             shared: self.shared.clone(),
             root: Some(Arc::from(crate::trust::normalise(root))),
+            waits: self.waits.clone(),
         }
     }
 
@@ -128,6 +202,7 @@ impl FileAuthority {
         Self {
             shared: self.shared.clone(),
             root: None,
+            waits: self.waits.clone(),
         }
     }
 
@@ -189,13 +264,23 @@ impl FileAuthority {
     /// Order a capture or effect entry against every other participant.
     /// Never keep this guard across a prompt, model request or process wait.
     pub fn capture(&self) -> FileCapture<'_> {
+        let guard = match self.shared.access.try_write() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let from = std::time::Instant::now();
+                let guard = self
+                    .shared
+                    .access
+                    .write()
+                    .unwrap_or_else(|error| error.into_inner());
+                self.waited(from);
+                guard
+            }
+        };
         FileCapture {
             authority: self,
-            _guard: self
-                .shared
-                .access
-                .write()
-                .unwrap_or_else(|error| error.into_inner()),
+            _guard: guard,
         }
     }
 
@@ -207,13 +292,21 @@ impl FileAuthority {
     /// handle it returns cannot enter an effect. Never keep this guard across a prompt, model
     /// request or process wait.
     pub fn capture_shared(&self) -> SharedCapture<'_> {
-        SharedCapture {
-            _guard: self
-                .shared
-                .access
-                .read()
-                .unwrap_or_else(|error| error.into_inner()),
-        }
+        let guard = match self.shared.access.try_read() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let from = std::time::Instant::now();
+                let guard = self
+                    .shared
+                    .access
+                    .read()
+                    .unwrap_or_else(|error| error.into_inner());
+                self.waited(from);
+                guard
+            }
+        };
+        SharedCapture { _guard: guard }
     }
 
     pub fn snapshot(&self) -> TrustStore {
@@ -352,18 +445,47 @@ impl FileAuthority {
     /// Called under `capture`, immediately before entering a filesystem effect.
     /// Refuses overlapping writers; no approval is held while waiting on another effect.
     fn begin(&self, path: &str) -> Option<FileEffect> {
+        self.begin_all(&[path])
+    }
+
+    /// [`FileAuthority::begin`] for a file with more than one name (TRUST-4): the effect reserves
+    /// and distrusts every name in `paths`, or none of them. One name held by another writer
+    /// refuses the whole entry and changes nothing.
+    fn begin_all(&self, paths: &[&str]) -> Option<FileEffect> {
         let mut state = self.state();
-        let key = state.trust.key(&self.spelled(path));
-        let slot = state.slot(&key);
-        if !state.active.insert(slot) {
-            return None;
+        let keys: Vec<String> = paths
+            .iter()
+            .map(|path| state.trust.key(&self.spelled(path)))
+            .collect();
+        let mut slots: Vec<String> = Vec::new();
+        for key in &keys {
+            let slot = state.slot(key);
+            if state.active.contains(&slot) {
+                return None;
+            }
+            if !slots.contains(&slot) {
+                slots.push(slot);
+            }
         }
-        state.trust.distrust(&key);
-        let revision = state.record_change(key.clone());
+        state.active.extend(slots);
+        // What the map said of each name before any is distrusted, so a name a person had distrusted
+        // is known to have been when the effect completes (TRUST-4).
+        let before: Vec<Option<Integrity>> = keys
+            .iter()
+            .map(|key| state.trust.integrity_of(key))
+            .collect();
+        let mut entered: Vec<(String, u64, Option<Integrity>)> = Vec::new();
+        for (key, before) in keys.into_iter().zip(before) {
+            if entered.iter().any(|(held, _, _)| *held == key) {
+                continue;
+            }
+            state.trust.distrust(&key);
+            let revision = state.record_change(key.clone());
+            entered.push((key, revision, before));
+        }
         Some(FileEffect {
             authority: self.clone(),
-            key,
-            revision,
+            entered,
             completed: false,
         })
     }
@@ -400,13 +522,20 @@ impl FileCapture<'_> {
     pub fn begin(&self, path: &str) -> Option<FileEffect> {
         self.authority.begin(path)
     }
+
+    /// Reserve every name of one file before releasing this boundary to perform a write. Refused
+    /// when any of them is held by another writer.
+    pub fn begin_all(&self, paths: &[&str]) -> Option<FileEffect> {
+        self.authority.begin_all(paths)
+    }
 }
 
 /// Dropping an unfinished effect leaves explicit distrust, including after an I/O error.
 pub struct FileEffect {
     authority: FileAuthority,
-    key: String,
-    revision: u64,
+    /// Each name of the file the effect entered, with the revision its entry recorded and what the
+    /// map said of it just before.
+    entered: Vec<(String, u64, Option<Integrity>)>,
     completed: bool,
 }
 
@@ -414,15 +543,53 @@ impl FileEffect {
     pub fn complete(mut self, integrity: Integrity) {
         let _access = self.authority.capture();
         let mut state = self.authority.state();
-        let slot = state.slot(&self.key);
-        state.active.remove(&slot);
-        let unchanged = state.revision_of(&self.key) <= self.revision;
-        match integrity {
-            Integrity::Trusted if unchanged => state.trust.trust(&self.key),
-            _ => state.trust.distrust(&self.key),
+        // Every name is judged before any is recorded, so one name's record does not move the
+        // revision another is compared with.
+        //
+        // The name the write was made through (the first) is trusted as it always was. Another
+        // name of the file is given what the rules over its directory say and no more: the yes to
+        // the write was about the first name, so a link or a second path inside a directory the
+        // map distrusts stays distrusted (an exact trust rule would outrank the directory's), and
+        // one inside a directory nobody ruled on is left undecided, which grants it nothing and
+        // does not lower a read through the first name (TRUST-4). A name the map distrusted before
+        // the effect entered, by a rule of its own or its directory's, is distrusted afterwards: the
+        // entry replaced that rule with the effect's own, and the yes to the write was not about
+        // this name.
+        let mut settled: Vec<(&str, Option<Integrity>)> = Vec::new();
+        for (position, (key, revision, before)) in self.entered.iter().enumerate() {
+            let slot = state.slot(key);
+            state.active.remove(&slot);
+            let decision = match integrity {
+                Integrity::Untrusted => Some(Integrity::Untrusted),
+                Integrity::Trusted if state.revision_of(key) > *revision => {
+                    Some(Integrity::Untrusted)
+                }
+                Integrity::Trusted if position == 0 => Some(Integrity::Trusted),
+                Integrity::Trusted if *before == Some(Integrity::Untrusted) => {
+                    Some(Integrity::Untrusted)
+                }
+                Integrity::Trusted => state.trust.integrity_of(parent_key(key)),
+            };
+            settled.push((key, decision));
         }
-        state.record_change(self.key.clone());
+        for (key, decision) in settled {
+            match decision {
+                Some(Integrity::Trusted) => state.trust.trust(key),
+                Some(Integrity::Untrusted) => state.trust.distrust(key),
+                None => state.trust.undecide(key),
+            }
+            state.record_change(key.to_string());
+        }
         self.completed = true;
+    }
+}
+
+/// The directory a key is in, as a key: what decides the key where no rule is written about it.
+fn parent_key(key: &str) -> &str {
+    match key.rsplit_once('/') {
+        Some(("", _)) => "/",
+        Some((parent, _)) => parent,
+        None => "",
     }
 }
 
@@ -430,10 +597,12 @@ impl Drop for FileEffect {
     fn drop(&mut self) {
         if !self.completed {
             let mut state = self.authority.state();
-            let slot = state.slot(&self.key);
-            state.active.remove(&slot);
-            state.trust.distrust(&self.key);
-            state.record_change(self.key.clone());
+            for (key, _, _) in &self.entered {
+                let slot = state.slot(key);
+                state.active.remove(&slot);
+                state.trust.distrust(key);
+                state.record_change(key.clone());
+            }
         }
     }
 }
@@ -441,6 +610,61 @@ impl Drop for FileEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture that had to wait for another guard records how long, and one that did not records
+    /// nothing. Rejects an implementation that times every capture (a figure for a free boundary
+    /// would be noise) and one that records nothing.
+    #[test]
+    fn a_blocked_capture_records_its_wait_and_a_free_one_does_not() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let mark = authority.wait_mark();
+        drop(authority.capture());
+        drop(authority.capture_shared());
+        assert!(
+            authority.waits_after(mark).is_empty(),
+            "a capture that was not blocked was recorded"
+        );
+
+        let held = authority.capture();
+        let hold = std::time::Duration::from_millis(60);
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| drop(authority.capture()));
+            let reader = scope.spawn(|| drop(authority.capture_shared()));
+            std::thread::sleep(hold);
+            drop(held);
+            waiter.join().unwrap();
+            reader.join().unwrap();
+        });
+        let waits = authority.waits_after(mark);
+        assert_eq!(waits.len(), 2, "{waits:?}");
+        for wait in &waits {
+            assert!(
+                wait.end.duration_since(wait.start) >= hold / 2,
+                "the span is shorter than the time the guard was held: {wait:?}"
+            );
+        }
+        assert_eq!(authority.all_waits().len(), 2);
+        assert_eq!(authority.wait_mark(), mark + 2);
+    }
+
+    /// A handle with its own log shares the boundary and not the record, so a delegate's waits are
+    /// not read as the waits of the turn that started it until they are handed back.
+    #[test]
+    fn a_handle_with_its_own_log_keeps_its_waits_apart() {
+        let parent = FileAuthority::new(TrustStore::new("/work"));
+        let child = parent.with_own_waits();
+        let held = parent.capture();
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| drop(child.capture()));
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            drop(held);
+            waiter.join().unwrap();
+        });
+        assert_eq!(child.all_waits().len(), 1, "the boundary was not shared");
+        assert!(parent.all_waits().is_empty(), "the child's wait leaked");
+        parent.record_waits(child.all_waits());
+        assert_eq!(parent.all_waits().len(), 1);
+    }
 
     /// Ancestor decisions invalidate previews; sibling and descendant decisions do not.
     #[test]
@@ -525,6 +749,137 @@ mod tests {
                 "{changed}"
             );
         }
+    }
+
+    /// A writer that enters under two names of one file (TRUST-4) holds both: a second writer
+    /// through either is refused, an entry refused for one name reserves none of the others, and
+    /// an untrusted completion leaves every name untrusted. Rejects an entry that reserves only the
+    /// first name, one that reserves the names before it finds a held one, and a completion that
+    /// trusts or distrusts only the first.
+    #[test]
+    fn a_writer_under_two_names_reserves_and_distrusts_both() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish("src", Integrity::Trusted);
+
+        let held = authority.capture().begin_all(&["src/a", "src/b"]).unwrap();
+        assert!(authority.capture().begin("src/b").is_none());
+        assert!(authority.capture().begin("src/a").is_none());
+        assert!(authority.capture().begin_all(&["src/c", "src/b"]).is_none());
+        drop(held);
+
+        let free = authority.capture().begin("src/c");
+        assert!(
+            free.is_some(),
+            "a refused entry reserved the names it passed"
+        );
+        drop(free);
+
+        authority.publish("src", Integrity::Trusted);
+        let effect = authority.capture().begin_all(&["src/a", "src/b"]).unwrap();
+        effect.complete(Integrity::Untrusted);
+        assert!(!authority.snapshot().is_trusted("src/a"));
+        assert!(!authority.snapshot().is_trusted("src/b"));
+        assert!(authority.capture().begin("src/b").is_some());
+    }
+
+    /// A completed trusted write trusts the name it was made through and gives every other name
+    /// of the file no more than the rules over its directory give (TRUST-4). A link inside a
+    /// distrusted directory stays distrusted: an exact trust rule on the link would outrank the
+    /// directory's rule, so the file would read as trusted through it. Rejects a completion that
+    /// trusts every entered key, and one that distrusts every other name whatever its directory
+    /// says (a link in a trusted directory would then never be trusted).
+    #[test]
+    fn a_trusted_write_does_not_lift_another_name_out_of_a_distrusted_directory() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.publish("vendor", Integrity::Untrusted);
+
+        let effect = authority
+            .capture()
+            .begin_all(&["src/a", "vendor/link", "docs/link"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("src/a"), Some(Integrity::Trusted));
+        assert_eq!(
+            map.integrity_of("vendor/link"),
+            Some(Integrity::Untrusted),
+            "a name inside a distrusted directory was trusted by a write through another name"
+        );
+        assert_eq!(
+            map.integrity_of("docs/link"),
+            Some(Integrity::Trusted),
+            "a name in a trusted directory was not given that trust"
+        );
+
+        // The reverse: the write is made through the name inside the distrusted directory. That
+        // name is the one the write was approved for, and the name in the trusted directory is
+        // trusted only because its own directory is.
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.publish("vendor", Integrity::Untrusted);
+        let effect = authority
+            .capture()
+            .begin_all(&["vendor/a", "src/link", "vendor/second"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("src/link"), Some(Integrity::Trusted));
+        assert_eq!(
+            map.integrity_of("vendor/second"),
+            Some(Integrity::Untrusted),
+            "a second name inside the distrusted directory was trusted"
+        );
+    }
+
+    /// A trusted write completed through one name keeps an exact distrust on another name of the
+    /// file, and an effect dropped without completing leaves every name distrusted and releases
+    /// its reservations (TRUST-4). Rejects a completion that gives the other name what its
+    /// directory says, and a drop that distrusts only the first name.
+    #[test]
+    fn an_exact_distrust_on_another_name_survives_completion_and_a_drop_distrusts_every_name() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish(".", Integrity::Trusted);
+        authority.publish("docs/link", Integrity::Untrusted);
+
+        let effect = authority
+            .capture()
+            .begin_all(&["a.txt", "docs/link"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("a.txt"), Some(Integrity::Trusted));
+        assert_eq!(
+            map.integrity_of("docs/link"),
+            Some(Integrity::Untrusted),
+            "a trusted write through a.txt lifted the distrust of docs/link"
+        );
+
+        // A name nobody had a rule against is still given its directory's trust.
+        let effect = authority
+            .capture()
+            .begin_all(&["b.txt", "docs/other"])
+            .unwrap();
+        effect.complete(Integrity::Trusted);
+        assert_eq!(
+            authority.snapshot().integrity_of("docs/other"),
+            Some(Integrity::Trusted)
+        );
+
+        // Dropped before completing: every name is distrusted and none stays reserved.
+        authority.publish("c.txt", Integrity::Trusted);
+        authority.publish("docs/third", Integrity::Trusted);
+        let effect = authority
+            .capture()
+            .begin_all(&["c.txt", "docs/third"])
+            .unwrap();
+        assert!(authority.capture().begin("docs/third").is_none());
+        drop(effect);
+        let map = authority.snapshot();
+        assert_eq!(map.integrity_of("c.txt"), Some(Integrity::Untrusted));
+        assert_eq!(map.integrity_of("docs/third"), Some(Integrity::Untrusted));
+        assert!(authority.capture().begin("docs/third").is_some());
     }
 
     /// A handle rooted in a checkout files a relative name under the checkout and leaves the
@@ -627,6 +982,28 @@ mod tests {
             drop(second);
             first.complete(Integrity::Trusted);
             assert!(authority.capture().begin("docs/a.md").is_some());
+        }
+    }
+
+    /// `\u{df}` and `\u{1e9e}` are one name to the one-letter fold the map decides a trust and a
+    /// refusal by, and two to the full fold alone. Where the volume folds case a writer through one
+    /// is a second writer to the other (TRUST-4); where it keeps names apart they are two files.
+    #[test]
+    fn a_second_writer_through_the_other_sharp_s_is_refused_while_the_first_is_open() {
+        for folds in [true, false] {
+            for (first, second) in [
+                ("docs/cla\u{1e9e}.md", "docs/cla\u{df}.md"),
+                ("docs/cla\u{df}.md", "docs/cla\u{1e9e}.md"),
+            ] {
+                let authority = FileAuthority::new(TrustStore::new("/ws").folding_case(folds));
+                let open = authority.capture().begin(first).unwrap();
+                let refused = authority.capture().begin(second).is_none();
+                assert_eq!(
+                    refused, folds,
+                    "folds case: {folds}, a second writer through {second} while {first} is open"
+                );
+                open.complete(Integrity::Trusted);
+            }
         }
     }
 

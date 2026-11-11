@@ -56,12 +56,17 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
   The minimum window is 900×560, and the column minimums are enforced in `columns.ts`, not in CSS.
 - **Reading column.** Conversation content is centred at `--reading-width` (720px). The composer
   is lined up under it and is as wide as the column.
+- **Bot home, before a chat.** The face, the title, the notes and the composer are one block,
+  centred in the column. The column scrolls when that block is taller than the space under the
+  header, and the header stays where it is.
 - **Settings.** Settings take the whole window: a page list on the app ground where the sidebar
   is, and the page on a raised card. The chat view stays mounted underneath and is inert. The
-  pages are General, Connectors and Agent settings; Connectors is a page here and has no entry
+  pages are General, Providers, Connectors and Agent settings; Connectors is a page here and has no entry
   in the sidebar. The header shows a back arrow only on a page inside a page (a connector's setup,
   the review before connecting), and it goes back one level; Esc does the same. A top-level page
   has no arrow, and "Back to BraveBot" in the page list leaves settings.
+- **Dividers in settings.** A divider separates two items of a group (rows of a table, a list, a
+  card). The last item of a group has none below it; the group's own border closes it.
 - **Inner elements in settings.** An element inside the content area of a settings page (a table,
   a bordered box, a collapsible, a connector card or row) uses `--radius-control`. Only the page's
   own card uses `--radius-card`.
@@ -116,6 +121,7 @@ that aliases a Leo token, then use it.
 | Border | `--border-hairline`, `-subtle`, `-strong`, `-focus` |
 | Ink | `--ink-primary`, `-secondary`, `-tertiary`, `-disabled`, `-link`, `-accent` |
 | Status | `--status-success`, `-warning`, `-error`, `-info` and their `-bg` |
+| Approval mode | `--mode-ask-bg` and `-ink`, and the same for `accept`, `plan` and `auto` |
 | Type | `--type-page-title` 28, `-heading` 20, `-title` 16, `-lede` 16, `-body` 14, `-meta` 12, `-caption` 11, `-code`, `-code-body`, with `-strong` forms |
 | Radius | `--radius-chip`, `-control`, `-card`, `-field`, `-bubble`, `-pill` |
 | Elevation | `--shadow-raised`, `--shadow-floating`, `--shadow-focus` |
@@ -151,8 +157,11 @@ and at the minimum window size.
 **States**
 - Every interactive element has hover, pressed, focus-visible and disabled states. Hover feedback
   lands within `--motion-fast`. Nothing animates on first paint.
-- Every list and panel has designed empty, loading and error states. Loading shows a skeleton or a
-  progress ring only after 150ms (`useDelayedFlag`), with no blank flash. The loading row mounts when
+- Every list and panel has designed empty, loading and error states. Content that is loading shows
+  a skeleton (`Skeleton.tsx`, `skeleton.css`) the shape of what is coming, only after 150ms
+  (`useDelayedFlag`), with no blank flash. A spinner is for work in progress that has no shape to
+  stand in for (a turn, a tool call, a sign-in waiting, an action's "Working…"), and every spinner is
+  20px (`--spinner`). A gauge that fills, such as the context meter, is not a spinner. The loading row mounts when
   loading starts and carries `data-delayed` until the delay passes, so it holds its height while
   hidden. An empty state and any other branch still read the raw flag.
 - Switching sessions shows the target's skeleton immediately and restores scroll, with no flash of
@@ -218,7 +227,21 @@ Compose from these before inventing a new pattern.
 - **List rows**: `--session-row-h` rows in the sidebar, three lines of text, a hover control that
   overlays the time, sticky caption-ink group headings.
 - **Menus**: Leo menu items with a leading icon column and a check column (`menus.css`).
+- **List beside detail** (`Accounts.tsx`, `settings.css`): inside a settings card, a 240px list box of
+  rows (mark, name, a status line in status ink) beside the chosen row's detail, in one bordered box
+  with `--radius-control`. The chosen row sits on `--surface-app`; the arrow keys move through the
+  list. It stacks into one column on a narrow page.
+- **Model picker** (`ModelPicker.tsx`, `models.css`): search and Refresh across the top, then a rail
+  of service marks as `IconButton`s, the list, and a second column of choices, with a footnote on
+  `--surface-app`. It sizes itself to the room beside its trigger and scrolls only its lists.
 - **Modal**: `Modal` with a `size`, the standard head and the footer actions described above.
+- **Small window** (`small-window-page.tsx`, `small-window.css`): the main process's sign-in and key
+  windows. A head with the service's mark at `--icon-hero` and the title in `--type-heading`, the
+  title naming the row as Accounts lists it. Then a column of body text in primary ink, fields on
+  `--surface-app` with a `--border-subtle` border and `--radius-field`, each holding its value and a
+  small plain Copy button `--leo-spacing-xl` from it, and notes in secondary ink. Cancel (plain-faint)
+  and the filled primary action sit at the right of the foot. Padding is `--leo-spacing-3xl`, and the
+  page reports its height so the window fits it.
 - **Popover editor** (`AvatarEditor.tsx`, `dialogs.css`): a manual `popover` in the top layer,
   placed under the control that opens it and kept inside the window. A title row with at most one
   plain tiny action, then groups of option cells named by `aria-label` rather than a visible

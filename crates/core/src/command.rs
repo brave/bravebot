@@ -308,6 +308,63 @@ pub fn is_the_null_device(path: &Path) -> bool {
     path.as_os_str() == NULL_DEVICE
 }
 
+/// One piece of the value of an assignment that is worked out when the step's pipeline starts.
+///
+/// Only ever the *source*: the name of a variable, or the line of a command. What either comes to
+/// is resolved at spawn time, held by the spawn alone, and never stored in a plan, a key, a trail or
+/// a result, because it may be a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValuePart {
+    /// Text taken as written.
+    Text(String),
+    /// `$NAME` or `${NAME}`: the value of a variable of the environment bravebot runs in.
+    Variable(String),
+    /// `$(source)`: what the compiled `steps` print, trailing newlines trimmed.
+    Substitution { source: String, steps: Box<Steps> },
+}
+
+/// `NAME=value` in front of a program where the value is not all literal text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expansion {
+    pub name: String,
+    pub parts: Vec<ValuePart>,
+}
+
+impl Expansion {
+    /// The assignment as written, from its source alone.
+    pub fn display(&self) -> String {
+        if let [ValuePart::Variable(variable)] = self.parts.as_slice() {
+            return format!("{}=${variable}", self.name);
+        }
+        let spelled = |out: &mut String, text: &str, escape: bool| {
+            for c in text.chars() {
+                if escape && matches!(c, '\\' | '"' | '$' | '`') {
+                    out.push('\\');
+                    out.push(c);
+                } else if needs_spelling(c) {
+                    out.push_str(&format!("\\u{{{:x}}}", c as u32));
+                } else {
+                    out.push(c);
+                }
+            }
+        };
+        let mut out = format!("{}=\"", self.name);
+        for part in &self.parts {
+            match part {
+                ValuePart::Text(text) => spelled(&mut out, text, true),
+                ValuePart::Variable(variable) => out.push_str(&format!("${{{variable}}}")),
+                ValuePart::Substitution { source, .. } => {
+                    out.push_str("$(");
+                    spelled(&mut out, source, false);
+                    out.push(')');
+                }
+            }
+        }
+        out.push('"');
+        out
+    }
+}
+
 /// One program in a plan, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {
@@ -335,11 +392,22 @@ pub struct Step {
     pub args: Vec<String>,
     /// `NAME=value` written in front of this step's own program.
     pub environment: Vec<(String, String)>,
+    /// `NAME=$VAR` and `NAME="$(cmd)"` written in front of this step's own program, as source.
+    ///
+    /// Accepted in bypass mode only. Nothing here holds a value: they are worked out when the
+    /// pipeline holding this step starts and go to the process alone. Applied after
+    /// [`Step::environment`].
+    pub expansions: Vec<Expansion>,
     /// Where this step's streams go.
     pub routes: Vec<Route>,
 }
 
 impl Step {
+    /// Whether an assignment is written in front of this step's program, literal or not.
+    pub fn carries_an_assignment(&self) -> bool {
+        !self.environment.is_empty() || !self.expansions.is_empty()
+    }
+
     /// The step as a person should read it before approving.
     ///
     /// The binary rather than the name, because that is what will run: the path it is started by
@@ -370,13 +438,17 @@ impl Step {
     }
 
     fn render(&self, program: &str) -> String {
-        self.render_args(program, self.args.iter().map(|arg| quoted(arg)).collect())
+        self.render_args(
+            program,
+            self.args.iter().map(|arg| quoted(arg)).collect(),
+            None,
+        )
     }
 
     /// [`Step::display`] with the arguments already rendered, for a caller whose arguments are not
     /// all text. The caller owns the quoting of what it passes.
     pub(crate) fn display_args(&self, args: Vec<String>) -> String {
-        self.render_args(&self.binary(), args)
+        self.render_args(&self.binary(), args, None)
     }
 
     /// [`Step::display_args`] naming the program by the path it was started as and not the file
@@ -387,35 +459,44 @@ impl Step {
     ///
     /// [TOOL-4]: ../../../docs/specs/tools/tool-surface.md
     /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
-    pub(crate) fn told_args(&self, args: Vec<String>) -> String {
-        self.render_args(&self.started_as.to_string_lossy(), args)
+    ///
+    /// `targets` holds the file each redirection of the step names, as the line wrote it and
+    /// already quoted, in the order of the routes that name a file. A route's own path was joined
+    /// onto the directory the line landed in, which is where a link led.
+    pub(crate) fn told_args(&self, args: Vec<String>, targets: &[String]) -> String {
+        self.render_args(&self.started_as.to_string_lossy(), args, Some(targets))
     }
 
-    fn render_args(&self, program: &str, args: Vec<String>) -> String {
+    fn render_args(&self, program: &str, args: Vec<String>, targets: Option<&[String]>) -> String {
         let mut out = String::new();
         for (name, value) in &self.environment {
             out.push_str(&format!("{name}={} ", quoted(value)));
+        }
+        for expansion in &self.expansions {
+            out.push_str(&expansion.display());
+            out.push(' ');
         }
         out.push_str(program);
         for arg in args {
             out.push(' ');
             out.push_str(&arg);
         }
+        let mut targets = targets.map(|targets| targets.iter());
         for route in &self.routes {
             out.push(' ');
+            let mut file = |path: &Path| match targets.as_mut() {
+                Some(targets) => targets.next().cloned().unwrap_or_default(),
+                None => quoted(&path.to_string_lossy()),
+            };
             out.push_str(&match route {
-                Route::Stdout { path, append } => format!(
-                    "{} {}",
-                    if *append { ">>" } else { ">" },
-                    quoted(&path.to_string_lossy())
-                ),
-                Route::Stdin { path } => format!("< {}", quoted(&path.to_string_lossy())),
-                Route::Stderr { path, append } => format!(
-                    "{} {}",
-                    if *append { "2>>" } else { "2>" },
-                    quoted(&path.to_string_lossy())
-                ),
-                Route::Both { path } => format!("&> {}", quoted(&path.to_string_lossy())),
+                Route::Stdout { path, append } => {
+                    format!("{} {}", if *append { ">>" } else { ">" }, file(path))
+                }
+                Route::Stdin { path } => format!("< {}", file(path)),
+                Route::Stderr { path, append } => {
+                    format!("{} {}", if *append { "2>>" } else { "2>" }, file(path))
+                }
+                Route::Both { path } => format!("&> {}", file(path)),
                 Route::StderrToStdout => "2>&1".to_string(),
             });
         }
@@ -436,6 +517,7 @@ impl Step {
             started_as,
             args,
             environment: _,
+            expansions: _,
             routes: _,
         } = self;
         crate::programs::Command::new(resolved.clone(), args.clone(), directory)
@@ -469,22 +551,40 @@ impl Steps {
         out
     }
 
-    /// The steps, where this is one pipeline and no step of it has a route.
+    /// The steps, where this is one pipeline and no step of it, or of a substitution inside it,
+    /// has a route.
     ///
     /// The one shape a background job can be: a join waits on its own parts to decide where to go
-    /// next, and a route is a destination the background has no reader for. Read off the routes
-    /// rather than the plan's write and read sets, because `2>&1` opens no file and so is in
-    /// neither of those.
+    /// next, and a route is a destination the background has no reader for. The routes of the
+    /// steps inside a `$(...)` count as well, because they open files at the same moment the
+    /// pipeline's own do and a job starts none of the checks made when a route is opened. Read off
+    /// the routes rather than the plan's write and read sets, because `2>&1` opens no file and so
+    /// is in neither of those.
     pub fn unrouted_pipeline(&self) -> Option<&[Step]> {
         match self {
-            Self::Pipeline(steps) if steps.iter().all(|step| step.routes.is_empty()) => Some(steps),
+            Self::Pipeline(steps) if self.steps().iter().all(|step| step.routes.is_empty()) => {
+                Some(steps)
+            }
             _ => None,
         }
     }
 
     fn gather<'a>(&'a self, out: &mut Vec<&'a Step>) {
         match self {
-            Self::Pipeline(steps) => out.extend(steps.iter()),
+            Self::Pipeline(steps) => {
+                for step in steps {
+                    // A command whose output becomes a value runs before the step that uses it,
+                    // and is as much a step as any other for every gate that walks the plan.
+                    for expansion in &step.expansions {
+                        for part in &expansion.parts {
+                            if let ValuePart::Substitution { steps, .. } = part {
+                                steps.gather(out);
+                            }
+                        }
+                    }
+                    out.push(step);
+                }
+            }
             Self::Join { left, right, .. } => {
                 left.gather(out);
                 right.gather(out);
@@ -523,23 +623,78 @@ impl Steps {
     /// For a caller that holds the operands as the line spelled them. The operands of a compiled
     /// step are what a pattern matched, which is a listing of a directory, and a sentence the
     /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
-    /// [`Step::told_args`].
-    /// `None` where `written` does not hold exactly one list per step.
-    pub fn display_with_operands(&self, written: &[Vec<String>]) -> Option<String> {
-        let mut rest = written.iter();
+    /// [`Step::told_args`], and passes the file each redirection names, as the line wrote it, in
+    /// `targets`: one list per step, in the order of the routes that name a file.
+    /// `None` where `written` or `targets` does not hold exactly one list per step.
+    pub fn display_with_operands(
+        &self,
+        written: &[Vec<String>],
+        targets: &[Vec<String>],
+    ) -> Option<String> {
+        if written.len() != targets.len() {
+            return None;
+        }
+        let mut rest = written.iter().zip(targets.iter());
         let shown = self.draw_with_operands(&mut rest)?;
         rest.next().is_none().then_some(shown)
     }
 
-    fn draw_with_operands(
+    /// These steps with each step's operands replaced by `written`: one list per step, in the order
+    /// [`Steps::steps`] gives them. `None` where `written` does not hold exactly one list per step.
+    ///
+    /// For a question about the plan's structure that must not turn on the names a pattern matched.
+    /// The result is not a plan to run.
+    pub fn with_operands(&self, written: &[Vec<String>]) -> Option<Steps> {
+        let mut rest = written.iter();
+        let rebuilt = self.rebuild_with_operands(&mut rest)?;
+        rest.next().is_none().then_some(rebuilt)
+    }
+
+    fn rebuild_with_operands(
         &self,
         written: &mut std::slice::Iter<'_, Vec<String>>,
+    ) -> Option<Steps> {
+        Some(match self {
+            Self::Pipeline(steps) => {
+                let mut rebuilt = Vec::with_capacity(steps.len());
+                for step in steps {
+                    rebuilt.push(Step {
+                        args: written.next()?.clone(),
+                        ..step.clone()
+                    });
+                }
+                Self::Pipeline(rebuilt)
+            }
+            Self::Join {
+                left,
+                joiner,
+                right,
+            } => {
+                let left = left.rebuild_with_operands(written)?;
+                let right = right.rebuild_with_operands(written)?;
+                Self::Join {
+                    left: Box::new(left),
+                    joiner: *joiner,
+                    right: Box::new(right),
+                }
+            }
+            Self::Group(inner) => Self::Group(Box::new(inner.rebuild_with_operands(written)?)),
+        })
+    }
+
+    fn draw_with_operands(
+        &self,
+        written: &mut std::iter::Zip<
+            std::slice::Iter<'_, Vec<String>>,
+            std::slice::Iter<'_, Vec<String>>,
+        >,
     ) -> Option<String> {
         Some(match self {
             Self::Pipeline(steps) => {
                 let mut drawn = Vec::with_capacity(steps.len());
                 for step in steps {
-                    drawn.push(step.told_args(written.next()?.clone()));
+                    let (args, targets) = written.next()?;
+                    drawn.push(step.told_args(args.clone(), targets));
                 }
                 drawn.join(" | ")
             }
@@ -627,7 +782,7 @@ impl Plan {
     /// Any step, not the first: an assignment in front of a stage in the middle of a pipeline
     /// decides what that stage loads, and what it prints is what the next stage reads.
     pub fn carries_an_assignment(&self) -> bool {
-        self.steps().iter().any(|step| !step.environment.is_empty())
+        self.steps().iter().any(|step| step.carries_an_assignment())
     }
 
     /// Whether an entry could record this line as the person read it.
@@ -777,6 +932,7 @@ fn encode_step(out: &mut String, step: &Step) {
         started_as,
         args,
         environment,
+        expansions,
         routes,
     } = step;
     length_prefixed_path(out, resolved);
@@ -789,6 +945,29 @@ fn encode_step(out: &mut String, step: &Step) {
     for (name, value) in environment {
         length_prefixed(out, name);
         length_prefixed(out, value);
+    }
+    // The source, never a value: the value is not known here and must not be.
+    out.push_str(&format!("x{}|", expansions.len()));
+    for expansion in expansions {
+        length_prefixed(out, &expansion.name);
+        out.push_str(&format!("p{}|", expansion.parts.len()));
+        for part in &expansion.parts {
+            match part {
+                ValuePart::Text(text) => {
+                    out.push('t');
+                    length_prefixed(out, text);
+                }
+                ValuePart::Variable(name) => {
+                    out.push('v');
+                    length_prefixed(out, name);
+                }
+                ValuePart::Substitution { source, steps } => {
+                    out.push('s');
+                    length_prefixed(out, source);
+                    encode(out, steps);
+                }
+            }
+        }
     }
     out.push_str(&format!("r{}|", routes.len()));
     for route in routes {
@@ -819,6 +998,7 @@ mod tests {
             started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
+            expansions: Vec::new(),
             routes: Vec::new(),
         }
     }
@@ -882,6 +1062,67 @@ mod tests {
             right: Box::new(Steps::Pipeline(vec![step("b", &[])])),
         };
         assert!(joined.unrouted_pipeline().is_none(), "a join was holdable");
+    }
+
+    /// A pipeline whose step takes a value from a substitution is held only if no step inside the
+    /// substitution has a route either: the job starts none of the checks made when a route is
+    /// opened. Each spelling is a case of its own, `2>&1` and `<` because they are in neither of
+    /// the plan's sets or only one of them.
+    #[test]
+    fn a_route_inside_a_substitution_is_a_route_of_the_line() {
+        let substituting = |inner: Step| {
+            let mut outer = step("echo", &[]);
+            outer.expansions = vec![Expansion {
+                name: "A".to_string(),
+                parts: vec![ValuePart::Substitution {
+                    source: "inner".to_string(),
+                    steps: Box::new(Steps::Pipeline(vec![inner])),
+                }],
+            }];
+            Steps::Pipeline(vec![outer])
+        };
+
+        let path = || PathBuf::from("/work/out.txt");
+        for (spelling, route) in [
+            (
+                ">",
+                Route::Stdout {
+                    path: path(),
+                    append: false,
+                },
+            ),
+            (
+                ">>",
+                Route::Stdout {
+                    path: path(),
+                    append: true,
+                },
+            ),
+            ("<", Route::Stdin { path: path() }),
+            ("2>&1", Route::StderrToStdout),
+        ] {
+            let mut inner = step("gen", &[]);
+            inner.routes = vec![route];
+            assert!(
+                substituting(inner).unrouted_pipeline().is_none(),
+                "a `{spelling}` inside a substitution was holdable"
+            );
+        }
+
+        assert_eq!(
+            substituting(step("gen", &[]))
+                .unrouted_pipeline()
+                .map(<[Step]>::len),
+            Some(1),
+            "a substitution with no route was not holdable"
+        );
+
+        let mut routed = step("echo", &[]);
+        routed.routes = vec![Route::StderrToStdout];
+        assert!(
+            Steps::Pipeline(vec![routed]).unrouted_pipeline().is_none(),
+            "a route on the line's own step was holdable"
+        );
     }
 
     /// A step boundary is part of what is endorsed, so splitting one command into two must not
@@ -958,6 +1199,202 @@ mod tests {
         );
     }
 
+    /// CMDLINE-17: an expansion is an assignment written in front of a program, so the step and the
+    /// plan carry one, and a line carrying one is not a line an entry could record.
+    #[test]
+    fn an_expansion_counts_as_an_assignment_and_keeps_a_line_from_being_remembered() {
+        let expanding = || Step {
+            expansions: vec![Expansion {
+                name: "TOKEN".to_string(),
+                parts: vec![ValuePart::Variable("SECRET".to_string())],
+            }],
+            ..step("prog", &[])
+        };
+        assert!(!step("prog", &[]).carries_an_assignment());
+        assert!(expanding().carries_an_assignment());
+
+        let bare = plan(Steps::Pipeline(vec![step("prog", &[])]));
+        assert!(!bare.carries_an_assignment());
+        assert!(bare.can_be_remembered(), "the control cannot be remembered");
+
+        let later_stage = plan(Steps::Pipeline(vec![step("a", &[]), expanding()]));
+        assert!(
+            later_stage.carries_an_assignment(),
+            "an expansion on a later stage was not seen"
+        );
+        assert!(
+            !later_stage.can_be_remembered(),
+            "a line carrying an expansion could be remembered"
+        );
+    }
+
+    /// A step that takes `name` from `parts` in front of its program.
+    fn expanding(program: &str, name: &str, parts: Vec<ValuePart>) -> Step {
+        Step {
+            expansions: vec![Expansion {
+                name: name.to_string(),
+                parts,
+            }],
+            ..step(program, &[])
+        }
+    }
+
+    fn substituting(source: &str, inner: Step) -> ValuePart {
+        ValuePart::Substitution {
+            source: source.to_string(),
+            steps: Box::new(Steps::Pipeline(vec![inner])),
+        }
+    }
+
+    /// CMDLINE-17: an assignment is drawn from its source, a lone variable the way it was written
+    /// and a mixed value in double quotes with each part escaped so that two values do not draw
+    /// alike. Rejects drawing a value in place of its source, dropping a part, or leaving a
+    /// `"` or `$` in a text part unescaped so that `"a$(x)"` as text and as a substitution match.
+    #[test]
+    fn an_expansion_is_drawn_from_its_source() {
+        let lone = Expansion {
+            name: "TOKEN".to_string(),
+            parts: vec![ValuePart::Variable("SECRET".to_string())],
+        };
+        assert_eq!(lone.display(), "TOKEN=$SECRET");
+
+        let mixed = Expansion {
+            name: "MIX".to_string(),
+            parts: vec![
+                ValuePart::Text("a\"b$c\\".to_string()),
+                ValuePart::Variable("X".to_string()),
+                substituting("cmd 'y'", step("cmd", &["y"])),
+                ValuePart::Text("\u{7}".to_string()),
+            ],
+        };
+        assert_eq!(
+            mixed.display(),
+            "MIX=\"a\\\"b\\$c\\\\${X}$(cmd 'y')\\u{7}\""
+        );
+
+        let as_text = Expansion {
+            name: "MIX".to_string(),
+            parts: vec![ValuePart::Text("$(cmd 'y')".to_string())],
+        };
+        assert_ne!(
+            as_text.display(),
+            Expansion {
+                name: "MIX".to_string(),
+                parts: vec![substituting("cmd 'y'", step("cmd", &["y"]))],
+            }
+            .display(),
+            "text and a substitution drew alike"
+        );
+    }
+
+    /// CMDLINE-17: the line a person reads and the line the planner is told both carry the
+    /// assignment, in front of the program, so an approval or a result never hides one.
+    #[test]
+    fn a_step_with_an_expansion_draws_it_in_front_of_its_program() {
+        let expanding = expanding("prog", "TOKEN", vec![ValuePart::Variable("SECRET".into())]);
+        let steps = Steps::Pipeline(vec![expanding]);
+        assert_eq!(steps.display(), "TOKEN=$SECRET /usr/bin/prog");
+        let told = steps
+            .display_with_operands(&[vec!["arg".into()]], &[vec![]])
+            .expect("one list per step");
+        assert_eq!(told, "TOKEN=$SECRET /usr/bin/prog arg");
+        assert_eq!(plan(steps.clone()).display(), "TOKEN=$SECRET /usr/bin/prog");
+        let as_written = steps.steps()[0].as_written();
+        assert_eq!(as_written, "TOKEN=$SECRET prog");
+    }
+
+    /// CMDLINE-17: the command inside a substitution is a step of the plan, and it comes before the
+    /// step that uses its output, which is the order it runs in. Every gate that walks the plan
+    /// sees it, including one inside a later stage and one inside a group. Rejects a `steps` that
+    /// leaves the inner step out (a rule or a vouched list never judging it) or lists it after.
+    #[test]
+    fn the_steps_of_a_plan_list_a_substituted_command_before_the_step_using_it() {
+        let using = expanding(
+            "outer",
+            "A",
+            vec![substituting("inner a", step("inner", &["a"]))],
+        );
+        let alone = plan(Steps::Pipeline(vec![using.clone()]));
+        let programs: Vec<&str> = alone
+            .steps
+            .steps()
+            .iter()
+            .map(|step| step.program.as_str())
+            .collect();
+        assert_eq!(programs, ["inner", "outer"]);
+
+        let later = plan(Steps::Join {
+            left: Box::new(Steps::Pipeline(vec![step("first", &[])])),
+            joiner: Joiner::And,
+            right: Box::new(Steps::Group(Box::new(Steps::Pipeline(vec![
+                step("mid", &[]),
+                using,
+            ])))),
+        });
+        let programs: Vec<&str> = later
+            .steps
+            .steps()
+            .iter()
+            .map(|step| step.program.as_str())
+            .collect();
+        assert_eq!(programs, ["first", "mid", "inner", "outer"]);
+    }
+
+    /// CMDLINE-17: an endorsement is bound to the expansion, so two plans that differ only in what
+    /// an assignment takes its value from must not encode alike. Rejects a key that drops
+    /// `expansions`, one that keeps the name and loses the parts, one that tells a variable from
+    /// text of the same spelling, and one that keeps the substitution's source and loses the
+    /// command it compiled to.
+    #[test]
+    fn two_plans_differing_only_in_an_expansion_never_encode_alike() {
+        let encoded = |step: Step| plan(Steps::Pipeline(vec![step])).canonical();
+        let variable = |name: &str, from: &str| {
+            encoded(expanding("p", name, vec![ValuePart::Variable(from.into())]))
+        };
+        let bare = encoded(step("p", &[]));
+        assert_ne!(
+            bare,
+            variable("A", "X"),
+            "an expansion was left out of the key"
+        );
+        assert_ne!(
+            variable("A", "X"),
+            variable("B", "X"),
+            "the name was ignored"
+        );
+        assert_ne!(
+            variable("A", "X"),
+            variable("A", "Y"),
+            "the variable was ignored"
+        );
+        assert_ne!(
+            variable("A", "X"),
+            encoded(expanding("p", "A", vec![ValuePart::Text("X".into())])),
+            "a variable and the same word as text encoded alike"
+        );
+        assert_ne!(
+            encoded(expanding(
+                "p",
+                "A",
+                vec![ValuePart::Text("a".into()), ValuePart::Text("b".into())]
+            )),
+            encoded(expanding("p", "A", vec![ValuePart::Text("ab".into())])),
+            "the number of parts was ignored"
+        );
+        let substituting_with =
+            |inner: Step| encoded(expanding("p", "A", vec![substituting("cmd", inner)]));
+        assert_ne!(
+            substituting_with(step("cmd", &["one"])),
+            substituting_with(step("cmd", &["two"])),
+            "a substitution compiled to other steps encoded alike"
+        );
+        assert_eq!(
+            variable("A", "X"),
+            variable("A", "X"),
+            "the encoding is not stable"
+        );
+    }
+
     /// The directory decides what a relative path in the plan means, so it is part of the plan.
     #[test]
     fn the_directory_a_plan_runs_in_is_part_of_what_it_encodes() {
@@ -1030,7 +1467,7 @@ mod tests {
             resolving_to(0xff).canonical(),
             // `0:` is the empty standard input, which every plan encodes whether it has one. The
             // path twice, as the file and as the path that starts it.
-            format!("t5:/work0:P1|{UNSHOWABLE_FF}{UNSHOWABLE_FF}a0|e0|r0|"),
+            format!("t5:/work0:P1|{UNSHOWABLE_FF}{UNSHOWABLE_FF}a0|e0|x0|r0|"),
             "the endorsement is bound to the path's own bytes"
         );
     }
@@ -1180,10 +1617,59 @@ mod tests {
         cargo.resolved = PathBuf::from("/home/me/.cargo/bin/HOSTILE-landed");
         let steps = Steps::Pipeline(vec![cargo, step("tail", &["-n", "5"])]);
         let told = steps
-            .display_with_operands(&[vec!["test".into()], vec!["-n".into(), "5".into()]])
+            .display_with_operands(
+                &[vec!["test".into()], vec!["-n".into(), "5".into()]],
+                &[vec![], vec![]],
+            )
             .expect("one list per step");
         assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
         assert!(steps.display().contains("HOSTILE-landed"));
+    }
+
+    /// Operands put in place of a step's own keep the rest of the step and the shape of the line,
+    /// and a list count that does not match the steps is refused.
+    ///
+    /// Rejects a rebuild that drops the join shape, keeps the matched names, or accepts too few or
+    /// too many lists.
+    #[test]
+    fn steps_take_the_operands_given_and_keep_the_shape() {
+        let steps = Steps::Join {
+            left: Box::new(Steps::Pipeline(vec![
+                step("ls", &["matched-a", "matched-b"]),
+                step("wc", &["-l"]),
+            ])),
+            joiner: Joiner::And,
+            right: Box::new(Steps::Pipeline(vec![step("cp", &["x", "y"])])),
+        };
+        let rebuilt = steps
+            .with_operands(&[
+                vec!["*".into()],
+                vec!["-l".into()],
+                vec!["x".into(), "y".into()],
+            ])
+            .expect("one list per step");
+        let args: Vec<&Vec<String>> = rebuilt.steps().into_iter().map(|one| &one.args).collect();
+        assert_eq!(
+            args,
+            vec![
+                &vec!["*".to_string()],
+                &vec!["-l".to_string()],
+                &vec!["x".to_string(), "y".to_string()]
+            ]
+        );
+        assert!(matches!(
+            rebuilt,
+            Steps::Join {
+                joiner: Joiner::And,
+                ..
+            }
+        ));
+        assert!(steps.with_operands(&[vec![], vec![]]).is_none());
+        assert!(
+            steps
+                .with_operands(&[vec![], vec![], vec![], vec![]])
+                .is_none()
+        );
     }
 
     /// The arrow separates a link from its file, so arguments that spell one cannot be drawn as
@@ -1490,6 +1976,7 @@ mod tests {
                 started_as: PathBuf::from("/usr/bin/sed"),
                 args: vec!["-n".into(), "2p".into()],
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]));
             out.stdin = label;

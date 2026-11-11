@@ -1428,6 +1428,52 @@ fn an_unusable_premium_key_fails_rather_than_downgrading() {
     );
 }
 
+/// BACKEND-37: a client says it presented the premium key only after a request went out with it. A
+/// request to the free endpoint, with a key lent but no premium host, and one that could not get
+/// the key, did not present it. The regressions it rejects are a flag that is always set, one set
+/// by a source being lent, and one set before the key was produced.
+#[test]
+fn a_client_reports_the_premium_key_only_when_a_request_carried_it() {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let egress = Egress::new();
+
+    let (premium_endpoint, _received) = serve(REPLY);
+    let config = premium_config("http://127.0.0.1:1", &premium_endpoint);
+    let mut subscription = StubSubscription { remaining: 1 };
+    let mut client = AichatClient::new(&config, &egress).with_subscription(&mut subscription);
+    assert!(!client.presented_a_premium_key(), "nothing was sent yet");
+    client.complete(&mut policy, &request).expect("completion");
+    assert!(client.presented_a_premium_key());
+
+    let (base_endpoint, _received) = serve(REPLY);
+    let mut config = config_for(&base_endpoint);
+    config.premium_endpoint = None;
+    let mut subscription = StubSubscription { remaining: 5 };
+    let mut client = AichatClient::new(&config, &egress).with_subscription(&mut subscription);
+    client.complete(&mut policy, &request).expect("completion");
+    assert!(!client.presented_a_premium_key(), "no premium host");
+
+    let (base_endpoint, _received) = serve(REPLY);
+    let config = premium_config(&base_endpoint, &base_endpoint);
+    let mut subscription = StubSubscription { remaining: 0 };
+    let mut client = AichatClient::new(&config, &egress).with_subscription(&mut subscription);
+    client
+        .complete(&mut policy, &request)
+        .expect_err("no key to present");
+    assert!(
+        !client.presented_a_premium_key(),
+        "the key was not produced"
+    );
+}
+
 /// PREM-2: a configuration with no premium host attaches no key even when a source of one is lent,
 /// rather than sending it to an endpoint it was not issued for. The request is the free endpoint's,
 /// signed as it always was. The host is compiled in for every build that reaches Brave, so the case
@@ -4085,10 +4131,12 @@ fn a_gateway_stating_a_retry_count_is_asked_again_that_many_times() {
     }
 }
 
-/// A block that says nothing about retries is the three requests every block has always had.
+/// BACKEND-55: a block that says nothing about retries sends a request whose connection failed
+/// again for as long as the default window holds, so a service that recovers on the fourth request
+/// is reached. Rejects a client still held to the three requests it used to send.
 #[test]
-fn a_gateway_stating_nothing_is_asked_three_times() {
-    let model = "a-model-asked-three-times";
+fn a_gateway_stating_nothing_is_asked_again_while_the_default_window_holds() {
+    let model = "a-model-asked-while-the-window-holds";
     for streaming in [false, true] {
         let (endpoint, received) = serve_attempts(vec![
             Attempt::Status(503),
@@ -4101,9 +4149,69 @@ fn a_gateway_stating_nothing_is_asked_three_times() {
 
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
 
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a service that recovered on the fourth request was given up on: {result:?}"
+        );
+        assert_eq!(attempts, 4, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 4, "streaming {streaming}");
+    }
+}
+
+/// BACKEND-55: a stated window sends a failed connection again past the stated count, and ends the
+/// call when the next pause would not fit. Rejects a client that reads the count as the whole of
+/// the limit, and one that sits out the window and past it.
+#[test]
+fn a_gateway_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window() {
+    let model = "a-model-asked-for-its-window";
+    for streaming in [false, true] {
+        // The count alone would stop at the second request, and the window carries on to the fifth.
+        let (endpoint, received) = serve_attempts(
+            (0..4)
+                .map(|_| Attempt::Status(503))
+                .chain([answer_for(streaming)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(
+            &endpoint,
+            model,
+            r#""maxRetries": 1, "retryWindowMs": 60000"#,
+        );
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: the count was taken for the whole limit: {result:?}"
+        );
+        assert_eq!(attempts, 5, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
+
+        // A service that never recovers is given up on when the window is spent, well before the
+        // sixty requests it was ready to refuse.
+        let (endpoint, received) = serve_attempts((0..60).map(|_| Attempt::Status(503)).collect());
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 150"#);
+        let started = std::time::Instant::now();
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
         assert!(result.is_err(), "streaming {streaming}: {result:?}");
-        assert_eq!(attempts, 3, "streaming {streaming}");
-        assert_eq!(received.try_iter().count(), 3, "streaming {streaming}");
+        assert!(
+            attempts > 3,
+            "streaming {streaming}: the window sent only {attempts} requests"
+        );
+        assert!(
+            attempts < 30,
+            "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "streaming {streaming}: the call outlasted its window: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            received.try_iter().count() as u32,
+            attempts,
+            "streaming {streaming}"
+        );
     }
 }
 
@@ -4136,6 +4244,176 @@ fn a_larger_retry_count_does_not_make_a_refusal_worth_asking_again() {
             "streaming {streaming}: {result:?}"
         );
     }
+}
+
+/// BACKEND-54: a 429 that carries no wait is sent again on a longer schedule than the connection
+/// failures get. Three of them and then an answer is reached on the fourth request, which the
+/// three-request limit ended the call before, and a limit that never lifts is given up on after
+/// the sixth request and not a seventh. Both paths have a loop of their own.
+#[test]
+fn a_rate_limit_with_no_wait_is_asked_again_up_to_six_requests() {
+    let model = "a-model-rate-limited-without-a-wait";
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Status(429),
+            Attempt::Status(429),
+            Attempt::Status(429),
+            answer_for(streaming),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&endpoint, model);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a limit that lifted after three requests ended the call: {result:?}"
+        );
+        assert_eq!(attempts, 4, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 4, "streaming {streaming}");
+
+        let (endpoint, received) = serve_attempts(
+            (0..6)
+                .map(|_| Attempt::Status(429))
+                .chain([answer_for(streaming)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        // A window of a millisecond cannot hold any pause of the schedule, so only the default
+        // count of six decides. Without it the default window would send the request again for
+        // as long as it holds, which the 1 ms base of this helper never spends.
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1"#);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            matches!(
+                result,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                    status: 429,
+                    ..
+                }))
+            ),
+            "streaming {streaming}: {result:?}"
+        );
+        assert_eq!(attempts, 6, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 6, "streaming {streaming}");
+    }
+}
+
+/// BACKEND-55: a stated count replaces the rate limit default as it replaces the other one, so
+/// zero sends the request once and two sends it three times, and the cap of seven is eight
+/// requests for a rate limit as for any failure.
+#[test]
+fn a_stated_retry_count_bounds_a_rate_limit_with_no_wait() {
+    let model = "a-model-rate-limited-with-a-count";
+    for (stated, sent) in [(0u32, 1usize), (2, 3), (7, 8)] {
+        let (endpoint, received) = serve_attempts(
+            (0..9)
+                .map(|_| Attempt::Status(429))
+                .chain([answer_for(true)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, &format!(r#""maxRetries": {stated}"#));
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, true);
+        assert!(result.is_err(), "maxRetries {stated}: {result:?}");
+        assert_eq!(attempts as usize, sent, "maxRetries {stated}");
+        assert_eq!(received.try_iter().count(), sent, "maxRetries {stated}");
+    }
+}
+
+/// BACKEND-54: the longer count is for a 429 that carries no wait. One that named its wait keeps
+/// the count every failure has, and so does a 503 that carried a `Retry-After`.
+#[test]
+fn a_429_that_named_its_wait_keeps_the_three_requests() {
+    let model = "a-model-rate-limited-with-a-wait";
+    for status in [429u16, 503] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::StatusAfter(status, "1"),
+            Attempt::StatusAfter(status, "1"),
+            Attempt::StatusAfter(status, "1"),
+            answer_for(true),
+        ]);
+        let config = config_for(&endpoint);
+        // A window of a millisecond holds none of these pauses, so only the default count of
+        // three decides and the default window does not send a fourth request.
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1"#);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, true);
+        assert!(result.is_err(), "status {status}: {result:?}");
+        assert_eq!(attempts, 3, "status {status}");
+        assert_eq!(received.try_iter().count(), 3, "status {status}");
+    }
+}
+
+/// BACKEND-54: the pauses of the longer schedule are the ones of the schedule and not the doubling
+/// from the base: two 429s with no wait and a 50ms base wait 400ms and then 800ms before the third
+/// request, where the doubling would have waited 150ms in all.
+#[test]
+fn a_rate_limit_with_no_wait_pauses_on_the_longer_schedule() {
+    let (endpoint, _received) =
+        serve_attempts(vec![Attempt::Status(429), Attempt::Status(429), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(50));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+    let waited = started.elapsed();
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 3);
+    // 400ms then 800ms. The doubling from 50ms would have been 150ms.
+    assert!(
+        waited >= Duration::from_millis(1200),
+        "the doubling was taken for a rate limit: {waited:?}"
+    );
+}
+
+/// BACKEND-54: a stop lands in the middle of the longer wait and ends it at once, as it ends any
+/// pause, without a request after it.
+#[test]
+fn a_stop_ends_the_wait_after_a_rate_limit_with_no_wait() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Status(429), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let cancel = Cancel::new();
+    let stopper = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        stopper.cancel();
+    });
+    // Eight seconds is the first wait of the schedule at a one second base.
+    let mut client = AichatClient::new(&config, &egress)
+        .with_backoff(Duration::from_secs(1))
+        .with_cancel(cancel);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect_err("the wait ran to its end");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "the stop waited out the pause: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(error, ChatError::Cancelled), "{error:?}");
+    assert_eq!(received.try_iter().count(), 1);
 }
 
 /// A server that answers a whole reply as `pieces`, `pause` apart, after its headers.
@@ -7354,6 +7632,111 @@ fn a_failed_responses_reply_is_named_from_a_closed_set_and_asked_again_only_wher
     let shown = error.to_string();
     assert!(shown.contains("invalid_request_error"), "{shown}");
     assert!(!shown.contains("page could have written"), "{shown}");
+}
+
+/// BACKEND-37, DIAG-7: a failure event inside a 200 stream whose code is not on the closed list is
+/// reported as the fallback of that list, is not asked for again, and is written to the diagnostic
+/// log once with the program's own words (the event kind, that the code was unlisted, the time and
+/// the count of requests) and nothing the service wrote. A code that names the account, arriving
+/// on a gateway that has no account, is unlisted for that service and is written the same way. A
+/// listed code writes no such line.
+///
+/// The regressions it rejects are a client that sends the request again (a second request), one
+/// that writes no line, one that writes the code or message the service sent, one that names the
+/// event kind from the service's text, one that writes the line for a listed code, and one that
+/// writes none for an account code on a gateway.
+#[test]
+fn an_unlisted_failure_in_a_responses_stream_is_written_once_and_not_asked_for_again() {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.path().to_path_buf()));
+    // Points the log nowhere again when an assertion below panics.
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let _unconfigure = Unconfigure;
+
+    let unlisted = "private_code_nobody_documented";
+    let words = "words a page could have written";
+    let failed = |code: &str| {
+        Attempt::Frames(vec![
+            sse(
+                "response.output_text.delta",
+                serde_json::json!({"delta": "partial"}),
+            ),
+            sse(
+                "response.failed",
+                serde_json::json!({"response": {"error": {"code": code, "message": words}}}),
+            ),
+        ])
+    };
+    let error_event = |code: &str| {
+        Attempt::Frames(vec![sse(
+            "error",
+            serde_json::json!({"error": {"code": code, "message": words}}),
+        )])
+    };
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let request = ChatRequest::new("a-responses-gateway/a-model", vec![Message::user("hi")]);
+
+    // One server for each scenario, each followed by a reply that would succeed, so a request sent
+    // again is seen as a second request and as a reply.
+    let mut shown = Vec::new();
+    for event in [
+        failed(unlisted),
+        error_event(unlisted),
+        failed(USAGE_LIMIT),
+        failed("invalid_prompt"),
+    ] {
+        let (endpoint, received) =
+            serve_attempts(vec![event, Attempt::Frames(text_reply(&["recovered"]))]);
+        let provider = responses_at(&endpoint);
+        let mut client = responses_client(&egress, &provider, "a-model");
+        let error = client
+            .complete(&mut policy, &request)
+            .expect_err("a failure the service reported ends the call");
+        assert_eq!(client.attempts(), 1, "{error}");
+        assert!(matches!(error, ChatError::Reported { .. }), "{error:?}");
+        received.recv().expect("the request was sent");
+        assert!(
+            received.recv_timeout(Duration::from_millis(200)).is_err(),
+            "the request was sent again"
+        );
+        shown.push(error.to_string());
+    }
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("an unlisted failure makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("aichat.stream_failure"))
+        .collect();
+    assert_eq!(lines.len(), 3, "one line for each unlisted failure: {log}");
+    for (line, kind) in lines.iter().zip(["failed", "error", "failed"]) {
+        assert!(
+            line.contains(&format!(
+                "ERROR aichat.stream_failure event={kind} code=unlisted elapsed_ms="
+            )),
+            "{line}"
+        );
+        assert!(line.ends_with(" attempts=1"), "{line}");
+    }
+    assert!(!log.contains(unlisted), "{log}");
+    assert!(!log.contains(USAGE_LIMIT), "{log}");
+    assert!(!log.contains("a page could have written"), "{log}");
+    assert!(!log.contains("partial"), "{log}");
+    for text in &shown {
+        assert!(!text.contains(unlisted), "{text}");
+    }
 }
 
 /// A level a service refuses costs the field and not the turn, and the model is not asked for one

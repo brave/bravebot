@@ -419,6 +419,8 @@ fn said_of(name: &str) -> Option<&'static str> {
         "the marker that leads a reply" => t!(hover_reply),
         "the word that copies a fenced block" => t!(hover_block),
         "a prompt waiting behind a turn" => t!(hover_queued),
+        "the word that removes a waiting prompt" => t!(hover_queued_remove),
+        "the word that removes every waiting prompt" => t!(hover_queued_clear),
         "the way back of a delegate's view" | "the sentence that closes a delegate's view" => {
             t!(hover_back)
         }

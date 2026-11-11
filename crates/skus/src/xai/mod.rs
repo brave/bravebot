@@ -30,7 +30,8 @@ pub use renew::Renewer;
 
 use crate::oauth::encoding;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 /// The client the sign-in presents. It is the `client_id` that xAI's open-source Grok Build sets in
 /// its default OAuth2 provider configuration and that opencode presents, and the maintainer stated
@@ -147,6 +148,8 @@ pub enum SignInError {
     Clock,
     /// The sign-in could not be stored.
     Store(AccountError),
+    /// The caller's stop was set before the sign-in was stored. Nothing was stored.
+    Cancelled,
 }
 
 /// A short name for the step, for a log or a test.
@@ -161,6 +164,7 @@ impl std::fmt::Display for SignInError {
             Self::Exchange(class) => write!(f, "exchange {class}"),
             Self::Clock => f.write_str("clock"),
             Self::Store(failure) => write!(f, "store {failure}"),
+            Self::Cancelled => f.write_str("cancelled"),
         }
     }
 }
@@ -180,10 +184,13 @@ pub struct SignedIn {
 ///
 /// `announce` is called once, with the address and the code, after the code is had and before the
 /// token endpoint is asked anything. `transport` is what the caller has decided its clients trust and
-/// go through, half-built so the caller can finish it.
+/// go through, half-built so the caller can finish it. Setting `stop` ends the sign-in with
+/// [`SignInError::Cancelled`] before the next ask of the token endpoint, and does nothing once the
+/// sign-in is stored.
 pub fn sign_in(
     hosts: &Hosts,
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
+    stop: &AtomicBool,
     announce: impl FnOnce(&Announcement<'_>),
 ) -> Result<SignedIn, SignInError> {
     let destination = path().map_err(SignInError::Store)?;
@@ -192,9 +199,25 @@ pub fn sign_in(
         transport,
         &destination,
         encoding::clock,
-        std::thread::sleep,
+        stop,
+        |interval| waited_unless(stop, interval),
         announce,
     )
+}
+
+/// The longest one sleep of a wait is, so a stop is seen within it.
+const STOP_SEEN_WITHIN: Duration = Duration::from_millis(100);
+
+/// Sleep for `interval`, or until `stop` is set.
+fn waited_unless(stop: &AtomicBool, interval: Duration) {
+    let until = Instant::now() + interval;
+    while !stop.load(Ordering::SeqCst) {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return;
+        }
+        std::thread::sleep(left.min(STOP_SEEN_WITHIN));
+    }
 }
 
 /// The sign-in, with `clock` as the seconds since 1970 or `None` where it reads before that, and
@@ -216,6 +239,7 @@ fn run(
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
     destination: &Path,
     clock: impl Fn() -> Option<u64>,
+    stop: &AtomicBool,
     mut wait: impl FnMut(Duration),
     announce: impl FnOnce(&Announcement<'_>),
 ) -> Result<SignedIn, SignInError> {
@@ -238,6 +262,9 @@ fn run(
     let mut interval = code.interval;
     let mut cut_polls = 0;
     let granted = loop {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignInError::Cancelled);
+        }
         let at = clock().ok_or(SignInError::Clock)?;
         if at >= deadline {
             return Err(SignInError::TimedOut);
@@ -282,6 +309,9 @@ fn run(
         refresh_token: refresh,
         expires_at: granted.lifetime.expiry(now),
     };
+    if stop.load(Ordering::SeqCst) {
+        return Err(SignInError::Cancelled);
+    }
     account::save_at(destination, &signed_in).map_err(SignInError::Store)?;
     Ok(SignedIn {
         expires: signed_in.expires(),
@@ -388,6 +418,7 @@ mod tests {
             transport(),
             path,
             || from().map(|now| now + slept.get()),
+            &AtomicBool::new(false),
             |waited| {
                 waits.borrow_mut().push(waited.as_secs());
                 slept.set(slept.get() + waited.as_secs());
@@ -504,6 +535,7 @@ mod tests {
             transport(),
             &path,
             || Some(START),
+            &AtomicBool::new(false),
             |_| {},
             |announcement| {
                 shown_times.set(shown_times.get() + 1);
@@ -1056,6 +1088,77 @@ mod tests {
         let now = stored(&path).expect("an account");
         assert_eq!(now.access_token.expose(), "new-access");
         assert_eq!(now.refresh_token.expose(), "new-refresh");
+    }
+
+    /// A stop set while the sign-in waits between asks ends it before the next ask, with nothing
+    /// stored: the token endpoint is asked once and never again.
+    #[test]
+    fn a_stop_set_while_waiting_ends_the_sign_in_before_the_next_ask_and_stores_nothing() {
+        let path = scratch("stopped-waiting");
+        let server = serve(vec![
+            a_code(Some(1800), Some(5)),
+            pending(),
+            granted("a", "r", 60),
+        ]);
+        let stop = AtomicBool::new(false);
+        let result = run(
+            &Hosts::at(&server.base),
+            transport(),
+            &path,
+            || Some(START),
+            &stop,
+            |_| stop.store(true, Ordering::SeqCst),
+            |_| {},
+        );
+
+        assert!(matches!(result, Err(SignInError::Cancelled)), "{result:?}");
+        let asked = server.finish();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_eq!(asked[1].path, "/token");
+        assert!(!path.exists(), "an account was stored");
+    }
+
+    /// A stop set once the grant has arrived, and before the account is stored, stores nothing.
+    #[test]
+    fn a_stop_set_after_the_grant_and_before_the_store_stores_nothing() {
+        let path = scratch("stopped-before-store");
+        let server = serve(vec![a_code(Some(1800), Some(5)), granted("a", "r", 60)]);
+        let stop = AtomicBool::new(false);
+        let reads = Cell::new(0);
+        let result = run(
+            &Hosts::at(&server.base),
+            transport(),
+            &path,
+            || {
+                reads.set(reads.get() + 1);
+                // Read at the start, at the code, at the first ask, and then at the grant.
+                if reads.get() == 4 {
+                    stop.store(true, Ordering::SeqCst);
+                }
+                Some(START)
+            },
+            &stop,
+            |_| {},
+            |_| {},
+        );
+        server.finish();
+
+        assert!(matches!(result, Err(SignInError::Cancelled)), "{result:?}");
+        assert_eq!(reads.get(), 4);
+        assert!(!path.exists(), "an account was stored after the stop");
+    }
+
+    /// A wait given a stop that is set returns at once, and one given a stop that is not set waits
+    /// its interval.
+    #[test]
+    fn a_wait_returns_once_the_stop_is_set() {
+        let started = Instant::now();
+        waited_unless(&AtomicBool::new(true), Duration::from_secs(30));
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let started = Instant::now();
+        waited_unless(&AtomicBool::new(false), Duration::from_millis(250));
+        assert!(started.elapsed() >= Duration::from_millis(250));
     }
 
     /// A clock set before 1970 reads as no time, and a sign-in compares the code's lifetime and the

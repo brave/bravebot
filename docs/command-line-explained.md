@@ -263,22 +263,46 @@ should never approve.
 **Allowed**: a simple command; pipes; `&&`, `||` and `;`; `( … )` to group a sequence; quoting
 with `'…'`, `"…"` and `\`; redirection with `>`, `>>`, `<`, `2>`, `2>>`, `2>&1` and `&>`; globs
 `*`, `?`, `[…]` and `**`; brace expansion `{a,b}` and `{1..9}`; a leading `~`; and
-`NAME=literal cmd`.
+`NAME=literal cmd`. In bypass mode only, the value of an assignment in front of a program may also be
+`$VAR`, `${VAR}` or `$(cmd)` (section 8a below).
 
-**Refused**: `$(...)` and backticks, `$VAR` and `${...}`, `$((...))`, `<(...)` and `>(...)`,
+**Refused**: `$(...)` and backticks, `$VAR` and `${...}`, the special parameters `$?`, `$$`,
+`$@`, `$*`, `$#`, `$-` and `$!`, `$'...'` and `$"..."`, `$((...))`, `<(...)` and `>(...)`,
 heredocs (`<<` and `<<<`), a bare `&`, an unquoted `!`, a `(` or `)` written onto the end of an
 argument, `eval`, `source`, `.`, `exec`, `trap`, `if`, `while`, `for`, `case`, `function`, a
 descriptor duplication other than `2>&1`, a numbered redirection other than `2>`, a `~` naming
-somebody else's home, an assignment whose value is not literal, and a newline.
+somebody else's home, an assignment whose value is not literal (outside bypass mode, see 8a), and a newline.
 
-The pattern: **anything whose value isn't visible in the line is refused.** Quoting settles every
-one of them. `'$HOME'` is six characters and arrives as one argument, because the refusals are
-about what a construct stands for and never about which characters are in it.
+The pattern: **anything whose value isn't visible in the line is refused.** Single quotes settle
+every one of them. `'$HOME'` is six characters and arrives as one argument, because the refusals are
+about what a construct stands for and never about which characters are in it. Double quotes settle
+none of the `$` forms, so `"$HOME"` and `"$?"` are refused.
 
 Why is `$VAR` refused when bash obviously supports it? Because of the approval prompt. If you
 show a human `rm -rf "$D/build"`, they cannot approve it: they don't know what `D` is. And if
 `D` *were* known at compile time, the model could have just written the value. Either the
 substitution makes the prompt a lie, or it's pointless. So: refused.
+
+### 8a. The one exception: bypass mode and the assignment prefix
+
+In bypass mode nobody approves a plan, so the objection above has no prompt to make false. There,
+and only there, the compiler accepts an expansion in the `NAME=value` words in front of a program:
+
+- `NAME=$VAR cmd`, `NAME=${VAR} cmd`, `NAME=a-$VAR-b cmd`: the variable's value from bravebot's own
+  environment.
+- `NAME="$(other)" cmd` or `NAME=$(other) cmd`: `other` is compiled by the same compiler and runs
+  first, and its standard output with trailing newlines trimmed becomes the value. One level only:
+  a `$` or backtick inside `other` is refused.
+
+Everything else is still refused, in bypass too: `$VAR` or `$(...)` as an argument or as the
+program, backticks, `eval`, `FOO=*.rs cmd`, `${X:-y}`. Outside bypass, all of it is refused.
+
+The design rule is that **the value never leaves the spawn**. The plan, its key, the trail, the
+history and every error carry the source text (`$X`, `$(other)`) and nothing else. The value is
+looked up when the step is started and goes into that one process's environment. A variable the
+settings or the agent's own credentials withhold is refused, an unset one is refused naming only
+its name, and a failing `other` is reported by its source text and exit status without what it
+printed. The spec for this is `CMDLINE-17` in `docs/specs/tools/command-line.md`.
 
 Globs are different, and worth understanding. We expand them **before** the prompt, against the
 actual working tree. So the human doesn't see `src/**/*.ts`: they see the twelve files it

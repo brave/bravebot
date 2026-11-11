@@ -341,7 +341,9 @@ fn has_more_to_show(entry: &Entry) -> bool {
 /// A line longer than `width` less the margin continues on the next row under the margin, so every
 /// row of a note starts in the column the first does (VIEW-19), the way a refusal's rows do. The
 /// rows are broken here and not left to the paragraph that draws them, which continues a row at
-/// column 0. The words are drawn as they are, like a refusal's: a note is the session's own voice.
+/// column 0. The words are drawn as they are, like a refusal's, except that a control character is
+/// drawn as its picture: a note can quote a name a person typed or pasted (NAME-12), and an escape in
+/// it must not reach the terminal. A note is the session's own voice.
 ///
 /// The one caller is the `Speaker::System` entry. What commands typed during a turn answered is
 /// pushed as those entries, so it is drawn by this too, being the same voice. The ink is the tone's
@@ -355,7 +357,7 @@ fn note_lines(text: &str, tone: Tone, width: u16) -> Vec<Line<'static>> {
     };
     let room = (width as usize).saturating_sub(LEAD).max(8);
     text.lines()
-        .flat_map(|text| wrap::wrap(text, room, 0).rows)
+        .flat_map(|text| wrap::wrap(&printable(text), room, 0).rows)
         .map(|row| {
             Line::from(Span::styled(
                 format!("{:LEAD$}{row}", ""),
@@ -423,7 +425,15 @@ fn speaker_laid(
         // clipped: a reason is the one line in the transcript somebody reads to the end.
         Speaker::Failure | Speaker::Stopped => {
             for text in entry.text.lines() {
-                for row in wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows {
+                // Made printable because a failure line can quote a name the person typed or
+                // pasted (NAME-13), and a control character in it must not move the cursor.
+                for row in wrap::wrap(
+                    &printable(text),
+                    (width as usize).saturating_sub(LEAD).max(8),
+                    0,
+                )
+                .rows
+                {
                     lines.push(Line::from(Span::styled(
                         format!("{:LEAD$}{row}", ""),
                         Style::default().fg(theme::fail()),
@@ -2297,6 +2307,76 @@ mod tests {
                 "  > \u{241b}[2Ksecond"
             ]
         );
+    }
+
+    /// NAME-12: a refusal note quotes the name the person typed or pasted, so an escape in it is
+    /// drawn as its picture and no row holds a control character. The fault this rejects is
+    /// wrapping the note's text as it is, which leaves the escape in the row.
+    #[test]
+    fn a_refusal_note_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::refused("@a\u{1b}[2Jb.txt is not a file in this project.\u{7}"),
+            90,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            rows,
+            ["  @a\u{241b}[2Jb.txt is not a file in this project.\u{2407}"]
+        );
+    }
+
+    /// LAYER-3: a note that quotes an alias with an escape in it, as `/mcp disable` does, is drawn
+    /// with the escape made visible, so no rendered row holds a control character. Rejects a note
+    /// row that wraps the entry's text as it stands.
+    #[test]
+    fn a_mcp_note_quoting_an_alias_with_an_escape_is_drawn_with_the_escape_made_visible() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        let settings = bravebot_config::Settings::default();
+        crate::mcp_command::run(
+            &mut session,
+            &settings,
+            std::path::Path::new("."),
+            "disable a\u{1b}[2Jbc",
+            bravebot_agent::servers::Asking::Person,
+            &mut crate::mcp_command::tests::Never,
+        );
+        let rows: Vec<String> = transcript_lines(&session, 90, 40)
+            .iter()
+            .map(text)
+            .filter(|row| !row.trim().is_empty())
+            .collect();
+        assert!(!rows.is_empty(), "no note was drawn");
+        for row in &rows {
+            assert!(!row.chars().any(char::is_control), "{row:?}");
+        }
+        assert!(
+            rows.iter().any(|row| row.contains("a\u{241b}[2Jb")),
+            "{rows:?}"
+        );
+    }
+
+    /// NAME-13: a failure line can quote a name the person typed or pasted, so an escape in it is
+    /// drawn as its picture and the line holds no control character. The fault this rejects is
+    /// wrapping the recorded text as it is, which leaves the escape in the row.
+    #[test]
+    fn a_failure_line_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::failure("'a\u{1b}[2Jb.txt' is not text\u{7}"),
+            90,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(rows, ["  'a\u{241b}[2Jb.txt' is not text\u{2407}"]);
     }
 
     /// Who an entry is from decides how it reads: the person's words behind the marker they were

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: The lsp tool
-description: Which language server answers, what starting one costs, how a file is checked, and how every answer is labelled.
+description: Language-server symbol queries and diagnostics, server selection and custom declarations, approval costs, answer labels, empty results and index caching.
 ---
 
 # The lsp tool
@@ -18,6 +18,11 @@ start is refused where nobody can be asked, as in a one-shot run, unless that an
 | `path` | workspace-relative file holding the symbol, or the file to check for `diagnostics`; required for every operation but `workspaceSymbol` |
 | `line`, `character` | 1-based position of the symbol, as a search or a read reported it; not used by `diagnostics` |
 | `query` | for `workspaceSymbol`, the name to look for |
+
+**`path` is confined as a read is.** It is resolved through the workspace before a server is started or
+you are asked about one. A path that lands outside the directories you added, whether absolute, climbing
+out with `..`, or through a link that leads out, is refused, as it is for `read_file`. The check is made
+when the call is made: a directory on the path replaced by a link afterwards is not seen by it.
 
 This answers what [`search`](tools.md#search) cannot. A search for a name finds every comment and string that
 mentions it; this finds the declaration the compiler agrees on.

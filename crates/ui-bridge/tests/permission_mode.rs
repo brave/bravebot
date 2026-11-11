@@ -1,5 +1,5 @@
 //! Permission modes in the desktop front end, as docs/specs/permission-modes.md has them. A window
-//! chooses asking, accepting edits or planning for a session with `session.mode` (MODE-11), every
+//! chooses asking, accepting edits, planning or auto for a session with `session.mode` (MODE-11), every
 //! session opens asking (MODE-10), and a running turn follows the mode chosen last (MODE-8).
 //!
 //! Driven through the binary against a model service of the test's own. Whether a write landed is
@@ -11,6 +11,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -183,6 +185,32 @@ fn a_planner_writing_then_running() -> (String, mpsc::Receiver<String>) {
     })
 }
 
+/// A planner that writes `notes.md` and then runs a command that would make `ran.txt`, and a
+/// permission classifier that answers `word` to the command (AUTO-3). The classifier is told apart
+/// by the name its instructions give it.
+fn a_planner_with_a_classifier(word: &'static str) -> (String, mpsc::Receiver<String>) {
+    a_model_service(move |request| {
+        if request.to_string().contains("permission classifier") {
+            return json!({"role": "assistant", "content": word});
+        }
+        let messages = request["messages"].as_array().expect("a conversation");
+        let this_turn = messages
+            .iter()
+            .rev()
+            .take_while(|m| m["role"] != "user")
+            .filter(|m| m["role"] == "tool")
+            .count();
+        match this_turn {
+            0 => calls(
+                "write_file",
+                json!({"path": "notes.md", "contents": "# Notes\n"}),
+            ),
+            1 => calls("run", json!({"command": "/usr/bin/touch ran.txt"})),
+            _ => json!({"role": "assistant", "content": "done"}),
+        }
+    })
+}
+
 /// A planner that writes two files a turn, named by how many results came before each.
 fn a_planner_writing_twice_a_turn() -> (String, mpsc::Receiver<String>) {
     a_planner(|results, this_turn| {
@@ -311,7 +339,7 @@ impl FrontEnd {
     fn ask(&mut self, session: &str) -> Value {
         self.send(
             "turn.send",
-            json!({"session": session, "prompt": "do the work"}),
+            message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
         );
         let started = self.until(|message| message["event"] == "turn.started");
         started["data"]["mode"].clone()
@@ -492,6 +520,54 @@ fn accepting_edits_writes_unasked_and_still_asks_about_a_command() {
         "the first question was not the command's: {question}"
     );
     assert_eq!(scratch.written("notes.md").as_deref(), Some("# Notes\n"));
+    front.reply("run.reply", &session, &question, "reject");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+    assert_eq!(scratch.written("ran.txt"), None, "a refused command ran");
+}
+
+/// AUTO-1, AUTO-2, AUTO-3: a window can choose auto. The write goes through unasked, the command
+/// is put to the classifier on the session's own model, and the window is asked about the command
+/// only where the classifier does not allow it. The regressions it rejects are the choice being read
+/// as another mode, the command being asked about although the classifier allowed it, and a
+/// classifier's no running the command.
+#[test]
+fn auto_writes_unasked_and_lets_the_classifier_answer_a_command() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    let scratch = Scratch::new("bridge-mode-auto-allowed");
+    let (endpoint, rounds) = a_planner_with_a_classifier("allow");
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, false);
+    assert_eq!(front.mode(&session, "auto")["ok"]["permissionMode"], "auto");
+    assert_eq!(front.ask(&session), "auto");
+    let end = front.question_or_the_end();
+    assert_eq!(end["event"], "turn.done", "a question was put: {end}");
+    assert_eq!(scratch.written("notes.md").as_deref(), Some("# Notes\n"));
+    assert!(
+        scratch.written("ran.txt").is_some(),
+        "the command the classifier allowed did not run"
+    );
+    let asked: Vec<String> = rounds.try_iter().collect();
+    assert!(
+        asked.iter().any(|r| r.contains("permission classifier")),
+        "the classifier was not consulted"
+    );
+    drop(front);
+
+    let scratch = Scratch::new("bridge-mode-auto-denied");
+    let (endpoint, _rounds) = a_planner_with_a_classifier("deny");
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, false);
+    front.mode(&session, "auto");
+    assert_eq!(front.ask(&session), "auto");
+    let question = front.question_or_the_end();
+    assert_eq!(
+        question["event"], "run.request",
+        "the classifier's no did not put the command to the window: {question}"
+    );
     front.reply("run.reply", &session, &question, "reject");
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
     assert_eq!(scratch.written("ran.txt"), None, "a refused command ran");

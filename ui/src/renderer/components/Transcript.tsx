@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { Enhancement } from '../enhancing'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { Fragment, memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
@@ -37,8 +37,9 @@ import { LabelChip } from './LabelChip'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
+import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
-import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
+import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
 import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
@@ -54,6 +55,8 @@ interface Live {
   todos: TodoRow[]
   quarantine: Shown[]
   phase: Waiting | null
+  /** When a failed request waiting to be sent again will be, while the phase is `reconnecting` (VIEW-43). */
+  retry?: RetryDue | null
   checking: Checking | null
   hook: Hook | null
   composing: string | null
@@ -145,8 +148,6 @@ interface Props {
   onMode: (mode: PermissionMode) => void
   onSandbox: (mode: SandboxMode) => void
   onSubmit: () => void
-  /** Start a manifest run from the draft. Absent where the window cannot start one. */
-  onPlan?: () => void
   onCancel: () => void
   onDecide: Answer
   onAnswer: AnswerQuestions
@@ -332,7 +333,6 @@ export function Transcript({
   onMode,
   onSandbox,
   onSubmit,
-  onPlan,
   reading,
   onCancel,
   onDecide,
@@ -483,7 +483,6 @@ export function Transcript({
   const restoreEnhanced = useEvent(onRestoreEnhanced)
   const dismissEnhancement = useEvent(onDismissEnhancement)
   const cancel = useEvent(onCancel)
-  const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
   const chooseMode = useEvent(onMode)
@@ -744,7 +743,7 @@ export function Transcript({
         <div className="toast-stack">{toast}<Toasts /></div>
         <div className="empty-body">
           <div className="welcome">
-            <div className="welcome-mark" aria-hidden="true"><Icon name="product-brave-leo" /></div>
+            <img className="welcome-mark" src="./app-icon.svg" alt="" />
             <h1>What should we build?</h1>
             <p className="welcome-lede">Open a project to work with an agent in it. Changes and approvals stay in the conversation.</p>
             <div className="welcome-actions">
@@ -805,7 +804,7 @@ export function Transcript({
               <div className="bot-first-hero" data-test="bot-greeting">
                 <BotAvatar seed={bot.avatar} size={160} doing="open" />
                 <h1>Talk to {bot.name}</h1>
-                <p>One conversation that carries on. Type @ to bring in another bot, or summon {bot.name} from a project’s chat to work there.</p>
+                <p>Type @ to bring in another bot, or summon {bot.name} from a project’s chat to work there.</p>
               </div>
             ) : noProject ? <>
               <h1>Ready</h1>
@@ -851,7 +850,7 @@ export function Transcript({
           <WorkingRow
             key={live.handle}
             bot={answering}
-            word={workingWord(live.phase, live.checking, live.composing, live.hook)}
+            word={(now) => workingWord(live.phase, live.checking, live.composing, live.hook, live.retry ?? null, now)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
@@ -908,7 +907,6 @@ export function Transcript({
           onRestoreEnhanced={restoreEnhanced}
           onDismissEnhancement={dismissEnhancement}
           onCancel={cancel}
-          onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
           permissionMode={live.permissionMode}
           onMode={chooseMode}
@@ -1039,11 +1037,20 @@ function waitedWord(waited: number | null): string {
  * change, and one function serves both places the word is drawn so they cannot disagree. A call
  * being written follows the check: the phase is the same for the whole wait, which can be minutes.
  */
-export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null, hook: Hook | null = null): string {
+export function workingWord(
+  phase: Waiting | null,
+  checking: Checking | null,
+  composing: string | null = null,
+  hook: Hook | null = null,
+  retry: RetryDue | null = null,
+  now: number = Date.now(),
+): string {
   if (hook !== null) return `Running hook: ${hook.program} (${hook.moment})`
   if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
   if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
   if (composing !== null) return `Preparing a call: ${composing}`
+  // A request waiting to be sent again says when, until the wait is over (VIEW-43).
+  if (phase === 'reconnecting' && retry !== null) return reconnectingWords(retry, now) ?? phaseWord(phase)
   return phase ? phaseWord(phase) : 'Working'
 }
 
@@ -1055,7 +1062,8 @@ export function workingWord(phase: Waiting | null, checking: Checking | null, co
 export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThinking, offerThinking, onThinking }: {
   /** The face of the bot answering, or `null` for a turn no bot answers. */
   bot: { avatar: string } | null
-  word: string
+  /** The word for the time given, so a countdown ticks with the row's own clock (VIEW-43). */
+  word: (now: number) => string
   tokens: number
   turn: number | null
   onAudit: OpenAudit
@@ -1086,7 +1094,7 @@ export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThi
       ) : (
         <ProgressRing mode="indeterminate" className="working-ring" data-test="working-ring" />
       )}
-      <span className="working-word">{word}…</span>
+      <span className="working-word">{word(now)}…</span>
       <span className="count">
         {seconds > 0 && elapsed}
         {tokens > 0 && `${seconds > 0 ? ' · ' : ''}${tokens.toLocaleString()} tokens written`}
@@ -1748,60 +1756,6 @@ function Unanswered(): React.JSX.Element {
 }
 
 /**
- * The row a waiting question's answers sit in. It counts the rows the card marks as deciding that
- * have not been on screen yet, says how many are left, and the approving buttons in it wait until
- * none are (PROMPT-4). A refusal never waits.
- */
-function Answers({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const row = useRef<HTMLDivElement>(null)
-  const counted = useShown(row)
-  const note = useId()
-  const shown = useMemo<OnScreen>(() => ({ ...counted, note }), [counted, note])
-  const words = leftWords(shown)
-  return (
-    <div className="confirm-actions" ref={row}>
-      {words && <span className="shown-left" id={note}>{words}</span>}
-      <ShownContext.Provider value={shown}>{children}</ShownContext.Provider>
-    </div>
-  )
-}
-
-/**
- * Whether an approving button is open, the note saying why not and its id, and `press`, which
- * measures once more before it answers, so a row scrolled away since the last count stops it.
- */
-function useApproval(standing: boolean, onClick: () => void): {
-  open: boolean
-  words: string | undefined
-  reason: string | undefined
-  press: () => void
-} {
-  const shown = useContext(ShownContext)
-  const open = mayAnswer(shown, standing)
-  const words = open ? undefined : leftWords(shown) ?? undefined
-  return { open, words, reason: words && shown.note, press: () => { if (open && shown.now(standing)) onClick() } }
-}
-
-/** A card's approving Leo button. `standing` is an answer that also covers later questions. */
-function Approve({ kind = 'filled', className = 'approve', standing = false, tooltip, onClick, children }: {
-  kind?: 'filled' | 'outline'
-  className?: string
-  standing?: boolean
-  tooltip?: string
-  onClick: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  const { open, words, press } = useApproval(standing, onClick)
-  // The note's id would not resolve inside the button's shadow root, so its words go across instead.
-  return (
-    <Button kind={kind} size="small" className={className} data-tooltip={tooltip} isDisabled={!open} aria-disabled={!open}
-      aria-description={words} onClick={press}>
-      {children}
-    </Button>
-  )
-}
-
-/**
  * The two answers on a yes-or-no card. The words are the card's own. `kind` chooses the method
  * the answer is sent through, and the agent checks that against the question actually waiting.
  */
@@ -2065,7 +2019,22 @@ function Card({
       )
 
     case 'narration':
-      return <div className="narration"><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
+      return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
+
+    case 'ask-settled':
+      // The kernel's words for each question and what became of it, in the register of the other
+      // lines that say what happened on the way to a reply. Drawn as text, so a question or an
+      // answer that looks like markup or a command is shown as typed.
+      return (
+        <div className="attached ask-settled">
+          <Icon name="file-text" />
+          <ul>
+            {entry.rows.map((row, at) => (
+              <li key={at}><span>{row.question}</span><span className="ask-settled-outcome">{row.outcome}</span></li>
+            ))}
+          </ul>
+        </div>
+      )
 
     case 'attached':
       // A line rather than a bubble, and the path rather than the contents. This is the same
@@ -2791,7 +2760,11 @@ function Card({
           subject={request.name}
           decided={decision === null ? null : {
             tone: decision,
-            text: decision === 'reject' ? 'You refused this call' : remember ? 'You allowed this call and later ones to this tool in this project' : 'You allowed this call',
+            text: decision === 'reject'
+              ? (request.also.length > 0 ? 'You refused this call and the later ones listed with it' : 'You refused this call')
+              : remember
+                ? 'You allowed this call and later ones to this tool in this project'
+                : request.also.length > 0 ? 'You allowed this call and the later ones listed with it' : 'You allowed this call',
           }}
           head={<CardHead icon="plug" intent="Call tool" deciding
             subject={<code className="path">{request.name}</code>}
@@ -2834,8 +2807,33 @@ function Card({
           <p className="permission-scope">
             The call sends these arguments to the server. What it returns is confined: it is not
             put in the model’s context.
-            {!request.mayStand && ' Nothing answered in this conversation can be recorded, so it cannot stop asking.'}
+            {!request.mayStand && (request.askedForPrivateArguments
+              ? ' This call is asked because something read earlier was private, and no stored answer covers it.'
+              : ' Nothing answered in this conversation can be recorded, so it cannot stop asking.')}
           </p>
+          {request.also.length > 0 && (
+            <div className="mcp-also" data-deciding="all">
+              <p className="permission-scope">
+                {request.also.length === 1
+                  ? 'Your answer also covers this later call to the same tool in this round:'
+                  : `Your answer also covers these ${request.also.length} later calls to the same tool in this round:`}
+              </p>
+              {request.also.map((later, at) => (
+                <dl className="mcp-arguments" key={at}>
+                  {later.map((argument) => (
+                    <div key={argument.name}>
+                      <dt>
+                        <code>{argument.name}</code>
+                      </dt>
+                      <dd>
+                        <pre className="mcp-argument">{argument.value}</pre>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              ))}
+            </div>
+          )}
         </DecisionCard>
       )
     }

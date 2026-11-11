@@ -195,6 +195,23 @@ that exist; it does not make them the project's.
 
 `verified-by: bravebot_agent::lsp::a_composed_location_is_not_labelled_by_the_rule_of_an_ancestor`
 
+**A file is labelled under every name it has.** The trust map holds a rule about one spelling, and a
+file can be reached by others ([TRUST-2](../trust-map.md#TRUST-2), [TRUST-4](../trust-map.md#TRUST-4)):
+a symbolic link, a hard link, and its spelling under another open directory that is the same
+directory. A location is asked about under the name the server reported and under each other name
+the file system gives the file, the way a read of the file is. A link in a vouched directory to a
+file in a distrusted one is therefore untrusted, and so is a hard link to it; a link to a vouched
+file stays trusted. The other names are the file system's answer about the reported path and never a
+file's bytes. They can lower the label and never raise it. Where the lookup of the other names could
+not finish, because the walk reached the search cap, a directory could not be listed, or a name is
+not UTF-8, the location is untrusted, since the name that was not found may carry a rule that says
+so.
+
+`verified-by: bravebot_agent::lsp::a_location_reported_through_a_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::lsp::a_location_reported_through_a_hard_link_to_a_distrusted_file_is_untrusted`
+`verified-by: bravebot_agent::lsp::a_location_whose_other_names_could_not_be_found_is_untrusted`
+`verified-by: bravebot_agent::lsp::a_respelled_location_of_a_distrusted_file_is_still_untrusted`
+
 **The label is not a function of the answer's text, and nothing here decides from a name.** The
 paths go to the kernel and a label comes back. Which wording the answer uses ("outside the
 workspace", the 200-location notice) is chosen from the same bytes, but it is written into a string
@@ -264,8 +281,25 @@ Nothing outside the workspace becomes readable by having been named here. The co
 unchanged, so a planner that asks for the file anyway is refused as it would be for any other path
 outside the tree.
 
+**The `path` of a query is confined the way a read's is.** It is resolved through the workspace
+before a server is started or the person is asked about one. A path that lands outside the added
+directories, whether it is absolute, climbs out with `..`, or goes through a link that leads out, is
+refused with the remedy a read of it would be given, and the refusal is recorded in the trail as a
+confinement refusal ([TRACE-1](../trace.md#TRACE-1)), worded with the path as the planner typed it.
+A leading `~` is expanded to the person's home directory first, so it is refused unless the home is
+inside an added directory.
+The server is given the path the check resolved and not the name as typed, so a link on the typed
+name that is repointed after the check does not change which file the server is asked about. The
+check and the server's open of the file are separate steps: a directory on the resolved path that is
+replaced by a link between them is followed by the server, which runs with the person's own access
+([LSP-5](#LSP-5)). This applies to every operation that takes a `path`, `diagnostics` included.
+
 `verified-by: bravebot_agent::lsp::a_location_outside_the_workspace_says_so`
 `verified-by: bravebot_agent::lsp::naming_an_outside_location_does_not_make_it_readable`
+`verified-by: bravebot_agent::lsp::a_path_that_lands_outside_the_workspace_is_refused_before_a_server_is_asked`
+`verified-by: bravebot_agent::lsp::a_path_inside_the_workspace_is_still_answered_and_the_server_is_told_of_it`
+`verified-by: bravebot_agent::lsp::a_path_through_the_home_directory_is_refused_when_the_home_is_not_added`
+`verified-by: bravebot_agent::lsp::a_path_in_an_added_directory_is_answered_and_the_server_is_told_of_it`
 
 <a id="LSP-5"></a>
 ### LSP-5: a server is a program a person approved, and runs with their own access
@@ -763,19 +797,6 @@ their own merits under [READ-4](read-file.md#READ-4).
 `verified-by: bravebot_agent::lsp::the_end_line_is_in_the_context_only_where_the_answer_is_trusted`
 
 ## Known costs
-
-- **The `path` of a query is not confined to the workspace.** The tool joins `path` onto the root the
-  server was started in, so an absolute path or one with `..` names a file outside it, and a link
-  inside the root that leads out is followed. Only the deny rules are consulted
-  (`refuse_denied_path`). A server for the file's extension is asked about it and reads it with the
-  person's own access ([LSP-5](#LSP-5)). What comes back is labelled as for any query
-  ([LSP-3](#LSP-3)): hover text is untrusted, and a location in an outside file is shown as outside
-  the workspace and not readable ([LSP-4](#LSP-4)). The locations, line numbers and diagnostic counts
-  of an outside file still reach the planner as structure. The file tools resolve a path through
-  the workspace and refuse one outside the added directories; this tool does not, and no test
-  passes it an outside path. This is a defect and not an accepted cost: LSP-4 says nothing outside
-  the workspace becomes readable by being named here, and the unconfined `path` goes against that.
-  It is filed as [#3519](https://github.com/brave/bravebot/issues/3519).
 
 - **A declared server's own build tooling is unknown, so the prompt cannot say what it runs.**
   [LSP-11](#LSP-11) says that it is unknown. A person who declares a server wrapping a build tool

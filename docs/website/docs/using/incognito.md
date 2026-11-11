@@ -1,7 +1,7 @@
 ---
 sidebar_position: 10
 title: Incognito sessions
-description: Start a session with --incognito so it adds nothing to ~/.bravebot, and see what is still read and what still reaches the filesystem.
+description: Start an incognito session with --incognito, omit saved history, records and audit trails, and understand existing-state reads and filesystem side effects.
 ---
 
 # Incognito sessions
@@ -15,7 +15,7 @@ An incognito session runs like any other and adds nothing to `~/.bravebot`, apar
 written, no audit trail is kept, and a model, theme or effort level chosen inside it applies for
 that session without being recorded. The sessions directory is not created either, since an empty
 one still says that a session ran, in this project, at this time. No record is written, so nothing
-is resumable. An incognito session does not appear in the picker, including to itself.
+is resumable. An incognito session does not appear in the Sessions screen, including to itself.
 
 A history and records that were already there are left exactly as they were, and an ordinary session
 from before stays resumable. It stops being updated for as long as the incognito one runs.

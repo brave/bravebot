@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: How Brave Bot works
-description: The planner, the driver, labels, quarantine and processors.
+description: Planner and driver roles, labels, quarantine references, processors, delegates, routing and content, gates, trust sources and security limits.
 ---
 
 # How Brave Bot works
@@ -126,7 +126,7 @@ reading.
 | | |
 |---|---|
 | Tools | its kind's, a way to delegate again above the bottom of the tree, and never a way to ask you something or fetch a URL |
-| Memory | none of its parent's exchange: it begins with the task it was given |
+| Memory | none of its parent's exchange: it begins with the task it was given, which is sent again word for word if its conversation is compacted |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths you vouched for allow |
 | Writes | files, each shown to you first, and slots in a quarantine of its own |

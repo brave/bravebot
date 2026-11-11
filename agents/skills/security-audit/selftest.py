@@ -793,6 +793,317 @@ def test_labelled_impls():
     own = {Path("crates/core/src/value.rs"): ["impl<T> Labelled<T> {", "}"]}
     check("the type's own impl block is not a trait", list(audit.check_labelled_impls(own)) == [])
 
+    # The type's own functions are read too: an accessor added there reaches the content with no
+    # trait and no witness.
+    accessor = labelled(
+        "impl Labelled<String> {",
+        "    pub fn starts_with(&self, p: &str) -> bool { self.value.starts_with(p) }",
+        "}",
+    )
+    found = list(audit.check_labelled_impls(accessor))
+    check(
+        "an accessor in the type's own block is one error at its line",
+        kinds(found) == ["labelled-impl"]
+        and found[0]["impact"] == "high"
+        and found[0]["evidence"][0].startswith("crates/core/src/value.rs:2 ")
+        and "starts_with" in found[0]["title"],
+        str(found),
+    )
+
+    found = list(
+        audit.check_labelled_impls(
+            labelled(
+                "impl<T> Labelled<T> {",
+                "    pub fn new(value: T, label: Label) -> Self { todo() }",
+                "    pub fn peek(&self) -> &T { &self.value }",
+                "    pub fn take(self) -> T { self.value }",
+                "}",
+            )
+        )
+    )
+    check(
+        "each function outside the allowed ones is its own error and an allowed one is not",
+        [f["evidence"][0].split()[0] for f in found]
+        == ["crates/core/src/value.rs:3", "crates/core/src/value.rs:4"],
+        str([f["evidence"] for f in found]),
+    )
+
+    for name, source in {
+        "an accessor in a block whose header wraps": labelled(
+            "impl<T>", "    Labelled<T>", "{", "    pub fn raw(&self) -> &T { &self.value }", "}"
+        ),
+        "an accessor on the line that opens the block": labelled(
+            "impl<T> Labelled<T> { pub fn raw(&self) -> &T { &self.value } }"
+        ),
+        "an accessor in a block with a bound": labelled(
+            "impl<T: Clone> Labelled<T> {", "    pub fn copy_out(&self) -> T { self.value.clone() }", "}"
+        ),
+        "an accessor in a block with a where clause": labelled(
+            "impl<T> Labelled<T>", "where", "    T: Clone,", "{", "    fn copy_out(&self) -> T {", "        self.value.clone()", "    }", "}"
+        ),
+        "an accessor after a string holding a brace": labelled(
+            "impl<T> Labelled<T> {",
+            '    pub fn label(&self) -> Label { lookup("}") }',
+            "    fn raw(&self) -> &T { &self.value }",
+            "}",
+        ),
+        "an accessor after a character literal holding a brace": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn label(&self) -> Label { lookup('{') }",
+            "    fn raw(&self) -> &T { &self.value }",
+            "}",
+        ),
+        "an accessor after a function that takes a lifetime": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn label(&self) -> Label { lookup::<'static>(&'static self.label) }",
+            "    fn raw<'a>(&'a self) -> &'a T { &self.value }",
+            "}",
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str(found))
+
+    for name, source in {
+        "a conversion from a Labelled into another type": labelled(
+            "impl From<Labelled<String>> for String {",
+            "    fn from(l: Labelled<String>) -> String { l.value }",
+            "}",
+        ),
+        "a conversion from a reference to a Labelled": labelled(
+            "impl<'a> From<&'a Labelled<String>> for String {", "}"
+        ),
+        "a conversion whose header wraps": labelled(
+            "impl", "    TryFrom<Labelled<Vec<u8>>>", "    for Vec<u8>", "{", "}"
+        ),
+        "a trait for a reference to Labelled": labelled("impl<T> AsRef<T> for &Labelled<T> {", "}"),
+        "a trait for a mutable reference to Labelled": labelled(
+            "impl<T> DerefMut for &'a mut Labelled<T> {", "}"
+        ),
+        "a trait for a path to Labelled": labelled("impl<T> Deref for crate::value::Labelled<T> {", "}"),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str(found))
+
+    for name, source in {
+        "a block of only the type's own functions": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn new(value: T, label: Label) -> Self { Self { value, label } }",
+            "    pub fn trusted(value: T) -> Self { todo() }",
+            "    pub fn label(&self) -> Label { self.label }",
+            "    pub fn declassify(self, _proof: &Declassification) -> T { self.value }",
+            "    pub fn into_trusted(self) -> Result<T, Self> { todo() }",
+            "    pub fn relabel(self, to: Label) -> Option<Self> { todo() }",
+            "}",
+            "impl Labelled<String> {",
+            "    pub(crate) fn shape(&self) -> Shape { todo() }",
+            "}",
+        ),
+        "a function named in a comment inside the type's block": labelled(
+            "impl<T> Labelled<T> {",
+            "    // fn raw(&self) -> &T would let a caller read the content.",
+            "    /* fn peek(&self) -> &T */",
+            "    pub fn label(&self) -> Label { self.label }",
+            "}",
+        ),
+        "a function named in a string inside the type's block": labelled(
+            "impl<T> Labelled<T> {", '    pub fn label(&self) -> Label { lookup("fn raw") }', "}"
+        ),
+        "a function nested in an allowed function": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn label(&self) -> Label {",
+            "        fn helper(l: Label) -> Label { l }",
+            "        helper(self.label)",
+            "    }",
+            "}",
+        ),
+        "a function of another type that follows the type's block": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn label(&self) -> Label { self.label }",
+            "}",
+            "impl Other {",
+            "    pub fn raw(&self) -> &str { &self.value }",
+            "}",
+        ),
+        "a conversion into another type from something else": labelled(
+            "impl From<String> for Wrapper {", "}"
+        ),
+        "a trait of another type with a Labelled bound in its generics": labelled(
+            "impl<T: Into<Labelled<String>>> Describe for Wrapper<T> {", "}"
+        ),
+        "a trait of another type with a Labelled bound in its where clause": labelled(
+            "impl<T> Describe for Wrapper<T>", "where", "    T: From<Labelled<String>>,", "{", "}"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is clean", found == [], str(found))
+
+    # The tree's own definition is the fixture that decides which names are the type's own, so a
+    # function it has that the list omits is an error here and not in some later change.
+    real = Path("crates/core/src/value.rs")
+    check(
+        "the functions of the real Labelled are all allowed",
+        list(audit.check_labelled_impls({real: real.read_text().splitlines()})) == [],
+    )
+
+    def own(*body):
+        return labelled("impl Labelled<String> {", *body, "}")
+
+    # Hole 1: an allowed name keeps its place on the list and changes what it takes or returns.
+    for name, source in {
+        "shape returning the content": own("    pub(crate) fn shape(&self) -> String { self.value.clone() }"),
+        "label returning the content": labelled(
+            "impl<T> Labelled<T> {", "    pub fn label(&self) -> &T { &self.value }", "}"
+        ),
+        "a signature wrapped over lines that differs": labelled(
+            "impl<T> Labelled<T> {",
+            "    pub fn into_trusted(",
+            "        self,",
+            "        peek: bool,",
+            "    ) -> Result<T, Self> {",
+            "        todo()",
+            "    }",
+            "}",
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(
+            f"{name} is one error",
+            len(found) == 1 and "signature" in found[0]["title"],
+            str([f["title"] for f in found]),
+        )
+    check(
+        "a recorded signature wrapped over lines is clean",
+        list(
+            audit.check_labelled_impls(
+                labelled(
+                    "impl<T> Labelled<T> {",
+                    "    pub fn declassify(",
+                    "        self,",
+                    "        _proof: &Declassification,",
+                    "    ) -> T {",
+                    "        self.value",
+                    "    }",
+                    "}",
+                )
+            )
+        )
+        == [],
+    )
+
+    # Hole 2: the name and the signature are right and the visibility is wider, or missing.
+    for name, source in {
+        "shape widened to pub": own("    pub fn shape(&self) -> Shape { todo() }"),
+        "shape with no visibility": own("    fn shape(&self) -> Shape { todo() }"),
+        "new narrowed to pub(crate)": labelled(
+            "impl<T> Labelled<T> {", "    pub(crate) fn new(value: T, label: Label) -> Self { todo() }", "}"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(
+            f"{name} is one error",
+            len(found) == 1 and "visibility" in found[0]["title"],
+            str([f["title"] for f in found]),
+        )
+
+    # Hole 3: an implementation whose subject is `Labelled` under another spelling.
+    def declared(*lines):
+        return {
+            Path("crates/core/src/value.rs"): ["pub struct Labelled<T> {", "    value: T,", "}", *lines]
+        }
+
+    for name, source in {
+        "a trait for a Box of Labelled": declared("impl<T> Deref for Box<Labelled<T>> {", "}"),
+        "a trait for an alias of Labelled": declared(
+            "type Held = Labelled<String>;", "impl Deref for Held {", "}"
+        ),
+        "a trait for an alias of an alias": declared(
+            "type Held = Labelled<String>;", "pub(crate) type Kept = Held;", "impl Deref for Kept {", "}"
+        ),
+        "a trait for a wrapper tuple struct": declared(
+            "pub struct Wrapper(Labelled<String>);", "impl Deref for Wrapper {", "}"
+        ),
+        "a trait for a wrapper with named fields": declared(
+            "pub struct Wrapper {", "    inner: Box<Labelled<String>>,", "}", "impl Deref for Wrapper {", "}"
+        ),
+        "an inherent accessor on an alias": declared(
+            "type Held = Labelled<String>;", "impl Held {", "    fn raw(&self) -> &str { &self.value }", "}"
+        ),
+        "a blanket impl for a generic parameter": declared("impl<T> Deref for T {", "}"),
+        "a trait for a projection": declared("impl Deref for <Held as Holds>::Inner {", "}"),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str([f["title"] for f in found]))
+
+    for name, source in {
+        "a trait for a type that holds no Labelled": declared("struct Plain(String);", "impl Deref for Plain {", "}"),
+        "an alias of something else": declared("type Held = Vec<String>;", "impl Deref for Held {", "}"),
+        "an associated type named like an alias": declared(
+            "impl Other for Plain {", "    type Held = Labelled<String>;", "}"
+        ),
+        "the recorded trait for a Box of Labelled": declared("impl<T> fmt::Debug for Box<Labelled<T>> {", "}"),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is clean", found == [], str([f["title"] for f in found]))
+
+    elsewhere = {
+        Path("crates/core/src/value.rs"): ["pub struct Labelled<T> {", "    value: T,", "}"],
+        Path("crates/agent/src/hold.rs"): [
+            "pub struct Holder(Labelled<String>);",
+            "impl<T> Deref for T {",
+            "}",
+        ],
+    }
+    check(
+        "a wrapper or a blanket impl in a file that does not declare Labelled is not read",
+        list(audit.check_labelled_impls(elsewhere)) == [],
+    )
+
+    # Hole 4: a brace inside a raw string, which a counter that skips ordinary strings only reads as
+    # code. The first function is allowed, so every finding here comes from where the block ends.
+    for name, body in {
+        "an opening brace in a raw string": '    pub fn label(&self) -> Label { lookup(r#"{"#) }',
+        "a closing brace in a raw string": '    pub fn label(&self) -> Label { lookup(r#"}"#) }',
+        "a raw string with two hashes holding a quote and a brace": (
+            '    pub fn label(&self) -> Label { lookup(r##"a "# }"##) }'
+        ),
+        "a raw string wrapped over lines": (
+            '    pub fn label(&self) -> Label { lookup(r#"\n}\n"#) }'
+        ),
+        "a byte raw string": '    pub fn label(&self) -> Label { lookup(br#"}"#) }',
+        "a brace in a block comment": "    pub fn label(&self) -> Label { /* } */ lookup() }",
+    }.items():
+        found = list(
+            audit.check_labelled_impls(
+                labelled(
+                    "impl<T> Labelled<T> {",
+                    *body.split("\n"),
+                    "    fn raw(&self) -> &T { &self.value }",
+                    "}",
+                )
+            )
+        )
+        check(
+            f"{name} leaves the next function attributed to the block",
+            [f["title"].split()[0] for f in found] == ["raw"],
+            str([f["title"] for f in found]),
+        )
+    check(
+        "a function after an impl block with a raw string is not attributed to it",
+        list(
+            audit.check_labelled_impls(
+                labelled(
+                    "impl<T> Labelled<T> {",
+                    '    pub fn label(&self) -> Label { lookup(r#"{"#) }',
+                    "}",
+                    "impl Other {",
+                    "    fn raw(&self) -> &str { &self.value }",
+                    "}",
+                )
+            )
+        )
+        == [],
+    )
+
 
 PINNED_STEP = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
 
@@ -1715,6 +2026,24 @@ def test_construction_pinned():
         ) == 1,
     )
 
+    spelled = {
+        Path("crates/agent/src/tools.rs"): [
+            "fn a(t: String) -> Labelled<String> { Labelled::<String>::trusted(t) }",
+            "fn b(t: String) -> Labelled<String> { <Labelled<String>>::trusted(t) }",
+            "fn c(t: String) -> Labelled<String> { Labelled::trusted(t) }",
+            "fn d(t: String) -> Vec<Labelled<String>> { Vec::<Labelled<String>>::new() }",
+        ]
+    }
+    check(
+        "a constructor written with its qualifier's generics is a construction site",
+        sum(site["count"] for site in audit.sites_for("Labelled::trusted", spelled)) == 3,
+        str([site["text"] for site in audit.sites_for("Labelled::trusted", spelled)]),
+    )
+    check(
+        "another type's constructor with generics is not a construction of Labelled",
+        sum(site["count"] for site in audit.sites_for("Labelled::new", spelled)) == 0,
+    )
+
 
 def test_the_gate_that_reads_a_number_is_counted():
     """The gate hands an answer's text to a function the caller names and takes a byte back.
@@ -1764,6 +2093,145 @@ def test_the_gate_that_reads_a_number_is_counted():
     check(
         "the gate that reads a number is one of the gates",
         "Policy::read_a_number" in audit.GATES,
+    )
+
+
+def test_label_builders_are_accounted():
+    def policy(*functions):
+        body = ["impl Policy {"]
+        for function in functions:
+            body += function
+        return {Path("crates/core/src/policy.rs"): body + ["}"]}
+
+    def promote(name, call):
+        return [f"    pub fn {name}(&mut self, value: Labelled<String>) -> Labelled<String> {{", f"        {call}", "    }"]
+
+    counted = FakeSpec(["Policy::promote_known"])
+    known = promote("promote_known", "Labelled::new(value.declassify(&proof), Label::trusted_public())")
+
+    check(
+        "a function a spec counts is clean",
+        list(audit.check_label_builders_accounted([counted], policy(known))) == [],
+    )
+
+    for name, call in {
+        "a promotion to trusted and public": "Labelled::new(text, Label::trusted_public())",
+        "a promotion to trusted and private": "Labelled::new(text, Label::trusted_private())",
+        "a label with a trusted integrity": "Labelled::new(text, Label::new(Integrity::Trusted, c))",
+        "a release to public": "Labelled::new(text, Label::new(from.integrity, Confidentiality::Public))",
+    }.items():
+        found = list(
+            audit.check_label_builders_accounted([counted], policy(known, promote("ninth_gate", call)))
+        )
+        check(
+            f"{name} in a ninth function is one error at its line",
+            kinds(found) == ["label-builder-unaccounted"]
+            and "ninth_gate" in found[0]["title"]
+            and found[0]["evidence"][0].startswith("crates/core/src/policy.rs:5 "),
+            str([f["evidence"] for f in found]),
+        )
+
+    other = FakeSpec(["Policy::promote_known"], named=["Policy::promote_known", "Policy::ninth_gate"])
+    check(
+        "a ninth function a spec guards without counting is accounted for",
+        list(
+            audit.check_label_builders_accounted(
+                [other], policy(known, promote("ninth_gate", "Labelled::new(t, Label::trusted_public())"))
+            )
+        )
+        == [],
+    )
+    check(
+        "a function named in LABEL_BUILDERS_NOT_GATES is accounted for",
+        list(
+            audit.check_label_builders_accounted(
+                [counted], policy(promote("record_note", "Labelled::new(t, Label::trusted_public())"))
+            )
+        )
+        == [],
+    )
+
+    for name, function in {
+        "a comparison against a constructor": [
+            "    pub fn trusts(&self, l: Label) -> bool {",
+            "        l == Label::trusted_public()",
+            "    }",
+        ],
+        "an assert against a constructor": [
+            "    pub fn trusts(&self, l: Label) {",
+            "        assert_eq!(l, Label::trusted_public());",
+            "    }",
+        ],
+        "a constructor named in a comment": [
+            "    pub fn quiet(&self) {",
+            "        // Label::trusted_public() is what promote_known returns",
+            "    }",
+        ],
+        "a constructor named in a string": [
+            "    pub fn quiet(&self) -> &str {",
+            '        "Label::trusted_public()"',
+            "    }",
+        ],
+        "an untrusted label": [
+            "    pub fn hop(&self) -> Label {",
+            "        Label::untrusted_public()",
+            "    }",
+        ],
+        "a private function": [
+            "    fn build(&self) -> Label {",
+            "        Label::trusted_public()",
+            "    }",
+        ],
+        "a nested function belongs to its parent": [
+            "    pub fn promote_known(&self) -> Label {",
+            "        fn inner() -> Label { Label::trusted_public() }",
+            "        inner()",
+            "    }",
+        ],
+    }.items():
+        found = list(audit.check_label_builders_accounted([counted], policy(known, function)))
+        check(f"{name} is clean", found == [], str([f["title"] for f in found]))
+
+    tests_only = policy(known) | {}
+    tests_only[Path("crates/core/src/policy.rs")] += [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    pub fn ninth_gate() -> Label { Label::trusted_public() }",
+        "}",
+    ]
+    check(
+        "a function under cfg(test) is not read",
+        list(audit.check_label_builders_accounted([counted], tests_only)) == [],
+    )
+    check(
+        "a tree with no policy file has nothing to report",
+        list(audit.check_label_builders_accounted([counted], {})) == [],
+    )
+
+    real = Path("crates/core/src/policy.rs")
+    sources = {real: real.read_text().splitlines()}
+    found = audit.label_builders(sources)
+    check(
+        "the real policy layer's label builders include the eight gates",
+        all(
+            name in found
+            for name in (
+                "declassify_into_workspace",
+                "declassify_written_into_workspace",
+                "declassify_checkout_into_workspace",
+                "promote_a_tool_list",
+                "promote_a_server_move",
+                "adopt_edited_body",
+                "promote_vetted",
+                "promote_vetted_picture",
+            )
+        ),
+        str(sorted(found)),
+    )
+    check(
+        "every name LABEL_BUILDERS_NOT_GATES lists is still a label builder",
+        set(audit.LABEL_BUILDERS_NOT_GATES) <= set(found),
+        str(sorted(set(audit.LABEL_BUILDERS_NOT_GATES) - set(found))),
     )
 
 
@@ -2214,6 +2682,9 @@ def key_tree(**bodies):
             "pub fn fold_case(key: &str) -> String {",
             "    key.to_string()",
             "}",
+            "pub fn fold_simple(key: &str) -> String {",
+            "    key.to_string()",
+            "}",
             "pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {",
             "    Cow::Borrowed(key)",
             "}",
@@ -2299,6 +2770,7 @@ def test_key_steps_join_no_names():
         ("to_string_lossy", "    Path::to_string_lossy(&path_buf).into_owned()"),
         ("from_utf8_lossy", "    String::from_utf8_lossy(bytes).into_owned()"),
         ("fold_case", "    fold_case(path)"),
+        ("fold_simple", "    fold_simple(path)"),
         ("to_lowercase", "    path.chars().flat_map(char::to_lowercase).collect()"),
         ("canonical_form", "    canonical_form(path, true).into_owned()"),
         ("decompose", "    crate::canonical::decompose(path)"),
@@ -3345,8 +3817,13 @@ def test_the_stop_hook():
     ]
     check(
         "the Stop hook in agents/settings.json runs this script in the mode that answers it",
-        commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
-        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
+        commands
+        == ['"$CLAUDE_PROJECT_DIR/contrib/py" "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
+        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file()
+        # The hook runs the script through `contrib/py`, which finds a Python of at least 3.11; a
+        # hook naming a wrapper that is missing or cannot be run would run nothing.
+        and (ROOT / "contrib/py").is_file()
+        and os.access(ROOT / "contrib/py", os.X_OK),
         str(commands),
     )
 
@@ -4327,7 +4804,7 @@ def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
     names = {(Path(s["path"]).name, s["function"]) for s in real}
     check(
         "the tree's own name-to-thing calls are listed, the workspace's hard-link check among them",
-        ("other_names.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
+        ("other_names.rs", "hard_links") in names and ("linux.rs", "open_row") in names,
         str(sorted(names)[:8]),
     )
     rows = with_cwd(ROOT, lambda: audit.confinement_rows(audit.mechanics.load_sources()))
@@ -4706,6 +5183,7 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
         "identity": [{"path": "crates/agent/src/workspace.rs"}],
         "deny_judgements": [{"path": "crates/agent/src/walker.rs"}],
     }
+    found_starts = {**found, "program_starts": [{"path": "crates/cli/src/browser.rs"}]}
     was = audit.mechanics.changed_files
     try:
         for touched, lane, shown in [
@@ -4720,6 +5198,10 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
             ("contrib/check-source.py", "tooling", found),
             (".githooks/pre-push", "tooling", found),
             ("Makefile", "tooling", found),
+            ("crates/sandbox/src/programs.rs", "inherited-environment", found),
+            ("docs/specs/sandboxing.md", "inherited-environment", found),
+            ("docs/best-practices/paths.md", "inherited-environment", found),
+            ("crates/cli/src/browser.rs", "inherited-environment", found_starts),
         ]:
             audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
             lanes = audit.changed_lanes("base", [Governing()], shown)
@@ -4874,6 +5356,51 @@ def test_no_name_in_the_enumerator_is_bound_twice():
         "every module-level name in security-audit.py, findings.py and workflow_checks.py is bound once",
         not twice,
         ", ".join(twice),
+    )
+
+
+def test_the_inherited_environment_lane_lists_each_start_with_its_selectors():
+    """The lane starts from every `programs::start` and says which selectors argument each passes."""
+    sources = {
+        Path("crates/a/src/one.rs"): [
+            "fn a() {",
+            "    let c = programs::start(p, i, s,",
+            "        CodeSelectors::Checked(&[]));",
+            "}",
+            "// programs::start(commented)",
+        ],
+        Path("crates/a/src/two.rs"): [
+            "use bravebot_sandbox::programs::{Inherits, start};",
+            "fn b() {",
+            "    start(p, i, s, CodeSelectors::Kept);",
+            "}",
+        ],
+        Path("crates/a/src/three.rs"): ["fn c() {", "    start(1);", "}"],
+        Path("crates/a/tests/four.rs"): ["fn d() { programs::start(p, i, s, CodeSelectors::Kept); }"],
+    }
+    found = [(s["path"], s["line"], s["selectors"]) for s in audit.program_starts(sources)]
+    check(
+        "a qualified start and a bare start in a file that imports it are listed with their selectors, and a "
+        "comment, an unrelated start and a test file are not",
+        found == [("crates/a/src/one.rs", 2, "Checked"), ("crates/a/src/two.rs", 3, "Kept")],
+        str(found),
+    )
+
+    def real():
+        specs = audit.load_specs()
+        surface = audit.surface(audit.mechanics.load_sources(), specs)
+        return surface, audit.build_lane(
+            "inherited-environment", surface, specs, Path("results.json"), Path("surface.json"), Path("tracker.txt")
+        )
+
+    surface, prompt = with_cwd(ROOT, real)
+    check(
+        "the tree's own starts are listed, and the prompt names the table and has no placeholder left",
+        any(s["path"] == "crates/sandbox/src/programs.rs" or s["selectors"] for s in surface["program_starts"])
+        and f"{len(surface['program_starts'])} starts of a program" in prompt
+        and "CODE_SELECTORS" in prompt
+        and not SURVIVING.search(prompt.replace("{start_sites}", "")),
+        str(SURVIVING.findall(prompt)),
     )
 
 
@@ -5477,6 +6004,7 @@ TESTS = (
     test_prompt_split,
     test_exhaustive_reader_docs,
     test_labelled_impls,
+    test_label_builders_are_accounted,
     test_pinned_actions,
     test_pinned_images,
     test_downloads_verified,
@@ -5522,6 +6050,7 @@ TESTS = (
     test_the_tracker_is_written_for_the_lanes,
     test_no_name_in_the_enumerator_is_bound_twice,
     test_every_lane_has_its_file_and_its_row,
+    test_the_inherited_environment_lane_lists_each_start_with_its_selectors,
     test_the_exemption_stops_at_the_person_s_own_configuration,
     test_candidates_that_make_one_claim_are_checked_together,
     test_a_group_is_one_verifier_and_the_others_are_in_its_prompt,

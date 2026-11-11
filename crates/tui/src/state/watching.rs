@@ -5,7 +5,8 @@ use super::*;
 /// A question asked beside a running turn, while its worker is out (CMD-8).
 ///
 /// Held by the session so the turn's own loop can drain it each frame: the loop that waits for a
-/// question asked between turns takes the terminal, and this one must not.
+/// question asked between turns takes the terminal, and this one must not. A turn that ends by
+/// itself leaves it here, and the loop that waits for the person drains it from then.
 #[derive(Debug)]
 pub struct AsideFlight {
     /// What the row will say was asked.
@@ -202,9 +203,7 @@ impl Session {
         if self.attributed_to == Some(id) {
             self.attributed_to = None;
         }
-        if self.waiting_on == Some(id) {
-            self.waiting_on = None;
-        }
+        self.waiting_on.retain(|waiting| *waiting != id);
         // The roster says which delegate this ends: the latest with that number still working.
         if let Some(place) = self.roster.finish(id, failed) {
             self.sync_delegates();
@@ -413,7 +412,7 @@ impl Session {
     /// are the turn's and are left alone.
     pub fn charge_aside_beside_a_turn(&mut self, usage: bravebot_aichat::protocol::Usage) {
         self.charge(usage.total());
-        self.charged_split(usage.total(), usage.completion_tokens);
+        self.charged_split(bravebot_session::sessions::Split::of_usage(usage));
     }
 
     /// A row put ahead of every delegate in the list, with the place of the row the view is on moved

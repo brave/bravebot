@@ -65,21 +65,10 @@ ground on its left too, so its corners never meet the edge. The three column hea
 so they line up across the window, and the sidebar's head leaves room for the inset traffic
 lights.
 
-The **Agent** menu beside the model picker chooses how the next message is handled. **Agent** is
-the default: an ordinary turn. **Plan** makes the next Send start a manifest run from the draft.
-The agent plans the whole task before reading anything, shows you the plan, and runs it only if
-you approve. The menu goes back to Agent once the run starts, so the next message is an ordinary
-turn; a conversation never holds the mode. A run cannot take attached or dropped files or pasted
-pictures, and a bot cannot start one, so Plan is greyed with the reason in either case. A file
-named with `@` in the task stays a word of the task and is not read into it, as with `/manifest`
-in the terminal: a plan is fixed before anything is read, so the run reads that file, if it does,
-as one of its steps. The run is saved as its own record and is not part of the conversation, so a
-later turn is not sent what the run said.
-
-A run's record is listed with the conversations and marked **Plan run**. Choosing one reads
-it: the task, the goal, the plan, the steps that ran, and why it stopped if it did. It has
-no message box, because a run has no conversation to continue. **New chat here** starts
-a chat in the run's project. Runs started in the terminal are listed and read the same way.
+The window starts no manifest runs. A run's record, started in the terminal, is listed with the
+conversations and marked **Plan run**. Choosing one reads it: the task, the goal, the plan, the
+steps that ran, and why it stopped if it did. It has no message box, because a run has no
+conversation to continue. **New chat here** starts a chat in the run's project.
 
 Drafts and reading positions survive conversation switches and restarts. A running
 conversation can continue in the background. Enter while a turn runs sends the message into that
@@ -153,15 +142,25 @@ banners above the header. It goes where it is needed:
   clear themselves after four seconds, name where a file went, and at most three show at once.
   A failure is never a confirmation.
 
-The mode control in the composer, beside the model, says how much the session asks before it acts: **Ask** (every
+The composer has two controls on the right, before Send: the session controls menu and the model
+picker, the model last. The menu has two groups, **Approvals** and **Sandbox**. Its button shows the approval mode, and
+adds the sandbox mode when it is not Workspace write, so nothing that changes what the session
+does is hidden in the closed menu. The button's accessible name lists both, and `⇧⌘M` still cycles the approval mode.
+The menu opens upward from the button and is no taller than the space above it, so a short window
+scrolls it instead of cropping it.
+
+The **Approvals** group says how much the session asks before it acts: **Ask** (every
 write and command is put to you), **Accept edits** (writes go through, commands and writes that
-would create a credential are still asked about) or **Plan** (nothing is written, commands are still
-asked about). Ask is drawn plainly. The other two are tinted for as long as they hold. Every session
+would create a credential are still asked about), **Plan** (nothing is written, commands are still
+asked about) or **Auto** (writes go through as in Accept edits, and a model decides whether to run
+a command or fetch a URL; anything it does not allow is still put to you, as in Ask). Each is
+drawn in a hue of its own, on the button and on the chosen item: yellow for Ask, green for Accept
+edits, blue for Plan and pink for Auto. Every session
 opens in Ask, including a resumed one and a fork. A change while a turn runs applies to the rest
 of that turn. Bypassing every check is not offered here, because it is reached
 only through the terminal's `--dangerously-skip-permissions` flag.
 
-The sandbox control beside it says how much a program the agent runs is held to: **Workspace write**
+The **Sandbox** group says how much a program the agent runs is held to: **Workspace write**
 (the machine can be read except credential locations, and writes stay in the session), **Read only**
 (the same reads and no writes in the session) or **Strict** (a program reads only what its command
 names). On Windows none of the three reads the machine and Strict gives a program what Workspace
@@ -171,18 +170,26 @@ through the terminal's `--sandbox off` flag or `/sandbox off`. A change applies 
 and a turn already running keeps the mode it began with. Every session opens in the mode the
 settings and the managed file give, never in another session's choice.
 
-The model control in the composer opens the conversation's model picker.
-Search by name, provider, or reported capability (for example, `text` or `tools`),
-then click a model or use the arrow keys and Enter. Escape closes the picker.
+The model control in the composer opens the conversation's model picker: a search field and
+**Refresh** across the top, then a rail of service marks, the models, and a **Reasoning** column.
+The first mark lists every service's models, each row with its service's mark; another mark lists
+that service's models alone. Search by name, provider, or reported capability (for example, `text`
+or `tools`); a search covers every service whichever mark is chosen. Click a model to choose it and
+keep the picker open, or use the arrow keys and Enter to choose and close. Escape closes the picker.
 
-Models are grouped by provider. **ArrowLeft** on any row collapses that provider's section;
-**ArrowRight** on a collapsed section expands it. Clicking the provider heading toggles
-it the same way. **PageDown** and **PageUp** jump six rows at a time through the visible
-list. **Home** and **End** jump to the first and last visible row. Changing the search
-query resets all collapsed sections. New conversations use the agent's configured default when available;
-the default is also marked in the list. A choice applies to subsequent messages and is
-remembered locally for that conversation across app restarts. Forks inherit the current
+With the search field empty, **ArrowLeft** and **ArrowRight** move between the rail, the models and
+the Reasoning column, and **ArrowUp** and **ArrowDown** move within the one the highlight is in.
+**PageDown** and **PageUp** jump six models at a time, and **Home** and **End** jump to the first and
+last. The models a service shows, and their order, are chosen under **Settings › Providers**; the
+model in use is listed whatever was hidden. New conversations use the agent's configured default
+when available; the default is also marked in the list. A choice applies to subsequent messages
+and is remembered locally for that conversation across app restarts. Forks inherit the current
 choice. The picker is disabled while a turn is running.
+
+The Reasoning column is **Default** and five levels, Low to Ultra. A level is recorded where the
+terminal's `/effort` records it, so it applies to every conversation and to the terminal, and
+**Default** removes it. The column is locked, with a line saying why, where the model in use takes
+no level or the conversation's folder names one in its settings, which outranks a pick.
 
 Available models come from the agent's configured backends, including OpenRouter.
 Badges show the capabilities the app exposes: **Text** and **Tools**. The catalogue
@@ -194,10 +201,10 @@ Refresh retries discovery if a provider is unavailable; the configured default r
 selectable. Choosing a model does not change the agent's global default.
 
 Where the models of a service could not be listed, the picker says so above the list, one sentence
-for each service, in the picker's status type. The bridge words each sentence. A sentence that names
+for each service, as a small warning alert. The bridge words each sentence. A sentence that names
 a command to run, such as the one that signs in to ChatGPT again, has that command drawn as code. The
 bridge sends it beside the sentence (`warningCommands`, in the order of `warnings`), so the picker does
-not read a sentence to find it. A warning that names no command is a plain line.
+not read a sentence to find it. A warning that names no command is a plain sentence in the alert.
 
 ### Turn notices, usage and audit
 
@@ -300,6 +307,17 @@ uses, rather than by assembling a string of HTML — so a reply's markdown is ga
 to paper by exactly what gates it on screen. See `src/main/export.ts` for why that is worth a
 whole extra window.
 
+### The `/schedule` line
+
+A line that is `/schedule` or `/schedule <argument>`, typed into the composer, lists and manages
+schedule entries through the bridge method `schedule.command`, which runs the code `bravebot schedule`
+runs. The answer is drawn as a note in the transcript, as an error note where the command refused or
+failed, and is never sent to the model. `list`, `pending` and `history` are answered during a turn;
+any other form waits in the queue and is asked again when the turn ends. `run-now` answers at once
+and the line the run ends with arrives later as the `schedule.ran` event. An entry added here holds
+read mode whatever mode the conversation is in. A line from the queue of another kind, a template or
+the model's output is never taken for the command.
+
 ### Bots
 
 The left column has two lists. The **Chats** tab is everything above; the **Bots** tab is the
@@ -310,7 +328,9 @@ A bot has a name, purpose, model choice, avatar, a home folder and persistent me
 folder is made by the app under its own data directory, beside the briefing and never inside it.
 Opening a bot opens its conversation, one that carries on, in its home folder
 ([MEMORY-14](../../docs/specs/definition-memory.md#MEMORY-14)). A bot nobody has talked to yet
-shows its face and **Talk to** its name above the message box. The conversation has no project
+shows its face and **Talk to** its name above the message box. The face, the title, the notes
+and the composer are centred in the column, and the column scrolls when that block is taller
+than the space under the header. The conversation has no project
 picker. The history button in its header opens **Earlier conversations**,
 the bot's other conversations and its details, and the arrow on that page goes back to the
 conversation.
@@ -393,14 +413,42 @@ white cell and a pupil. Avatar colours do not change with appearance. A face has
 rounded frame: it is drawn on the page and cropped to its own cells, so it fills whatever size it
 is given.
 
+Light falls on a face from the upper left. Edge cells facing it are paler, edge cells facing away
+are darker, and each part darkens toward its lower right, all drawn over the cells so their own
+colours are unchanged. No cell beside an eye is lightened. At 32 pixels and over a face also has a
+catch-light in each pupil.
+
 Any stored seed draws a face, so every bot has one, new or old.
 
 Each face is an SVG with one rect per cell. One shared clock moves the animated ones by whole
 cells, writing attributes rather than re-rendering: idle glances swap the pupils, blinks close
 the eyes to a line, a running turn drops the eyes a row, a failed turn looks away for a few
-seconds, and finishing a turn nods the figure once. Reduced-motion preferences stop the clock, and
-a face then changes only when what its bot is doing changes. See `src/renderer/avatar/` and
-`src/renderer/components/BotAvatar.tsx`.
+seconds, and finishing a turn nods the figure once.
+
+A face also says what a turn is doing. While the model writes, its eyes look up and from side to
+side. While a tool runs, they look down. While the turn waits on your answer, it looks straight
+out, and its marker says so.
+
+An animated face of 32 pixels and over moves its body as well, with a weight its body gives it:
+the block, blob, squat and bust bodies are heavy and slow, the round and diamond ones light and
+springy. It breathes, bobs while it works with its arms tapping, and sways while it thinks.
+Starting a turn makes it lean in. Finishing one makes it crouch, jump, land and settle, with its
+eyes closed into happy arches. A failed turn makes it startle with wide eyes, shake, and slump
+while it looks away. Asked a question, it opens its eyes wide and bounces every few seconds until
+it is answered. The crown and arms trail the body and overshoot it.
+
+It answers the pointer too. It perks up when the pointer arrives over it, squashes under a press
+and springs back when let go, and giggles at the third quick press. Choosing a bot in the
+sidebar, by pointer or by Enter or Space, makes its face giggle. The open bot's face watches
+the message box while you type. A face glances toward a neighbour that cheers, startles or
+giggles. A face in a list that nothing has happened to for 40 seconds dozes off, with heavy lids
+and a slow breath, and wakes with a stretch when the pointer reaches it. About every half minute
+at rest a face sways, hops or wiggles its antennae. Choosing a new look in the avatar editor pops
+the new face in. Two views of one bot move together.
+
+Reduced-motion preferences stop the clock and all of this, and a face then changes only when what
+its bot is doing changes. See `src/renderer/avatar/`, `src/renderer/components/BotAvatar.tsx` and
+`src/renderer/styles/avatar.css`.
 
 #### How a purpose reaches the model
 
@@ -583,7 +631,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
 | `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |
 | `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
-| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
+| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Auto, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | | Brave Bot › Keep Computer Awake During Turns | A checkbox, off at every launch: while it is on the computer does not sleep while any chat has a turn running. The first time, a dialog says what it does (the screen still locks) and asks to Enable |
 | | Chat › Add Note… | Keep a note on the chat's record, never sent to the model; greyed while a turn runs. The context panel's Notes section lists the notes and has the same Add button |
@@ -830,13 +878,67 @@ stay in English.
 ## Agent 0.9 controls
 
 **Settings** at the foot of the sidebar replaces the chat view with the settings: pages on the
-left (**General** and **Agent settings**) and **Back to
+left (**General**, **Providers**, **Connectors** and **Agent settings**) and **Back to
 BraveBot**, which `Esc` also does. The chat view stays as it was underneath. The setup button on
-the backend notice opens Agent settings.
+the backend notice opens Providers.
 
-**Agent settings** shows Connection, Hooks and Run settings, one after another. Connection
-shows the bundled agent build, model services, certificate/proxy details and administrator
-pins, with setup instructions for gateways, AWS Bedrock and Brave. Secrets are not shown.
+**Providers** shows **Accounts** first, then the model service, with the bundled agent build, the
+default model and each configured provider's credential, a **Fix** beside one that is missing which
+chooses its account above, and setup instructions for gateways and AWS Bedrock. **Agent settings**
+shows Connection (certificate and proxy details, diagnostics and administrator pins), Hooks and Run
+settings, one after another. Secrets are not shown.
+
+**Accounts** is a list of the sign-ins beside the one chosen, which the arrow keys move through. A
+signed-in account shows its models: **Show in model picker** shows or hides all of them, each model
+has a switch of its own and a handle that moves it, by dragging or by Alt with the up or down arrow,
+and **Reset to defaults** forgets those choices for that service and leaves it signed in. The
+choices are kept by the desktop window alone. The list holds the sign-ins `bravebot auth status` reports: Brave Premium,
+each gateway, OpenRouter wherever a key could be stored for it, AWS Bedrock, ChatGPT and xAI, each
+with its mark and its standing (signed in, key stored, key from the environment, no key needed, not
+signed in, can't be used, or misconfigured) and the reason a sign-in can't be used. No row shows
+who is signed in, a key or a token. A row the agent can forget has **Sign out**, which asks first;
+Cancel and `Esc` forget nothing, and a gateway's question names its host. A ChatGPT or xAI row that
+is not signed in, or can't be used, has **Sign in**, and so does an AWS Bedrock row whose sign-in
+is the remedy. The Brave Premium row and a gateway row whose key can be stored have **Enter key**,
+or **Replace key** where one is stored. Any other row that is not signed in shows the command that
+signs in, with a copy button; a key row shows its button instead. The window coming back reads the
+rows again, at most every five seconds and not where an AWS
+Bedrock row is listed, since reading it runs the AWS command-line tool. A failure card or picker
+warning that names `bravebot auth login chatgpt` or `bravebot auth login xai` has the same
+**Sign in** button.
+
+Sign in asks in a dialog of the main process's own, with Cancel as the default. A yes starts the
+sign-in and opens a small **Sign in to** window titled with the row's name as Accounts lists it
+(**Sign in to ChatGPT account**, **Sign in to xAI account**). For ChatGPT the
+browser opens at OpenAI, and the window shows the address, with a copy button and **Open browser
+again**, and the local port that waits for it. For xAI the window shows the code to enter, with a
+copy button, how long it lasts, and **Open in browser**. The row shows that it is waiting, until
+when, **Show sign-in window** and **Cancel**; closing the small window cancels too. When the
+sign-in ends the row says it was stored, cancelled or why it failed, and the model list is read
+again.
+
+An AWS Bedrock row signs in to the account it names, its profile or the default chain, with
+`aws sso login`, as `bravebot auth login bedrock` does. The dialog says that the AWS command-line
+tool opens a browser at AWS and keeps the session. The **Sign in to** window, titled with the row's name, shows the profile,
+the code to confirm, with a copy button, once the AWS command-line tool has written it, and
+**Open browser again**. Cancel, closing the window and quitting stop the AWS command-line tool.
+Afterwards the account is checked again, as a turn would, and a sign-in it did not complete says
+so. Signing in to the account the tier variables name records `BRAVEBOT_USE_BEDROCK` in the
+user's settings, as the command does, except in an incognito session, and the row says what
+became of it. Where there is no account to sign in to, or Bedrock is switched or pinned off, the
+row says so and the AWS command-line tool is not run.
+
+Enter key opens a small **Enter the key for** window of the main process's own, once the agent
+says a key can be kept; otherwise the row says why not, such as an incognito session or a key file
+that cannot be read, which is left as it is. The window shows the service's mark, where the key is
+sent, that a known service is named in the settings so sessions send it, that saving replaces the
+key stored and the one replaced still works at its host until it is revoked there, and that a
+variable set in the environment is sent instead of the key while it is set. The key is typed in a
+password field and the page never sees it. **Save key** or **Replace key** stores it and closes
+the window; a refusal is said in the window, which stays open. **Cancel**, or closing the window,
+stores nothing. While it is open the row says to enter the key in its window, with **Show key
+window**. When a key is stored the row says so, and the model list is read again.
+
 Run settings selects a JSON model/connection override for this app run, lists loaded files
 in precedence order, and provides Clear override. Existing turns retain their configuration;
 future turns and model discovery use the selected override. Terminal-only preferences are not

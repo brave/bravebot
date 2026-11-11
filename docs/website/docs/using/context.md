@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Adding context
-description: Naming files with @path and --file, pasting text and pictures, and dropping files onto the terminal.
+description: Add files with @path or --file, address definitions and earlier sessions, paste text and pictures, drop terminal or desktop attachments, pipe input and understand each route's trust.
 ---
 
 # Adding context
@@ -47,6 +47,16 @@ A name containing whitespace is written with a backslash before each whitespace 
 writes that form for you. The picker leaves out a file or folder whose name holds a line break, and a file whose
 name ends in whitespace, because the line is trimmed when it is sent. Name such a file with `--file`.
 
+## Addressing a definition from the `@` list
+
+Typing `@` also lists the [delegate definitions](../customize/agents.md) this session resolved, the ones
+`/agent` accepts, each with its description, above the files. Picking one writes a `[@Name]` marker
+into the box and addresses that message to the definition, as `/agent <name> <task>` does, with the
+marker taken out of the task. A message addresses at most one definition: picking a second replaces
+the first, and deleting the marker takes the pick off. Shift-Enter starts a new line and keeps the
+pick. While a turn runs, the message waits as the `/agent` line it becomes. The marker is not a file
+name, so a line holding it names no file. The desktop app lists its bots in the same place.
+
 ## Naming an earlier session: `@session:<id>`
 
 After the files, the `@` picker lists earlier sessions of this directory by title and age. Typing a
@@ -66,9 +76,12 @@ been shown private content are not quoted, and the transcript says which. On the
 before anything is sent. The desktop app does not offer sessions in its message box.
 
 The desktop app's message box works the same way: `@` opens the list over the project, Tab and the
-arrows choose, and Enter completes a half-typed name or sends a finished one. A name that is not a
-text file inside the project stops the send and says which name it was, so nothing goes that you
-did not mean to send.
+arrows choose, and Enter completes a half-typed name or sends a finished one.
+
+In both, a name that is not a text file inside the project stops the send and says which name it
+was, so nothing goes that you did not mean to send. The line stays in the box, a paste included, and
+removing the `@` sends the word as text. This applies to a handle in pasted text, such as
+`cc @alice`, as well as to a path.
 
 :::caution
 Content you have not read is content you are vouching for. Be as careful naming a file as answering

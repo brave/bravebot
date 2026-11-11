@@ -20,6 +20,24 @@ const TWO_HIDDEN = '2 characters in this text draw as nothing. Each is written o
 const ONE_HIDDEN = '1 character in this text draws as nothing. It is written out below as \u2039U+XXXX\u203A, and a tag character also as the letter it stands for. The model reads it as it is.'
 const filler = (words) => range(words).map((n) => ['the', 'checker', 'read', 'this', 'and', 'found', 'nothing', 'that', 'gives', 'orders'][n % 10]).join(' ')
 
+// The question asked before the agent works in a directory (PROMPT-4, TRUST-23). It is a dialog
+// opened by choosing a folder, not a card put to the transcript by a `*.request` event, so it is
+// kept apart from CASES, whose loops put each case to the window as an event. The directory runs
+// to three long components, so it scrolls inside its own box, and the tokens are the words no
+// other row draws: both ends of the directory, the sentence the bridge words for a grant, and the
+// file a yes is kept in.
+const TRUST_DIRECTORY = `/work/zqy01/${'a'.repeat(255)}/${'b'.repeat(255)}/zqy02`
+export const TRUST_CASE = {
+  kind: 'trust',
+  props: {
+    directory: TRUST_DIRECTORY,
+    keeping: '/home/zqy04/.bravebot/trusted',
+    confinedLines: 'zqy03 A yes also lets a command run without asking when the sandbox confines it.',
+  },
+  tokens: ['zqy01', 'zqy02', 'zqy03', 'Trust it', 'Decline', 'A yes is kept', 'zqy04'],
+  standing: [],
+}
+
 export const CASES = {
   confirm: {
     kind: 'confirm',
@@ -160,10 +178,11 @@ export const CASES = {
     kind: 'mcp-call',
     event: 'mcp-call.request',
     request: {
-      request: 113, alias: 'files', tool: 'read', name: 'files:zqk31', description: 'Reads a file.', mayStand: true,
+      request: 113, alias: 'files', tool: 'read', name: 'files:zqk31', description: 'Reads a file.', mayStand: true, askedForPrivateArguments: false,
+      also: [[{ name: 'later', value: JSON.stringify('zqk32') }], [{ name: 'later', value: JSON.stringify('zqk33') }]],
       arguments: range(30).map((n) => ({ name: `arg${n}`, value: JSON.stringify(n === 0 ? 'zqk01' : n === 29 ? 'zqk30' : `value ${n}`) })),
     },
-    tokens: ['zqk01', 'zqk30', 'zqk31'],
+    tokens: ['zqk01', 'zqk30', 'zqk31', 'zqk32', 'zqk33'],
     standing: [],
   },
   'mcp-move': {

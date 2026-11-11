@@ -292,6 +292,46 @@ fn answered_with(turn: &mut Turn, asking: Asking, answers: Vec<Answer>) -> (Vec<
     (got, shown)
 }
 
+/// ASK-13 in a desktop session: after the window answers, it is sent each question put and what
+/// became of it, worded by the kernel, and a question remembered from before has no row. The
+/// regressions it rejects: no event at all, a row for the remembered question, and an outcome the
+/// window would have to word itself.
+#[test]
+fn the_window_is_sent_each_question_put_and_what_became_of_it() {
+    let mut turn = a_turn(&Answerers::default());
+    answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+    while turn.said.try_recv().is_ok() {}
+
+    let (_, _) = answered_with(
+        &mut turn,
+        series_of(&["Which layer?", "Which store?"]),
+        vec![Answer::Typed("sqlite".to_string())],
+    );
+    let settled = turn.the_question_shown_as("ask.settled");
+    assert_eq!(
+        settled["rows"],
+        serde_json::json!([{ "question": "Cache: Which store?", "outcome": "answered: sqlite" }]),
+        "{settled}"
+    );
+}
+
+/// ASK-13: a window that returned no answers is not drawn as having skipped each question.
+#[test]
+fn a_window_that_returned_no_answers_is_sent_no_rows() {
+    let mut turn = a_turn(&Answerers::default());
+    let (_, _) = answered_with(&mut turn, series_of(&["Which layer?"]), Vec::new());
+    assert!(
+        turn.said
+            .try_iter()
+            .all(|event| event.name != "ask.settled"),
+        "rows were sent for a series nobody answered"
+    );
+}
+
 /// ASK-8 in a desktop session: a question the person answered is answered again from memory, and
 /// the window is shown nothing for it.
 #[test]

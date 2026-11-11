@@ -13,6 +13,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -71,6 +73,10 @@ exit 1
 
 /// A project with one Rust file, a home, and a `rust-analyzer` that is the script above, under
 /// the build directory and removed when the test ends.
+///
+/// The project is its own checkout (it holds a `.git`), so the checkout a session leaves out of the
+/// search for programs (SANDBOX-30) is the project and not the repository this test is built in.
+/// The server is beside the project, outside it.
 struct Scratch {
     path: PathBuf,
 }
@@ -86,6 +92,7 @@ impl Scratch {
             .join(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("project/src")).expect("a project directory");
+        std::fs::create_dir_all(path.join("project/.git")).expect("a checkout");
         std::fs::create_dir_all(path.join("home/.bravebot")).expect("a home directory");
         std::fs::create_dir_all(path.join("bin")).expect("a directory for the server");
         let path = path.canonicalize().expect("a real scratch directory");
@@ -336,7 +343,10 @@ impl FrontEnd {
     /// Ask for a turn, and return the next question it puts to the window or the event that
     /// ended it.
     fn ask(&mut self, session: &str, prompt: &str) -> Value {
-        self.send("turn.send", json!({"session": session, "prompt": prompt}));
+        self.send(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
         self.question_or_the_end()
     }
 

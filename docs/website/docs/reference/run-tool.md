@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: The run tool
-description: How a command line is compiled, approved and run, what each answer grants, and how its output is labelled.
+description: Run command grammar, directories, approvals and remembered commands, globbing, redirections, output trust and filtering, inherited environment, deadlines and background jobs.
 ---
 
 # The run tool
@@ -15,7 +15,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
-| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), not in `off`, and asked about every time. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
+| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), and asked about every time. Under `off`, and in a turn that confines none of its runs, the line already starts with no sandbox, so the request is checked for its shape and then ignored, and the line is put to you as any other line is. In a workspace you have not trusted it is refused in every mode. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
@@ -40,11 +40,20 @@ names each place taken this way, with the variable that named it.
 **A program is started by the path its name was found by**, and a link on that path is not followed
 first. That keeps `venv/bin/python` finding its virtual environment. The prompt shows the path and
 the file it leads to, and your answer covers the file only when it is started by that same path.
-A run's result, a job's line and a remembered line name such a step the same way, as
+A job's line as you see it and a remembered line name such a step the same way, as
 `/home/me/.cargo/bin/cargo -> /home/me/.cargo/bin/rustup test`, so a `cargo` served by `rustup` does not
-read as `rustup test`. A program started by its own file is shown by that file alone.
+read as `rustup test`. A run's result, the account of a job that ended and the sentence for a job that
+did not start name the program by the path alone, which is the path the planner typed. A program started
+by its own file is shown by that file alone.
 Just before the pipeline starts, each path is resolved again, and one that no longer leads to the
 file you approved refuses the whole pipeline before any step runs.
+
+An argument, an environment value or a redirection path that holds a control character, white space
+other than a space, a character that draws as nothing or the blank braille pattern is drawn in single
+quotes with each such character written as `\u{..}`, its code point in hex, and a backslash written
+`\\`. Two lines that differ only in such a character therefore look different in the prompt, and an
+argument made only of them still shows as an argument. Your answer applies to the arguments as they
+are.
 
 Every step's program is found when the line is compiled, before anything runs. A line therefore
 cannot run a program an earlier step in it creates: `python3 -m venv v && v/bin/python x.py` is
@@ -67,9 +76,22 @@ started on its own, so one of them would change nothing for the steps after it. 
 is refused wherever it stands, before anything is asked or run, and the refusal says to name the
 `directory` argument of the call to run elsewhere.
 
+**A `ulimit` step is refused too.** `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` and `wait`
+are shell builtins whose effect stays in the shell that runs them. A host may have a program of the
+name (macOS has `/usr/bin/ulimit`) that runs the builtin in a shell of its own and exits zero, so a
+step of that name would run and change nothing for the steps after it. A line that has one is
+refused in any form, `ulimit -a` and a bare `umask` included, wherever it stands, before anything is
+asked or run. To run a program under a limit or a mask, write the whole line as
+`sh -c '... ulimit ...'`, such as `sh -c 'ulimit -n 10240 && cargo test'`. That is one line and is
+approved as one line. A limit or a mask is read the same way, inside `sh -c`.
+
 A directory that is not the workspace root **is asked about**, and what the line prints is quarantined,
 unless something you answered names that exact tree. A directory that does not exist is an error and
-moves nothing, and a refused directory does not become the one the next line runs in.
+moves nothing, and a refused directory does not become the one the next line runs in. This holds for a
+directory carried from the previous call as well as one named in the call: it is refused before the line
+is compiled and before anyone is asked, and the carried directory goes back to the workspace root. The
+directory is checked again just before the first stage starts, so one removed while the question waited is
+reported as removed rather than as a program that could not be started.
 
 ## What the grammar takes
 
@@ -80,7 +102,7 @@ moves nothing, and a refused directory does not become the one the next line run
 | patterns | `*`, `?`, `[…]`, `**` |
 | brace expansion | `{a,b}`, `{1..9}` |
 | home | a leading `~`, and only a leading one |
-| per-command environment | `NAME=literal cmd` |
+| per-command environment | `NAME=literal cmd`; in [bypass mode](#an-assignment-can-take-a-variable-or-a-command-in-bypass-mode) only, the value may also be `$VAR`, `${VAR}` or `$(cmd)` |
 
 A leading `~` is **your home directory**, the one `~/.bravebot` sits inside, and never that directory
 itself: a home-relative path the planner writes names a file of your own rather than one among this
@@ -93,24 +115,59 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 
 | Refused | Why |
 |---|---|
-| `$(…)`, backticks | a command whose text is computed is a destination nobody saw; inside double quotes it is still one |
-| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line |
+| `$(…)`, backticks | a command whose text is computed is a destination nobody saw; inside double quotes it is still one. Bypass mode accepts `$(…)` as the value of an assignment in front of a program, never elsewhere, and never a backtick |
+| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line. Bypass mode accepts them in the value of an assignment in front of a program, never elsewhere |
+| `$?` | the exit status of an earlier step is not in the line; the result of a run already says how each step ended |
+| `$$`, `$@`, `$*`, `$#`, `$-`, `$!` | no shell holds parameters between the steps of a line, so there is no value for them to stand for |
+| `$'…'`, `$"…"` | escapes after a `$` quote are not read; a newline comes from a file or from standard input |
 | `$((…))` | arithmetic needs an interpreter; inside double quotes it is still one |
 | `<(…)`, `>(…)` | the same, plus a file descriptor nobody named |
 | `&` | backgrounding is a parameter of a call, not a token in a line |
 | `<<`, `<<<` | a here-document is content, not syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
 | `cd`, `pushd`, `popd`, `export` | they change a shell's state, which no step has; name the `directory` of the call, or put `NAME=value` in front of the program |
+| `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash`, `wait` | they act on the shell that runs them and change nothing for later steps; write the whole line as `sh -c '... ulimit ...'` |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
 | `(` or `)` written onto the end of an argument | grouping is syntax, so an argument that holds a parenthesis has to be quoted |
 | a pattern in program position | a program worked out from what is on disk changes when the tree does |
 | anything that would open `/dev/tty` | the terminal is not this program's to hand over |
 
-Quoted, every one of them is an ordinary argument: `'$HOME'` is six characters that reach the program
-as one word. A `$` followed by no name, brace or parenthesis is an ordinary character even unquoted, so
-the end anchor in `grep -E "x$" file` reaches `grep` as written. To pass a literal `$` that comes
+In single quotes, every one of them is an ordinary argument: `'$HOME'` is six characters that reach the
+program as one word. Double quotes settle none of the `$` forms, so `"$HOME"` and `"$?"` are refused. A
+`$` followed by no name, brace, parenthesis, special parameter or quote is an ordinary character even
+unquoted, so the end anchor in `grep -E "x$" file` reaches `grep` as written. To pass a literal `$` that comes
 before a name, put it in single quotes or write `\$`.
+
+### An assignment can take a variable or a command in bypass mode
+
+Only in [bypass mode](../security/permission-modes.md), and only for the `NAME=value` words in front
+of a program, a value may be `$VAR`, `${VAR}`, text around them (`NAME=a-$VAR-b`), or a command
+substitution, `NAME="$(cmd)" prog` or `NAME=$(cmd) prog`. Several assignments may each have one, and a
+later step of a pipeline may have its own. Everything else stays refused, in bypass mode too: a
+variable or substitution as an argument or as the program, backticks (an assignment value included),
+`$1`, `$?`, `${X:-y}` and the like, and `FOO=*.rs prog`. Outside bypass mode all of it is refused.
+
+- **The plan shows the line's own words.** The plan, the trail and every message show `$X` or
+  `$(cmd)` as written, never what they stood for. The value is looked up when that step starts and
+  goes only into that program's environment.
+- **`cmd` is a step of the plan.** It is compiled by the same rules as any other step, with the same
+  resolved binary, permission checks and recorded reads and writes, and runs just before the step
+  that uses it, in the same directory, under the same deadline and sandbox, with no standard input.
+  It is one level deep: `$`, a substitution or a backtick inside it is refused. Trailing newlines of
+  its output are dropped, and the output is not shown to the model. Nothing else is done to the
+  output, and bravebot does not look at it: its length and its encoding do not refuse the line, so
+  a long output or a byte that is not text reaches the program as it was printed. On Windows the
+  value is text, so a byte sequence that is not valid UTF-8 arrives as U+FFFD. A value the system
+  will not put in an environment, such as one holding a NUL byte or one larger than the system
+  takes, fails the start of the step that would use it, with the system's words about that program
+  and nothing of the value.
+- **A withheld variable is refused.** The credentials bravebot removes from every step
+  ([below](#what-a-program-is-handed)) and the names in `run.scrubEnv` cannot be read this way, and
+  the removal is still applied after the assignment. A variable that is not set is refused too,
+  naming the variable.
+- **A failing `cmd` is reported by its source and its exit status.** What it printed is in the
+  message neither for you nor for the model.
 
 ## Your answer binds to the plan, not to the line
 
@@ -234,8 +291,10 @@ operand therefore leaves the step unproven, so `grep -r TODO src -n` is asked ab
 
 Five other things leave a step unproven. Naming the program by path rather than by name, since a file
 called `wc` in the directory the line runs in would otherwise answer as the audited one. A name that
-resolves to a file inside the workspace, for the same reason: a `PATH` entry in the project can put
-one there. An environment assignment, which decides what a program loads before its own arguments are read. A
+resolves to a file inside the workspace, the checkout holding it, a directory you added or left
+with `/cd`, or a directory a stage was granted to write (and, for a delegate working in a checkout,
+the directory the checkout was made from), for the same reason: a `PATH` entry in the project can
+put one there. An environment assignment, which decides what a program loads before its own arguments are read. A
 redirection, which opens a file the argument list does not name. And running anywhere but the
 directory the trust map's rules are written against.
 
@@ -268,13 +327,17 @@ A line runs unasked only where all of these hold:
 - no stage is `git`, and the line asks for no scope, toolchain list or `unconfined`, reads no private
   input, redirects nothing and starts with no `NAME=value`;
 - no stage starts a file under a directory the session may write, and no stage is handed one as an
-  argument where it is executable or the stage is a shell or interpreter (`sh`, `python3`, `node`, `env`
-  and the like), including inside a `sh -c` string or an option's value.
+  argument where it is executable or the stage is an interpreter or wrapper (`sh`, `python3`, `node`, `env`
+  and the like), including inside a `sh -c` string or an option's value. An argument is looked up whole,
+  so a file name holding a space is found, and also as the words in it, read with the quoting a shell
+  applies, so `sh "run script.sh"` and `sh -c "'run script.sh'"` name the file they run.
 
 Its output is untrusted and private, as for any line nobody vouched for. Such a line runs with the network
 closed for that line, even where the session's network is open, which is the default: a plain command that needs
 the network fails, and you are asked when it runs with `unconfined`. A program that finds its own files, such as `make` or
-`cargo`, still runs whatever a stage wrote, held to the same sandbox.
+`cargo`, still runs whatever a stage wrote, held to the same sandbox. A command string is read for its
+quoting and not expanded, so a name written with `$'...'`, a variable, a glob or a nested command string,
+or an option's value that holds an `=` and is followed by another `=`, is not found, and the file it names runs unasked under the same sandbox.
 
 A resumed session keeps the answer its own record holds, in the directory it was given in and no other: a record
 resumed in a directory the project has moved to asks again.
@@ -389,6 +452,7 @@ step that reads it gets nothing rather than the terminal.
 | standard input | may be untrusted; a person approves when it is private |
 | standard output and error | `(U,priv)`, quarantined |
 | …for a line every step of which a person vouched for, fed nothing untrusted | `(T,priv)` |
+| …for a line that asked for `unconfined` or `scopes` and was accepted | `(U,priv)`, whatever vouched for the same line without the request; the [audit trail](../security/audit-trail.md) states it |
 | …for a line that [proves what it read](#a-line-that-only-reads-what-you-vouched-for-does-not-ask) | the trust map's answer about what it read, private |
 
 **Output nobody vouched for is not shown to the planner.** It comes back as a reference, like a file
@@ -409,11 +473,15 @@ changes it in any mode: a check's word answers first, so the planner is told the
 text it can read or that it was kept back. Otherwise the planner is told you see the output and decide.
 The description names neither the mode nor the check. A run's result carries only the reference, the
 advice about vouching for the command (left out where a remembered line already stops the asking), and,
-where the call passed `read: true`, a note that the argument was not applied.
+where the call passed `read: true` and the output did not come back, a note that the argument did not
+return it.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
-the planner. That is decided from the size of the output alone.
+the planner. That is decided from the size of the output alone. The same holds when the call passed
+`read: true`, or when the planner calls `read_output` on such a reference: no check is made, nobody
+is asked and nothing is released for output that holds no bytes, and the result says the command
+printed nothing.
 
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
@@ -456,11 +524,18 @@ was too long for one result. It is told where the rest is too: `read_output` han
 it, and a filter such as `tail` given the reference as `stdin_ref` reads part of it without the line
 being run again.
 
-In every other mode `read` changes nothing: the output is quarantined as usual, and you are asked, or
-a check reads it, only when the planner calls `read_output`. The same holds for an
+In every other mode `read` changes nothing where you are asked: the output is quarantined as usual, and
+you are asked only when the planner calls `read_output`. Where screening is asked for
+([`--vet`](../security/permission-modes.md#bypassing)), the check reads the output at the run, and when
+it finds nothing the output comes back in that result with the same label and audit entry
+`read_output` would have written. When it does not, or cannot be made, the output stays behind its
+reference, nobody is asked, and the result says the argument did not return it. Under bypass the
+person is also told that auto-vetting kept the output back. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
-holds nothing the job has printed.
+holds nothing the job has printed. [`fetch_url`](tools.md#fetch_url) and the tools of an
+[MCP server](../customize/mcp-servers.md) take the same argument, described under
+[Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 ## Filtering something the agent may not read
 
@@ -499,12 +574,14 @@ run and nobody is asked.
 ## What a program is handed
 
 A step gets the environment bravebot is running in, **less the credentials bravebot authenticates to
-its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`. Every step, not only the
+its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`, and the crash report address, `BACKTRACE_SUBMIT_URL`. Every step, not only the
 first, and removed rather than blanked, so a program that tells an unset variable from an empty one
-sees what a machine that never held the credential sees. You approve the plan, the resolved binaries
+sees what a machine that never held the credential sees. A `NAME=value` written in front of a program
+does not bring one of the removed credentials back: the removal is applied again after the line's own
+assignments. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
-The description of `run` tells the planner that these two are removed, and that the variables your
+The description of `run` tells the planner that these three are removed, and that the variables your
 settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
 also says that a program reporting one of them unset says nothing about whether you have set it, so a
 build that fails for want of one is not reported to you as a gap in your setup.
@@ -541,10 +618,18 @@ where your build takes longer than five minutes, so a line the agent did not thi
 on is not stopped partway through. The agent is told whichever figures are in force, so a ceiling you
 raise is one it knows it may ask for.
 
-When the deadline runs out the steps are killed, and **what they printed before that comes back exactly
+When the deadline runs out the steps are stopped, and **what they printed before that comes back exactly
 as it would from a line that ended on its own**, under the same label. Reaching the deadline ends a run
 rather than failing it, so a program that never exits, like a server told to serve a page, still gives
 you everything it printed. The result says it was stopped, which is how you tell the two apart.
+
+On Linux and macOS each step leads a process group of its own. A stop asks the group to end first, so
+the programs the step started are asked with it, and gives it two seconds to finish what it holds, such
+as removing a `.git/index.lock`. Whatever is left after that is killed. A stop at the deadline or by you
+can still leave lock files or partly written output behind, and the result says so, so check what the
+line started. The step is not in the session's own process group: Ctrl-C at a one-shot run, a closed
+terminal or a `SIGTERM` to a background session does not reach it, and a session ended that way leaves
+the steps it was running.
 
 Being cut short neither raises nor lowers the label on the output. Finishing inside the deadline says
 nothing about what a program did.
@@ -568,14 +653,23 @@ Anything a job wrote to standard error is marked as such wherever it is reported
 is not read as though the program had printed it as output. [`/jobs`](commands.md#jobs-stop-name-delegate)
 lists the jobs a turn has started and stops one.
 
+Each look at a job with [`job_output`](tools.md#job_output) is a slice: the bytes the job printed since the
+previous look, with the count of lines that begin in it. Earlier slices are in the earlier references the
+result lists, which is every earlier look at the job, so a line printed before a slice is in one of those and not in the latest.
+
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting on
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
-Both are refused rather than half-honoured.
+Both are refused rather than half-honoured. A redirection inside a `NAME="$(...)"` assignment value
+counts too, so such a line cannot be started in the background.
 
 **In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
 started in one turn is still running when you ask the next question, and the model is told at the
 start of each turn which jobs are still going and under which names. A job ends when it exits, when
-you or the model stops it, when you `/clear` the conversation, or when the session ends. A job that
+you or the model stops it, when you `/clear` the conversation, or when the session ends. `/branch` does
+not end one: the copy is the same process, so the job keeps running under the sandbox profile it started
+with and is listed and stopped from the copy. The copy forgets the path and host answers the job started
+with, so a `run` started in the copy asks about them again, while the programs you vouched for come
+across and are not asked about. A job that
 finishes between turns is reported at the next turn's first round. `/jobs stop` between turns stops
 the job at once, since no turn is there to read it. A stop still waiting when a turn ends is carried
 out as the turn finishes, and repeating `/jobs stop` on a row that still reads `being stopped`, with no
@@ -594,11 +688,11 @@ In the terminal client, a message sent while the line runs also moves it once th
 The command is not stopped or started again. It becomes a job exactly as if it had been started with
 `background: true`, and the agent's result for the call says the user moved it, after how many
 seconds, and under which job name. Nothing it printed is in that result, including what it printed
-before the move: [`job_output`](tools.md#job_output) reads all of it, under the label the line was
-always going to carry.
+before the move: [`job_output`](tools.md#job_output) returns it, in the first look at the job.
 
 **Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
-`background: true` accepts. A line that reads its input from an earlier result and one a delegate is
+`background: true` accepts. A redirection inside a `NAME="$(...)"` assignment value counts, so a
+line with one is not offered. A line that reads its input from an earlier result and one a delegate is
 running are waited for to the end, and the hint does not name the key while they run. A line that
 asked for its output with `read: true` can be moved: the result for the call is then the move, and
 [`job_output`](tools.md#job_output) returns the output.

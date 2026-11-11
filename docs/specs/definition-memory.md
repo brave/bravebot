@@ -212,7 +212,8 @@ that clause.
 
 Before the turn, with the definitions, the driver asks the map about the memory's path. Trust is
 decided first and by the path alone, so a path the map does not trust is withheld whatever is or is
-not there. The run is told, in the driver's words:
+not there. The path is asked under every name the file has ([TRUST-4](trust-map.md#TRUST-4)), so a
+memory that is a hard link to a distrusted file is withheld. The run is told, in the driver's words:
 
 | The path | What the run is told |
 |---|---|
@@ -264,6 +265,7 @@ made the path trusted again: a copy is how untrusted bytes are laundered.
 
 `verified-by: bravebot_agent::memory::a_trusted_memory_stands_as_what_is_at_its_path`
 `verified-by: bravebot_agent::memory::a_memory_the_map_does_not_trust_is_withheld_whatever_is_there`
+`verified-by: bravebot_agent::memory::a_memory_that_is_another_name_of_a_distrusted_file_is_withheld`
 `verified-by: bravebot_agent::delegate::a_delegates_memory_is_said_after_its_body_and_before_what_it_cannot_do`
 `verified-by: bravebot_agent::turn::an_addressed_run_is_told_where_its_memory_is_and_not_what_it_holds`
 `verified-by: bravebot_agent::turn::a_delegate_under_a_definition_keeping_a_memory_is_told_where_it_is`

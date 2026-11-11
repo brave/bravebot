@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Instructions
-description: AGENTS.md holds standing instructions for a project or for every project.
+description: AGENTS.md and other instruction sources, precedence, linked files and @path includes, command-line instructions, size limits, workspace facts, scratch directories and trust.
 ---
 
 # Instructions
@@ -44,6 +44,14 @@ that walked upwards would pick up instructions from whatever happened to be abov
 machine, which is a different set of instructions on the next machine. A file at any other path is an
 ordinary file, read only when something asks for it by name, or when the source points at it.
 
+**A name counts only when the file is spelled exactly as shown.** `AGENTS.md`, `CLAUDE.md` and
+`.claude/CLAUDE.md` are matched letter for letter, including the `.claude` directory, on every
+system. On a volume that does not tell upper and lower case apart, such as the default one on macOS
+and Windows, a page called `docs/agents.md` can be opened as `docs/AGENTS.md`, but it is still an
+ordinary file: it is not loaded, it adds nothing to the system prompt, and you are not told it is
+large. Rename it to `AGENTS.md` to make it instructions. The same holds for a skill: a directory
+holding `skill.md` is not a skill, and `SKILL.md` must be spelled that way.
+
 **A project's skills are read from three directories, at the project root only.**
 `.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
 wins a name clash with either of the others. Skills you wrote for another agent work here without
@@ -58,10 +66,13 @@ down from the project root follows the project's, the deeper last so it wins, an
 under `.bravebot/skills` there; a skill of the same name replaces the project's. The next turn
 picks it up, not the one that read the file. Each goes through the same trust check as the project's
 own file, and one that fails it is left out with a notice naming the file. A pointer or an `@path`
-import inside a nested file is not followed. Only `.bravebot/skills` is read below the root, not
-`.claude/skills` or `.agents/skills`. A directory is counted when a file is read or written in it,
-not when it is only listed or searched, and a session remembers up to 64 of them until `/cd` moves
-the project.
+import inside a nested file is not followed. A nested file whose text equals the source loaded
+immediately before it, or that is the same file as that source (for example `AGENTS.md` linked to
+`agents/AGENTS.md`), is left out with no notice, so the same text is not stated twice in a row. A
+nested file that repeats only an earlier source is kept, so the deepest file still has the last
+word. Only `.bravebot/skills` is read below the root, not `.claude/skills` or `.agents/skills`. A
+directory is counted when a file is read or written in it, not when it is only listed or searched,
+and a session remembers up to 64 of them until `/cd` moves the project.
 
 **A rule file loads when a turn touches a file it names.** A convention that applies to one kind of
 file, in any directory, does not have to be in every request. Put it in
@@ -213,9 +224,12 @@ However large a file is, it still reaches the prompt. Half a conventions documen
 whole one that cost a sentence to say so: the rules that happened to be in the second half would be
 gone with no sign of it, and the first half would read as the whole.
 
-Both the figures and the notices concern files that are there. A source that is absent is still
-silent, and the check is a byte count: nothing a file says decides whether it loads or what is said
-about it. `--append-system-prompt` is not measured, since there is no file behind it.
+Both the figures and the notices concern files that are there. A nested `AGENTS.md` left out for
+repeating the source loaded immediately before it adds nothing to the total and is not named. A
+source that is absent is still silent. The size notices depend on a byte count only, and whether a
+file loads depends on the trust check. The one comparison of text is the skip of a repeated nested
+file above, which runs on text that has already passed the check. `--append-system-prompt` is not
+measured, since there is no file behind it.
 
 ## Where you are working
 

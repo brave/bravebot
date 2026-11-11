@@ -69,13 +69,16 @@ struct Delegated {
 
 impl Totals {
     /// The turn's figures with what every delegate it has not yet reported has spent added. The
-    /// context reading and the timing are the turn's alone: a delegate's context is another
-    /// conversation, and its requests overlap the turn's own clock.
+    /// context reading and the clock are the turn's alone: a delegate's context is another
+    /// conversation, and its requests overlap the turn's own clock. The counts beside the clock
+    /// are made again from the sum, since they were made from the turn's own account.
     fn reported(&self) -> crate::outcome::Spent {
         let mut total = self.turn;
         for delegate in self.delegates.values() {
             total.add_spent(&delegate.spent);
         }
+        total.timing.activity =
+            crate::timing::Activity::of(&total, total.timing.activity.compactions);
         total
     }
 }
@@ -316,6 +319,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn output_tokens(&mut self, written: u64);
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);
+        fn retrieved(&mut self, retrieved: crate::report::Retrieved);
         fn summary_failed(&mut self, why: crate::report::Why);
         fn fell_back(&mut self, from: &str, to: &str, why: crate::report::Why);
         fn streaming(&mut self, text: String);
@@ -325,7 +329,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn quarantined(&mut self, shown: Shown);
         fn printed(&mut self, output: Printed);
         fn returned(&mut self, returned: Returned);
-        fn landed(&mut self, landing: Landing);
+        fn landed(&mut self, call: Option<crate::report::CallId>, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
         fn movable(&mut self, handoff: bravebot_core::cancel::Handoff);
@@ -433,10 +437,30 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |held| held.confirm_vouch_noting_the_mode(request),
+            |refuse| refuse.confirm_vouch_noting_the_mode(request),
+        )
+    }
+
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
         self.asked(
             |held| held.confirm_exposing_read(request),
             |refuse| refuse.confirm_exposing_read(request),
+        )
+    }
+
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |held| held.confirm_exposing_read_noting_the_mode(request),
+            |refuse| refuse.confirm_exposing_read_noting_the_mode(request),
         )
     }
 
@@ -923,6 +947,17 @@ mod tests {
                 cached: Cached {
                     read_tokens: 70,
                     written_tokens: 7,
+                },
+                // The counts beside the clock are made again from the sum, so they hold the
+                // delegate's tokens as well as the turn's.
+                timing: crate::timing::Timing {
+                    activity: crate::timing::Activity {
+                        written_tokens: 107,
+                        cache_read_tokens: 70,
+                        cache_written_tokens: 7,
+                        ..Default::default()
+                    },
+                    ..Default::default()
                 },
                 ..Default::default()
             }),

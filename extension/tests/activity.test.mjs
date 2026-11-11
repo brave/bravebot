@@ -243,6 +243,9 @@ test("a bookmark added, and a call to the group while it is off, are logged with
       async search() {
         return [{ id: "10", title: "Hunter2 folder" }];
       },
+      async getTree() {
+        return [{ id: "0", title: "", children: [] }];
+      },
       async create(details) {
         chrome.calls.push(["bookmarks.create", details]);
         return { id: "n1", title: details.title, url: details.url, parentId: "10" };

@@ -10,7 +10,7 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 14] = [
+pub(crate) const COMMANDS: [&str; 17] = [
     "acp",
     "doctor",
     "update",
@@ -20,6 +20,9 @@ pub(crate) const COMMANDS: [&str; 14] = [
     "permissions",
     "sessions",
     "stats",
+    "schedule",
+    "skill",
+    "trigger",
     "attach",
     "reply",
     "import-providers",
@@ -42,6 +45,17 @@ const PERMISSIONS: [&str; 1] = ["check"];
 /// that do something else with it.
 const SESSIONS: [&str; 4] = ["list", "stop", "import", "search"];
 
+/// What follows `skill`.
+const SKILL: [&str; 1] = ["eval"];
+
+/// What follows `schedule`.
+const SCHEDULE: [&str; 9] = [
+    "add", "list", "remove", "run-now", "history", "pause", "resume", "pending", "clear",
+];
+
+/// What follows `trigger`.
+const TRIGGER: [&str; 6] = ["add", "list", "remove", "pending", "clear", "serve"];
+
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
 struct Flag {
@@ -54,7 +68,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 54] = [
+const FLAGS: [Flag; 56] = [
     flag("interactive", Some('i'), true),
     flag("plain", None, false),
     flag("handle-uri", None, true),
@@ -93,6 +107,8 @@ const FLAGS: [Flag; 54] = [
     flag("json-stream", None, false),
     flag("input-format", None, true),
     flag("trust-input-lines", None, false),
+    flag("approve-input-lines", None, false),
+    flag("event", None, true),
     flag("output-schema", None, true),
     flag("goal", None, true),
     flag("max-rounds", None, true),
@@ -158,6 +174,9 @@ fn bash() -> String {
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
             permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
             sessions) COMPREPLY=($(compgen -W "{sessions}" -- "$cur")); return 0 ;;
+            schedule) COMPREPLY=($(compgen -W "{schedule}" -- "$cur")); return 0 ;;
+            skill) COMPREPLY=($(compgen -W "{skill}" -- "$cur")); return 0 ;;
+            trigger) COMPREPLY=($(compgen -W "{trigger}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
@@ -177,6 +196,9 @@ complete -o default -F _bravebot bravebot
         mcp = MCP.join(" "),
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
+        skill = SKILL.join(" "),
+        schedule = SCHEDULE.join(" "),
+        trigger = TRIGGER.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -193,6 +215,9 @@ _bravebot() {{
             mcp) compadd -- {mcp}; return ;;
             permissions) compadd -- {permissions}; return ;;
             sessions) compadd -- {sessions}; return ;;
+            schedule) compadd -- {schedule}; return ;;
+            skill) compadd -- {skill}; return ;;
+            trigger) compadd -- {trigger}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
@@ -215,6 +240,9 @@ fi
         mcp = MCP.join(" "),
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
+        skill = SKILL.join(" "),
+        schedule = SCHEDULE.join(" "),
+        trigger = TRIGGER.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -232,6 +260,9 @@ fn fish() -> String {
         ("mcp", MCP.join(" ")),
         ("permissions", PERMISSIONS.join(" ")),
         ("sessions", SESSIONS.join(" ")),
+        ("schedule", SCHEDULE.join(" ")),
+        ("skill", SKILL.join(" ")),
+        ("trigger", TRIGGER.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
     ] {
@@ -252,4 +283,19 @@ fn fish() -> String {
         script.push('\n');
     }
     script
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_destination_word_of_schedule_add_is_not_offered_as_a_flag_of_the_program() {
+        // Like `--cron` and `--dir`, `--deliver-to` is a word of `schedule add` and not a flag
+        // the usage table lists, so no shell offers it ahead of a command or to a run.
+        let word = bravebot_schedule::DELIVER_TO_WORD.trim_start_matches("--");
+        assert!(FLAGS.iter().all(|flag| flag.long != word));
+        assert!(!flag_words().contains(bravebot_schedule::DELIVER_TO_WORD));
+        assert!(SCHEDULE.contains(&"add"));
+    }
 }

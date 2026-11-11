@@ -116,6 +116,30 @@ written: the files are on disk and its report says which, so the line is not sai
 is taken back. Saying it would contradict the work just done and could send the planner to write the
 same change twice. It is the same record [TURN-4](#TURN-4) reads.
 
+**A run the table does not prove read-only counts.** A `run` line is a way to write, so the
+planner asking for one that nothing establishes leaves every file alone has tried to deliver, the
+same as a write tool request, and the line is not said. The question is the one the approval
+answer is built on: the line counts unless the audited table of read-only programs
+([CMDLINE-8](tools/command-line.md#CMDLINE-8)) answers for every step, so `touch`, `cp`, a build, a
+redirection and an environment assignment count and `wc -l notes.txt` does not. It is asked once
+the line has compiled and the person's rules have let it through, of the plan with each pattern
+left as the line wrote it, so the names a pattern matched in a directory nobody vouched for never
+decide it ([CMDLINE-4](tools/command-line.md#CMDLINE-4)). It is the request and not the outcome, as
+for a write tool: a line the person declined counts, and a line refused before it compiled does not.
+It does not feed [TURN-4](#TURN-4) or the work record's writes ([GROUND-1](grounding.md#GROUND-1)),
+which count a call that changed a file, and a `run` line only when the workspace tree measurably
+differs after it: a line the table does not prove read-only is often a build or a test run, so
+counting the request as a write would leave "a command ran after the last write" false for every
+build. A call that ran a program is already a command for TURN-4, so a turn whose edits all go
+through `run` is not told that files changed and nothing was run. A worker delegate that asked for
+such a line has delivered, and the parent counts it when it takes the delegate back.
+
+The line is the same whatever the program is and however the turn is shaped: a turn that makes a
+worktree, applies a patch with `git apply` and copies files with `cp`, with lines that only read
+between them, is not told after eight rounds that nothing is written, because `git` and `cp` are
+not in the table. A turn whose every `run` line the table proves read-only is told, and the work
+record counts no write for it.
+
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
@@ -127,6 +151,16 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_run_line_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_whose_background_run_line_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_that_delivers_its_change_through_run_lines_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_only_git_apply_changed_nothing_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_that_only_reads_through_run_lines_is_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_ran_a_line_that_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_ran_a_writing_line_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_after_a_completed_turn_that_ran_a_writing_line_is_still_told_to_write`
+`verified-by: bravebot_core::policy::a_plan_may_change_files_unless_the_table_proves_it_reads_only`
 `verified-by: bravebot_agent::turn::a_turn_in_plan_mode_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_under_read_only_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
@@ -164,7 +198,17 @@ programs have started. A line that ended in any other error does not, since the 
 say whether a program in it had started. This is the opposite of [TURN-3](#TURN-3)'s nudge and for
 the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
-about to act on.
+about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is a changed file here
+only when the workspace tree differs after it ([GROUND-1](grounding.md#GROUND-1)), and is a program
+run only when one started, so a line the person declined counts for TURN-3 and not for this. A write
+that landed in the session's own directory leaves nothing to build either: that directory is for
+the turn's own use, outside the project and gone when the session ends. The write is not counted,
+and a turn whose only writes landed there is neither asked the question nor told the closing line.
+The work record's writes ([GROUND-1](grounding.md#GROUND-1)) leave it out as well. For a write
+call it is decided on where the write landed, so a link in the project that lands in that
+directory is not counted. Applying a kept checkout writes into the source tree and counts. A turn
+whose only changes were made by `run` lines has run a program, so it is neither asked the
+question nor told the closing line: both are about a turn that ran no program.
 
 **Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
 a file it changed and a program it ran count as the turn's from the round the turn takes it back
@@ -186,16 +230,21 @@ In the terminal app the person's line is the open-loops line of [OPEN-3](open-lo
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
+`verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_write_plan_mode_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_run_the_person_refused_leaves_the_change_reported_as_never_built`
 `verified-by: bravebot_agent::turn::a_turn_offered_no_run_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
+`verified-by: bravebot_agent::turn::a_turn_whose_only_edit_is_a_run_line_is_not_told_nothing_was_run`
+`verified-by: bravebot_agent::turn::a_run_line_that_changes_a_file_is_recorded_as_a_write`
 `verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built`
+`verified-by: bravebot_agent::turn::a_file_a_worker_delegate_changed_through_a_run_line_is_a_write_of_the_turn`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_in_a_checkout_changed_through_a_run_line_is_not_a_write_of_the_turn`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turns_own`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_change_reported_as_never_built`
@@ -503,6 +552,13 @@ the calls before it left. No label, routing or approval decision changes.
 **Reads wait for effects and not for each other.** A read holds the file authority's access lock
 shared, and an effect entering or completing holds it exclusive ([TRUST-4](trust-map.md#TRUST-4)).
 Two reads therefore overlap, and neither captures bytes while an effect on a file is entering.
+What a read holds the lock for is its label measurement and, for a search, the read of one file at
+a time. A listing's or a search's walk of the tree runs outside it, so an effect can enter while a
+large one is under way, and the labels of the paths it names are measured after the walk, inside the
+lock ([TRUST-4](trust-map.md#TRUST-4)).
+`read_file` takes the lock shared in the same way. It still runs alone and in order, but it does not
+wait for a search or listing that is part way through, and a search or listing does not wait for it
+(delegates share the one file authority).
 
 **Cancelling.** The cancel is checked before the run starts, before a thread starts each read, and
 before each call is taken. A read already running finishes, as a search does when it runs alone. A
@@ -525,6 +581,9 @@ and each call in it is shown as finishing at once.
 `verified-by: bravebot_agent::tools::no_more_reads_run_at_once_than_the_limit`
 `verified-by: bravebot_agent::tools::a_cancel_stops_the_reads_not_yet_started`
 `verified-by: bravebot_agent::tools::reads_taken_beforehand_wait_for_an_effect_entering_a_file`
+`verified-by: bravebot_agent::tools::a_read_file_does_not_wait_for_a_reader_holding_the_boundary`
+`verified-by: bravebot_agent::tools::a_read_file_waits_for_an_effect_holding_the_boundary`
+`verified-by: bravebot_agent::tools::a_read_file_emits_nothing_while_it_holds_the_boundary`
 `verified-by: bravebot_agent::tools::a_read_is_used_only_while_the_context_is_what_it_ran_under`
 `verified-by: bravebot_agent::tools::only_a_read_the_run_offers_is_taken_beforehand`
 `verified-by: bravebot_core::policy::a_branch_decides_what_the_policy_it_came_from_would`
@@ -561,7 +620,7 @@ used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](label
 `verified-by: bravebot_tui::app::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`
 
 <a id="TURN-12"></a>
-### TURN-12: a turn that answers with tasks still open asks about the list once
+### TURN-12: a turn that answers with tasks still open asks about the list
 
 Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
 progress, and the planner answers without calling a tool, the driver puts that answer into the
@@ -580,14 +639,18 @@ kept for a list whichever way its result went back to the planner. Pending and i
 finished and dropped are not, and a status the driver does not recognise reads as pending
 ([TODO-2](tools/todo-write.md#TODO-2)).
 
-**Asked once for each list.** A list the planner writes after the question, in the turn that put
-it, is its answer to the question and is not asked about, whatever it holds. A planner that
-answers with the list as it was, or sends it again with a task still open, is not asked again, in
-that turn or in the turns after it. A list written in a later turn is a new list. A task may be open
-for a reason the driver cannot read, such as a question the planner put to the person, and a request
-spent each turn on a list nothing in that turn touched would be the cost of asking every time. The
-count is read once, whether or not it leads to the question, so a list with nothing open is not read
-again at the end of every turn after it.
+**Asked once for each list, and again after work.** A list the planner writes after the question,
+in the turn that put it, or after the reminder of [TURN-15](#TURN-15), is its answer and is not
+asked about, whatever it holds. A planner that answers with the list as it was, or sends it again
+with a task still open, is not asked again in that turn. A later turn asks about the same list again
+only if it did work after the list: it went [`ROUNDS_BEFORE_LIST_REMINDER`](../../crates/agent/src/turn.rs)
+rounds, or a call changed a file, or a call ran a program. Each is the driver's own count, never
+what a call returned. A later turn that did none of these is not asked, and a turn is asked at most
+once. A list written in a later turn is a new list. A task may be open for a reason the driver
+cannot read, such as a question the planner put to the person, and a request spent each turn on a
+list nothing in that turn touched would be the cost of asking every time. The reminder reads the
+count without using it up, so a planner that was reminded and did not rewrite the list is still
+asked at the end.
 
 **Conditional in its wording, not in its firing.** The driver cannot tell a list the planner
 finished from one it left open on purpose, and must not try. It knows how many tasks are open, and
@@ -627,6 +690,13 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::turn::a_list_the_planner_was_asked_about_is_not_asked_about_by_the_next_turn`
 `verified-by: bravebot_agent::turn::a_list_written_after_the_planner_was_asked_is_asked_about_afresh`
 `verified-by: bravebot_agent::turn::a_list_the_planner_sends_again_when_asked_is_not_asked_about_by_the_next_turn`
+`verified-by: bravebot_agent::turn::a_list_is_asked_about_again_at_the_end_of_a_later_turn_of_many_rounds`
+`verified-by: bravebot_agent::turn::a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_wrote_a_file`
+`verified-by: bravebot_agent::turn::a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_ran_a_program`
+`verified-by: bravebot_agent::turn::a_list_is_not_asked_about_again_at_the_end_of_a_later_turn_that_only_read`
+`verified-by: bravebot_agent::turn::a_planner_that_rewrote_its_list_when_reminded_is_not_asked_at_the_end`
+`verified-by: bravebot_agent::turn::an_untrusted_count_of_open_tasks_is_refused_by_the_gate`
+`verified-by: bravebot_agent::turn::a_trusted_count_of_open_tasks_is_acted_on`
 `verified-by: bravebot_agent::turn::a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it`
 `verified-by: bravebot_agent::turn::a_list_written_in_a_round_with_no_call_ids_is_asked_about`
 `verified-by: bravebot_agent::turn::a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list`
@@ -647,7 +717,9 @@ When a turn ends as a failure ([TURN-5](#TURN-5)) after it has added messages to
 the driver adds one more after them, so the next prompt follows it. The note says that the turn
 failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
 gives the failure's category and, where it is known, the number of requests sent for the call that
-failed. A turn that answered, a turn that failed before it added anything to the conversation, and
+failed. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
+are for the person alone and are not in the note, and neither is the next step that ends a rate-limited
+or refused failure. A turn that answered, a turn that failed before it added anything to the conversation, and
 a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
 continues the turn ([TURN-3](#TURN-3)).
 
@@ -656,7 +728,9 @@ of the diagnosis ([BACKEND-37](backends.md#BACKEND-37)). The category is a fixed
 is the driver's own, so nothing the service sent is in the note: not its reply, its headers, its
 URL, its error text or the status of its reply. The category is what the driver made of that
 status, and it is all the planner is given of any other failure ([BACKEND-37](backends.md#BACKEND-37)
-says the same of a processor's). A background session started again after an interrupted turn is
+says the same of a processor's). A failure that ended on the read of a file the person named with
+`@` is also given the category alone: the name the person is shown ([NAME-13](naming-files.md#NAME-13))
+is not in the note or in the saved conversation. A background session started again after an interrupted turn is
 told in the same way, in the driver's own words, that the turn ended without finishing
 ([BG-12](background-sessions.md#BG-12)).
 
@@ -682,6 +756,8 @@ for a note to refer to.
 it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
 
 `verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
+`verified-by: bravebot_agent::backend::the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure`
+`verified-by: bravebot_agent::turn::the_note_and_the_conversation_of_a_turn_that_failed_on_a_named_file_hold_no_name`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_its_prompt_does`
 `verified-by: bravebot_agent::turn::a_turn_that_answered_or_was_stopped_leaves_no_note_of_a_failure`
 `verified-by: bravebot_agent::turn::a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure`
@@ -751,3 +827,78 @@ usage never reaches a limit in tokens. A run that ends on a limit writes no sess
 `verified-by: bravebot_agent::turn::a_task_with_no_limit_of_its_own_is_not_stopped_by_one`
 `verified-by: bravebot_agent::turn::a_limit_is_a_stop_and_says_which_limit_it_was`
 `verified-by: bravebot_cli::running::the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was`
+
+<a id="TURN-15"></a>
+### TURN-15: a turn whose task list has gone unwritten for a long run of rounds says it may be behind
+
+Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
+progress, and the turn has made [`ROUNDS_BEFORE_LIST_REMINDER`](../../crates/agent/src/turn.rs)
+rounds since that list was accepted, the driver adds a line to the next request. The line gives the
+number of rounds and the number of open tasks, says the list may be behind the work, asks for the
+whole list again with a task marked completed where it is done and cancelled where it was dropped,
+and says to carry on if the list is accurate. The planner decides whether it is.
+
+**Counted from the list.** The rounds are counted from the round that accepted the latest list, so
+a list written part way through the turn restarts the count. A list an earlier turn wrote is counted
+from the start of the turn that reads it.
+
+**Said once for each list.** The line is not repeated for the same list, however much longer the
+turn goes on. A list written after it is a new list and can be reminded about in its turn.
+
+**The count is the one TURN-12 reads, and is left in place.** It is read through
+`Policy::read_trusted_content` ([LABEL-6](labels.md#LABEL-6)), so a session that has met something
+untrusted keeps no count and is not reminded. The line carries the count and the rounds and nothing
+the tasks said. Reading the count does not take it, so the question of [TURN-12](#TURN-12) is still
+put when the planner answers.
+
+**Not where it cannot be acted on.** A turn not offered `todo_write`, and a request that carries no
+tools ([TURN-1](#TURN-1)), get no line.
+
+**Known costs.** Ten rounds is chosen and not measured. A task may be open for a reason the driver
+cannot read, and the line is then a request spent on a list that was right.
+
+`verified-by: bravebot_agent::turn::a_planner_that_does_not_update_its_list_is_reminded_after_enough_rounds`
+`verified-by: bravebot_agent::turn::the_list_reminder_counts_from_the_last_accepted_list`
+`verified-by: bravebot_agent::turn::a_list_with_nothing_open_is_not_reminded_about`
+`verified-by: bravebot_agent::turn::the_list_reminder_names_no_task`
+`verified-by: bravebot_agent::turn::a_session_that_has_met_something_untrusted_is_not_reminded_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_the_task_list_tool_is_not_reminded_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_with_no_tools_left_is_not_reminded_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_many_times_the_threshold_long_gets_one_reminder_for_its_list`
+`verified-by: bravebot_agent::turn::a_list_left_open_by_an_earlier_turn_is_reminded_about_in_a_later_turn_of_many_rounds`
+
+<a id="TURN-16"></a>
+### TURN-16: the planner is told how to read a quarantined reference by the tools it was offered and by who can answer
+
+The system prompt of a session turn ends its guidance on a quarantined reference with text built by
+`reading_a_reference` in [`prompts.rs`](../../crates/agent/src/turn/prompts.rs). It is built from
+the driver's own facts and never from content: whether `vet_content` is among the tools the turn
+was offered, whether a check already answers for it ([`vetting::auto`](tools/vet-content.md)), and
+whether the run was started where a question reaches nobody.
+
+**`vet_content` is named only where it is offered.** A turn offered `vet_content` is told to call it
+for a reference the task needs read, and to say a file needs vouching for only where it was refused.
+A turn not offered it, because a definition's `tools:` line or the command line left it out, is told
+nothing about it. A delegate is never offered it ([VET-2](tools/vet-content.md)) and is given none
+of this text.
+
+**A run nobody answers is told what to write.** A one-shot run that is not reading lines
+([ASK-7](tools/ask-user.md#ASK-7)) is told not to end its reply on a question, and to say in its
+reply how the person can lift the quarantine on another run: `--trust-workspace` for the whole
+directory and `--file` for one file. `--vet` is added only where `vet_content` is offered and no
+check already answers for it. A run that can be answered gets none of this.
+
+Only a one-shot run is told. The terminal session, the desktop and the editor protocol
+([ACP-5](acp.md#ACP-5)) end a turn with a reply a person reads, and the person answers it with the
+next prompt, so a planner ending its reply there is not a dead end. A scheduled firing and a trigger
+firing run as `bravebot -p` with no `--input-format lines`, so they are one-shot runs and are told.
+
+**The shared guidance does not say the quarantine cannot be lifted.** The text every turn and every
+delegate is given about a quarantined file says that another read or a search will not show what is
+in it, and that the person can vouch for a file or a directory. It does not say that asking will not
+show it, because a person can answer, and it sends a planner to say a file needs vouching for only
+where nothing offered to it can show the file.
+
+`verified-by: bravebot_agent::turn::the_planner_is_told_how_to_read_a_reference_by_the_tools_it_is_offered_and_who_can_answer`
+`verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_call_vet_content_or_to_name_the_flags`
+`verified-by: bravebot_cli::running::only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine`

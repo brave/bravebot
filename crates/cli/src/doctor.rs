@@ -44,7 +44,7 @@ pub(crate) fn sandbox_mode_line(
                 Source::File(path) | Source::Managed(path) => t!(
                     doctor_sandbox_from,
                     mode = choice.mode.name(),
-                    path = path.display().to_string()
+                    path = progress::printable_path(&path)
                 ),
             };
             Ok(aligned(label, detail, DETAIL))
@@ -80,8 +80,14 @@ pub(crate) fn ends_on(found: Ending, also: Ending) -> Ending {
 ///
 /// It leaves through [`fail`], which is what makes CLI-6's identifier a property of one function
 /// rather than of every place a report can go wrong.
+///
+/// The problem is drawn through [`crate::progress::printable_lines`] (LAYER-3), because the
+/// configuration's can quote an endpoint value an environment variable or a settings file chose.
 fn doctor_found(ending: &mut Ending, found: Ending, problem: impl std::fmt::Display) {
-    let _ = fail(found, problem);
+    let _ = fail(
+        found,
+        crate::progress::printable_lines(&problem.to_string()),
+    );
     *ending = ends_on(*ending, found);
 }
 
@@ -98,7 +104,7 @@ fn report_mcp_declared(settings: &bravebot_config::Settings, ending: &mut Ending
             t!(
                 doctor_settings_mcp_declared,
                 key = mcp::shown(key),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             ),
         );
     }
@@ -228,7 +234,7 @@ fn each<T>(label: impl AsRef<str>, items: impl IntoIterator<Item = T>, say: impl
 /// `each` under `doctor_settings_ignored`, for the settings that name only the file that held them.
 fn ignored<'a>(paths: impl IntoIterator<Item = &'a Path>, say: impl Fn(String) -> String) {
     each(t!(doctor_settings_ignored), paths, |path| {
-        say(path.display().to_string())
+        say(progress::printable_path(path))
     });
 }
 
@@ -253,6 +259,7 @@ fn home_only_line(key: &str, path: String) -> String {
                 path = path
             )
         }
+        "retrieval" => t!(doctor_settings_retrieval_ignored, path = path),
         "language" => t!(doctor_settings_language_ignored, path = path),
         "retentionDays" => t!(doctor_settings_retention_ignored, path = path),
         "references" => t!(doctor_settings_references_ignored, path = path),
@@ -266,7 +273,7 @@ fn home_only_line(key: &str, path: String) -> String {
 fn home_only_lines(settings: &bravebot_config::Settings) -> Vec<String> {
     settings
         .not_obeyed_all()
-        .map(|(key, path)| home_only_line(key, path.display().to_string()))
+        .map(|(key, path)| home_only_line(key, progress::printable_path(path)))
         .collect()
 }
 
@@ -279,7 +286,10 @@ fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)
         .map(|path| {
             (
                 t!(doctor_retention).to_string(),
-                t!(doctor_retention_paused, path = path.display().to_string()),
+                t!(
+                    doctor_retention_paused,
+                    path = progress::printable_path(path)
+                ),
             )
         })
         .collect()
@@ -303,13 +313,18 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
         });
     let profile = bravebot_agent::home::profile();
     let directory = std::env::current_dir().unwrap_or_default();
-    let rules = bravebot_sandbox::rules::resolve(&settled.lists, profile.as_deref(), &directory);
+    let rules = bravebot_sandbox::rules::resolve(
+        &settled.lists,
+        profile.as_deref(),
+        bravebot_agent::home::directory().as_deref(),
+        &directory,
+    );
     let backend = bravebot_sandbox::for_current_platform().ok();
     let capabilities = backend.as_ref().map(|backend| backend.capabilities());
     for line in sandbox_filesystem_lines(&rules, &directory, capabilities.as_ref()) {
         fact(t!(doctor_sandbox_filesystem), line);
     }
-    let managed_file = bravebot_config::managed_file().display().to_string();
+    let managed_file = progress::printable_path(&bravebot_config::managed_file());
     each(
         t!(doctor_settings_ignored),
         &settled.unread,
@@ -329,7 +344,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_filesystem_ignored,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -340,7 +355,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_misshapen,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -351,7 +366,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_hosts_ignored,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -362,7 +377,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_settings_sandbox_hosts_misshapen,
                 key = key,
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -375,30 +390,34 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
         |(path, key)| {
             t!(
                 doctor_settings_git_identities_misshapen,
-                key = key,
-                path = path.display().to_string()
+                key = progress::printable(key),
+                path = progress::printable_path(path)
             )
         },
     );
     // Judged as a stage judges it, so a key a push would not be given is named before the push.
     if let Some(home) = bravebot_agent::home::profile() {
         for entry in &settings.git_identities().entries {
-            let lent = bravebot_sandbox::scope::identity_key(&entry.key, &home)
-                .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
+            let lent = bravebot_sandbox::scope::identity_key(
+                &entry.key,
+                &home,
+                bravebot_agent::home::directory().as_deref(),
+            )
+            .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
             if lent.is_none() {
                 fact(
                     t!(doctor_settings_ignored),
                     t!(
                         doctor_settings_git_identities_key_refused,
-                        key = format!(
+                        key = progress::printable(&format!(
                             "git.identities.{}/{}",
                             entry.address.host, entry.address.owner
-                        ),
-                        value = entry.key.clone(),
+                        )),
+                        value = progress::printable(&entry.key),
                         path = entry
                             .by
                             .as_deref()
-                            .map(|by| by.display().to_string())
+                            .map(progress::printable_path)
                             .unwrap_or_default()
                     ),
                 );
@@ -468,7 +487,7 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
     // something. A person reading a value they did not expect has three places it could have come
     // from, and the paths are the whole of what tells them which.
     each(t!(doctor_settings_layer), settings.layers(), |layer| {
-        layer.display().to_string()
+        progress::printable_path(layer)
     });
     each(
         t!(doctor_settings_override),
@@ -477,7 +496,7 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
             t!(
                 doctor_settings_overridden,
                 name = progress::printable(name),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -494,10 +513,32 @@ fn refused_provider_port(id: &str, port: &str) -> String {
     )
 }
 
+/// The line for a Bedrock region refused for what it holds. The region is the person's own text,
+/// shown as pictures where it holds a control character; the source is one of five fixed phrases,
+/// and the one that names a settings file prints the path through the same call.
+fn refused_region(refused: &bravebot_config::bedrock::RefusedRegion) -> String {
+    use bravebot_config::bedrock::RegionSource;
+    let source = match (&refused.source, &refused.file) {
+        (RegionSource::EnvBlock, Some(file)) => t!(
+            doctor_region_source_env_block_of,
+            path = progress::printable(&file.display().to_string())
+        ),
+        (RegionSource::Exported, _) => t!(doctor_region_source_exported).to_string(),
+        (RegionSource::EnvBlock, None) => t!(doctor_region_source_env_block).to_string(),
+        (RegionSource::Managed, _) => t!(doctor_region_source_managed).to_string(),
+        (RegionSource::ProviderEntry, _) => t!(doctor_region_source_provider_entry).to_string(),
+    };
+    t!(
+        doctor_region_refused,
+        region = progress::printable(&refused.fault.region),
+        source = source
+    )
+}
+
 /// Every setting that was read and not obeyed, or not read at all, from the vetting key through the
 /// narrowing keys. The network and filesystem ones follow in their own sections.
 fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Managed) {
-    let managed_file = bravebot_config::managed_file().display().to_string();
+    let managed_file = progress::printable_path(&bravebot_config::managed_file());
     // A key that looks like configuration and does nothing, which is the one worth saying out
     // loud: it is read from the home layer alone, so a checkout cannot stop whoever opened it being
     // asked, and somebody who wrote it into one has to be told rather than left wondering why the
@@ -545,7 +586,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             t!(
                 doctor_settings_sandbox_ignored,
                 mode = mode.name(),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -555,9 +596,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         |(path, mode, held)| {
             t!(
                 doctor_settings_sandbox_strict_ignored,
-                path = path.display().to_string(),
+                path = progress::printable_path(path),
                 mode = mode.name(),
-                held = held.display().to_string()
+                held = progress::printable_path(held)
             )
         },
     );
@@ -588,7 +629,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             t!(
                 doctor_settings_unread_key,
                 key = progress::printable(key),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -605,7 +646,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             t!(
                 doctor_settings_narrowing_ignored,
                 key = format!("permissions.{key}"),
-                path = path.display().to_string()
+                path = progress::printable_path(path)
             )
         },
     );
@@ -651,7 +692,7 @@ fn report_run_network(
         |()| {
             t!(
                 doctor_managed_network_unreadable,
-                path = bravebot_config::managed_file().display().to_string()
+                path = progress::printable_path(&bravebot_config::managed_file())
             )
         },
     );
@@ -760,6 +801,13 @@ fn report_backends(config: &Config, ending: &mut Ending) {
     if let Some(bedrock) = config.bedrock.as_ref() {
         report_bedrock(bedrock);
     }
+    // A region written and refused leaves no Bedrock account, and this is the only place that
+    // is explained ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+    each(
+        t!(doctor_settings_ignored),
+        &config.refused_regions,
+        refused_region,
+    );
     for provider in &config.providers {
         report_gateway(provider);
     }
@@ -774,7 +822,7 @@ fn report_backends(config: &Config, ending: &mut Ending) {
             t!(doctor_gateway_keys),
             t!(
                 doctor_gateway_keys_unreadable,
-                path = bravebot_config::keys::file(&directory).display()
+                path = progress::printable_path(&bravebot_config::keys::file(&directory))
             ),
         );
     }
@@ -789,7 +837,7 @@ fn report_backends(config: &Config, ending: &mut Ending) {
             t!(doctor_brave_key),
             t!(
                 brave_key_unreadable,
-                path = bravebot_config::brave_key::file(&directory).display()
+                path = progress::printable_path(&bravebot_config::brave_key::file(&directory))
             ),
         );
     }
@@ -887,15 +935,16 @@ fn report_model(config: &Config, settings: &bravebot_config::Settings) {
         config,
         bravebot_session::store::model(bravebot_session::store::load_model(), settings),
     ) {
-        bravebot_agent::backend::Pick::InForce(chosen) => {
-            fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen))
-        }
+        bravebot_agent::backend::Pick::InForce(chosen) => fact(
+            t!(doctor_model),
+            t!(doctor_model_chosen, model = progress::printable(&chosen)),
+        ),
         bravebot_agent::backend::Pick::SetAside(pick) => fact(
             t!(doctor_model),
             t!(
                 doctor_model_set_aside,
-                model = &config.default_model,
-                pick = pick
+                model = progress::printable(&config.default_model),
+                pick = progress::printable(&pick)
             ),
         ),
         // The configured model answers as it does above, and the reason differs: a model this
@@ -909,22 +958,25 @@ fn report_model(config: &Config, settings: &bravebot_config::Settings) {
                 t!(doctor_model),
                 t!(
                     doctor_model_refused,
-                    model = &config.default_model,
-                    pick = &recorded
+                    model = progress::printable(&config.default_model),
+                    pick = progress::printable(&recorded)
                 ),
             );
             fact(
                 t!(doctor_settings_ignored),
                 t!(
                     session_model_pick_refused,
-                    model = &recorded,
-                    reason = reason
+                    model = progress::printable(&recorded),
+                    reason = progress::printable_lines(&reason)
                 ),
             );
         }
         bravebot_agent::backend::Pick::Absent => fact(
             t!(doctor_model),
-            t!(doctor_model_default, model = &config.default_model),
+            t!(
+                doctor_model_default,
+                model = progress::printable(&config.default_model)
+            ),
         ),
     }
 }
@@ -951,6 +1003,11 @@ fn report_serving(config: &Config, ending: &mut Ending) {
                 other => other,
             };
             let (chatgpt, xai) = (unsaid(chatgpt), unsaid(xai));
+            // Nothing printed here is left undrawn text a checkout chose: the how-to is catalog
+            // wording, the lines of `import::looked` draw each name and path they carry
+            // (`left_lines`, `unwritable`), and the sign-in reasons are not passed (the unreadable
+            // files are blanked above, and no question was asked, so no listing failure is said).
+            // The model that was refused or absent is drawn by the arms that print one (LAYER-3).
             println!();
             println!(
                 "{}",
@@ -1082,6 +1139,7 @@ pub(crate) fn doctor() -> ExitCode {
     if failed {
         ending = ends_on(ending, Ending::Failed);
     }
+    report_openshell(&mcp::in_openshell(&home), &mut ending);
 
     // Outside the configuration block as well: which skills a session here loads is read off two
     // directories, a trust map and the rules, and a key nothing reads is wrong whatever the
@@ -1200,7 +1258,7 @@ pub(crate) fn development(
         return Vec::new();
     };
     vec![
-        t!(doctor_development, path = root.display().to_string()),
+        t!(doctor_development, path = progress::printable_path(root)),
         aligned("AGENTS.md", agent_discovery(root, windows), FACT),
         aligned(
             "direnv",
@@ -1300,28 +1358,121 @@ fn report_bedrock(bedrock: &bravebot_config::bedrock::Bedrock) {
     }
 }
 
+/// What `doctor` says of OpenShell, where a server is declared to run in it (SERVERS-24): whether the
+/// program is found and new enough, and whether its gateway answers. Nothing where no declaration
+/// names it, since a machine without OpenShell is not missing anything then.
+#[cfg(unix)]
+fn report_openshell(servers: &[String], ending: &mut Ending) {
+    use bravebot_sandbox::openshell;
+    if servers.is_empty() {
+        return;
+    }
+    let row = |name: &str, value: &str| println!("{}", aligned(name, value, DETAIL));
+    println!();
+    println!("{}", t!(doctor_openshell));
+    row(t!(doctor_openshell_servers), &servers.join(", "));
+    let probe = match openshell::probe() {
+        Ok(probe) => probe,
+        Err(error) => {
+            fact(
+                t!(doctor_openshell),
+                t!(doctor_openshell_missing, reason = error.to_string()),
+            );
+            *ending = ends_on(*ending, Ending::Failed);
+            return;
+        }
+    };
+    match probe.version.as_deref() {
+        Some(version) if openshell::is_supported(version) => {
+            row(t!(doctor_openshell_version), version);
+        }
+        found => {
+            row(
+                t!(doctor_openshell_version),
+                &t!(
+                    doctor_openshell_too_old,
+                    version = found.unwrap_or("?"),
+                    minimum = openshell::MINIMUM_VERSION
+                ),
+            );
+            *ending = ends_on(*ending, Ending::Failed);
+        }
+    }
+    match probe.gateway {
+        Ok(()) => row(
+            t!(doctor_openshell_gateway),
+            t!(doctor_openshell_gateway_up),
+        ),
+        Err(reason) => {
+            row(
+                t!(doctor_openshell_gateway),
+                &t!(doctor_openshell_gateway_down, reason = reason),
+            );
+            *ending = ends_on(*ending, Ending::Failed);
+        }
+    }
+}
+
+/// OpenShell runs on macOS and Linux alone, so a server declared for it is never started here.
+#[cfg(not(unix))]
+fn report_openshell(servers: &[String], ending: &mut Ending) {
+    if !servers.is_empty() {
+        println!();
+        println!("{}", t!(doctor_openshell));
+        println!(
+            "{}",
+            aligned(t!(doctor_openshell_servers), servers.join(", "), DETAIL)
+        );
+        println!(
+            "{}",
+            aligned(
+                t!(doctor_openshell_version),
+                t!(doctor_openshell_unsupported),
+                DETAIL
+            )
+        );
+        *ending = ends_on(*ending, Ending::Failed);
+    }
+}
+
 /// What `doctor` says about whether an AWS account can sign a request now.
 ///
 /// Asked of the AWS CLI the way a turn asks before it signs, so the answer is the one a session
 /// would get. Only the answer is printed: what the CLI exports to give it is a live AWS credential.
 /// The sign-in command is named only where a sign-in is what is missing.
 fn report_aws_session(profile: Option<&str>) {
-    use bravebot_agent::backend::{Backend, CredentialError};
+    use bravebot_agent::backend::Backend;
     fact(
         t!(doctor_aws_session),
-        match Backend::session_of(profile) {
-            Ok(()) => t!(doctor_aws_signed_in).to_string(),
-            Err(CredentialError::Refused { .. }) => t!(doctor_aws_signed_out).to_string(),
-            Err(CredentialError::NoSuchProfile { available, .. }) if available.is_empty() => {
-                t!(doctor_aws_no_profiles).to_string()
-            }
-            Err(CredentialError::NoSuchProfile { available, .. }) => {
-                t!(doctor_aws_no_profile, available = available.join(", "))
-            }
-            Err(CredentialError::NotInstalled) => t!(doctor_aws_no_cli).to_string(),
-            Err(CredentialError::Undecodable { .. }) => t!(doctor_aws_undecodable).to_string(),
-        },
+        aws_session_line(Backend::session_of(profile)),
     );
+}
+
+/// What the AWS session line says for the answer the AWS CLI gave.
+///
+/// The profile names the CLI lists come from a configuration file, so each is drawn by
+/// [`progress::printable`] (LAYER-3).
+fn aws_session_line(answer: Result<(), bravebot_agent::backend::CredentialError>) -> String {
+    use bravebot_agent::backend::CredentialError;
+    match answer {
+        Ok(()) => t!(doctor_aws_signed_in).to_string(),
+        Err(CredentialError::Refused { .. }) => t!(doctor_aws_signed_out).to_string(),
+        Err(CredentialError::NoSuchProfile { available, .. }) if available.is_empty() => {
+            t!(doctor_aws_no_profiles).to_string()
+        }
+        Err(CredentialError::NoSuchProfile { available, .. }) => {
+            t!(
+                doctor_aws_no_profile,
+                available = available
+                    .iter()
+                    .map(|name| progress::printable(name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        Err(CredentialError::NotInstalled) => t!(doctor_aws_no_cli).to_string(),
+        Err(CredentialError::Undecodable { .. }) => t!(doctor_aws_undecodable).to_string(),
+    }
 }
 
 /// The URL `doctor` gives for a gateway's endpoint for a reply, without the userinfo a `baseURL` may
@@ -1817,7 +1968,7 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
     let Some(path) = managed.path() else {
         return Vec::new();
     };
-    let path = path.display().to_string();
+    let path = progress::printable_path(path);
     let pinned: Vec<&str> = managed.pinned().collect();
     vec![aligned(
         t!(doctor_managed),
@@ -1893,12 +2044,12 @@ pub(crate) fn state_directory(
     };
     let mut lines = vec![t!(
         doctor_state_directory,
-        path = path.display().to_string(),
+        path = progress::printable_path(path),
         variable = variable
     )];
     lines.push(t!(
         doctor_state_directory_logs,
-        path = path.join(bravebot_diag::DIRECTORY).display().to_string()
+        path = progress::printable_path(&path.join(bravebot_diag::DIRECTORY))
     ));
     if !restricted {
         lines.push(aligned(
@@ -1949,7 +2100,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             paths = named
                 .paths()
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|path| progress::printable_path(path))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -1967,7 +2118,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
     for problem in transport.trust_problems() {
         lines.push(aligned(
             t!(doctor_trust_roots_unusable),
-            problem.to_string(),
+            progress::printable_lines(&problem.to_string()),
             DETAIL,
         ));
     }
@@ -2005,8 +2156,8 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             t!(doctor_client_certificate),
             t!(
                 doctor_client_certificate_loaded,
-                certificate = certificate.display().to_string(),
-                key = key.display().to_string()
+                certificate = progress::printable_path(certificate),
+                key = progress::printable_path(key)
             ),
             DETAIL,
         ));
@@ -2019,7 +2170,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         for problem in transport.client_problems() {
             lines.push(aligned(
                 t!(doctor_client_certificate_unusable),
-                problem.to_string(),
+                progress::printable_lines(&problem.to_string()),
                 DETAIL,
             ));
         }
@@ -2061,7 +2212,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
                 t!(
                     doctor_network_file_detail,
                     names = names.join(", "),
-                    path = file.display().to_string()
+                    path = progress::printable_path(file)
                 ),
                 DETAIL,
             ));
@@ -2075,7 +2226,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             t!(
                 doctor_network_file_ignored_detail,
                 name = name,
-                path = file.display().to_string()
+                path = progress::printable_path(file)
             ),
             DETAIL,
         ));
@@ -2181,6 +2332,26 @@ mod tests {
     use bravebot_sandbox::policy::Capabilities;
     use bravebot_sandbox::policy::ConfinementLevel;
     use std::path::PathBuf;
+
+    /// LAYER-3: the profile names the AWS CLI lists come from a configuration file, and `doctor`
+    /// draws them as pictures in the line that names the alternatives.
+    ///
+    /// Rejects joining the names as the CLI printed them.
+    #[test]
+    fn the_aws_profiles_the_cli_lists_are_drawn_as_pictures() {
+        use bravebot_agent::backend::CredentialError;
+        let line = aws_session_line(Err(CredentialError::NoSuchProfile {
+            profile: "work".into(),
+            available: vec!["dev\u{1b}[2J".into(), "ops\u{202e}".into()],
+        }));
+
+        assert!(
+            !line.chars().any(|c| c.is_control() && c != '\n'),
+            "a control character reached the line: {line:?}"
+        );
+        assert!(!line.contains('\u{202e}'), "{line:?}");
+        assert!(line.contains("dev\u{241b}[2J"), "{line:?}");
+    }
 
     /// The two facts about the network nothing else in the report carries. A machine behind a
     /// TLS-inspecting proxy refuses every connection over an authority its user already installed,
@@ -2506,6 +2677,57 @@ mod tests {
             &Default::default(),
         );
         assert!(!bare.join("\n").contains("client certificate"), "{bare:?}");
+    }
+
+    /// LAYER-3, CLI-7: the certificate and key a client presents are named by environment
+    /// variables, so the line that says they loaded draws both paths as pictures. The integration
+    /// test covers the lines for files that cannot be used, which come through the transport's own
+    /// error text; this pins the line for a pair that loaded, which needs a valid pair on disk.
+    ///
+    /// Rejects interpolating `Path::display` into the line.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_draws_the_paths_of_a_client_certificate_that_loaded_as_pictures() {
+        let (certificate, key) = client_files(
+            "doctor-client-hostile",
+            &armoured(
+                &format!("{} KEY", "PRIVATE"),
+                &[
+                    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNI5exiW0VUAX6Zlh",
+                    "2xpQpP9Ul/tkSYnXIk0Ew/P6G1qhRANCAAQvxnDQ3AYHDeZGt/rINkorQdR29nsI",
+                    "WLbY1tX9vPGoIPii3RoRH2ndnu4qv35pTOL5ZPoT6W8ZF4tEue2KzaW7",
+                ],
+            ),
+        );
+        let hostile = certificate
+            .parent()
+            .unwrap()
+            .join("dir\u{1b}[2J\u{202e}end");
+        std::fs::create_dir_all(&hostile).expect("a directory");
+        let moved_certificate = hostile.join("client.crt");
+        let moved_key = hostile.join("client.key");
+        std::fs::rename(&certificate, &moved_certificate).expect("move the certificate");
+        std::fs::rename(&key, &moved_key).expect("move the key");
+        let transport =
+            Transport::stated_with_client_pair(Some(&moved_certificate), Some(&moved_key));
+
+        let report = network(&transport, &Default::default()).join("\n");
+
+        assert!(
+            report.contains("loaded"),
+            "the pair did not load: {report:?}"
+        );
+        assert!(
+            !report.contains('\u{1b}') && !report.contains('\u{202e}'),
+            "the line holds a raw character: {report:?}"
+        );
+        assert_eq!(
+            report
+                .matches("\u{241b}[2J\u{2039}U+202E\u{203A}end")
+                .count(),
+            2,
+            "both paths are drawn: {report:?}"
+        );
     }
 
     /// NET-11: a named file that cannot be used is a line of its own, and ends the report on a
@@ -3444,6 +3666,36 @@ mod tests {
         }
     }
 
+    /// BACKEND-33: a refused region is whatever the person wrote, and so is the path of the settings
+    /// file that holds it, so a control character in either is drawn as its picture. Written raw, an
+    /// escape sequence in the report could retitle or rewrite the terminal it is read in.
+    #[test]
+    fn a_refused_region_and_its_file_are_reported_with_control_characters_drawn_as_pictures() {
+        use bravebot_config::bedrock::{RefusedRegion, RegionFault, RegionSource};
+        let refused = RefusedRegion {
+            fault: RegionFault {
+                region: "us-east-1\u{1b}]0;PWNED-REGION\u{7}".to_string(),
+            },
+            source: RegionSource::EnvBlock,
+            file: Some(std::path::PathBuf::from("/home/\u{1b}[2Jsettings.json")),
+        };
+
+        let line = refused_region(&refused);
+
+        assert!(
+            !line.chars().any(char::is_control),
+            "a control character reached the report: {line:?}"
+        );
+        assert!(
+            line.contains("us-east-1\u{241b}]0;PWNED-REGION\u{2407}"),
+            "the region was not drawn as pictures: {line:?}"
+        );
+        assert!(
+            line.contains("/home/\u{241b}[2Jsettings.json"),
+            "the settings file path was not drawn as pictures: {line:?}"
+        );
+    }
+
     /// A gateway's credential is a long-lived bearer token, so a diagnostic that echoed one would put
     /// a live credential in every issue somebody pastes this into.
     #[test]
@@ -3707,6 +3959,83 @@ mod tests {
         assert!(!source.path.join("AGENTS.md").exists());
     }
 
+    /// LAYER-3, CLI-7: a managed file's path is drawn as pictures on the line that names it, in
+    /// both the line for a file that pinned nothing and the line for one that pinned names. The
+    /// path is a fixed machine location in a real install, so the binary cannot be made to print
+    /// one with control characters, and this is the only place the draw is pinned.
+    ///
+    /// Rejects interpolating `Path::display` into either line.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_draws_the_managed_files_path_as_pictures() {
+        let scratch = Scratch::new("doctor-managed-hostile\u{1b}[2J\u{202e}end");
+        let path = scratch.path.join("managed.json");
+        for (text, what) in [
+            (
+                r#"{"env": {"BRAVEBOT_CONTEXT_BUDGET": "4096"}}"#,
+                "pinned names",
+            ),
+            (r#"{"env": {}}"#, "pinned nothing"),
+        ] {
+            std::fs::write(&path, text).expect("a managed file");
+
+            let lines = managed_layer(&Managed::at(&path)).join("\n");
+
+            assert!(
+                !lines.contains('\u{1b}') && !lines.contains('\u{202e}'),
+                "the line for a file that {what} holds a raw character: {lines:?}"
+            );
+            assert!(
+                lines.contains("\u{241b}[2J\u{2039}U+202E\u{203A}end"),
+                "the line for a file that {what} does not draw the path: {lines:?}"
+            );
+        }
+    }
+
+    /// LAYER-3, CLI-7: the source tree a session runs in is found from the working directory, which
+    /// a checkout names, so its root is drawn as pictures on the development line.
+    ///
+    /// Rejects interpolating `Path::display` into the line.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_draws_the_development_root_as_pictures() {
+        let source = development_fixture("doctor-development-hostile\u{1b}[2J\u{202e}end");
+
+        let report = development(&source.path, None, false).join("\n");
+
+        assert!(
+            !report.contains('\u{1b}') && !report.contains('\u{202e}'),
+            "the development line holds a raw character: {report:?}"
+        );
+        assert!(
+            report.contains("\u{241b}[2J\u{2039}U+202E\u{203A}end"),
+            "the development line does not draw the root: {report:?}"
+        );
+    }
+
+    /// LAYER-3, CLI-7: the state directory is chosen by the environment, so the line that names it
+    /// and the line for its log directory draw its path as pictures.
+    ///
+    /// Rejects interpolating `Path::display` into either line.
+    #[test]
+    fn doctor_draws_the_state_directory_as_pictures() {
+        let path = Path::new("/home/\u{1b}[2J\u{202e}end/.bravebot");
+
+        let report = state_directory(Some(("HOME", path)), &["HOME"], false).join("\n");
+
+        assert!(
+            !report.contains('\u{1b}') && !report.contains('\u{202e}'),
+            "the state directory lines hold a raw character: {report:?}"
+        );
+        assert_eq!(
+            report
+                .matches("\u{241b}[2J\u{2039}U+202E\u{203A}end")
+                .count(),
+            2,
+            "both lines draw the path: {report:?}"
+        );
+    }
+
     /// A hand-written path must survive a diagnostic and must not look healthy.
     #[test]
     fn doctor_reports_agent_discovery_conflicts_without_changing_them() {
@@ -3833,7 +4162,7 @@ mod tests {
             deny_write: vec![entry("secret.env"), entry(outside)],
             ..Lists::default()
         };
-        let rules = resolve(&lists, None, &directory);
+        let rules = resolve(&lists, None, None, &directory);
         let backend = |subtracts_from_a_grant| Capabilities {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["a mechanism"],

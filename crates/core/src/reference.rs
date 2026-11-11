@@ -75,12 +75,6 @@ pub struct Reference {
     /// base64 says nothing anybody can use, and one was reported as "1 lines" for a whole
     /// screenshot. Set by the driver from a table of extensions.
     pub picture: Option<String>,
-    /// Whether the planner's context already held private content when this reference was made.
-    ///
-    /// Every `spawn_processor` call is refused from then on (PROC-4), so a reference described as
-    /// something to give one sends the planner into a refusal. Set by the policy that made the
-    /// reference, the only party that knows what the context holds.
-    pub processors_closed: bool,
     /// Whether the run this reference is made for is offered `vet_content`.
     ///
     /// A delegate never is, and a turn's definition or the command line can leave the tool out of
@@ -92,8 +86,7 @@ pub struct Reference {
     ///
     /// A reader or a definition's tools line can leave it out of the list, and a reference that
     /// told such a run to give it one would be a refusal the planner is invited to earn. Set by
-    /// the policy that made the reference, as `vetting_offered` is. A run offered the tool and
-    /// holding private content is the separate case `processors_closed` says.
+    /// the policy that made the reference, as `vetting_offered` is.
     pub spawning_offered: bool,
     /// Whether the run this reference is made for is offered `write_file`, which is where a
     /// reference goes as `contents_ref` or `path_ref`. Set by the policy that made the reference.
@@ -120,19 +113,11 @@ impl Reference {
             bytes: Some(bytes),
             label,
             picture: None,
-            processors_closed: false,
             vetting_offered: true,
             spawning_offered: true,
             writing_offered: true,
             reading_offered: true,
         }
-    }
-
-    /// Say that no processor can be given this reference, because the planner's context holds
-    /// private content.
-    pub fn closed_to_processors(mut self) -> Self {
-        self.processors_closed = true;
-        self
     }
 
     /// Say that the run this reference is made for is not offered `vet_content`.
@@ -210,7 +195,6 @@ impl Reference {
             bytes,
             label,
             picture: None,
-            processors_closed: false,
             vetting_offered: true,
             spawning_offered: true,
             writing_offered: true,
@@ -254,33 +238,17 @@ impl Reference {
             }
         };
 
-        // Once the context holds private content no processor can be started, so the move that
-        // names one is left out rather than offered and refused. The same goes for each tool a
+        // The move that names a tool is left out rather than offered and refused for each tool a
         // run is not offered: `vet_content`, `spawn_processor`, `write_file` and `read_output`.
-        let vet = match self.vetting_offered {
-            true => " Where you have to read it yourself, vet_content is how to ask for it.",
-            false => "",
-        };
-        let can_process = self.spawning_offered && !self.processors_closed;
+        let vet = self.vet_move();
+        let can_process = self.spawning_offered;
         let next = match self.kind {
-            Kind::File => {
-                // Putting the result back is the second half of the move that starts a processor,
-                // so a run that cannot write is told only the first, and a run that cannot start
-                // one is told neither.
-                let moves = match (can_process, self.writing_offered) {
-                    (true, true) => {
-                        " Give it to spawn_processor to work on, and name it as write_file's \
-                         path_ref to put the result back."
-                    }
-                    (true, false) => " Give it to spawn_processor to work on.",
-                    (false, _) => "",
-                };
-                format!(
-                    "Quarantined: you will not be shown what this file holds, and read_file has \
-                     nothing to add: {} already is the file.{moves}{vet}",
-                    self.slot
-                )
-            }
+            Kind::File => format!(
+                "Quarantined: you will not be shown what this file holds, and read_file has \
+                 nothing to add: {} already is the file.{}{vet}",
+                self.slot,
+                self.file_moves()
+            ),
             Kind::Content => format!(
                 "Quarantined: you will not be shown it.{}{vet}",
                 self.moves_with(&self.slot.to_string(), can_process)
@@ -322,6 +290,30 @@ impl Reference {
         format!("[{}] {} {shape}. {next}", self.slot, self.origin)
     }
 
+    /// The move that asks to read it, led by a space, or nothing where the run is not offered
+    /// `vet_content`.
+    fn vet_move(&self) -> &'static str {
+        match self.vetting_offered {
+            true => " Where you have to read it yourself, vet_content is how to ask for it.",
+            false => "",
+        }
+    }
+
+    /// What to do with a file reference, led by a space, or nothing where the run cannot do it.
+    ///
+    /// Putting the result back is the second half of the move that starts a processor, so a run
+    /// that cannot write is told only the first, and a run that cannot start one is told neither.
+    fn file_moves(&self) -> &'static str {
+        match (self.spawning_offered, self.writing_offered) {
+            (true, true) => {
+                " Give it to spawn_processor to work on, and name it as write_file's path_ref to \
+                 put the result back."
+            }
+            (true, false) => " Give it to spawn_processor to work on.",
+            (false, _) => "",
+        }
+    }
+
     /// What to do with the content besides reading it, led by a space, or nothing where the run
     /// is offered neither tool that does it. `subject` is how the sentence names the content.
     fn moves_with(&self, subject: &str, can_process: bool) -> String {
@@ -335,6 +327,78 @@ impl Reference {
             (false, false) => String::new(),
         }
     }
+}
+
+/// How the planner is told about the entries of a listing it may not read.
+///
+/// What is the same for every entry is said once at the top: where they are from, and what a
+/// reference to a file and a reference to a directory is for. The lines below give each file its
+/// reference and label, and each run of directories that share a label as a count with the first
+/// and last reference. `describe` says the same words again for every entry, which a listing of a
+/// hundred entries pays for in every round after it.
+///
+/// The references come from one call of `Policy::defer_entries`, so they share an origin and what
+/// the run is offered, and the first one speaks for all. Which are files and which are
+/// directories is each reference's `kind`, which the policy set from the position of the entry in
+/// the listing. A run is cut where the label changes, and a label is the policy's, not a fact read
+/// off a name. Nothing here is a name.
+///
+/// Empty for no references.
+pub fn describe_listing(references: &[Reference]) -> String {
+    let Some(first) = references.first() else {
+        return String::new();
+    };
+
+    let mut notes = vec![format!(
+        "Each is {}. The lines below give each its reference, what it stands for and its label.",
+        first.origin
+    )];
+    if references.iter().any(|r| r.kind == Kind::File) {
+        notes.push(format!(
+            "A file: you will not be shown what it holds, and read_file has nothing to add: its \
+             reference already is the file.{}{}",
+            first.file_moves(),
+            first.vet_move()
+        ));
+    }
+    if references.iter().any(|r| r.kind == Kind::Directory) {
+        notes.push(
+            "A directory: this listing stopped at it rather than at a file in it, so there is \
+             nothing behind its reference to read, process or write. List the directory you \
+             named again with a greater depth to reach what is inside it. A range of references \
+             covers every reference from its first to its last."
+                .to_string(),
+        );
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut at = 0;
+    while at < references.len() {
+        let start = &references[at];
+        let mut end = at + 1;
+        // A file reference is passed to spawn_processor or as a path_ref, so each needs its own
+        // line. A directory reference has nothing behind it to act on, so a range loses nothing.
+        if start.kind == Kind::Directory {
+            while end < references.len()
+                && references[end].kind == Kind::Directory
+                && references[end].label == start.label
+            {
+                end += 1;
+            }
+        }
+        let last = &references[end - 1];
+        lines.push(match (start.kind, end - at) {
+            (Kind::Directory, 1) => format!("[{}] directory {}", start.slot, start.label),
+            (Kind::Directory, count) => format!(
+                "[{}] to [{}]: {count} directories {}",
+                start.slot, last.slot, start.label
+            ),
+            _ => format!("[{}] file {}", start.slot, start.label),
+        });
+        at = end;
+    }
+
+    format!("{}\n\n{}", notes.join(" "), lines.join("\n"))
 }
 
 impl fmt::Display for Reference {
@@ -534,71 +598,9 @@ mod tests {
     /// asked: where permissions are bypassed nobody is, and the planner gave up on what it read.
     #[test]
     fn a_description_does_not_say_the_user_is_asked_to_show_it() {
-        for described in [
-            reference().describe(),
-            reference().closed_to_processors().describe(),
-        ] {
-            assert!(described.contains("vet_content"), "{described}");
-            assert!(!described.contains("the user"), "{described}");
-        }
-    }
-
-    /// Every `spawn_processor` call is refused once the planner's context holds private content,
-    /// so advice to give a reference to one is a refusal the planner is invited to earn. The
-    /// other moves stay, because they are all the planner has left.
-    #[test]
-    fn a_reference_closed_to_processors_names_none_and_keeps_the_other_moves() {
-        let content = reference().closed_to_processors().describe();
-        assert!(!content.contains("spawn_processor"), "{content}");
-        assert!(
-            content.contains("Write ref:1 into a file as contents_ref")
-                && content.contains("vet_content"),
-            "the moves that remain were dropped with the processor: {content}"
-        );
-
-        let file = Reference::unread(
-            SlotId::new("ref:2"),
-            "an entry in \".\"",
-            None,
-            Label::untrusted_private(),
-        )
-        .closed_to_processors()
-        .describe();
-        assert!(!file.contains("spawn_processor"), "{file}");
-        assert!(
-            file.contains("ref:2 already is the file") && file.contains("vet_content"),
-            "{file}"
-        );
-
-        // A picture is looked at only by a processor or by a person, so once no processor can
-        // be started the person is the one move left, and it is still offered.
-        let picture = Reference::unread(
-            SlotId::new("ref:3"),
-            "an entry in \".\"",
-            None,
-            Label::untrusted_private(),
-        )
-        .of_a_picture("image/png")
-        .closed_to_processors()
-        .describe();
-        assert!(!picture.contains("spawn_processor"), "{picture}");
-        assert!(picture.contains("vet_content"), "{picture}");
-
-        let kept = Reference::new(
-            SlotId::new("ref:4"),
-            "git log",
-            900,
-            90_000,
-            Label::trusted_private(),
-        )
-        .of_kept_output()
-        .closed_to_processors()
-        .describe();
-        assert!(!kept.contains("spawn_processor"), "{kept}");
-        assert!(
-            kept.contains("read_output with ref:4 and an offset") && kept.contains("contents_ref"),
-            "{kept}"
-        );
+        let described = reference().describe();
+        assert!(described.contains("vet_content"), "{described}");
+        assert!(!described.contains("the user"), "{described}");
     }
 
     /// A run that is not offered `vet_content` is not told to use it: a delegate never is, and a
@@ -614,50 +616,44 @@ mod tests {
                 Label::untrusted_private(),
             )
         };
-        for closed in [false, true] {
-            let close = |reference: Reference| match closed {
-                true => reference.closed_to_processors(),
-                false => reference,
-            };
-            let content = close(reference()).without_vetting().describe();
-            let file = close(entry()).without_vetting().describe();
-            let picture = close(reference().of_a_picture("image/png"))
-                .without_vetting()
-                .describe();
-            for described in [&content, &file, &picture] {
-                assert!(
-                    !described.contains("vet_content") && !described.contains("read it yourself"),
-                    "closed to processors {closed}: a run without it was sent to it: {described}"
-                );
-                assert!(
-                    described.contains("Quarantined"),
-                    "closed to processors {closed}: the reference no longer says what it is: \
-                     {described}"
-                );
-            }
-            assert!(content.contains("contents_ref"), "{content}");
-            assert!(picture.contains("contents_ref"), "{picture}");
-            assert!(file.contains("ref:2 already is the file"), "{file}");
-            assert_eq!(
-                [&content, &file, &picture].map(|described| described.contains("spawn_processor")),
-                [!closed; 3],
-                "closed to processors {closed}: the processor move did not follow the context"
+        let content = reference().without_vetting().describe();
+        let file = entry().without_vetting().describe();
+        let picture = reference()
+            .of_a_picture("image/png")
+            .without_vetting()
+            .describe();
+        for described in [&content, &file, &picture] {
+            assert!(
+                !described.contains("vet_content") && !described.contains("read it yourself"),
+                "a run without it was sent to it: {described}"
             );
-            // The move a path reference adds is the file's own.
-            assert_eq!(file.contains("path_ref"), !closed, "{file}");
+            assert!(
+                described.contains("Quarantined"),
+                "the reference no longer says what it is: {described}"
+            );
+        }
+        assert!(content.contains("contents_ref"), "{content}");
+        assert!(picture.contains("contents_ref"), "{picture}");
+        assert!(file.contains("ref:2 already is the file"), "{file}");
+        assert!(
+            [&content, &file, &picture]
+                .into_iter()
+                .all(|described| described.contains("spawn_processor")),
+            "taking vet_content away took the processor move with it"
+        );
+        // The move a path reference adds is the file's own.
+        assert!(file.contains("path_ref"), "{file}");
 
-            // And the same reference made for a run that is offered it still says so.
-            for described in [
-                close(reference()).describe(),
-                close(entry()).describe(),
-                close(reference().of_a_picture("image/png")).describe(),
-            ] {
-                assert!(
-                    described.contains("vet_content is how to ask for it"),
-                    "closed to processors {closed}: a run offered vetting was not told of it: \
-                     {described}"
-                );
-            }
+        // And the same reference made for a run that is offered it still says so.
+        for described in [
+            reference().describe(),
+            entry().describe(),
+            reference().of_a_picture("image/png").describe(),
+        ] {
+            assert!(
+                described.contains("vet_content is how to ask for it"),
+                "a run offered vetting was not told of it: {described}"
+            );
         }
     }
 
@@ -675,16 +671,13 @@ mod tests {
             )
         };
         // Content, a file, a picture and the whole of some output, made for a run.
-        let each = |spawning: bool, writing: bool, closed: bool| {
+        let each = |spawning: bool, writing: bool| {
             let adjust = |mut reference: Reference| {
                 if !spawning {
                     reference = reference.without_spawning();
                 }
                 if !writing {
                     reference = reference.without_writing();
-                }
-                if closed {
-                    reference = reference.closed_to_processors();
                 }
                 reference
             };
@@ -701,46 +694,42 @@ mod tests {
                 ),
             ]
         };
-        for closed in [false, true] {
-            for (spawning, writing) in [(true, true), (true, false), (false, true), (false, false)]
-            {
-                let run =
-                    format!("spawn_processor {spawning}, write_file {writing}, closed {closed}");
-                for (kind, described) in each(spawning, writing, closed) {
-                    assert_eq!(
-                        described.contains("spawn_processor"),
-                        spawning && !closed,
-                        "{kind} for a run offered {run}: {described}"
-                    );
-                    // A file is written back through the processor's answer, so its move needs both.
-                    let names_writing = described.contains("write_file")
-                        || described.contains("contents_ref")
-                        || described.contains("path_ref");
-                    assert_eq!(
-                        names_writing,
-                        writing && (kind != "file" || (spawning && !closed)),
-                        "{kind} for a run offered {run}: {described}"
-                    );
-                    assert!(
-                        described.contains("Quarantined") || described.contains("You may read"),
-                        "{kind} for a run offered {run} no longer says what it is: {described}"
-                    );
-                    // The other tools it names are not touched.
-                    assert_eq!(
-                        described.contains("vet_content"),
-                        kind != "kept output",
-                        "{kind} for a run offered {run}: {described}"
-                    );
-                    assert_eq!(
-                        described.contains("read_output"),
-                        kind == "kept output",
-                        "{kind} for a run offered {run}: {described}"
-                    );
-                }
+        for (spawning, writing) in [(true, true), (true, false), (false, true), (false, false)] {
+            let run = format!("spawn_processor {spawning}, write_file {writing}");
+            for (kind, described) in each(spawning, writing) {
+                assert_eq!(
+                    described.contains("spawn_processor"),
+                    spawning,
+                    "{kind} for a run offered {run}: {described}"
+                );
+                // A file is written back through the processor's answer, so its move needs both.
+                let names_writing = described.contains("write_file")
+                    || described.contains("contents_ref")
+                    || described.contains("path_ref");
+                assert_eq!(
+                    names_writing,
+                    writing && (kind != "file" || spawning),
+                    "{kind} for a run offered {run}: {described}"
+                );
+                assert!(
+                    described.contains("Quarantined") || described.contains("You may read"),
+                    "{kind} for a run offered {run} no longer says what it is: {described}"
+                );
+                // The other tools it names are not touched.
+                assert_eq!(
+                    described.contains("vet_content"),
+                    kind != "kept output",
+                    "{kind} for a run offered {run}: {described}"
+                );
+                assert_eq!(
+                    described.contains("read_output"),
+                    kind == "kept output",
+                    "{kind} for a run offered {run}: {described}"
+                );
             }
         }
 
-        let [(_, content), (_, file), _, (_, kept)] = each(true, true, false);
+        let [(_, content), (_, file), _, (_, kept)] = each(true, true);
         assert!(
             content.contains(
                 "Give ref:1 to spawn_processor to work on, or write it into a file as \
@@ -762,7 +751,7 @@ mod tests {
             ),
             "{kept}"
         );
-        let [(_, content), (_, file), _, (_, kept)] = each(true, false, false);
+        let [(_, content), (_, file), _, (_, kept)] = each(true, false);
         assert!(
             content.contains("Give ref:1 to spawn_processor to work on. Where"),
             "{content}"
@@ -775,7 +764,7 @@ mod tests {
             kept.ends_with("being asked. Give it to spawn_processor to work on."),
             "{kept}"
         );
-        let [(_, content), _, _, (_, kept)] = each(false, true, false);
+        let [(_, content), _, _, (_, kept)] = each(false, true);
         assert!(
             content.contains(
                 "you will not be shown it. Write ref:1 into a file as contents_ref. Where"
@@ -885,5 +874,101 @@ mod tests {
     fn references_are_ordinary_values() {
         assert_eq!(reference(), reference());
         assert!(!format!("{}", reference()).is_empty());
+    }
+
+    fn listing(files: usize, directories: usize) -> Vec<Reference> {
+        let entry = |n: usize| {
+            Reference::unread(
+                SlotId::new(format!("ref:{n}")),
+                "an entry in \".\"",
+                None,
+                Label::untrusted_private(),
+            )
+        };
+        (1..=files)
+            .map(entry)
+            .chain((files + 1..=files + directories).map(|n| entry(n).of_a_directory()))
+            .collect()
+    }
+
+    /// A listing says what its references are once, gives each file its own line and a run of
+    /// directories one line, and never hands a directory over as a file.
+    #[test]
+    fn a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories() {
+        let described = describe_listing(&listing(2, 3));
+        assert_eq!(described.matches("read_file has nothing to add").count(), 1);
+        assert_eq!(described.matches("stopped at").count(), 1);
+        assert!(described.contains("[ref:1] file (U,priv)"), "{described}");
+        assert!(described.contains("[ref:2] file (U,priv)"), "{described}");
+        assert!(
+            described.contains("[ref:3] to [ref:5]: 3 directories (U,priv)"),
+            "{described}"
+        );
+        for directory in ["[ref:3] file", "[ref:4] file", "[ref:5] file"] {
+            assert!(!described.contains(directory), "{described}");
+        }
+    }
+
+    /// One directory is a line of its own, not a range of one, and a listing with no files says
+    /// nothing about files.
+    #[test]
+    fn a_listing_of_one_directory_is_one_line_and_names_no_file_move() {
+        let described = describe_listing(&listing(0, 1));
+        assert!(
+            described.contains("[ref:1] directory (U,priv)"),
+            "{described}"
+        );
+        assert!(!described.contains(" to [ref:"), "{described}");
+        assert!(!described.contains("spawn_processor"), "{described}");
+        assert!(!described.contains("already is the file"), "{described}");
+    }
+
+    /// Directories with different labels are not one run: the count states what the label is
+    /// for each of them.
+    #[test]
+    fn directories_with_different_labels_are_not_counted_together() {
+        let mut entries = listing(0, 3);
+        entries[1].label = Label::trusted_private();
+        let described = describe_listing(&entries);
+        assert!(
+            described.contains("[ref:1] directory (U,priv)"),
+            "{described}"
+        );
+        assert!(
+            described.contains("[ref:2] directory (T,priv)"),
+            "{described}"
+        );
+        assert!(
+            described.contains("[ref:3] directory (U,priv)"),
+            "{described}"
+        );
+    }
+
+    /// The tools a run is offered decide what the header says, as they do for one reference.
+    #[test]
+    fn the_header_of_a_listing_names_only_the_moves_the_run_is_offered() {
+        let described_with = |change: fn(Reference) -> Reference| {
+            describe_listing(&listing(1, 0).into_iter().map(change).collect::<Vec<_>>())
+        };
+        let open = described_with(|r| r);
+        assert!(
+            open.contains("spawn_processor")
+                && open.contains("path_ref")
+                && open.contains("vet_content"),
+            "{open}"
+        );
+        let no_writing = described_with(Reference::without_writing);
+        assert!(
+            no_writing.contains("spawn_processor") && !no_writing.contains("path_ref"),
+            "{no_writing}"
+        );
+        let no_vetting = described_with(Reference::without_vetting);
+        assert!(!no_vetting.contains("vet_content"), "{no_vetting}");
+    }
+
+    /// A listing with no entries says nothing: a header would promise lines below that never come.
+    #[test]
+    fn no_references_are_described_as_nothing() {
+        assert_eq!(describe_listing(&[]), "");
     }
 }

@@ -1,4 +1,5 @@
 import type { Enhancement } from './enhancing'
+import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
 import type { Staged, Staging } from './staging'
 import type {
@@ -32,6 +33,11 @@ export interface Queued {
    * It goes as a turn of its own whether or not the queue is paused.
    */
   fromInterjection?: boolean
+  /**
+   * Set for a typed `/schedule` line that waits for the turn: its argument. It is asked of the
+   * bridge when the turn ends and is never sent as a prompt (CMD-8).
+   */
+  schedule?: string
 }
 
 /** A line sent into the running turn, kept as written until the turn says it has read it. */
@@ -66,6 +72,12 @@ export interface Live {
   notes?: SessionNote[]
   quarantine: Shown[]
   phase: Waiting | null
+  /**
+   * When a failed request waiting to be sent again will be, while the phase is `reconnecting`
+   * (VIEW-43). Set by the `phase` event that announces the wait and by every later one, so it never
+   * outlives the wait it names.
+   */
+  retry?: RetryDue | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
   hook: Hook | null
@@ -216,6 +228,24 @@ export function cameFrom(
 }
 
 /** What a chat is called until its first prompt names it. */
+/**
+ * Whether a running turn is the model writing rather than a tool at work: a thinking or planning
+ * round with no tool call being written, no tool running and no check or hook under way. A tool
+ * runs from its entry until its landing arrives. For a bot's face (`Doing` in `avatar/clock.ts`).
+ */
+export function thinking(live: Live): boolean {
+  if (live.phase !== 'thinking' && live.phase !== 'planning') return false
+  if (live.composing !== null || live.checking !== null || live.hook !== null) return false
+  // An approved run keeps its decision card after the tool entry, so the last entry is not enough:
+  // look through this turn, and no further, for a tool still running.
+  for (let i = live.entries.length - 1; i >= 0; i--) {
+    const entry = live.entries[i]!
+    if (entry.kind === 'turn-start') break
+    if (entry.kind === 'tool' && entry.landing === null) return false
+  }
+  return true
+}
+
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */

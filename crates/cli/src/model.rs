@@ -2,7 +2,7 @@
 
 use crate::import;
 use crate::plain::Prompting;
-use crate::progress::printable;
+use crate::progress::{printable, printable_lines};
 use bravebot_agent::chatgpt::{AccountFile, Model};
 use bravebot_config::Config;
 use bravebot_i18n::t;
@@ -412,6 +412,10 @@ pub(crate) fn put_processor_model_in_force(
 /// that opens an interactive session, and that same start again once an import has written a model.
 /// The model is named as well as the file, since a tier word resolves to a name the person reading
 /// this wrote nowhere.
+///
+/// The model is a name a flag or a checkout's settings chose, and the reason holds the path of the
+/// file that refused, so both are drawn through [`printable`] and [`printable_lines`] here and
+/// every caller prints pictures (LAYER-3). The drawing maps each character and decides nothing.
 pub(crate) fn managed_refusal(
     model: &str,
     file: &Path,
@@ -419,8 +423,8 @@ pub(crate) fn managed_refusal(
 ) -> String {
     t!(
         managed_model_refused,
-        model = model,
-        reason = bravebot_agent::backend::refusal_reason(file, why)
+        model = printable(model),
+        reason = printable_lines(&bravebot_agent::backend::refusal_reason(file, why))
     )
 }
 
@@ -486,6 +490,37 @@ pub(crate) fn model_not_served(asked: &str, comparable: bool, served: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LAYER-3, BACKEND-48: the sentence a refused start or report prints draws the model's name and
+    /// the refusing file's path as pictures, whichever of the callers prints it. A model name comes
+    /// from `--model` or a checkout's settings, and a path can be named by whoever made the file.
+    /// The regression it rejects is the arguments reaching the sentence as they were written, which
+    /// sends an escape sequence to the terminal.
+    #[test]
+    fn the_managed_refusal_draws_the_model_and_the_file_as_pictures() {
+        for why in [
+            bravebot_config::ModelRefusal::NotAllowed,
+            bravebot_config::ModelRefusal::Denied,
+        ] {
+            let said = managed_refusal(
+                "a-model\u{1b}[8mhidden",
+                Path::new("/etc/\u{1b}]52;c;aGVsbG8=\u{7}managed.json"),
+                why,
+            );
+
+            assert_eq!(
+                said.chars()
+                    .find(|c| c.is_control() && !matches!(c, '\n' | '\t')),
+                None,
+                "the refusal sent a control character: {said:?}"
+            );
+            assert!(said.contains("a-model\u{241b}[8mhidden"), "{said:?}");
+            assert!(
+                said.contains("/etc/\u{241b}]52;c;aGVsbG8=\u{2407}managed.json"),
+                "{said:?}"
+            );
+        }
+    }
 
     /// A row of the account as the picker shows it, with the fields the question reads.
     fn an_account_row(key: &str, name: &str) -> Model {

@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """Open the implement-issues skill in the terminal client, after the steps that need no model.
 
-    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] -- <argument>
+    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] [--force] [--bypass] -- <argument>
 
-`make implement-issues ISSUES=<argument> [NOTES=<notes>]` runs it. <argument> is what the skill takes:
+`make implement-issues ISSUES=<argument> [NOTES=<notes>] [FORCE=1] [BYPASS=1]` runs it. <argument> is what the skill takes:
 issue numbers, links and search queries separated by commas. The skill receives it unchanged, since the
 session is `bravebot -i "/implement-issues <argument>"` and opens on that line as its first turn.
+With `--bypass` it is `bravebot --dangerously-bypass-approvals-and-sandbox -i "..."`, which answers every
+permission question and turns the sandbox off for the whole session.
 
 The notes are the person's instructions for the run, such as how to group the issues. They begin at a
 line of <argument> that starts with `Notes:`, and `--notes` adds such a line after <argument>. The skill
 reads them (step 1). This script takes no issue, link or query from them, and they do not change which
 issues it claims.
 
+Once the claim is written, the session is given a line that starts with `Claimed:`, between <argument>
+and the notes. It says when the script assigned the account and added the label, to which issues, and
+that those writes are this run's, so the skill does not read them as another session's work. It holds
+the account, the time and issue numbers, and nothing that GitHub returned. With `--force`, it also
+names the issues that have another assignee. A line of <argument> that starts with `Claimed:` ends the
+list as one that starts with `Notes:` does.
+
 Before the session opens, from the same reading of <argument> as step 1 of the skill, and with no
 model:
 
 1. every open issue is read, and the run stops with nothing changed when one is assigned to anybody
-   but the account `gh` writes as (`gh api user`);
+   but the account `gh` writes as (`gh api user`), unless `--force` is given, which works those issues
+   anyway and leaves the other assignees where they are;
 2. that account is assigned to each of them;
 3. each of them gets the label bot/in-progress.
 
@@ -30,6 +40,7 @@ names the sweep that removes it.
 
 import argparse
 import concurrent.futures
+import datetime
 import importlib.util
 import json
 import os
@@ -43,6 +54,8 @@ from urllib.parse import quote
 
 LABEL = "bot/in-progress"
 SKILL = "implement-issues"
+# The client's flag for no permission prompts and no sandbox, which `--bypass` puts ahead of `-i`.
+BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 NAME = re.compile(r"[A-Za-z0-9-]+")
 NUMBER = re.compile(r"#?(\d+)")
 LINK = re.compile(r"https?://\S+")
@@ -51,10 +64,13 @@ STATE = re.compile(r"\b(?:is|state):(?:open|closed)\b", re.IGNORECASE)
 READ = "{state: .state, pull: (.pull_request != null), assignees: [.assignees[].login], labels: [.labels[].name]}"
 SEARCH = ".items[] | select(.pull_request == null) | .number"
 READ_JOBS = 8
-# The notes of an argument begin at a line that starts with this and run to the end of the argument.
-NOTES = re.compile(r"^Notes:", re.MULTILINE)
+# The issues of an argument end at the first line that starts with this: the notes run from there to the
+# end of the argument, and the claim line is the one this script writes ahead of them.
+LIST_ENDS = re.compile(r"^(?:Notes|Claimed):", re.MULTILINE)
 # Statuses after which the skill does nothing more with an item (SKILL.md, step 0), so it needs no claim.
 FINISHED = {"done", "skipped", "blocked"}
+# What GitHub answers (HTTP 404) when the label is not on the issue, which the session may have removed already.
+LABEL_GONE = "Label does not exist"
 
 
 def _load(name):
@@ -92,9 +108,9 @@ def current_user():
     return login
 
 
-def split_notes(argument):
-    """The part of the argument that names the issues, and the notes that follow it, or an empty string."""
-    found = NOTES.search(argument)
+def split_list(argument):
+    """The part of the argument that names the issues, and what follows it, or an empty string."""
+    found = LIST_ENDS.search(argument)
     return (argument[: found.start()], argument[found.start():]) if found else (argument, "")
 
 
@@ -202,13 +218,13 @@ def assigned_to(issue, login):
 
 
 def conflicts(issues, me):
-    """A line for each issue assigned to somebody other than `me`."""
-    lines = []
+    """The logins, as printed, of everybody but `me` that each issue is assigned to, for the issues with any."""
+    found = {}
     for number, issue in sorted(issues.items()):
         others = [shown(login) for login in issue["assignees"] if login.lower() != me.lower()]
         if others:
-            lines.append(f"#{number} is assigned to {', '.join(others)}")
-    return lines
+            found[number] = others
+    return found
 
 
 def check_repository(me):
@@ -234,11 +250,14 @@ def api(method, path, *fields):
 
 
 def release(labelled):
-    """Remove the label from the issues it was added to, and return the numbers it could not be removed from."""
+    """Remove the label from the issues it was added to, and return the numbers it could not be removed from.
+
+    An issue that no longer has the label is not one of them: the label is off, which is what was asked.
+    """
     stuck = []
     for number in labelled:
         problem = api("DELETE", f"repos/{BASE_REPO}/issues/{number}/labels/{quote(LABEL, safe='')}")
-        if problem:
+        if problem and LABEL_GONE not in problem:
             stuck.append(number)
             print(
                 f"could not remove {LABEL} from #{number}: {problem}\n"
@@ -254,6 +273,53 @@ def undo(assigned, labelled, me):
         problem = api("DELETE", f"repos/{BASE_REPO}/issues/{number}/assignees", "-f", f"assignees[]={me}")
         if problem:
             print(f"could not unassign {me} from #{number}: {problem}", file=sys.stderr)
+
+
+def stamp():
+    """The time as a UTC timestamp to the second, which is how the claim line dates the writes."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def claim_line(me, when, issues, assigned, labelled, forced):
+    """The line that tells the session which assignments and labels this run wrote, and when.
+
+    `pr-fix.py issue` prints the labels of an issue, and a session that finds `bot/in-progress` on an
+    issue it was given has stopped on it as another session's work, although this script added it. The
+    line holds the account, the time and issue numbers only, so no text that GitHub returned reaches the
+    model.
+    """
+    wrote = []
+    if assigned:
+        wrote.append(f"assigned {me} to {listed(assigned)}")
+    if labelled:
+        wrote.append(f"added {LABEL} to {listed(labelled)}")
+    said = [f"Claimed: at {when}, before this session opened, implement-issues.py {' and '.join(wrote) or 'had nothing to write'}."]
+    if wrote:
+        said.append("Those writes are this run's own, so they are no reason to skip or stop on an item.")
+    before = [number for number, issue in issues.items() if LABEL in issue["labels"]]
+    if before:
+        said.append(f"{LABEL} was on {listed(before)} before this run and was left as found. That does not make an item anyone else's.")
+    if forced:
+        said.append(
+            f"The person forced this run past other assignees (FORCE=1): somebody else is also assigned to "
+            f"{listed(forced)}. That is no reason to skip or stop on an item."
+        )
+    return " ".join(said)
+
+
+def prompt_for(argument, notes, claimed):
+    """The line the client opens on: the argument as written with the claim line after its list, then the notes.
+
+    The claim goes where the notes begin, so that the lines before it are still the list and the notes
+    are still everything from the first `Notes:` line to the end.
+    """
+    named_in, rest = split_list(argument)
+    prompt = f"/{SKILL} {named_in.rstrip(chr(10))}\n{claimed}"
+    if rest:
+        prompt += f"\n{rest}"
+    if notes.strip():
+        prompt += f"\nNotes: {notes.strip()}"
+    return prompt
 
 
 def claim(issues, me):
@@ -313,9 +379,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bravebot", default="bravebot", help="the terminal client to open, by name or path")
     parser.add_argument("--notes", default="", help="notes for the skill, which reads them; no issue is taken from them")
+    parser.add_argument("--force", action="store_true", help="work an issue that is assigned to somebody else as well")
+    parser.add_argument("--bypass", action="store_true", help=f"open the client with {BYPASS_FLAG}")
     parser.add_argument("argument", help="what the skill takes, which it receives unchanged")
     args = parser.parse_args(argv)
-    named_in, _ = split_notes(args.argument)
+    named_in, _ = split_list(args.argument)
     if not named_in.strip():
         die("name the issues to implement, or a search for them. Nothing was changed.")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -324,9 +392,6 @@ def main(argv=None):
     if client is None:
         die(f"{args.bravebot} is not on PATH. Nothing was changed.")
     me = current_user()
-    prompt = f"/{SKILL} {args.argument}"
-    if args.notes.strip():
-        prompt += f"\nNotes: {args.notes.strip()}"
 
     numbers, notes = resolve(named_in)
     issues, more = open_issues(numbers)
@@ -335,21 +400,28 @@ def main(argv=None):
     if not issues:
         die("no open issue to implement. Nothing was changed.")
     taken = conflicts(issues, me)
+    lines = [f"#{number} is assigned to {', '.join(others)}" for number, others in taken.items()]
+    if taken and not args.force:
+        die("\n".join([*lines, "", "Nothing was changed. FORCE=1 (--force) works them anyway."]))
     if taken:
-        die("\n".join([*taken, "", "Nothing was changed."]))
+        print("\n".join(["working past another assignee, as asked:", *lines]), flush=True)
     check_repository(me)
 
     try:
         assigned, labelled = claim(issues, me)
     except RuntimeError as problem:
         die(f"{problem}\nWhat had been written was undone.")
+    prompt = prompt_for(args.argument, args.notes, claim_line(me, stamp(), issues, assigned, labelled, list(taken)))
     print(f"issues: {listed(issues)}", flush=True)
     print(f"assigned {me}: {listed(assigned) or 'none, already theirs'}", flush=True)
     print(f"labelled {LABEL}: {listed(labelled) or 'none, already labelled'}", flush=True)
 
+    command = [client, *([BYPASS_FLAG] if args.bypass else []), "-i", prompt]
+    if args.bypass:
+        print(f"bypass: the session runs with {BYPASS_FLAG}, so nothing asks before a command and no sandbox confines it", flush=True)
     status = 1
     try:
-        status = session([client, "-i", prompt])
+        status = session(command)
     finally:
         stuck = release(labelled)
         if labelled and not stuck:

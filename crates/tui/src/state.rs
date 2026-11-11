@@ -22,6 +22,7 @@ mod hover;
 mod menu;
 mod open_loops;
 mod queue;
+mod scheduling;
 mod scroller;
 mod sessions_screen;
 mod settings;
@@ -58,7 +59,7 @@ pub use menu::{Choice, Menu};
 pub use queue::{Bound, Queued};
 pub use scroller::{Bar, Footer, HintRow, Laid, Panel, Popup, Scroller, TopOfView};
 pub use settings::wheel_rows_named;
-pub use targets::{Hit, Scrolled, Space, Target};
+pub use targets::{Discard, Hit, Scrolled, Space, Target};
 pub use vi::Spelled;
 pub use watching::{AsideDone, AsideFlight, WatchScope, Watching};
 
@@ -332,6 +333,10 @@ pub struct Addressed {
     /// Resolved as the driver resolves it, or `None` where the definition names no model.
     pub model: Option<String>,
 }
+
+/// What `/schedule` calls with the words after it, the proof a person typed the line, and the
+/// session's directory.
+pub(crate) type ScheduleRuns = bravebot_schedule::SessionRun;
 
 /// Everything the interface needs to draw itself.
 #[derive(Debug)]
@@ -896,6 +901,9 @@ pub struct Session {
     /// Cleared between turns. `None` before the first request goes out, which is the only
     /// moment the generic word is all there is to say.
     pub phase: Option<Phase>,
+    /// When the phase in force was announced, which a request waiting to be sent again counts its
+    /// pause from.
+    phase_since: Option<Instant>,
     /// How many lines the check in flight was given, while one is in flight.
     ///
     /// Separate from [`Session::phase`] because a check is not a phase of the turn: it runs inside
@@ -911,7 +919,12 @@ pub struct Session {
     /// Separate from [`Session::phase`] because no request is in flight: the turn has nothing to
     /// ask the model until the report arrives, so without it the screen names nothing at all for
     /// the whole wait.
-    waiting_on: Option<bravebot_agent::report::DelegateId>,
+    waiting_on: Vec<bravebot_agent::report::DelegateId>,
+    /// Whether the request in flight is a `/btw` question asked with no turn running.
+    ///
+    /// Separate from [`Session::phase`] for the reason a check is: it is not a phase of a turn,
+    /// since there is no turn, and the interface that sets it is the one that knows what it asked.
+    answering: bool,
     /// The agents this session has started and where each stands, one for each delegate entry of
     /// the transcript and in the same order. The rules for it are
     /// [`bravebot_agent::roster::Roster`]'s, which the desktop bridge uses as well, and
@@ -1039,6 +1052,13 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
+    /// What `/schedule` calls with the words after it, the proof a person typed the line, and the
+    /// session's directory. A field so a test names one that touches neither the state directory
+    /// nor the system scheduler.
+    pub(crate) schedule: ScheduleRuns,
+    /// The `run-now` runs started from this session that have not answered yet, each read once
+    /// per pass of the loop so the box is not held for the length of a run.
+    schedule_runs: Vec<std::sync::mpsc::Receiver<bravebot_schedule::Reply>>,
     /// Set when `/init`, `/review` or `/help` hands back its prompt, so the turn that sends it says
     /// the driver wrote it.
     driver_prompt_pending: bool,
@@ -1249,6 +1269,11 @@ pub struct Session {
     workspace: std::path::PathBuf,
     /// The open references, so `@` offers their aliases (REFER-6).
     reference_sources: Vec<(String, std::path::PathBuf)>,
+    /// The workspace a file named with `@` is surveyed in before the line is sent (NAME-9).
+    ///
+    /// A clone of the one the session works in, said again wherever the references are. `None`
+    /// where nothing named it, which surveys nothing, so constructing a session reads no file.
+    named_in: Option<bravebot_agent::Workspace>,
     /// The skills a turn would advertise, held while a slash word is being typed.
     ///
     /// Resolved as one starts and let go once it ends, so a skill written mid-session is offered
@@ -1303,6 +1328,39 @@ pub struct Servers {
     /// The aliases `/mcp disable` turned off for this session. `/mcp reconnect` with no alias
     /// leaves them off, and one named starts it again (SERVERS-19).
     pub disabled: Vec<String>,
+}
+
+impl Servers {
+    /// The aliases of the started servers whose tools the person has not declined, in the order they
+    /// started (PANEL-14).
+    ///
+    /// A server whose list was put to the person and refused is running and offers the model
+    /// nothing for the rest of the session, so the info panel leaves it out. One nobody has been
+    /// asked about yet is in, since its list is put to the person before the next turn plans.
+    pub fn offered(&self) -> Vec<String> {
+        let offering = self
+            .session
+            .as_ref()
+            .map(bravebot_agent::mcp::Session::offering)
+            .unwrap_or_default();
+        leaving_out_the_declined(&self.started, &offering)
+    }
+}
+
+/// `started`, without the aliases `offering` says the person declined the tools of.
+fn leaving_out_the_declined(
+    started: &[String],
+    offering: &[(String, bravebot_agent::mcp::Offering)],
+) -> Vec<String> {
+    started
+        .iter()
+        .filter(|alias| {
+            !offering.iter().any(|(held, how)| {
+                held == *alias && *how == bravebot_agent::mcp::Offering::Declined
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 impl Session {
@@ -1451,9 +1509,11 @@ impl Session {
             plan_detail: Default::default(),
             reported: Vec::new(),
             phase: None,
+            phase_since: None,
             checking: None,
             hook: None,
-            waiting_on: None,
+            waiting_on: Vec::new(),
+            answering: false,
             roster: bravebot_agent::roster::Roster::new(),
             running: None,
             movable: None,
@@ -1463,6 +1523,8 @@ impl Session {
             ctrl_enter_arrives: false,
             looping: crate::loops::Loops::default(),
             watches: watch::Watches::new(),
+            schedule: bravebot_schedule::in_session,
+            schedule_runs: Vec::new(),
             driver_prompt_pending: false,
             goal: None,
             work: bravebot_agent::Work::default(),
@@ -1510,6 +1572,7 @@ impl Session {
             completion: 0,
             workspace: std::path::PathBuf::new(),
             reference_sources: Vec::new(),
+            named_in: None,
             skills: None,
             project_styles: Vec::new(),
             project_styles_read: false,
@@ -1538,6 +1601,14 @@ impl Session {
     /// (REFER-6). Said again whenever the workspace's open directories change.
     pub fn set_reference_sources(&mut self, sources: Vec<(String, std::path::PathBuf)>) {
         self.reference_sources = sources;
+    }
+
+    /// Survey the files a line names with `@` in this workspace before sending it (NAME-9), and
+    /// offer the aliases of its references. Said again whenever the workspace's open directories
+    /// or root change, in the places that say [`Session::set_reference_sources`].
+    pub fn adopt_workspace(&mut self, workspace: &bravebot_agent::Workspace) {
+        self.set_reference_sources(workspace.reference_sources());
+        self.named_in = Some(workspace.clone());
     }
 
     /// Complete against somewhere else from now on, the working directory having moved.
@@ -1616,8 +1687,19 @@ impl Session {
         // The turn has asked for everything it needs from the model and is waiting for a delegate
         // to finish. Nothing else on this row says so, and a screen that names nothing while a
         // delegate works reads as a turn that has stopped (DELEGATE-17).
-        if let Some(id) = self.waiting_on {
-            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()));
+        if !self.waiting_on.is_empty() {
+            let named: Vec<String> = self.waiting_on.iter().map(ToString::to_string).collect();
+            return Some(t!(
+                indicator_waiting_on_delegate,
+                delegate = named.join(", ")
+            ));
+        }
+
+        // A `/btw` question asked with no turn running has no phase of its own and nothing on the
+        // lines above it, so the turn's own word would be the only thing naming a wait that is
+        // for a question the person typed.
+        if self.answering {
+            return Some(t!(indicator_answering).to_string());
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the
@@ -1635,7 +1717,13 @@ impl Session {
         // server.py)…", which is a strange thing for a word beside a spinner to be. What that
         // word is for is showing that the session is alive while the answer takes its time.
         match self.phase {
-            Some(phase @ (Phase::Planning | Phase::Reconnecting | Phase::Compacting)) => {
+            // A request waiting to be sent again says when, until the wait is over. The attempt
+            // after it is out and has said nothing yet, which the bare word covers.
+            Some(Phase::Reconnecting(Some(retry))) => self
+                .phase_since
+                .and_then(|since| crate::indicator::waiting_to_retry(retry, since, Instant::now()))
+                .or_else(|| Some(Phase::Reconnecting(None).word().to_string())),
+            Some(phase @ (Phase::Planning | Phase::Reconnecting(None) | Phase::Compacting)) => {
                 Some(phase.word().to_string())
             }
             _ => None,
@@ -1895,6 +1983,10 @@ impl Session {
         // exchange is gone, so the question no longer has anything to be about, and a row that
         // outlived it would offer an answer to a conversation nobody can read.
         self.asides.clear();
+        // And a question still out beside a turn that has ended, whose answer would arrive as a
+        // row of the conversation that replaced the one it was about.
+        self.stop_aside_beside_a_turn();
+        self.aside_flight = None;
         self.watching = None;
         self.held_view = None;
         self.sessions_screen = None;
@@ -1934,13 +2026,14 @@ impl Session {
     /// Record what the turn is waiting on.
     pub fn set_phase(&mut self, phase: Phase) {
         self.phase = Some(phase);
+        self.phase_since = Some(Instant::now());
         // A phase is announced once at the top of every round and again when a request is being
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty. A delegate announces its own
         // phases while the planner writes and while the turn waits on another, and none of them
         // ends that reply or that wait.
         if self.attributed_to.is_none() {
-            self.waiting_on = None;
+            self.waiting_on.clear();
             self.streaming.clear();
             self.thinking.clear();
         }
@@ -1967,9 +2060,11 @@ impl Session {
         self.checking = Some(checking);
     }
 
-    /// Record that the turn is waiting on this delegate's report.
+    /// Record that the turn is waiting on this delegate's report, beside any it already waits on.
     pub fn waiting_on_delegate(&mut self, id: bravebot_agent::report::DelegateId) {
-        self.waiting_on = Some(id);
+        if !self.waiting_on.contains(&id) {
+            self.waiting_on.push(id);
+        }
     }
 
     /// Record that the check is over.
@@ -2236,7 +2331,14 @@ impl Session {
         }
         match self.call_where(Self::still_running) {
             Some(entry) => {
+                // What the call put under itself while it ran, such as the questions an
+                // `ask_user` call had settled, or what a manifest run's server call returned
+                // before it reported finishing, belongs to the call that finishes.
+                let held = entry.returned.take();
+                let shown = entry.shown.take();
                 *entry = Entry::tool(activity);
+                entry.returned = held;
+                entry.shown = shown;
             }
             // Straight into the delegate's own count where it has one, since a call that
             // finished without this side seeing it start is still a call it made.
@@ -2388,6 +2490,36 @@ impl Session {
         true
     }
 
+    /// Refuse a line that names, with `@`, a file the turn could not read, saying which names and
+    /// how to send each as text. The line stays in the box exactly as typed, markers and
+    /// attachments included, and nothing is sent (NAME-9).
+    ///
+    /// Returns whether the key was spent here. A shell line, a line with a row of the list
+    /// highlighted, and one naming only files the turn can read are left for the arms that follow.
+    /// Asked of the line the person wrote, which is the only kind that names files (NAME-1).
+    pub fn refuse_unsendable_names(&mut self) -> bool {
+        if self.shell || self.completion != 0 {
+            return false;
+        }
+        let Some(workspace) = self.named_in.clone() else {
+            return false;
+        };
+        let line = self.unfolded(self.input.trim());
+        let refused: Vec<String> = bravebot_agent::named::surveyed(
+            &workspace,
+            bravebot_mentions::referenced(&line),
+            |name| bravebot_mentions::resolved(workspace.root(), name, &self.reference_sources),
+        )
+        .into_iter()
+        .filter_map(Result::err)
+        .collect();
+        if refused.is_empty() {
+            return false;
+        }
+        self.note_refused(refused.join("\n"));
+        true
+    }
+
     /// The worker appended the submitted prompt at this recounted position.
     pub fn prompt_recorded(&mut self, at: usize) {
         self.prompt_at = Some(at);
@@ -2409,7 +2541,8 @@ impl Session {
             .filter(|e| e.speaker == Speaker::User)
             .map(|e| e.text.clone());
         let outcome = self.finished.map(|finished| {
-            match StoredOutcome::ended(self.turns, finished.ending, None) {
+            // The transcript's failure entry, which names the model, replaces this reason below.
+            match StoredOutcome::ended(self.turns, finished.ending, None, None) {
                 StoredOutcome::Failed { reason } => StoredOutcome::Failed {
                     reason: entries
                         .iter()
@@ -4154,6 +4287,12 @@ impl Session {
         self.started = Some(Instant::now());
     }
 
+    /// Name the request [`Session::begin_aside`] began as a `/btw` question, so the indicator says
+    /// what is being waited for. Ended with the request, by whatever ends it.
+    pub fn answering_a_question(&mut self) {
+        self.answering = true;
+    }
+
     /// Leave it again, adding what it cost to the session's total.
     ///
     /// Charged to the turn in flight, since `/compact` is asked for in the middle of one and its
@@ -4176,7 +4315,7 @@ impl Session {
     /// charged with how it divides into what was read and what was written.
     pub fn end_aside_of(&mut self, usage: bravebot_aichat::protocol::Usage) {
         self.end_aside(usage.total());
-        self.charged_split(usage.total(), usage.completion_tokens);
+        self.charged_split(bravebot_session::sessions::Split::of_usage(usage));
     }
 
     /// Leave a manifest run the session started, adding what it cost to the session's total.
@@ -4205,9 +4344,11 @@ impl Session {
     /// the sixth.
     fn clear_in_progress(&mut self) {
         self.phase = None;
+        self.phase_since = None;
         self.checking = None;
         self.hook = None;
-        self.waiting_on = None;
+        self.waiting_on.clear();
+        self.answering = false;
         self.running = None;
         self.movable = None;
     }
@@ -4596,7 +4737,7 @@ mod tests {
             // A delegate's request sent again throws away the delegate's words, not the turn's.
             session.reporting_for(Some(id));
             session.set_phase(Phase::Planning);
-            session.set_phase(Phase::Reconnecting);
+            session.set_phase(Phase::Reconnecting(None));
             session.reporting_for(None);
             assert_eq!(
                 session.reply_so_far(),
@@ -6500,6 +6641,31 @@ mod tests {
                 "an aside outlived its exchange"
             );
             assert!(session.watching().is_none(), "the view outlived its aside");
+        }
+
+        /// A question still out beside a turn that has ended is about the exchange `/clear` empties,
+        /// and its answer would arrive as a row of the conversation that replaced it. Rejects
+        /// leaving it to land, and leaving the request running with nobody to read it.
+        #[test]
+        fn clearing_stops_and_drops_a_question_still_out() {
+            let mut session = Session::new("none");
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let (_sender, from_worker) = std::sync::mpsc::channel();
+            session.begin_aside_beside_a_turn(AsideFlight {
+                asked: "why recursive?".to_string(),
+                cancel: cancel.clone(),
+                from_worker,
+                worker: std::thread::spawn(|| Err("stopped".to_string())),
+            });
+            assert!(session.aside_in_flight());
+
+            session.clear();
+
+            assert!(
+                !session.aside_in_flight(),
+                "a question outlived its exchange"
+            );
+            assert!(cancel.is_cancelled(), "its request was left running");
         }
 
         /// The one thing this view holds that outlives the session that produced it, and the
@@ -12193,6 +12359,35 @@ mod tests {
         assert_ne!(first, second);
     }
 
+    /// A `/btw` question asked with no turn running is called that on the indicator, in place of the
+    /// turn's own word, for as long as it is out. Rejects a label that outlives the request: the
+    /// next summary, which has no word of its own at rest, would be called an answer.
+    #[test]
+    fn a_question_asked_at_rest_is_named_on_the_indicator_until_it_ends() {
+        let mut s = session();
+        s.begin_aside();
+        let unnamed = s.indicator().expect("working").verb;
+        assert_ne!(
+            unnamed,
+            t!(indicator_answering),
+            "the label was always there"
+        );
+
+        s.answering_a_question();
+        assert_eq!(
+            s.indicator().expect("working").verb,
+            t!(indicator_answering)
+        );
+
+        s.end_aside(0);
+        s.begin_aside();
+        assert_ne!(
+            s.indicator().expect("working").verb,
+            t!(indicator_answering),
+            "the label outlived the question"
+        );
+    }
+
     /// The `/context` rows must add up to the measured total, so each share is a whole number
     /// and the rounding remainders are handed out rather than dropped.
     #[test]
@@ -12778,6 +12973,83 @@ mod tests {
             s.queued.len(),
             2,
             "a line was lost behind the one the turn took"
+        );
+    }
+
+    /// PANEL-14. Only the servers whose tools were declined are left out, whichever order they
+    /// started in, and one nobody has been asked about yet stays. Rejects dropping a server because
+    /// it is not offering tools yet, and dropping the wrong one of two.
+    #[test]
+    fn only_the_servers_whose_tools_were_declined_are_left_out_of_the_offered_ones() {
+        use bravebot_agent::mcp::Offering;
+        let started: Vec<String> = ["docs", "maps", "weather", "coins"]
+            .map(String::from)
+            .to_vec();
+        let offering = [
+            ("docs".to_string(), Offering::Unasked),
+            ("maps".to_string(), Offering::Declined),
+            ("weather".to_string(), Offering::Tools(3)),
+            ("coins".to_string(), Offering::Declined),
+        ];
+        assert_eq!(
+            leaving_out_the_declined(&started, &offering),
+            ["docs", "weather"]
+        );
+        assert_eq!(
+            leaving_out_the_declined(&started, &[]),
+            started,
+            "with nothing known every started server is listed"
+        );
+    }
+
+    /// MOUSE-28: a command a click queued is removed by its own place, and a clear stops at the first
+    /// prompt the turn has been given, since the ones before it are older still. Rejects a removal that
+    /// puts the line in the box, and a clear that drops a prompt the planner already read from the
+    /// queue, which would show a prompt as unsent that had gone.
+    #[test]
+    fn discarding_removes_a_click_queued_command_and_stops_at_a_prompt_the_turn_took() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for line in ["second", "third"] {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            s.queue();
+            if line == "second" {
+                assert!(s.queue_command_line("/mcp"), "the click was not queued");
+            }
+        }
+        assert!(!s.queued_comes_back(1), "a click's line comes back");
+        assert!(s.queued_comes_back(0));
+
+        assert!(s.discard_queued(1));
+        assert!(s.input.is_empty(), "{:?}", s.input);
+        assert_eq!(
+            s.queued
+                .iter()
+                .map(|line| line.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "third"]
+        );
+        assert!(!s.discard_queued(2), "a place past the end removed a line");
+
+        // The turn takes the oldest, and the session has not heard of it yet.
+        assert_eq!(reaching.take().as_deref(), Some("second"));
+        assert!(s.discard_queued_all());
+        assert_eq!(
+            s.queued
+                .iter()
+                .map(|line| line.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["second"],
+            "the prompt the turn took left the queue before the turn said so"
+        );
+        assert_eq!(reaching.take(), None, "`third` is still on its way");
+        assert!(
+            !s.discard_queued_all(),
+            "a prompt the turn took was removed"
         );
     }
 
@@ -13990,7 +14262,7 @@ mod tests {
         fn a_round_starting_afresh_starts_from_an_empty_tail() {
             let mut s = working();
             s.streaming("this reply was abandoned");
-            s.set_phase(Phase::Reconnecting);
+            s.set_phase(Phase::Reconnecting(None));
             assert!(s.streaming.is_empty());
         }
 
@@ -14052,8 +14324,47 @@ mod tests {
             let mut s = working();
             s.set_phase(Phase::Planning);
             assert_eq!(s.indicator().expect("working").verb, "Planning");
-            s.set_phase(Phase::Reconnecting);
+            s.set_phase(Phase::Reconnecting(None));
             assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+        }
+
+        /// BACKEND-55: a request waiting to be sent again says when, and goes back to the bare
+        /// word once the pause is over and for the attempt that follows. A wait of a minute is
+        /// long enough that no test on a loaded machine outlasts it.
+        #[test]
+        fn a_request_waiting_to_be_sent_again_says_when_and_gives_the_word_back() {
+            let mut s = working();
+            let retry = |pause_secs, gives_up_in_secs: Option<u64>| bravebot_agent::report::Retry {
+                attempt: 2,
+                pause: Duration::from_secs(pause_secs),
+                gives_up_in: gives_up_in_secs.map(Duration::from_secs),
+            };
+
+            s.set_phase(Phase::Reconnecting(Some(retry(3600, Some(7200)))));
+            let said = s.indicator().expect("working").verb.to_string();
+            assert!(
+                said.starts_with("Reconnecting, next try in "),
+                "the wait was not explained: {said}"
+            );
+            assert!(said.contains(", giving up in "), "{said}");
+
+            s.set_phase(Phase::Reconnecting(Some(retry(3600, None))));
+            let said = s.indicator().expect("working").verb.to_string();
+            assert!(said.starts_with("Reconnecting, next try in "), "{said}");
+            assert!(!said.contains("giving up"), "{said}");
+
+            // The attempt is out and has said nothing: no time to count down to.
+            s.set_phase(Phase::Reconnecting(None));
+            assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+
+            // A pause that has run its course reads as the bare word, never as a negative time.
+            s.set_phase(Phase::Reconnecting(Some(retry(0, Some(10)))));
+            assert_eq!(s.indicator().expect("working").verb, "Reconnecting");
+
+            // And the next phase takes the countdown with it.
+            s.set_phase(Phase::Reconnecting(Some(retry(3600, Some(7200)))));
+            s.set_phase(Phase::Thinking);
+            assert_eq!(s.phase, Some(Phase::Thinking));
         }
 
         /// A check takes it from every phase, which is the whole point of the pair. The phase the
@@ -14102,6 +14413,29 @@ mod tests {
             assert_eq!(s.indicator().expect("working").verb, named_nothing);
         }
 
+        /// DELEGATE-17: the wait ends at whichever delegate ends first, so the row names every
+        /// delegate still working and drops each as its report comes in. A row naming only the
+        /// first would claim the turn waits on a delegate that has already reported, or name one
+        /// of two that are working.
+        #[test]
+        fn a_turn_waiting_on_several_delegates_names_each_until_it_reports() {
+            use bravebot_agent::report::DelegateId;
+            let mut s = working();
+            s.set_phase(Phase::Thinking);
+            let named_nothing = s.indicator().expect("working").verb;
+            s.waiting_on_delegate(DelegateId::nth(1));
+            s.waiting_on_delegate(DelegateId::nth(2));
+            // A delegate named twice is named once.
+            s.waiting_on_delegate(DelegateId::nth(2));
+            assert_eq!(s.indicator().expect("working").verb, "Waiting on d1, d2");
+
+            s.delegate_finished(DelegateId::nth(1), String::new(), false, None);
+            assert_eq!(s.indicator().expect("working").verb, "Waiting on d2");
+
+            s.delegate_finished(DelegateId::nth(2), String::new(), false, None);
+            assert_eq!(s.indicator().expect("working").verb, named_nothing);
+        }
+
         /// The next round starts a request, and a row still naming the delegate would claim the
         /// turn is waiting on one that has reported.
         #[test]
@@ -14110,6 +14444,7 @@ mod tests {
             s.set_phase(Phase::Thinking);
             let named_nothing = s.indicator().expect("working").verb;
             s.waiting_on_delegate(bravebot_agent::report::DelegateId::nth(1));
+            s.waiting_on_delegate(bravebot_agent::report::DelegateId::nth(2));
             s.set_phase(Phase::Thinking);
             assert_eq!(s.indicator().expect("working").verb, named_nothing);
         }
@@ -15053,13 +15388,13 @@ mod tests {
             s.type_char('a');
             s.submit();
             s.complete("first", Vec::new(), 400);
-            s.charged_split(400, 100);
+            s.charged_split(bravebot_session::sessions::Split::of(400, 100));
             assert_eq!(split(&s), (300, 100));
 
             s.type_char('b');
             s.submit();
             s.complete("second", Vec::new(), 1_600);
-            s.charged_split(1_600, 1_000);
+            s.charged_split(bravebot_session::sessions::Split::of(1_600, 1_000));
             assert_eq!(
                 split(&s),
                 (900, 1_100),
@@ -15085,7 +15420,10 @@ mod tests {
             s.end_aside_of(bravebot_aichat::protocol::Usage {
                 prompt_tokens: 200,
                 completion_tokens: 50,
-                ..Default::default()
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 120,
+                    written_tokens: 30,
+                },
             });
 
             assert_eq!(s.tokens, 250);
@@ -15093,7 +15431,11 @@ mod tests {
                 s.split(),
                 bravebot_session::sessions::Split {
                     read: 200,
-                    written: 50
+                    written: 50,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 120,
+                        written_tokens: 30,
+                    },
                 }
             );
         }
@@ -15110,7 +15452,10 @@ mod tests {
             s.charge_aside_beside_a_turn(bravebot_aichat::protocol::Usage {
                 prompt_tokens: 200,
                 completion_tokens: 50,
-                ..Default::default()
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 120,
+                    written_tokens: 30,
+                },
             });
 
             assert_eq!(s.tokens, 250);
@@ -15123,7 +15468,11 @@ mod tests {
                 s.split(),
                 bravebot_session::sessions::Split {
                     read: 200,
-                    written: 50
+                    written: 50,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 120,
+                        written_tokens: 30,
+                    },
                 }
             );
             assert_eq!(
@@ -15148,7 +15497,10 @@ mod tests {
             s.end_aside_of(bravebot_aichat::protocol::Usage {
                 prompt_tokens: 200,
                 completion_tokens: 50,
-                ..Default::default()
+                cached: bravebot_aichat::protocol::Cached {
+                    read_tokens: 120,
+                    written_tokens: 30,
+                },
             });
 
             s.restore_spend(100, std::collections::BTreeMap::from([(1, 100)]));
@@ -15164,7 +15516,12 @@ mod tests {
             s.type_char('a');
             s.submit();
             s.complete("reply", Vec::new(), 400);
-            s.charged_split(400, 100);
+            s.charged_split(bravebot_session::sessions::Split::of(400, 100).with_cache(
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 250,
+                    written_tokens: 20,
+                },
+            ));
 
             s.clear();
 
@@ -15180,20 +15537,82 @@ mod tests {
             s.restore_split(bravebot_session::sessions::Split {
                 read: 700,
                 written: 300,
+                cache: bravebot_aichat::protocol::Cached {
+                    read_tokens: 500,
+                    written_tokens: 40,
+                },
             });
 
             s.type_char('a');
             s.submit();
             s.complete("reply", Vec::new(), 100);
-            s.charged_split(100, 40);
+            s.charged_split(bravebot_session::sessions::Split::of(100, 40).with_cache(
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 30,
+                    written_tokens: 5,
+                },
+            ));
 
             assert_eq!(
                 s.split(),
                 bravebot_session::sessions::Split {
                     read: 760,
-                    written: 340
+                    written: 340,
+                    cache: bravebot_aichat::protocol::Cached {
+                        read_tokens: 530,
+                        written_tokens: 45,
+                    },
                 }
             );
+        }
+
+        /// The record's cache totals are a history for a reader of the file. The status panel
+        /// reports what the last turn run in this process read out of the cache, and a resume that
+        /// fed it the saved totals would report a cache the session never used here
+        /// (SESSION-11, Known costs).
+        #[test]
+        fn a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty() {
+            let mut s = Session::new("none");
+            let record: bravebot_session::sessions::Record =
+                serde_json::from_value(serde_json::json!({
+                    "id": "1-2",
+                    "directory": "/tmp/x",
+                    "title": "a session",
+                    "started": 1,
+                    "updated": 1,
+                    "turns": 1,
+                    "tokens": 100,
+                    "split": {
+                        "read": 70,
+                        "written": 30,
+                        "cache": {"read_tokens": 50, "written_tokens": 10},
+                    },
+                    "conversation": {
+                        "messages": [],
+                        "context": "trusted",
+                        "references": 0,
+                        "archive": [],
+                        "measured": 0,
+                    },
+                }))
+                .expect("a record parses");
+
+            s.restore_accounts(&record);
+
+            assert_eq!(
+                s.split().cache,
+                bravebot_aichat::protocol::Cached {
+                    read_tokens: 50,
+                    written_tokens: 10,
+                },
+                "the cache totals did not come back from the record"
+            );
+            assert_eq!(
+                s.cached(),
+                None,
+                "the panel reported a cache nothing here used"
+            );
+            assert_eq!(s.cached_prompt_tokens(), None);
         }
 
         /// The whole point of keeping the split: a turn's wall clock alone cannot say whether it was
@@ -15213,6 +15632,8 @@ mod tests {
                 inference_ms: 300,
                 tools_ms: 100,
                 stalled_ms: 5_000,
+                file_wait_ms: 0,
+                ..Default::default()
             });
 
             let first = s
@@ -15332,6 +15753,8 @@ mod tests {
                     inference_ms: 300,
                     tools_ms: 100,
                     stalled_ms: 600_000,
+                    file_wait_ms: 0,
+                    ..Default::default()
                 }),
             );
 
@@ -15407,6 +15830,8 @@ mod tests {
                     inference_ms: 3_000,
                     tools_ms: 1_000,
                     stalled_ms: 4_000,
+                    file_wait_ms: 0,
+                    ..Default::default()
                 },
             )]));
 
@@ -15784,6 +16209,87 @@ mod tests {
         assert!(s.auto_vetting());
         s.choose_vetting(false);
         assert!(!s.auto_vetting(), "turning it back off did not take");
+    }
+
+    /// A session that opens in bypass is told the same thing a key press into bypass is told, and
+    /// the line is about what bypass does with auto-vetting on. Rejects a session-open path that
+    /// says only that a check reads content, which leaves a flag-opened session without the line.
+    #[test]
+    fn a_session_opened_in_bypass_with_auto_vetting_says_what_bypass_refuses() {
+        let said = bravebot_agent::report::vetting_in_bypass();
+        let mut s = Session::new("none").starting_in_bypass();
+        s.choose_vetting(true);
+        s.say_vetting_in_force();
+        assert!(
+            s.transcript.iter().any(|e| e.text == said),
+            "a session opened in bypass with auto-vetting on did not say what bypass refuses"
+        );
+
+        // Not in bypass, or not with auto-vetting on: the first line may be said, this one is not.
+        let mut s = Session::new("none");
+        s.choose_vetting(true);
+        s.say_vetting_in_force();
+        assert!(s.transcript.iter().all(|e| e.text != said));
+        let mut s = Session::new("none").starting_in_bypass();
+        s.say_vetting_in_force();
+        assert!(
+            s.transcript.is_empty(),
+            "a session with auto-vetting off said something about it"
+        );
+    }
+
+    /// The step of the mode key that enters bypass says what bypass does with auto-vetting on, once.
+    /// Rejects a note on every step (or none), and a note on the step into bypass whatever the
+    /// setting.
+    #[test]
+    fn entering_bypass_with_auto_vetting_on_says_what_bypass_refuses() {
+        use bravebot_agent::PermissionMode;
+        let said = bravebot_agent::report::vetting_in_bypass();
+        let mut s = Session::new("none");
+        s.choose_vetting(true);
+        let mut told = Vec::new();
+        for _ in 0..4 {
+            s.cycle_permission_mode();
+            told.push(s.transcript.iter().filter(|e| e.text == said).count());
+        }
+        assert_eq!(s.permission_mode(), PermissionMode::Bypass);
+        assert_eq!(
+            told,
+            [0, 0, 0, 1],
+            "the line was not said exactly once, on the step that enters bypass"
+        );
+    }
+
+    /// With auto-vetting off, bypass refuses nothing on a check's word, so the step says nothing.
+    #[test]
+    fn entering_bypass_with_auto_vetting_off_says_nothing_extra() {
+        use bravebot_agent::PermissionMode;
+        let mut s = Session::new("none");
+        for _ in 0..4 {
+            s.cycle_permission_mode();
+        }
+        assert_eq!(s.permission_mode(), PermissionMode::Bypass);
+        assert!(
+            s.transcript.is_empty(),
+            "entering bypass without auto-vetting said something"
+        );
+    }
+
+    /// Leaving bypass, and every step that does not enter it, says nothing about vetting, round the
+    /// ladder more than once. Rejects a note drawn on each step or on leaving.
+    #[test]
+    fn leaving_bypass_and_other_steps_say_nothing_about_vetting() {
+        let said = bravebot_agent::report::vetting_in_bypass();
+        let mut s = Session::new("none").starting_in_bypass();
+        s.choose_vetting(true);
+        // Out of bypass, then round to the step before it again.
+        for _ in 0..4 {
+            s.cycle_permission_mode();
+        }
+        assert!(
+            s.transcript.iter().all(|e| e.text != said),
+            "a step that does not enter bypass said what bypass refuses"
+        );
     }
 
     /// A session editing vi's way, with the choice recorded nowhere: `adopt_editing` reads the store
@@ -19131,6 +19637,8 @@ mod tests {
                     inference_ms: 31,
                     tools_ms: 13,
                     stalled_ms: 7,
+                    file_wait_ms: 0,
+                    ..Default::default()
                 },
                 ..Default::default()
             });

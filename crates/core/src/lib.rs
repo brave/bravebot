@@ -40,6 +40,8 @@ pub mod reference;
 pub mod remembered;
 pub mod safe;
 pub mod selector;
+#[path = "../../ui-files/src/short_name.rs"]
+mod short_name;
 pub mod slot;
 pub mod spelling;
 pub mod todo;
@@ -58,7 +60,10 @@ pub use event::{Event, NullSink, Principle, RecordingSink, Role, Sink};
 pub use label::{Confidentiality, Integrity, Label, taint_all};
 pub use manifest::{Draft, DraftStep, Manifest, ManifestError, Step as ManifestStep, Tier};
 pub use permissions::{Permissions, Ruling as PermissionRuling, Subject as PermissionSubject};
-pub use policy::{Declassification, Denial, Policy, ReleasePlan, Routing};
+pub use policy::{
+    Declassification, Denial, PathObserved, PathsObserved, PlanLabelled, Policy, ReleasePlan,
+    Routing,
+};
 pub use processor::ProcessorSpec;
 pub use programs::TrustedPrograms;
 pub use pure::Filter;

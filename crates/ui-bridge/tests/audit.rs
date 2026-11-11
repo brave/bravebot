@@ -116,7 +116,7 @@ fn the_live_audit_event_carries_each_string_field_drawn_by_printable() {
     for field in strings {
         assert_eq!(
             pictured[field].as_str(),
-            Some(bravebot_approval::printable(record[field].as_str().unwrap()).as_str()),
+            Some(bravebot_agent::confirm::printable(record[field].as_str().unwrap()).as_str()),
             "{field} was not drawn by printable"
         );
     }

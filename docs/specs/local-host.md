@@ -8,14 +8,17 @@ governs:
   - crates/ui-bridge/src/answerers.rs
   - crates/ui-bridge/src/workers.rs
   - crates/ui-bridge/src/bin/bravebot-host.rs
+  - packages/agent-client/scripts/dev-relay.ts
+  - packages/agent-client/scripts/websocket.ts
+  - packages/agent-client/src/dev-relay/index.ts
 documented-by: none (internal: the host is started by a person from a command line and driven by a program they chose; nothing in the product launches it yet)
 ---
 
 ## Scope
 
-`bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves one client at a time over the anonymous channel of [RPCVIEW-8](session-view.md#RPCVIEW-8). It has no socket path, port or token, and no network or remote client.
+`bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves one client at a time over the anonymous channel of [RPCVIEW-8](session-view.md#RPCVIEW-8). The host itself has no socket path, port or token, and no network or remote client. The development relay of [HOST-12](#HOST-12) is a client program that the host starts like any other. It listens on a loopback port so that an app in development can reach the host.
 
-Not here: a transcript for a client that returns (the snapshot of [HOST-11](#HOST-11) carries none), taking a session from a controller that is still connected, two clients acting at once, pairing, and anything about a phone.
+Not here: more of a transcript for a client that returns than the most recent rows of [RPCVIEW-9](session-view.md#RPCVIEW-9), taking a session from a controller that is still connected, two clients acting at once, pairing, and anything about a phone beyond the development relay.
 
 ## Clauses
 
@@ -47,7 +50,7 @@ The host starts the client over a new channel when it starts. The client ending 
 <a id="HOST-3"></a>
 ### HOST-3: a client may ask only what is named
 
-The host answers the methods in `allowlist::OFFERED` with the parameters listed for each, and refuses every other method with `not_allowed`, including a method the bridge answers and one it does not. A parameter that the method's entry does not name is refused too: `turn.send` takes `session` and `prompt`, `run.reply` takes no `remember`, and `trust.reply` takes no `remember`. `trust.reply` is the one widening answer that is offered: the client is the program the person named, over a channel it shares with the host alone, so its answer is the person's own. A client that is not that is not offered it. Refused requests reach no bridge method.
+The host answers the methods in `allowlist::OFFERED` with the parameters listed for each, and refuses every other method with `not_allowed`, including a method the bridge answers and one it does not. A parameter that the method's entry does not name is refused too: `turn.send` takes `session`, `prompt` and `messageId`, `turn.lookup` takes `session` and `messageId`, `run.reply` takes no `remember`, and `trust.reply` takes no `remember`. `trust.reply` is the one widening answer that is offered: the client is the program the person named, over a channel it shares with the host alone, so its answer is the person's own. A client that is not that is not offered it. Refused requests reach no bridge method.
 
 Every method the bridge answers is either offered or listed in `allowlist::DENIED`. A test reads the bridge's dispatch and fails while it answers a method that neither list names, and while either list names one it does not answer, so a method added to the bridge is not reachable through the host until someone classifies it.
 
@@ -124,7 +127,7 @@ When the controller's connection ends the session stays open with no controller.
 <a id="HOST-8"></a>
 ### HOST-8: a request line has a limit
 
-A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
+The host queues each line for a connection, and a thread of the connection's own writes them, so a client that reads slowly holds up no turn and no other event. A queue of 1024 lines that is full, or one holding more than 16 MiB of lines the writer has not yet taken, ends the connection, as a client that far behind is treated as gone. A line of any length is queued while the lines waiting are within 16 MiB, so a long event and its view update, written back to back, do not end a connection that is keeping up. Only each line's length is counted; nothing in it is read. It takes its sessions over again with `session.attach` to be sent where they stand ([HOST-11](#HOST-11)). A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
 
 A request line is at most 8 MiB, newline excluded. A line that reaches the limit without ending ends the connection without being answered or dispatched. A line of exactly the limit is read. Bytes that arrive without their end of line before the client closes its end are not a request and are not run.
 
@@ -132,7 +135,11 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 `verified-by: bravebot_ui_bridge::host::a_request_at_the_limit_is_read`
 `verified-by: bravebot_ui_bridge::host::a_last_line_with_no_newline_is_not_run`
 `verified-by: bravebot_ui_bridge::host::a_client_that_never_reads_does_not_wedge_the_host`
+`verified-by: bravebot_ui_bridge::host::a_queue_past_its_byte_budget_ends_the_connection_and_one_long_line_alone_does_not`
+`verified-by: bravebot_ui_bridge::host::a_client_that_keeps_up_is_sent_more_than_the_byte_budget`
+`verified-by: bravebot_ui_bridge::host::a_long_event_and_its_view_update_are_queued_together`
 `verified-by: bravebot_ui_bridge::host::a_write_that_gives_up_ends_the_connection_the_host_is_reading`
+`verified-by: bravebot_ui_bridge::host::a_slow_client_holds_up_no_event_and_a_full_queue_ends_its_connection`
 `verified-by: bravebot_ui_bridge::host_process::quit_stops_the_host_while_a_client_is_connected`
 `verified-by: bravebot_ui_bridge::host_process::a_line_of_input_that_is_not_text_does_not_stop_the_host`
 `verified-by: bravebot_ui_bridge::host_process::a_client_path_that_is_not_utf8_is_not_a_panic`
@@ -142,9 +149,11 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 <a id="HOST-9"></a>
 ### HOST-9: a program the host starts holds no part of the channel
 
-The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
+The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A process that a hook or an approved command leaves running after it has exited, given the host's and the client's process ids and the waiting question, holds no socket of the channel, reaches neither end through a descriptor path or a connection, and does not change what the client reads; the waiting write lands only when the client approves it. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
 
 `verified-by: bravebot_ui_bridge::host_process::an_unconfined_hook_the_host_runs_holds_no_socket`
+`verified-by: bravebot_ui_bridge::control_boundary::a_program_a_hook_the_host_runs_leaves_running_cannot_reach_the_channel`
+`verified-by: bravebot_ui_bridge::control_boundary::a_program_an_approved_command_the_host_runs_leaves_running_cannot_reach_the_channel`
 `verified-by: bravebot_ui_bridge::host_process::a_program_handed_a_socket_lists_it`
 `verified-by: bravebot_ui_bridge::host_process::a_listing_of_either_system_shows_its_sockets`
 `verified-by: bravebot_ui_bridge::control_boundary::programs_a_host_starts_hold_no_end_of_the_channels_it_created`
@@ -172,9 +181,9 @@ The check is made under the lock that registers a question, and the loss of the 
 <a id="HOST-11"></a>
 ### HOST-11: a client that takes a session over is told where it stands
 
-`session.attach` makes the connection the controller of an open session whose controller's connection has ended, and answers `{ "version": 1, "sequence": n, "history": "omitted" }`. A session that has a controller whose connection has not ended is not taken, by the controller itself or by another connection, and neither is a session that started no view, one that is closing or closed, or one the host does not hold.
+`session.attach` makes the connection the controller of an open session whose controller's connection has ended, and answers `{ "version": 1, "sequence": n, "omitted": k }`. A session that has a controller whose connection has not ended is not taken, by the controller itself or by another connection, and neither is a session that started no view, one that is closing or closed, or one the host does not hold.
 
-Before it answers, the connection is sent `session.view.snapshot`, with the shape of `session.view.initial`: the session's current sequence, turn, turn target, status and pending question, no rows, and `"history": "omitted"`. The host keeps no transcript for a client that was not there, and says so. Events are switched to the new controller and the snapshot is written as one step with respect to every update, so each update the client receives has a sequence after the snapshot's, and none is missed or repeated. A session whose startup question is unanswered is still `awaiting_trust` in the snapshot, and the question is sent again after it. Trust is not answered by taking the session over, and no turn runs until the new controller answers it.
+Before it answers, the connection is sent `session.view.snapshot` ([RPCVIEW-9](session-view.md#RPCVIEW-9)): the session's current sequence, turn, turn target, status and pending question, its most recent rows including those produced while no client was connected, and `omitted`, how many earlier rows it leaves out. Events are switched to the new controller and the snapshot is written as one step with respect to every update, so each update the client receives has a sequence after the snapshot's, and none is missed or repeated. A session whose startup question is unanswered is still `awaiting_trust` in the snapshot, and the question is sent again after it. Trust is not answered by taking the session over, and no turn runs until the new controller answers it.
 
 The new controller can answer the kinds of [HOST-10](#HOST-10) from the snapshot on. The question the previous controller was refused is resolved, and a later question has a number the earlier one did not. An answer naming the earlier question's number is refused with `no_such_request` and changes nothing, as is a cancel naming a target that has ended.
 
@@ -184,8 +193,20 @@ The new controller can answer the kinds of [HOST-10](#HOST-10) from the snapshot
 `verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
 `verified-by: bravebot_ui_bridge::host_process::a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen`
 `verified-by: bravebot_ui_bridge::control_tests::taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot`
+`verified-by: bravebot_ui_bridge::host_process::a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them`
 `verified-by: bravebot_ui_bridge::control_tests::the_startup_question_is_asked_again_only_while_it_is_unanswered`
 `verified-by: bravebot_ui_bridge::control_tests::a_session_that_cannot_be_taken_over_is_not_handed_over`
 `verified-by: bravebot_ui_bridge::control_tests::a_hand_over_that_fails_sends_nothing_and_changes_who_can_answer_nothing`
 `verified-by: bravebot_ui_bridge::control_tests::updates_during_a_take_over_fall_on_one_side_of_the_snapshot`
 `verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`
+
+<a id="HOST-12"></a>
+### HOST-12: the development relay hands the channel to one app on loopback, behind a code
+
+The development relay is a client program for the host, started after `--` with the same `--workspace` directories the host was given. It is for development only: any program on the computer that can reach 127.0.0.1 can reach it, and the code is the only thing between them. It does not identify a phone or a person and does not authorize control of a real session, so it is run with synthetic data only. The host treats it as any other client: every rule above applies to what arrives through it.
+
+It listens on 127.0.0.1 only, on a port the system picks, and shows the port and a six-digit code drawn for that launch on standard error. Nothing writes the code anywhere else, and the code is not part of the address. It takes one WebSocket connection per launch, and stops listening once that connection arrives, so a second app cannot reach it. The first message on the connection must be the code. A wrong code closes the connection with code 4001, and no code within a minute closes it too. Either ends that relay. After the right code it sends the list of its workspaces, then passes text both ways without reading it. A binary message, an unmasked frame, a reserved bit, a fragmented control frame, text that is not UTF-8, or a message over 32 MiB and 4 bytes (the host's 8 MiB line limit at four bytes a character) closes the connection, and nothing of it is passed on. Either end closing ends the relay, which ends the host's channel and leaves the host running. The next launch has a port and code of its own.
+
+The TypeScript client reaches the relay only through its `./dev-relay` export, which the package's main entry does not import. It refuses a port outside 1 to 65535 or a code that is not six digits before it opens anything, and reports a wrong code apart from a relay that could not be reached.
+
+`verified-by: by-construction (packages/agent-client/tests/dev-relay.test.ts starts a built bravebot-host with the relay as its client against a model service of its own, and checks that an app giving the code drives a session to an approved write that lands, that a wrong code ends that relay and leaves the host running and the next launch has a new port and code, that a second app cannot connect while the first is connected, that the app closing ends the relay and the host quitting ends the app's connection, and that a bad port or code opens nothing; packages/agent-client/tests/websocket.test.ts checks fragment reassembly, ping, and the close code for each frame the relay refuses; make check-agent-client runs both, and the Front end CI job runs that target)`

@@ -340,6 +340,8 @@ fn sockets_line(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> Option<
 /// home, sandbox mode and permission mode a turn builds its confinement from. This session is the
 /// lead session, so bypass alone decides whether the confinement is told to. It leaves out the
 /// trust of the directory, which a turn reads when a line runs and [`report`] reads from the map.
+/// It takes no state directory: the answer depends on the mode, the home directory and the
+/// platform, and the state directory only decides which paths a row leaves out.
 pub fn programs_write_unasked(
     mode: bravebot_sandbox::SandboxMode,
     permission: bravebot_agent::PermissionMode,
@@ -634,6 +636,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     if let Some(session) = &facts.servers.session {
         lines.extend(server_policy_lines(&session.policies()));
+        lines.extend(sandboxed_lines(&session.sandboxed()));
     }
 
     Report { lines }
@@ -811,7 +814,9 @@ fn standing_lines(facts: &Facts<'_>) -> Vec<Line> {
         started => {
             let line = Line::new(t!(status_mcp_servers), started.join(", "));
             match &facts.servers.session {
-                Some(session) => line.with_note(offering(&session.offering())),
+                Some(session) => {
+                    line.with_note(offering(&session.offering(), &manifest_only(session)))
+                }
                 None => line,
             }
         }
@@ -988,6 +993,7 @@ fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
             (facts.timing.inference_ms, t!(status_time_inference)),
             (facts.timing.tools_ms, t!(status_time_tools)),
             (facts.timing.stalled_ms, t!(status_time_stalled)),
+            (facts.timing.file_wait_ms, t!(status_time_file_wait)),
             (facts.timing.overhead_ms(), t!(status_time_overhead)),
         ] {
             if millis >= 1_000 {
@@ -1185,6 +1191,25 @@ fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
     lines
 }
 
+/// What each server that runs in an OpenShell sandbox runs in, under the heading a confined
+/// server's policy is drawn under, since it answers the same question for that server.
+fn sandboxed_lines(servers: &[(String, bravebot_agent::mcp::Sandboxed)]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for (alias, sandboxed) in servers {
+        lines.push(Line::new(
+            t!(status_server_policy),
+            bravebot_agent::mcp::shown(alias),
+        ));
+        lines.extend(
+            sandboxed
+                .described()
+                .into_iter()
+                .map(|(label, value)| Line::new(&label, value)),
+        );
+    }
+    lines
+}
+
 /// A heading line, then one line under it for each row.
 fn rows(heading: Line, rows: &[String]) -> Vec<Line> {
     let mut lines = vec![heading];
@@ -1318,11 +1343,28 @@ pub(crate) fn tokens(count: u64) -> String {
     t!(count_tokens_thousands, thousands = thousands)
 }
 
+/// The aliases of the servers `session` holds that only a manifest run calls.
+pub(crate) fn manifest_only(session: &bravebot_agent::mcp::Session) -> Vec<String> {
+    session
+        .sandboxed()
+        .into_iter()
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
 /// How each server's tools stand, one clause for each.
-pub(crate) fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> String {
+pub(crate) fn offering(
+    servers: &[(String, bravebot_agent::mcp::Offering)],
+    manifest_only: &[String],
+) -> String {
     servers
         .iter()
         .map(|(alias, offering)| match offering {
+            // A server only a manifest run calls is put to the person before a run plans, and
+            // never before a turn.
+            bravebot_agent::mcp::Offering::Unasked if manifest_only.contains(alias) => {
+                t!(status_mcp_servers_unread_manifest, alias = alias)
+            }
             bravebot_agent::mcp::Offering::Unasked => t!(status_mcp_servers_unread, alias = alias),
             bravebot_agent::mcp::Offering::Tools(count) => {
                 t!(status_mcp_servers_tools, alias = alias, count = *count)
@@ -2442,6 +2484,7 @@ mod tests {
                     .map(String::from)
                     .to_vec(),
                 environment: Vec::new(),
+                expansions: Vec::new(),
                 routes: Vec::new(),
             }]),
             writes: Vec::new(),
@@ -3513,12 +3556,15 @@ mod tests {
     #[test]
     fn each_servers_note_says_how_its_tools_stand() {
         use bravebot_agent::mcp::Offering;
-        let note = offering(&[
-            ("docs".to_string(), Offering::Unasked),
-            ("weather".to_string(), Offering::Tools(3)),
-            ("coins".to_string(), Offering::Tools(1)),
-            ("maps".to_string(), Offering::Declined),
-        ]);
+        let note = offering(
+            &[
+                ("docs".to_string(), Offering::Unasked),
+                ("weather".to_string(), Offering::Tools(3)),
+                ("coins".to_string(), Offering::Tools(1)),
+                ("maps".to_string(), Offering::Declined),
+            ],
+            &[],
+        );
         assert_eq!(
             note,
             [
@@ -3531,6 +3577,28 @@ mod tests {
         );
         assert!(note.contains("weather: 3 tools"), "{note}");
         assert!(note.contains("coins: one tool"), "{note}");
+    }
+
+    /// A server only a manifest run calls is said to be put to the person before a manifest run
+    /// plans, since a turn never puts its list.
+    #[test]
+    fn a_manifest_only_servers_note_says_a_manifest_run_puts_its_list() {
+        use bravebot_agent::mcp::Offering;
+        let note = offering(
+            &[
+                ("boxed".to_string(), Offering::Unasked),
+                ("docs".to_string(), Offering::Unasked),
+            ],
+            &["boxed".to_string()],
+        );
+        assert_eq!(
+            note,
+            [
+                t!(status_mcp_servers_unread_manifest, alias = "boxed"),
+                t!(status_mcp_servers_unread, alias = "docs"),
+            ]
+            .join("; ")
+        );
     }
 
     /// The policy a started server's backend was handed, drawn for the tests of `/status`.
@@ -3635,6 +3703,54 @@ mod tests {
                 "a policy was shown for a server that has none"
             );
         }
+    }
+
+    /// A server in an OpenShell sandbox is drawn under the heading a confined server's policy is:
+    /// the sandbox and its image, the hosts it may reach or none, that it reads only its image, and
+    /// that only a manifest run offers its tools.
+    #[test]
+    fn a_server_in_an_openshell_sandbox_says_what_it_runs_in_and_may_reach() {
+        let sandboxed = |hosts: &[&str]| bravebot_agent::mcp::Sandboxed {
+            name: "bb-42-0".into(),
+            image: "python:3.13-slim".into(),
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        };
+        let lines = sandboxed_lines(&[
+            (
+                "boxed".to_string(),
+                sandboxed(&["example.com", "api.example.org"]),
+            ),
+            ("closed".to_string(), sandboxed(&[])),
+        ]);
+        let pairs: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|line| (line.label.as_str(), line.value.as_str()))
+            .collect();
+        let heading = t!(status_server_policy);
+        let egress = t!(status_server_policy_egress);
+        assert_eq!(pairs[0], (heading, "boxed"));
+        assert!(
+            pairs.contains(&(
+                t!(status_server_openshell),
+                "OpenShell bb-42-0, made from python:3.13-slim"
+            )),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&(egress, "only example.com, api.example.org")),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&(egress, t!(status_server_policy_egress_closed))),
+            "{pairs:?}"
+        );
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(_, value)| *value == t!(status_server_openshell_manifest_runs))
+                .count(),
+            2
+        );
     }
 
     /// SERVERS-20: a path is drawn in full as the prompts that name one draw it, so a control
@@ -3856,6 +3972,8 @@ mod tests {
             inference_ms: 20_000,
             tools_ms: 5_000,
             stalled_ms: 0,
+            file_wait_ms: 0,
+            ..Default::default()
         };
 
         let lines = report(&mixed).lines;
@@ -3910,6 +4028,8 @@ mod tests {
             inference_ms: 120_000,
             tools_ms: 60_000,
             stalled_ms: 400_000,
+            file_wait_ms: 0,
+            ..Default::default()
         };
 
         let shown = rendered(&report(&spent));
@@ -3924,6 +4044,36 @@ mod tests {
         assert!(
             shown.contains("6m 40s"),
             "the stall was not reported: {shown}"
+        );
+    }
+
+    /// Time a call spent queued at the file-authority boundary is its own row, and the remainder
+    /// does not hold it. Rejects an implementation that leaves it in "unaccounted for".
+    #[test]
+    fn the_panel_says_how_long_the_session_waited_for_file_access() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut waited = facts(&config, &trust);
+        waited.timing = bravebot_agent::timing::Timing {
+            wall_ms: 100_000,
+            inference_ms: 10_000,
+            tools_ms: 10_000,
+            stalled_ms: 0,
+            file_wait_ms: 70_000,
+            ..Default::default()
+        };
+
+        let shown = rendered(&report(&waited));
+        assert!(shown.contains("waiting on file access"), "{shown}");
+        assert!(shown.contains("1m 10s"), "{shown}");
+        // 100 - 10 - 10 - 70 leaves 10 s, so the remainder row is the 10 s one, not 80 s.
+        assert!(!shown.contains("1m 20s"), "{shown}");
+
+        waited.timing.file_wait_ms = 0;
+        let shown = rendered(&report(&waited));
+        assert!(
+            !shown.contains("waiting on file access"),
+            "a wait that never happened was reported: {shown}"
         );
     }
 
@@ -3951,6 +4101,8 @@ mod tests {
             inference_ms: 30_000,
             tools_ms: 0,
             stalled_ms: 0,
+            file_wait_ms: 0,
+            ..Default::default()
         };
 
         let shown = rendered(&report(&quiet));

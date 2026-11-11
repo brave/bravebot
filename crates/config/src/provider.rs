@@ -308,6 +308,14 @@ pub fn known_ids() -> impl Iterator<Item = &'static str> {
     KNOWN_ENDPOINTS.iter().map(|(id, _, _)| *id)
 }
 
+/// The name a service is written with where its block gives none, for the ids that have one.
+///
+/// Every place that names a provider reads [`Provider::display_name`], which ends here, so the
+/// accounts list, the model list and the settings report spell a service the same way.
+pub fn known_name(id: &str) -> Option<&'static str> {
+    (id == "openrouter").then_some("OpenRouter")
+}
+
 /// The variable the other tool reads `id`'s token from, where the id is one compiled in.
 pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
     if id == GOOGLE_VERTEX_ID {
@@ -449,8 +457,8 @@ impl Model {
 
 /// The most times a request is sent again that a block may state.
 ///
-/// The pauses the doubling from one second gives total 127 seconds at the cap, and none is longer
-/// than 64, which stays inside the two minutes after which a service's own request to wait is
+/// The pauses the doubling from one second gives total 123 seconds at the cap, and none is longer
+/// than 60, which stays inside the two minutes after which a service's own request to wait is
 /// refused rather than waited out. A wait a service asks for is taken in place of the pause, so the
 /// whole wait is bounded by this count and by that figure per retry.
 pub const MAX_RETRIES: u32 = 7;
@@ -461,13 +469,27 @@ pub const MAX_RETRIES: u32 = 7;
 /// be the one that ended it.
 pub const MAX_IDLE_TIMEOUT_MS: u64 = 600_000;
 
+/// The longest window a block may state for sending a request again after its connection failed, in
+/// milliseconds: one hour.
+///
+/// A longer window would keep a turn waiting on a network that has been down for a working day, which
+/// is a state the person is better told about than waited on.
+pub const MAX_RETRY_WINDOW_MS: u64 = 3_600_000;
+
+/// How long a request is sent again after its connection failed, where a block states neither a
+/// window nor a retry count.
+///
+/// Long enough for a machine to come back from sleep, a VPN to reconnect or a service to recover
+/// from a short outage, and short enough that a person who is offline is told so within minutes.
+pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
+
 /// What a block states about repeating a request and about waiting on a reply gone quiet.
 ///
-/// Both are plain numbers a person chose, and only ever set a count or a timer: the decision to send
-/// a request again is still taken from the status or the failure that came back, never from this.
-/// `None` is nothing stated, which the clients read as the figures they have always used. Read out of
-/// the block's `options` for a gateway and for an AWS account alike, and so only from the layers a
-/// `provider` block is read from.
+/// All three are plain numbers a person chose, and only ever set a count or a timer: the decision to
+/// send a request again is still taken from the status or the failure that came back, never from
+/// this. `None` is nothing stated, which the clients read as the figures they have always used. Read
+/// out of the block's `options` for a gateway and for an AWS account alike, and so only from the
+/// layers a `provider` block is read from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Patience {
     /// `options.maxRetries`: how many times a request is sent again, at most [`MAX_RETRIES`].
@@ -477,11 +499,14 @@ pub struct Patience {
     /// `options.idleTimeoutMs`: how long a reply may go quiet before it is given up on, at most
     /// [`MAX_IDLE_TIMEOUT_MS`].
     pub idle_timeout: Option<Duration>,
+    /// `options.retryWindowMs`: how long after its first failure a request whose connection failed
+    /// is still sent again, at most [`MAX_RETRY_WINDOW_MS`].
+    pub retry_window: Option<Duration>,
 }
 
 impl Patience {
     /// What a block's `options` state. A figure above its cap is the cap, as Codex reads its own;
-    /// anything that is not a whole number, and a zero gap, states nothing.
+    /// anything that is not a whole number, and a zero gap or window, states nothing.
     pub(crate) fn from_options(
         options: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> Self {
@@ -492,13 +517,30 @@ impl Patience {
                 .and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok()),
             idle_timeout: positive(stated("idleTimeoutMs"))
                 .map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS))),
+            retry_window: positive(stated("retryWindowMs"))
+                .map(|window| Duration::from_millis(window.min(MAX_RETRY_WINDOW_MS))),
         }
     }
 
     /// How many requests are sent before a failure is the caller's: `default` where no retry count
     /// was stated, and one more than the count where one was.
+    ///
+    /// The count of every failure but a failed connection, which [`Patience::retry_window`] can
+    /// extend.
     pub fn attempts(&self, default: u32) -> u32 {
         self.max_retries.map_or(default, |retries| retries + 1)
+    }
+
+    /// How long after its first failure a request whose connection failed, or that was told to try
+    /// again later, is still sent again, in place of the count.
+    ///
+    /// The window the block stated. Where it stated none, [`DEFAULT_RETRY_WINDOW`], unless it
+    /// stated a retry count: a person who chose a count has chosen how often a request is sent, and
+    /// a window they did not ask for does not override it. `None` is no window, so the count alone
+    /// decides.
+    pub fn retry_window(&self) -> Option<Duration> {
+        self.retry_window
+            .or_else(|| self.max_retries.is_none().then_some(DEFAULT_RETRY_WINDOW))
     }
 }
 
@@ -625,6 +667,11 @@ pub struct Provider {
     /// Nothing for an AWS entry: its account is what a client reaches and carries its own
     /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
     pub patience: Patience,
+    /// Whether a `provider` entry wrote this provider, as against the environment naming it.
+    ///
+    /// `options.maxRetries` is stated in an entry, so a failure line names that setting only where
+    /// one exists ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    pub(crate) written_in_entry: bool,
     /// Whether `options.setCacheKey` is `true`, so a chat-completions request carries a
     /// `prompt_cache_key` ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
     ///
@@ -789,6 +836,20 @@ impl Provider {
             .collect()
     }
 
+    /// The region the `amazon-bedrock` entry under `provider` states when it is not spelled as one,
+    /// which is why [`Self::all`] drops the entry ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+    ///
+    /// A blank region is no region, as it is for the entry itself, and is not a refusal.
+    pub fn refused_region(
+        root: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<crate::bedrock::RegionFault> {
+        let entry = object(root, "provider")?
+            .get(AWS_PROVIDER_ID)?
+            .as_object()?;
+        let region = string(object(entry, "options")?.get("region"))?;
+        (!crate::bedrock::is_region(&region)).then_some(crate::bedrock::RegionFault { region })
+    }
+
     /// One entry under `provider`, or `None` where it does not describe a reachable service.
     fn one(id: &str, entry: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
         let options = object(entry, "options");
@@ -888,6 +949,7 @@ impl Provider {
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
+            written_in_entry: true,
             set_cache_key: options
                 .and_then(|options| options.get("setCacheKey"))
                 .and_then(serde_json::Value::as_bool)
@@ -942,6 +1004,7 @@ impl Provider {
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
+            written_in_entry: false,
             set_cache_key: false,
             output_budget: None,
             protocol,
@@ -989,6 +1052,7 @@ impl Provider {
             models,
             context_window: None,
             patience: Patience::default(),
+            written_in_entry: true,
             set_cache_key: false,
             output_budget: None,
             protocol: Protocol::ChatCompletions,
@@ -1008,6 +1072,12 @@ impl Provider {
     /// under this name keeps that reading by naming the SDK.
     pub fn protocol(&self) -> Protocol {
         self.protocol
+    }
+
+    /// Whether a `provider` entry wrote this provider, so `options.maxRetries` has a place to be
+    /// stated. False for the Vertex service the environment names.
+    pub fn written_in_entry(&self) -> bool {
+        self.written_in_entry
     }
 
     /// The URL one chat completion goes to.
@@ -1308,9 +1378,13 @@ impl Provider {
             .or_else(|| self.model(model).and_then(|model| model.output_limit))
     }
 
-    /// What to show a person choosing this provider.
+    /// What to show a person choosing this provider: the name its block gives, else the name a
+    /// known id is written with ([`known_name`]), else the id.
     pub fn display_name(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.id)
+        self.name
+            .as_deref()
+            .or_else(|| known_name(&self.id))
+            .unwrap_or(&self.id)
     }
 
     /// The host this gateway is reached at, which is what would end a token it carries.
@@ -2060,6 +2134,24 @@ mod tests {
         }
     }
 
+    /// `options.maxRetries` has a place to be stated only where a `provider` entry wrote the
+    /// provider. The Vertex service the environment names has none, so a rate-limited failure to it
+    /// is not told to raise a count it cannot set. The fault this rejects: the flag true for every
+    /// provider, or false for every provider.
+    #[test]
+    fn only_a_provider_written_in_an_entry_has_a_place_for_max_retries() {
+        let entry = one_entry(&format!(
+            r#"{{"options": {{"project": "{PLACEHOLDER_PROJECT}"}}}}"#
+        ));
+        assert!(entry.written_in_entry());
+
+        let from_environment = Provider::from_environment(&|name: &str| {
+            (name == crate::env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
+        })
+        .expect("a project names the service");
+        assert!(!from_environment.written_in_entry());
+    }
+
     /// The `google-vertex` entry written as `entry`, which holds the whole block.
     fn one_entry(entry: &str) -> Provider {
         let text = format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#);
@@ -2491,6 +2583,14 @@ mod tests {
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(provider.env, ["OPENROUTER_API_KEY"]);
         assert!(provider.offers("z-ai/glm-4.6"));
+
+        // A block that names no display name is shown as the known name for its id.
+        let unnamed = one(r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"]}}}"#);
+        assert_eq!(unnamed.display_name(), "OpenRouter");
+        let other = one(
+            r#"{"provider": {"local": {"env": ["A_KEY"], "options": {"baseURL": "http://localhost:1/v1"}}}}"#,
+        );
+        assert_eq!(other.display_name(), "local");
     }
 
     /// The block that configures this account in the other tool, copied across unedited. Its models
@@ -2855,12 +2955,84 @@ mod tests {
         }
     }
 
-    /// An AWS account is stated the same two keys, read from the block's `options` beside the
-    /// region, and the entry keeps them where a client reaching the account can read them.
+    /// BACKEND-55: `retryWindowMs` is how long a failed connection is retried, capped at an hour. A
+    /// window of zero and one that is not a whole number state nothing, so a mistyped figure costs
+    /// the setting and not the entry. Rejects a read that lets a day-long figure through, which
+    /// would keep a turn waiting on a network down since the morning.
     #[test]
-    fn an_aws_entry_states_the_same_two_figures() {
+    fn a_block_states_how_long_a_failed_connection_is_retried_and_an_hour_is_the_most() {
+        let at = |figure: &str| {
+            one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                    "retryWindowMs": {figure}}}}}}}}}"#
+            ))
+            .patience
+        };
+
+        assert_eq!(
+            at("600000").retry_window,
+            Some(Duration::from_millis(600_000))
+        );
+        assert_eq!(
+            at("86400000").retry_window,
+            Some(Duration::from_millis(MAX_RETRY_WINDOW_MS))
+        );
+        assert_eq!(
+            at(&MAX_RETRY_WINDOW_MS.to_string()).retry_window,
+            Some(Duration::from_secs(60 * 60))
+        );
+        for stated_nothing in ["0", r#""600000""#, "-1", "1.5", "true", "null", "[]"] {
+            assert_eq!(
+                at(stated_nothing).retry_window,
+                None,
+                "{stated_nothing} stated a window"
+            );
+        }
+    }
+
+    /// BACKEND-55: where a block states neither a window nor a count a failed connection is retried
+    /// for the default window, a stated count is the person's choice of how often and is not
+    /// overridden by a window they did not state, and a stated window replaces the count for a
+    /// failed connection. Zero retries sending each request once is the case a default window would
+    /// break first.
+    #[test]
+    fn a_window_replaces_the_count_only_where_nothing_or_a_window_was_stated() {
+        let patience = |max_retries, retry_window| Patience {
+            max_retries,
+            retry_window,
+            ..Patience::default()
+        };
+        let ten_minutes = Duration::from_secs(600);
+
+        assert_eq!(
+            Patience::default().retry_window(),
+            Some(DEFAULT_RETRY_WINDOW)
+        );
+        assert_eq!(patience(Some(3), None).retry_window(), None);
+        assert_eq!(
+            patience(Some(0), None).retry_window(),
+            None,
+            "zero retries took a window"
+        );
+        assert_eq!(
+            patience(None, Some(ten_minutes)).retry_window(),
+            Some(ten_minutes)
+        );
+        assert_eq!(
+            patience(Some(0), Some(ten_minutes)).retry_window(),
+            Some(ten_minutes),
+            "a stated window did not replace the count"
+        );
+        assert_eq!(patience(Some(3), None).attempts(3), 4, "the count moved");
+    }
+
+    /// An AWS account is stated the same keys, read from the block's `options` beside the region,
+    /// and the entry keeps them where a client reaching the account can read them.
+    #[test]
+    fn an_aws_entry_states_the_same_three_figures() {
         let provider = one(r#"{"provider": {"amazon-bedrock": {
-                "options": {"region": "us-west-2", "maxRetries": 4, "idleTimeoutMs": 240000},
+                "options": {"region": "us-west-2", "maxRetries": 4, "idleTimeoutMs": 240000,
+                            "retryWindowMs": 900000},
                 "models": {"arn:aws:bedrock:us-west-2:111122223333:inference-profile/x": {}}
             }}}"#);
         let account = provider.bedrock.expect("an account");
@@ -2868,6 +3040,10 @@ mod tests {
         assert_eq!(
             account.patience().idle_timeout,
             Some(Duration::from_millis(240_000))
+        );
+        assert_eq!(
+            account.patience().retry_window,
+            Some(Duration::from_millis(900_000))
         );
 
         let silent =
@@ -3914,14 +4090,17 @@ mod tests {
         assert_eq!(ids, ["openrouter", "together"]);
     }
 
-    /// Where the block said nothing friendlier, the id is what a picker row names it by: a term
-    /// that cannot collide with a name a service chose for itself.
+    /// Where the block said nothing friendlier, the id is what a picker row names it by, except for
+    /// an id with a brand name ([`known_name`]).
     #[test]
     fn a_provider_with_no_name_is_shown_by_its_id() {
-        let provider = one(
+        let provider =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://e.invalid/v1"}}}}"#);
+        assert_eq!(provider.display_name(), "gw");
+        let branded = one(
             r#"{"provider": {"openrouter": {"options": {"baseURL": "https://e.invalid/v1"}}}}"#,
         );
-        assert_eq!(provider.display_name(), "openrouter");
+        assert_eq!(branded.display_name(), "OpenRouter");
     }
 
     /// A provider that turns nothing on is still a provider, and "no models configured" is a better

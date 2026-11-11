@@ -25,7 +25,7 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE } from '../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, approveTrust, trustQuestion } from '../drive-support.mjs'
 import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -242,7 +242,7 @@ async function ensureResidents(world) {
         await row.locator(BOT_OPEN_BUTTON).click()
         await page.locator('[data-test="bot-greeting"]').waitFor()
         if (await page.locator('.trust').isVisible().catch(() => false)) {
-          await page.locator(TRUST_APPROVE).click()
+          await approveTrust(trustQuestion(page))
           await page.waitForTimeout(800)
         }
         for (const prompt of bot.prompts) {
@@ -350,7 +350,7 @@ async function build(world) {
       await page.locator('.new').first().click()
       await page.waitForTimeout(1500)
       if (await page.locator('.trust').isVisible().catch(() => false)) {
-        await page.locator(TRUST_APPROVE).click()
+        await approveTrust(trustQuestion(page))
         await page.waitForTimeout(800)
       }
 

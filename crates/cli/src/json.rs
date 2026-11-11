@@ -34,6 +34,10 @@ pub struct Call {
     /// further back to ask, since the driver carries the argument without reading it, so a field
     /// promising paths would be right most of the time and wrong without saying which.
     pub target: String,
+    /// The catalogue entry a `load_skill` call resolved to, by the name the catalogue holds it
+    /// under. Not written to the result object. `None` for every other call and for a load that
+    /// was refused.
+    pub skill: Option<String>,
     /// Whether it was refused or failed.
     pub refused: bool,
 }
@@ -256,6 +260,40 @@ pub fn question_event(id: u64, asking: &Asking) -> String {
     )
 }
 
+/// A write, run or fetch put to whatever sends the input lines, when the person typed
+/// `--approve-input-lines` (CLI-36).
+///
+/// `details` are the words that say what the call is, as the kernel released them to be shown to
+/// somebody, and `choices` are the two the driver fixed. `id` is what an `answer` line names, and
+/// the choice is answered by its position in `choices`.
+pub fn permission_event(
+    id: u64,
+    kind: &str,
+    details: &[(&str, String)],
+    choices: &[&str],
+) -> String {
+    let call = object(
+        &details
+            .iter()
+            .map(|(name, value)| (*name, quoted(value)))
+            .collect::<Vec<_>>(),
+    );
+    let choices = object_list(
+        choices
+            .iter()
+            .map(|label| object(&[("label", quoted(label))])),
+    );
+    event(
+        "permission",
+        vec![
+            ("id", id.to_string()),
+            ("kind", quoted(kind)),
+            ("call", call),
+            ("choices", choices),
+        ],
+    )
+}
+
 /// A line of the input stream was not taken (CLI-36).
 ///
 /// Names the line by its number and the cause by a fixed word, and nothing of what the line said:
@@ -404,16 +442,19 @@ mod tests {
             Call {
                 tool: "read_file".to_string(),
                 target: "src/main.rs".to_string(),
+                skill: None,
                 refused: false,
             },
             Call {
                 tool: "edit_file".to_string(),
                 target: "src/main.rs".to_string(),
+                skill: None,
                 refused: false,
             },
             Call {
                 tool: "write_file".to_string(),
                 target: "notes.md".to_string(),
+                skill: None,
                 refused: true,
             },
         ];
@@ -540,6 +581,7 @@ mod tests {
         let calls = [Call {
             tool: "write_file".to_string(),
             target: r#""},"ok":true,"x":""#.to_string(),
+            skill: None,
             refused: false,
         }];
         let mut report = finished(Ending::Done, &calls, &[]);
@@ -591,6 +633,7 @@ mod tests {
         let call = Call {
             tool: "write_file".to_string(),
             target: "notes.md".to_string(),
+            skill: None,
             refused: true,
         };
         let refusal = Refusal {

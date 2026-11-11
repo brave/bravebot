@@ -124,9 +124,18 @@ place of what was given up.
 The replaced messages go to an archive the transcript still reads and the session record still
 stores. The user owns their transcript; compaction is about what gets sent.
 
+A message that is in the archive and not in the request says nothing to the planner. That holds for a
+plan-mode notice as for any other message, so the end of plan mode is not announced after a
+compaction took the notice that said plan mode was on ([MODE-8](permission-modes.md#MODE-8)). A
+plan-mode notice is house-keeping: it is not the start of an exchange, so compaction does not cut in
+front of it, and a transcript does not draw it.
+
 `verified-by: bravebot_agent::conversation::what_compaction_took_out_of_the_request_is_still_recounted_to_the_person`
 `verified-by: bravebot_agent::conversation::a_compacted_conversation_survives_being_written_down`
 `verified-by: bravebot_agent::conversation::the_summary_is_not_shown_as_something_the_user_said`
+`verified-by: bravebot_agent::conversation::compacting_away_the_plan_mode_notice_leaves_nothing_to_retract`
+`verified-by: bravebot_agent::conversation::a_mode_notice_between_exchanges_is_not_a_place_to_cut`
+`verified-by: bravebot_agent::conversation::a_mode_notice_is_left_out_of_what_is_recounted`
 
 <a id="COMPACT-7"></a>
 ### COMPACT-7: the budget is configurable, and a nonsensical one falls back
@@ -534,3 +543,57 @@ stubs.
 `verified-by: bravebot_agent::conversation::a_compaction_moves_the_line_with_the_messages`
 `verified-by: bravebot_agent::conversation::a_cut_is_judged_on_what_the_request_holds`
 `verified-by: bravebot_agent::turn::old_tool_results_are_dropped_before_a_summary_is_asked_for`
+
+<a id="COMPACT-19"></a>
+### COMPACT-19: a delegate's task is sent again after the summary
+
+A delegate's conversation is its task and the rounds it has worked, so a cut by round gives the
+task up. When a compaction takes the task out of the request, the summary message ends with it,
+byte for byte as the kernel gave it to the delegate: no trimming, no truncation, no paraphrase and
+no cap on its size. The task is the whole of what the delegate was told ([AGENT-2](tools/spawn-agent.md#AGENT-2)),
+and the delegate has no tool that brings it back. A task in the part that is kept is sent as it was
+and is not repeated. The copy is carried through later compactions and is in the request once.
+
+The task is the text the kernel gave the delegate, so it comes back at the label of the context it
+came from, and only while the summary is adopted ([COMPACT-1](#COMPACT-1)). The driver records
+which message holds the task when the turn is a delegate's and branches on nothing inside it. The
+summariser has no tools ([COMPACT-2](#COMPACT-2)) and does not produce it. The copy counts as kept
+for [COMPACT-5](#COMPACT-5), so a task larger than what a cut would free makes no cut. The result
+stays in the archive and the record, and the copy is drawn in no transcript
+([COMPACT-6](#COMPACT-6)). The quarantine, the counter and the integrity are untouched
+([COMPACT-3](#COMPACT-3)).
+
+A turn that is not a delegate's records no task, and its opening prompt is left to the summary. `/compact` and the compaction of a request the server refused ([COMPACT-14](#COMPACT-14))
+end in the same step as the compaction in the middle of a turn, so they send the task again the
+same way. Masking old tool results ([COMPACT-18](#COMPACT-18)) leaves the task and its copy whole,
+since neither is a tool result.
+
+**Not covered.** The other messages a delegate's opening pushes around the task, such as context
+files and a skills overview, are summarised like any other message.
+
+**Not kept across a resume.** A delegate's conversation is not written to the session record, and
+the position of the task is not part of a snapshot.
+
+**Why.** A summary lists what was started and drops what was not, so without this a delegate
+given four items goes on with the first and nothing tells it or the person that the rest are gone.
+
+`verified-by: bravebot_agent::conversation::a_delegates_task_is_in_the_request_after_the_cut_byte_for_byte`
+`verified-by: bravebot_agent::conversation::the_carried_task_survives_a_second_compaction_once`
+`verified-by: bravebot_agent::conversation::a_task_the_cut_leaves_in_place_is_not_sent_again`
+`verified-by: bravebot_agent::conversation::a_conversation_that_never_recorded_a_task_gains_none`
+`verified-by: bravebot_agent::conversation::a_task_not_at_the_start_is_found_by_its_position`
+`verified-by: bravebot_agent::conversation::a_carried_task_counts_as_kept_for_the_cut`
+`verified-by: bravebot_agent::conversation::a_carried_task_is_one_more_message_kept_whatever_it_weighs`
+`verified-by: bravebot_agent::conversation::a_large_carried_task_delays_the_next_cut`
+`verified-by: bravebot_agent::conversation::the_carried_task_is_not_a_place_to_cut`
+`verified-by: bravebot_agent::conversation::the_carried_task_rides_in_the_summary_note_and_is_attributed_as_one`
+`verified-by: bravebot_agent::conversation::the_carried_task_is_in_the_archive_and_not_drawn_twice`
+`verified-by: bravebot_agent::conversation::carrying_a_task_leaves_the_quarantine_the_counter_and_the_integrity_alone`
+`verified-by: bravebot_agent::conversation::masking_old_results_leaves_the_task_and_its_carried_copy_whole`
+`verified-by: bravebot_agent::conversation::a_carried_task_is_not_dropped_with_the_old_tool_results`
+`verified-by: bravebot_agent::conversation::a_task_past_the_size_of_a_skill_is_carried_whole`
+`verified-by: bravebot_agent::conversation::a_restored_conversation_carries_no_task`
+`verified-by: bravebot_agent::turn::a_delegates_requests_after_a_compaction_still_hold_its_task_once`
+`verified-by: bravebot_agent::turn::a_fan_out_delegate_keeps_the_shared_task_and_its_entry_through_a_compaction`
+`verified-by: bravebot_agent::turn::a_turns_own_prompt_is_not_sent_again_after_a_compaction`
+`verified-by: bravebot_agent::turn::a_manual_compaction_sends_the_recorded_task_again`

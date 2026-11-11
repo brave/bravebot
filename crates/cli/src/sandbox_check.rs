@@ -14,6 +14,7 @@ use std::process::ExitCode;
 #[cfg(unix)]
 mod unix {
     use super::*;
+    use crate::progress::{printable, printable_path};
     use bravebot_agent::usability::{self, Kind, Outcome, Report, Unavailable};
     use std::path::Path;
 
@@ -54,15 +55,13 @@ mod unix {
                         Kind::Setup => t!(doctor_sandbox_fix_setup).to_string(),
                         Kind::Login => t!(doctor_sandbox_fix_login).to_string(),
                         Kind::NotConfined(detail) => {
-                            t!(doctor_sandbox_fix_not_confined, detail = detail).to_string()
+                            t!(doctor_sandbox_fix_not_confined, detail = printable(detail))
+                                .to_string()
                         }
                     };
                     lines.push((t!(doctor_sandbox_fix).to_string(), fix));
                     if let Some(log) = &failure.log {
-                        lines.push((
-                            t!(doctor_sandbox_log).to_string(),
-                            log.display().to_string(),
-                        ));
+                        lines.push((t!(doctor_sandbox_log).to_string(), printable_path(log)));
                     }
                 }
             }
@@ -84,6 +83,24 @@ mod unix {
         (lines, ending)
     }
 
+    /// What is said when the suite could not run, with `root` the directory it would have run in.
+    /// Every path in it is drawn with its control and bidirectional characters spelled out
+    /// (LAYER-3).
+    pub(super) fn unavailable_message(why: &Unavailable, root: &Path) -> String {
+        match why {
+            Unavailable::NoBase => t!(doctor_sandbox_cannot_confine).to_string(),
+            Unavailable::Root(path) => {
+                t!(doctor_sandbox_temporary, path = printable_path(path)).to_string()
+            }
+            Unavailable::Io(error) => t!(
+                doctor_sandbox_io,
+                path = printable_path(root),
+                detail = error.to_string()
+            )
+            .to_string(),
+        }
+    }
+
     pub(super) fn run() -> ExitCode {
         if !usability::available() {
             return fail(Ending::Failed, t!(doctor_sandbox_cannot_confine));
@@ -93,32 +110,11 @@ mod unix {
         };
         let root = directory.join("doctor-sandbox");
         let _ = std::fs::remove_dir_all(&root);
-        // This is a new process, so SANDBOX-30 finds the programs the suite starts outside the
-        // sandbox only once the directory it ran in and its checkout are left out.
-        crate::push_identity::keep_out_where_this_ran();
         let report = match usability::run(&root, &usability::workflows())
             .and_then(|report| with_the_login(report, &root))
         {
             Ok(report) => report,
-            Err(Unavailable::NoBase) => {
-                return fail(Ending::Failed, t!(doctor_sandbox_cannot_confine));
-            }
-            Err(Unavailable::Root(path)) => {
-                return fail(
-                    Ending::Failed,
-                    t!(doctor_sandbox_temporary, path = path.display().to_string()),
-                );
-            }
-            Err(Unavailable::Io(error)) => {
-                return fail(
-                    Ending::Failed,
-                    t!(
-                        doctor_sandbox_io,
-                        path = root.display().to_string(),
-                        detail = error.to_string()
-                    ),
-                );
-            }
+            Err(why) => return fail(Ending::Failed, unavailable_message(&why, &root)),
         };
         let (lines, ending) = facts(&report);
         for (name, value) in lines {
@@ -153,9 +149,9 @@ pub fn run() -> ExitCode {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix::facts;
+    use super::unix::{facts, unavailable_message};
     use super::*;
-    use bravebot_agent::usability::{Expect, Failure, Kind, Outcome, Report, Row};
+    use bravebot_agent::usability::{Expect, Failure, Kind, Outcome, Report, Row, Unavailable};
     use std::path::PathBuf;
 
     fn row(outcome: Outcome) -> Row {
@@ -261,6 +257,61 @@ mod tests {
         assert!(text.contains("sandbox.filesystem.allowRead"), "{text}");
         assert!(text.contains("--insecure-storage"), "{text}");
         assert_eq!(ending, Ending::Failed);
+    }
+
+    /// LAYER-3: the log's path comes from the state directory the environment names, and the
+    /// detail is the platform's own text, so both are drawn with their control and bidirectional
+    /// characters spelled out. The regression it rejects: either printed as it is.
+    #[test]
+    fn doctor_sandbox_draws_the_log_path_and_the_platform_detail() {
+        let hostile = "dir\u{1b}[2J\u{202e}end";
+        let mut failed = failure(Kind::NotConfined(format!("no profile {hostile}")));
+        failed.log = Some(PathBuf::from(format!("/state/{hostile}/stage-3.log")));
+        let report = Report {
+            rows: vec![row(Outcome::Failed(failed))],
+        };
+
+        let (text, _) = text(&report);
+
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(!text.contains('\u{202e}'), "{text:?}");
+        assert_eq!(
+            text.matches("dir\u{241b}[2J\u{2039}U+202E\u{203A}end")
+                .count(),
+            2,
+            "{text:?}"
+        );
+    }
+
+    /// LAYER-3: the path the suite could not run in comes from the state directory the environment
+    /// names, so each message that holds one draws it with its control and bidirectional characters
+    /// spelled out. The regression it rejects: the path of `Unavailable::Root` or of
+    /// `Unavailable::Io` printed as it is, which a terminal would act on.
+    #[test]
+    fn doctor_sandbox_draws_the_path_when_the_suite_could_not_run() {
+        let hostile = "dir\u{1b}[2J\u{202e}end";
+        let drawn = "dir\u{241b}[2J\u{2039}U+202E\u{203A}end";
+        let root = PathBuf::from(format!("/state/{hostile}/doctor-sandbox"));
+        let cases = [
+            (Unavailable::Root(root.clone()), "Root"),
+            (Unavailable::Io(std::io::Error::other("denied")), "Io"),
+        ];
+
+        for (why, variant) in cases {
+            let said = unavailable_message(&why, &root);
+
+            assert!(!said.contains('\u{1b}'), "{variant}: {said:?}");
+            assert!(!said.contains('\u{202e}'), "{variant}: {said:?}");
+            assert_eq!(said.matches(drawn).count(), 1, "{variant}: {said:?}");
+        }
+    }
+
+    /// A platform with no base to confine against says it cannot confine, with no path in it.
+    #[test]
+    fn doctor_sandbox_says_it_cannot_confine_when_there_is_no_base() {
+        let said = unavailable_message(&Unavailable::NoBase, &PathBuf::from("/state/x"));
+
+        assert_eq!(said, t!(doctor_sandbox_cannot_confine).to_string());
     }
 
     /// The regression it rejects: a skipped workflow read as a failure, which fails the report on

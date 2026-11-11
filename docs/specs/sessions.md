@@ -72,12 +72,18 @@ name is printed on a screen and pasted into a command, and a name built from the
 process id would put two facts about the machine somewhere they are nobody's business. Nothing
 orders sessions by it; the list is sorted on what each record says it was last written.
 
+The directory is named by [`bravebot_agent::home::key_for`](trust-map.md#TRUST-23), which every
+per-directory record under the state directory shares. A name of up to 200 bytes is unchanged. A
+longer one is cut to 200 bytes and ends in a digest of the path, so the session directory of a
+deeply nested checkout can be created.
+
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_session::sessions::a_session_is_named_by_a_uuid`
 `verified-by: bravebot_session::sessions::no_two_sessions_are_given_the_same_name`
 `verified-by: bravebot_session::sessions::a_list_puts_the_most_recently_written_session_first`
 `verified-by: bravebot_session::sessions::a_working_directory_becomes_one_readable_segment`
 `verified-by: bravebot_session::sessions::a_path_with_nothing_in_it_still_names_a_directory`
+`verified-by: bravebot_session::sessions::a_working_directory_too_deep_for_a_file_name_still_has_a_session_directory`
 
 <a id="SESSION-2"></a>
 ### SESSION-2: nothing untrusted is ever written down
@@ -367,9 +373,24 @@ the total, and clearing the conversation resets it. A record written before the 
 neither figure, and a session continued from one holds the split of its later turns only, so the two
 can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
 
+The split also holds, under `cache`, how many of the tokens read the service answered out of its own
+cache (`read_tokens`) and how many it wrote into the cache (`written_tokens`). They are two more
+running totals that each charge adds to with the rest of its split, and they are undone, cleared,
+restored and carried by a resume with it. The session's cache hit rate is `read_tokens` over the
+tokens read. They are totals for the session and not for each turn. They are left out of the record
+while both are zero, which a service that states no cache figure reports as much as a charge that
+missed ([BACKEND-31](backends.md#BACKEND-31)), and a record written before they were kept has none.
+The status panel does not read them back. It reports the last turn run in this process, so a
+resumed session shows no cache until a turn has run in it
+([PANEL-8](info-panel.md#PANEL-8)).
+
+A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
+like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
+session, and `schedule history` reads the tokens it spent from the record.
+
 A `/btw` question asked while a turn runs ([CMD-8](commands.md#CMD-8)) is charged to that turn, in
-the total, the breakdown and the split. The status line and the turn's clock are the turn's own and
-the question adds nothing to them.
+the total, the breakdown and the split, including one whose answer arrives after the turn has
+ended. The status line and the turn's clock are the turn's own and the question adds nothing to them.
 
 **Why.** A transcript is read after the fact to find out why a session went the way it did, and
 both questions are unanswerable from a total alone. Twenty even turns and one turn that ran away
@@ -381,6 +402,7 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
 `verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
+`verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
 `verified-by: bravebot_tui::state::a_run_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::state::clearing_forgets_what_each_turn_cost`
 `verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`
@@ -409,27 +431,45 @@ than the one in force at the time.
 `verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
 `verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`
 `verified-by: bravebot_cli::plain::a_failed_turn_is_charged_what_its_completed_requests_cost`
+`verified-by: bravebot_session::sessions::a_split_writes_its_cache_figures_only_when_it_has_some`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_cache_figures_reads_them_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_cache_figure_stating_one_half_reads_the_other_as_zero`
+`verified-by: bravebot_session::sessions::adding_a_split_sums_its_cache_figures_and_saturates`
+`verified-by: bravebot_session::sessions::cutting_a_split_to_its_total_keeps_the_cache_figures`
+`verified-by: bravebot_tui::state::a_resumed_session_counts_the_cache_totals_of_its_record_and_leaves_the_panel_empty`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_them`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them`
+`verified-by: bravebot_cli::running::a_background_session_adds_the_cache_figures_of_its_turn_to_the_record_it_resumed`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
 
-Every turn's wall clock is written down split four ways: what was spent waiting on the model, what
-was spent running tools, what was spent waiting for the person to answer a prompt, and what is left
-over. The four are a partition rather than four independent measures, so the parts account for the
-whole and the remainder is meaningful. An approval prompt is drawn from inside a tool call, so what
-was spent waiting for a person is taken off the tool figure rather than counted in both.
+Every turn's wall clock is written down split five ways: what was spent waiting on the model, what
+was spent running tools, what was spent waiting for the person to answer a prompt, what was spent
+blocked entering the file-authority boundary, and what is left over. The five are a partition rather
+than five independent measures, so the parts account for the whole and the remainder is meaningful.
+An approval prompt is drawn from inside a tool call, so what was spent waiting for a person is taken
+off the tool figure rather than counted in both. The same holds for the time a call spent blocked
+behind another holder of the boundary: it is taken off the tool figure and reported as
+`file_wait_ms`. Only a capture that had to wait is timed, as two instants, so the figure holds
+durations and no path, label or byte. Blocked spans inside one call's window are counted once and
+capped at the time the call took. The question about a server's tool list
+([SERVERS-8](mcp-servers.md#SERVERS-8)) is put before any tool runs, and the time it waits is
+charged to the same figure and reported as soon as the question is settled, so a turn stopped at it
+keeps that time.
 
-Delegate inference contributes only where requests overlap the parent's actual collection waits,
-with overlapping requests counted once (see [delegation.md](delegation.md)). The resulting
-breakdown reaches the same outcome, cumulative progress and session record as the parent's own
-measurements; collection does not add a second session charge.
+Delegate inference and delegate file waits contribute only where they overlap the parent's actual
+collection waits, with overlapping spans counted once (see [delegation.md](delegation.md)). The
+resulting breakdown reaches the same outcome, cumulative progress and session record as the parent's
+own measurements; collection does not add a second session charge.
 
 A turn that failed or stopped records its elapsed wall time and the timing breakdown retained from
 its progress on the same footing as one that succeeded. A `/compact` asked for mid-turn is charged
 to the turn it interrupted, as its tokens are; one asked for before the first turn is charged to
 the leading entry its tokens go to. `/status` reports the session total and each part that actually
 happened; a part that did not happen is left out rather than shown as zero. A record written before
-this was kept reads as an empty breakdown, which is not the same as a session that took no time.
+this was kept reads as an empty breakdown, which is not the same as a session that took no time, and
+one written before the file-wait figure existed reads that figure as zero.
 
 **Why.** A duration alone is unactionable, and the three things it conflates want three different
 fixes. A turn that took four minutes on the model, one that took four minutes running a test suite,
@@ -448,6 +488,13 @@ harness's own overhead.
 `verified-by: bravebot_session::sessions::a_record_written_before_timing_was_kept_still_loads`
 `verified-by: bravebot_tui::status::the_panel_says_where_the_session_spent_its_time`
 `verified-by: bravebot_tui::status::a_part_that_never_happened_is_not_reported_as_zero`
+`verified-by: bravebot_tui::status::the_panel_says_how_long_the_session_waited_for_file_access`
+`verified-by: bravebot_core::file_authority::a_blocked_capture_records_its_wait_and_a_free_one_does_not`
+`verified-by: bravebot_core::file_authority::a_handle_with_its_own_log_keeps_its_waits_apart`
+`verified-by: bravebot_agent::turn::time_blocked_at_the_file_boundary_is_charged_to_file_wait_and_not_to_the_tool`
+`verified-by: bravebot_agent::timing::a_record_without_a_file_wait_figure_reads_it_as_zero`
+`verified-by: bravebot_agent::timing::the_file_wait_is_taken_out_of_the_remainder`
+`verified-by: bravebot_agent::timing::blocked_since_counts_overlapping_waits_once`
 `verified-by: bravebot_tui::status::a_session_with_no_turn_yet_reports_no_time`
 `verified-by: bravebot_agent::confirm::the_time_a_person_takes_to_answer_is_counted`
 `verified-by: bravebot_agent::confirm::every_kind_of_question_is_timed`
@@ -456,6 +503,10 @@ harness's own overhead.
 `verified-by: bravebot_agent::timing::the_remainder_is_what_nothing_else_accounts_for`
 `verified-by: bravebot_agent::timing::parts_exceeding_the_whole_do_not_wrap`
 `verified-by: bravebot_agent::turn::time_spent_waiting_for_an_approval_is_not_charged_to_the_tool`
+`verified-by: bravebot_agent::mcp::the_time_taken_to_answer_the_list_is_charged_to_the_person`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_keeps_the_time_it_waited`
+`verified-by: bravebot_agent::mcp::a_turn_with_no_server_charges_nothing_to_the_person`
+`verified-by: bravebot_agent::manifest_server_calls::the_time_taken_to_answer_a_list_before_a_plan_is_charged_to_the_person`
 
 <a id="SESSION-13"></a>
 ### SESSION-13: a session that changes directory is recorded where it moved to
@@ -625,7 +676,8 @@ goes back another. Every path in the project that a rewound turn wrote through a
 back to what it held first, and one such a turn created is removed; where two of the rewound
 turns wrote the same path, it goes back to what it held before the first of them. The
 conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
-count, the spend, the timing, the trusted programs, and the transcript. File trust is reconciled per path as described below. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
+count, the spend, the timing, the trusted programs, and the transcript. The answers to the planner's
+questions are forgotten, all of them, so a question put again is asked ([ASK-8](tools/ask-user.md#ASK-8)). File trust is reconciled per path as described below. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
 conversation. Their display prompts, outcomes, and task lists are removed with them. Saving and
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
@@ -1046,11 +1098,22 @@ A record keeps, for every turn, its number, the prompt as it was shown, what cam
 messages of the conversation belong to it. A turn that failed or was cancelled keeps its own task
 list, spend, timing and audit lines through saving and reopening, with no final answer and no
 planner message of its own needed to hold them. A recorded failure carries only the reason the
-interface composed, never a message from the backend. A prompt handed back to the editor on
+interface composed, never a message from the backend. For a turn that ended on the read of a file
+the person named with `@`, the reason the interface composed holds that name, which the person
+wrote ([NAME-13](naming-files.md#NAME-13)). A prompt handed back to the editor on
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
 each other. None of this is sent to the planner. What the planner is told of a failure is the note
 of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
+A recorded unauthorized failure ends with the commands [BACKEND-37](backends.md#BACKEND-37) names,
+since the reason is the line the interface showed. A recorded refused failure holds the backend
+that sent the requests, the model the turn ran on, the request fields the retries left out and the
+next step [BACKEND-37](backends.md#BACKEND-37) names, for the same reason. A recorded rate-limited
+failure ends with the next step [BACKEND-37](backends.md#BACKEND-37) names, which is `maxRetries` and `fallbackModel` for a
+request to a `provider` entry and `fallbackModel` alone for any other backend and for a wait past
+the two minutes the client sits through. The model is the name
+the person configured or chose, written with control characters made visible; the rest are words of
+this program's, chosen from closed sets. Nothing the service sent is among them.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
@@ -1064,6 +1127,10 @@ closes.
 `verified-by: bravebot_tui::sessions::reopening_keeps_task_ownership_and_recorded_measurements`
 `verified-by: bravebot_tui::sessions::failure_after_work_keeps_its_prompt_and_safe_reason_without_changing_context`
 `verified-by: bravebot_tui::sessions::hidden_cancellation_then_corrections_keeps_plan_ownership`
+`verified-by: bravebot_session::sessions::a_refused_request_names_its_backend_and_the_fields_the_retries_left_out`
+`verified-by: bravebot_session::sessions::a_refused_request_names_the_model_the_turn_ran_on`
+`verified-by: bravebot_ui_bridge::history::a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words`
+`verified-by: bravebot_session::refused_in_french::a_refused_request_is_said_in_the_chosen_catalog_and_names_the_same_commands`
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 `verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`
@@ -1071,6 +1138,7 @@ closes.
 `verified-by: bravebot_ui_bridge::history::a_turn_after_a_resume_extends_the_history_the_record_held`
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_is_recorded_with_the_reason_the_interface_composed`
 `verified-by: bravebot_ui_bridge::history::a_stopped_turn_is_recorded_as_cancelled_under_its_own_number`
+`verified-by: bravebot_session::sessions::an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint`
 
 <a id="SESSION-24"></a>
 ### SESSION-24: a resumed transcript puts the prompt back where it was sent
@@ -1518,6 +1586,16 @@ stay behind because they were given for work that the brief describes only in wo
 
 ## Known costs
 
+- **A record holding a plan-mode notice is not read by an earlier build.** The driver tags the
+  notice that says plan mode is on or has ended with `{"kind":"mode_notice","plan":true}`, or
+  `"plan":false` when it says plan mode ended ([MODE-8](permission-modes.md#MODE-8)).
+  A build that has not heard of the tag refuses the record, so a session that went into or out of
+  plan mode with this build cannot be resumed by an earlier one.
+- **A fork of a record written before plan-mode notices were tagged is not told that plan mode
+  ended when it is cut between an untagged plan-on notice and a later tagged one.** Once a tagged
+  notice follows the untagged one, the record's flag holds the answer of the tagged notice and the
+  untagged notice's answer is no longer stored. The child keeps the untagged plan-on notice and no
+  tagged notice, and has nothing that retracts it ([MODE-8](permission-modes.md#MODE-8)).
 - **Listing the turns addressed to a definition reads every record.** `session.addressed` with no
   directory, and a terminal session opened under a definition, read each record whole
   ([SESSION-39](#SESSION-39)), so a directory with many long sessions is slow to list.
@@ -1540,7 +1618,9 @@ stay behind because they were given for work that the brief describes only in wo
   an imported session. A phrase is not matched across two lines.
 - **Two working directories can share a session store.** The directory name is derived by mapping
   every character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all
-  reduce to the same name. The Sessions screen does not re-check afterwards: it reads every record in
+  reduce to the same name. A name longer than 200 bytes is cut and ends in a digest of the path's
+  own bytes, so two long directories do not share a store ([TRUST-23](trust-map.md#TRUST-23)). The
+  Sessions screen does not re-check afterwards: it reads every record in
   that directory without comparing the path recorded inside it. Since a resume restores standing
   permissions, permissions granted in one of those directories would be offered in another.
 
@@ -1549,6 +1629,11 @@ stay behind because they were given for work that the brief describes only in wo
   it was run in. The Sessions screen still does not. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
+
+- **A working directory whose key is longer than 200 bytes loses its listed sessions.** Its
+  session directory is now named with a digest, so the sessions written under the earlier name are
+  not listed or resumed from that directory, and nothing migrates them
+  ([TRUST-23](trust-map.md#TRUST-23) records the same cost for the other per-directory records).
 
 - **A resume trusts whatever checkout stands at the recorded path.** A record holds the directory
   it was written in as a path and nothing that identifies the checkout there, and a resume restores
@@ -1611,11 +1696,12 @@ stay behind because they were given for work that the brief describes only in wo
 - **The per-turn breakdown counts what a turn sent, which is not what it cost.** A cached prompt
   token is charged at a fraction of a fresh one, so two turns recorded at the same figure can differ
   about tenfold in money. How much of a prompt a service answered out of its own cache is a figure
-  [backends.md](backends.md) carries out of a reply that states one, and it is not kept here. What is
-  written stays comparable across turns and across sessions, which is what the record is read for,
-  and it cannot be read as a bill. Keeping the split would mean a resumed session reporting a cache
-  it never used; the figures are on the status panel for the turn that just ran, where they are a
-  measurement rather than a history.
+  [backends.md](backends.md) carries out of a reply that states one. The record keeps it as a total
+  for the session, in the split, and not for each turn, so the breakdown cannot say which turn missed
+  the cache and none of the figures can be read as a bill. A service that states no cache figure
+  reads the same as one that missed. The status panel does not read the totals back, because a
+  resumed session would then report a cache it never used here; it shows the turn that just ran,
+  where the figures are a measurement rather than a history.
 
 - **An imported session is read and not continued from.** Its words are drawn on a resume and are
   not in any request, so a prompt that refers back to the old session is answered by a model that
@@ -1791,3 +1877,57 @@ its own that a rewind, a delete or a fork would leave out of date.
 `verified-by: bravebot_ui_bridge::addressing::the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply`
 `verified-by: bravebot_tui::app::a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere`
 `verified-by: bravebot_agent::turn::the_record_keeps_which_definition_each_prompt_was_addressed_to`
+
+<a id="SESSION-40"></a>
+### SESSION-40: the record says what each turn did, beside where its time went
+
+A turn's entry under `timing` ([SESSION-12](sessions.md#SESSION-12)) also holds, under `activity`,
+five counts of what the turn did: `requests`, the model requests that completed;
+`written_tokens`, the tokens the model wrote; `cache_read_tokens` and `cache_written_tokens`, the
+tokens the service answered out of its prompt cache and the tokens it wrote into it; and
+`compactions`, the summaries the turn made to make room.
+
+A request is counted where it completed: a planner round, including one whose reply arrived and
+could not be used; a processor's call; a summary; the check on a file nobody had vouched for; and a
+delegate's requests, which the turn was charged for. A reply that stated no usage is a request, and
+a tool that made none is not counted. A request made beside the work (`/compact` outside a turn, a
+question, a commit message, a handoff) and the check on a server's tool list are not counted, though
+their tokens are in the turn's spend, so the counts can come to less than the spend does. A
+delegate's summaries are the delegate's own and are not added to the turn's.
+
+The counts are charged and kept exactly as the time beside them is. A failed or stopped turn is
+charged the counts of the requests it completed, once. A delegate still running when its parent
+ends is counted once, and the running report of a turn that has delegates holds their requests and
+tokens as well as the turn's. A rewind takes a turn's counts back with its entry, a resume and a
+fork carry them, and a turn run after a resume has its own. They are left out of the file while all
+five are zero, and a record written before they were kept reads as none counted, which is not the
+same as a turn that did nothing. They are numbers, so they need no release.
+
+**Why.** The session's totals ([SESSION-11](sessions.md#SESSION-11)) cannot say which turn made
+forty requests, which wrote the most, or which the service served from its cache, and none of it
+can be read back from the conversation: a turn that failed or was stopped keeps no messages of its
+own, and the service's cache figures are in no message. A turn that cost several times the others
+because it made many requests is a different fault from one that read a large result, and a cached
+share that is low for one turn is a different fault from one that is low for the whole session.
+
+`verified-by: bravebot_agent::timing::finishing_takes_the_requests_tokens_and_cache_from_the_account_and_compactions_from_the_clock`
+`verified-by: bravebot_agent::timing::activity_is_added_with_the_time_by_both_adders_and_saturates`
+`verified-by: bravebot_agent::timing::activity_is_left_out_while_empty_and_survives_a_round_trip`
+`verified-by: bravebot_agent::outcome::a_request_is_counted_when_it_completed_whatever_usage_it_stated`
+`verified-by: bravebot_agent::outcome::adding_usage_or_another_spent_sums_the_cost_and_leaves_context_and_timing`
+`verified-by: bravebot_agent::turn::a_turn_counts_its_requests_and_what_they_wrote_and_read_out_of_the_cache`
+`verified-by: bravebot_agent::turn::a_summary_made_during_a_turn_is_counted_as_a_compaction_and_a_request`
+`verified-by: bravebot_agent::turn::a_turn_counts_the_requests_a_delegate_made`
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_failure`
+`verified-by: bravebot_agent::turn::planner_and_processor_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_failure`
+`verified-by: bravebot_agent::turn::compaction_progress_survives_cancellation`
+`verified-by: bravebot_agent::turn::successful_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::failed_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
+`verified-by: bravebot_session::sessions::a_failed_turn_keeps_the_counts_of_what_it_did_beside_its_time`
+`verified-by: bravebot_session::sessions::a_record_keeps_a_turns_counts_and_a_turn_without_them_reads_as_none_counted`
+`verified-by: bravebot_tui::sessions::completed_failed_and_stopped_usage_survives_session_storage`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_cache_figures_and_a_continued_one_adds_to_them`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_cache_figures_inside_the_split_and_a_resumed_one_adds_to_them`
+`verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`

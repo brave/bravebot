@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { TRUST_APPROVE } from './drive-support.mjs'
+import { approveTrust, trustQuestion } from './drive-support.mjs'
 
 const INHERITED = ['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG']
 
@@ -116,8 +116,8 @@ export async function openProject(page, app, project, { trust = true } = {}) {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, project)
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  const question = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  const answer = trust ? question.locator(TRUST_APPROVE) : question.getByRole('button', { name: "Don't trust", exact: true })
-  await answer.click()
+  const question = trustQuestion(page)
+  if (trust) await approveTrust(question)
+  else await question.getByRole('button', { name: "Don't trust", exact: true }).click()
   await question.waitFor({ state: 'hidden' })
 }

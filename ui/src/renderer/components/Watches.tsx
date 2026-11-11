@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useDelayedFlag } from '../hooks'
 import { Modal } from './Modal'
-import { Alert, Button, Icon, Input, ProgressRing } from '../nala'
+import { Alert, Button, Icon, Input } from '../nala'
+import { Skeleton } from './Skeleton'
 
 interface Watch { number: number; path: string; remainingSeconds: number; armedBy: number; state: string }
 interface Listing { watches: Watch[]; busy: boolean }
@@ -54,7 +55,7 @@ export function Watches({ session, onClose }: { session: string; onClose: () => 
     </>}>
     <p className="grant-lede">Normal read and approval rules still apply. Up to eight watches, for seven days each. They run while this conversation is open in the app; closing it ends the watches.</p>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}{status && <Alert type="success" size="small" role="status">{status}</Alert>}
-    {loading && <p role="status" className="settings-busy" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading watches…</p>}
+    {loading && <Skeleton label="Loading watches…" count={2} delayed={!showLoading} />}
     {listing?.watches.length === 0 && <p className="grant-empty"><Icon name="eye-on" />No files watched. Add one below, or ask the agent to watch a file.</p>}
     {!!listing?.watches.length && <ul className="grant-list watch-list" ref={list}>{listing.watches.map(w => <li key={w.number} className="grant-row">
       <Icon name="eye-on" />

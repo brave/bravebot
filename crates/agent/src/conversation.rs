@@ -151,6 +151,19 @@ pub enum Composed {
     /// for the failure note, so a transcript draws no row for it, no fork is cut in front of it and
     /// no cut between exchanges falls in front of it.
     Notice,
+    /// The notice that tells the planner plan mode is on, or that it ended (MODE-8).
+    ///
+    /// `plan` is whether the notice says plan mode is on. It is set by the driver from the mode it
+    /// chose to announce and never from a word of any message, so what the conversation last says
+    /// about plan mode is read from the newest of these still in the request
+    /// ([`Conversation::plan_mode_told`]). A message that leaves the request, as a compaction,
+    /// a rewind or a fork takes it, takes what it said with it.
+    ///
+    /// House-keeping for the planner, drawn and cut around as [`Composed::Notice`] is.
+    ModeNotice {
+        /// Whether the notice says plan mode is on.
+        plan: bool,
+    },
     /// A message the agent or a front end wrote in its own words into the conversation, and that a
     /// person is shown as it stands: the line a goal's carry-on or `/init` sends, the standard
     /// input a run was given, a file the kernel would not show, and what a shell line the person
@@ -194,6 +207,26 @@ pub enum Composed {
         /// What the planner wrote.
         text: String,
     },
+    /// Excerpts of messages a retrieval cut no longer sends, put in front of the prompt they were
+    /// chosen for ([RETRIEVE-8](../../../docs/specs/retrieval.md#RETRIEVE-8)).
+    ///
+    /// The fields are the driver's: the place in the record and the chunk of each excerpt, and the
+    /// model that ranked them. House-keeping for the planner: every word in it is already in the
+    /// record, so a transcript draws no row for it and it is never embedded.
+    Retrieved {
+        /// The ordinal and chunk of each excerpt, in the order they were said.
+        excerpts: Vec<(u32, u16)>,
+        /// The embeddings model the excerpts were ranked with.
+        model: String,
+        /// Found for a later prompt without moving the cut, so the excerpts before it are still
+        /// sent whole ([RETRIEVE-30](../../../docs/specs/retrieval.md#RETRIEVE-30)).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        refreshed: bool,
+        /// The position in `excerpts` of each one sent as a context line, cut short, and not as
+        /// the excerpt found. Empty in a record written before this was kept.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        context: Vec<u16>,
+    },
 }
 
 impl Composed {
@@ -210,8 +243,29 @@ impl Composed {
                 | Self::SkillNamed { .. }
                 | Self::SkillKept { .. }
                 | Self::Notice
+                | Self::ModeNotice { .. }
                 | Self::MessageSent { .. }
+                | Self::Retrieved { .. }
         )
+    }
+}
+
+/// The excerpts a retrieval's message holds, as [`Composed::Retrieved`] records them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Excerpts {
+    /// The place in the record and the chunk of each excerpt sent, in the order they were said.
+    pub sent: Vec<(u32, u16)>,
+    /// The position in `sent` of each one sent as a context line, cut short.
+    pub context: Vec<u16>,
+}
+
+impl From<Vec<(u32, u16)>> for Excerpts {
+    /// Excerpts none of which is a context line.
+    fn from(sent: Vec<(u32, u16)>) -> Self {
+        Self {
+            sent,
+            context: Vec::new(),
+        }
     }
 }
 
@@ -304,17 +358,54 @@ impl Stored {
             (Some(Composed::Watch { .. } | Composed::Resumed | Composed::Consolidation), _) => {
                 Provenance::Driver
             }
+            (Some(Composed::Retrieved { .. }), _) => Provenance::Trusted(RETRIEVED_PROVENANCE),
             (_, Role::Assistant) => Provenance::Planner,
             _ => Provenance::Unrecorded,
         }
     }
+
+    /// Whether the message has a place in the record's numbering, which the vectors kept beside
+    /// it name messages by.
+    ///
+    /// A summary, a skill sent again after one and a resume's note stand for or about other
+    /// messages, and a resume's note is never written down, so none of them is numbered.
+    pub fn holds_an_ordinal(&self) -> bool {
+        !matches!(
+            self.composed,
+            Some(Composed::Summary | Composed::SkillKept { .. } | Composed::Resumed)
+        )
+    }
 }
+
+/// One message of the record as [`Conversation::walked`] places it.
+struct Walked<'a> {
+    /// Where it was said, for a message the record numbers.
+    place: Option<crate::report::Place>,
+    /// The exchange it is in.
+    prompt: Option<u32>,
+    /// The excerpts it holds, for a retrieval's message.
+    excerpts: Option<&'a [(u32, u16)]>,
+}
+
+/// How what is pinned at a retrieval cut begins. Words for the planner; nothing decides from them.
+const PINNED_PREFIX: &str = "Earlier messages of this conversation are no longer sent. What they \
+held that still applies is repeated here.";
+
+/// What a request's view calls the excerpts a retrieval sent.
+const RETRIEVED_PROVENANCE: &str = "earlier excerpts";
+
+/// What an older message of excerpts is sent as once a later one has been added (RETRIEVE-8).
+pub const RETRIEVED_STUB: &str = "[earlier excerpts, no longer sent]";
 
 /// The record a session carries from one turn to the next.
 ///
 /// Not `Clone`: the quarantine holds the only copy of content nobody may read, and a second
 /// store would be a second place for a reference to resolve differently.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the session has already said or been asked, set and read on its own"
+)]
 pub struct Conversation {
     /// The exchange so far, oldest first, without the system prompt.
     ///
@@ -356,6 +447,16 @@ pub struct Conversation {
     /// Trusted metadata: from the names of the functions the planner called, never their
     /// arguments or anything a tool returned.
     asked_to_write: bool,
+    /// What a record written before plan-mode notices were tagged said about the last of them:
+    /// whether it said plan mode is on (MODE-8).
+    ///
+    /// Read only while the messages and the archive hold no [`Composed::ModeNotice`], since those
+    /// carry the answer themselves and leave the request when the notice does. Set only by
+    /// [`Conversation::restored`], from a record whose notices are untagged, and left alone after
+    /// that, so a compaction that drops such a notice can still cost one needless line.
+    ///
+    /// Trusted metadata: read from the record, never from a word of any message.
+    untagged_plan_mode_told: bool,
     /// The windows of files the planner has been shown, and the call that showed each.
     ///
     /// Held here for the reason `quarantine` is: a session is many turns and this is the only thing
@@ -372,20 +473,35 @@ pub struct Conversation {
     /// `todo_write` was accepted at this message and never looks inside it to decide anything.
     /// Not part of a [`Snapshot`], for the reason `reads` is not.
     task_list: Option<usize>,
-    /// How many tasks the planner's latest accepted list leaves open, while the planner has not been
-    /// asked about them (TURN-12).
+    /// How many tasks the planner's latest accepted list leaves open (TURN-12).
     ///
     /// Counted by the kernel and labelled as the list is, so the driver holds a number it cannot
-    /// read: [`Conversation::take_open_tasks`] hands it over for `Policy::read_trusted_content`,
-    /// which refuses it where the list is not trusted. Replaced with the list, so a list the
-    /// planner has since written is asked about afresh. Not part of a [`Snapshot`], for the reason
-    /// `task_list` is not.
+    /// read: [`Conversation::open_tasks`] hands it over for `Policy::read_trusted_content`, which
+    /// refuses it where the list is not trusted. Replaced with the list, so a list the planner has
+    /// since written is asked about afresh. Not part of a [`Snapshot`], for the reason `task_list`
+    /// is not.
     open_tasks: Option<Labelled<usize>>,
+    /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in answer
+    /// to being asked or reminded. A list asked about is asked about again only by a turn that did
+    /// work since it (TURN-12).
+    open_tasks_asked: bool,
     /// The latest task list, once a compaction took the message holding it out of the request.
     ///
     /// Carried word for word and put back after the summary (COMPACT-16). Model output the
     /// planner already held, so it comes back at the label of the context it came from.
     carried_task_list: Option<String>,
+    /// Where a delegate's task sits in `messages`, until a compaction takes the message out of the
+    /// request.
+    ///
+    /// A position recorded by the turn from the fact that it is a delegate's, so nothing here reads
+    /// the task. Not part of a [`Snapshot`], for the reason `task_list` is not: a delegate's
+    /// conversation is never written down.
+    task_at: Option<usize>,
+    /// A delegate's task, once a compaction took the message holding it out of the request.
+    ///
+    /// Carried byte for byte and put back after the summary (COMPACT-19). The task is the public
+    /// text the kernel gave the delegate, so it comes back at the label of the context it came from.
+    carried_task: Option<String>,
     /// Where the turn now running put the end of its opening: what it read for the prompt, and the
     /// prompt. A position in `messages`, so a compaction that moves them clears it.
     opening_end: Option<usize>,
@@ -409,6 +525,28 @@ pub struct Conversation {
     /// session rather than once per turn, so a session with nothing to say about it at first
     /// still says it once a long description appears, and never repeats it after that.
     long_descriptions_said: bool,
+    /// Messages before this position are not sent in a turn's request: a retrieval sent excerpts
+    /// of them instead ([RETRIEVE-2](../../../docs/specs/retrieval.md#RETRIEVE-2)).
+    ///
+    /// A view of the request, as `masked_before` is: the messages stay where they are, and moved
+    /// only in steps, so the prefix a cache holds survives the turns between two moves (RETRIEVE-8).
+    retrieval_cut: usize,
+    /// The most messages the request has left out at once, the archive's and those behind the cut
+    /// together, which a compaction that brings some back does not lower
+    /// ([RETRIEVE-28](../../../docs/specs/retrieval.md#RETRIEVE-28)).
+    left_out: usize,
+    /// What the request sends at the cut in place of what the messages before it carried: the
+    /// task, the task list and the skills (RETRIEVE-10).
+    ///
+    /// Taken when the cut moved and kept with it, so every request until the next move reads the
+    /// same.
+    pinned: Vec<Stored>,
+    /// Where the prompt of the turn now running sits in `messages`, which is where excerpts for it
+    /// go. A position, moved with everything else a compaction or an insertion moves.
+    prompt_at: Option<usize>,
+    /// Whether the person has been told that a turn summarised because retrieval could not run,
+    /// since retrieval last worked (RETRIEVE-7). Not part of a [`Snapshot`]: once per session.
+    recall_fallback_said: bool,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -491,14 +629,23 @@ impl Conversation {
             archive: Vec::new(),
             measured: 0,
             asked_to_write: false,
+            untagged_plan_mode_told: false,
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            open_tasks_asked: false,
             carried_task_list: None,
+            task_at: None,
+            carried_task: None,
             opening_end: None,
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
+            prompt_at: None,
+            recall_fallback_said: false,
         }
     }
 
@@ -529,7 +676,7 @@ impl Conversation {
     /// server rather than merely missing something. Filling the gap keeps the record of what
     /// was attempted, which is the reason the conversation survives a failed turn at all.
     pub fn with_system(&self, system: &str) -> Vec<Message> {
-        self.assembled(system, self.messages.len())
+        self.assembled(system, self.retrieval_cut, self.messages.len())
     }
 
     /// The same as [`Conversation::with_system`], with each message shared and not copied.
@@ -539,7 +686,7 @@ impl Conversation {
     /// carries in another form, a stubbed result or the answer to a call that never ran, is built
     /// new. The quarantine is not part of it.
     pub fn shared_with_system(&self, system: &str) -> Vec<Arc<Message>> {
-        self.assembled_marked(system, self.messages.len())
+        self.assembled_marked(system, self.retrieval_cut, self.messages.len())
             .into_iter()
             .map(|(message, _)| message)
             .collect()
@@ -550,7 +697,7 @@ impl Conversation {
     /// One list from one pass, so a mark cannot land on a message other than the one it was made
     /// for: a call answered here has the driver's sentence as its answer.
     pub fn with_system_marked(&self, system: &str) -> (Vec<Message>, Vec<Provenance>) {
-        let marked = self.assembled_marked(system, self.messages.len());
+        let marked = self.assembled_marked(system, self.retrieval_cut, self.messages.len());
         let marks = marked
             .iter()
             .skip(1)
@@ -570,22 +717,40 @@ impl Conversation {
     /// Shared with [`Conversation::with_system`] rather than written twice, because the gap
     /// filling below is the difference between a well-formed request and one a server refuses,
     /// and a summariser sending a prefix needs it exactly as much as a turn sending the whole.
-    fn assembled(&self, system: &str, end: usize) -> Vec<Message> {
-        self.assembled_marked(system, end)
+    fn assembled(&self, system: &str, from: usize, end: usize) -> Vec<Message> {
+        self.assembled_marked(system, from, end)
             .into_iter()
             .map(|(message, _)| Arc::unwrap_or_clone(message))
             .collect()
     }
 
     /// [`Conversation::assembled`] with each message's origin beside it.
-    fn assembled_marked(&self, system: &str, end: usize) -> Vec<(Arc<Message>, Provenance)> {
+    ///
+    /// From `from` on, with what is pinned at a retrieval cut in front when `from` is past the
+    /// start (RETRIEVE-10). Only the latest message of excerpts is sent as it stands: an older one
+    /// is sent as [`RETRIEVED_STUB`], a fixed sentence at a fixed place (RETRIEVE-8).
+    fn assembled_marked(
+        &self,
+        system: &str,
+        from: usize,
+        end: usize,
+    ) -> Vec<(Arc<Message>, Provenance)> {
         let exchange = &self.messages[..end];
         let mut messages = Vec::with_capacity(exchange.len() + 1);
         messages.push((Arc::new(Message::system(system)), Provenance::Driver));
-
-        for (index, stored) in exchange.iter().enumerate() {
+        if from > 0 {
+            for stored in &self.pinned {
+                messages.push((Arc::clone(&stored.message), stored.provenance()));
+            }
+        }
+        for (index, stored) in exchange.iter().enumerate().skip(from) {
             let message = &stored.message;
-            match self.stub_at(index) {
+            let stub = if self.excerpts_stubbed(index) {
+                Some(RETRIEVED_STUB.to_string())
+            } else {
+                self.stub_at(index)
+            };
+            match stub {
                 Some(stub) => {
                     let mut stubbed = Message::clone(message);
                     stubbed.content = Content::Text(stub);
@@ -745,22 +910,45 @@ impl Conversation {
         }
     }
 
+    /// Record that the message just pushed is a delegate's task, so a compaction sends it again
+    /// (COMPACT-19).
+    ///
+    /// Called by the turn from the fact that it is a delegate's and from nothing the task says.
+    pub fn task_given(&mut self) {
+        self.task_at = self.messages.len().checked_sub(1);
+        self.carried_task = None;
+    }
+
     /// Record how many tasks the planner's latest list leaves open, as the kernel counted them
     /// (TURN-12). Called for every accepted list, and with `None` where the planner was not shown
     /// that list, so that the count of an earlier list is not taken for the panel's.
     ///
-    /// A list written after the turn put the question was written in answer to it, and nothing more
-    /// is asked about it, whether or not it still has tasks open.
-    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, asked_this_turn: bool) {
-        self.open_tasks = open.filter(|_| !asked_this_turn);
+    /// A list written after the turn put the question or the reminder was written in answer to it
+    /// (`in_answer`), and is not asked about unless a turn does work after it, whether or not it
+    /// still has tasks open.
+    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, in_answer: bool) {
+        self.open_tasks = open;
+        self.open_tasks_asked = in_answer;
     }
 
-    /// Take the count of open tasks the planner has not been asked about, which is then not asked
-    /// about again until it writes another list.
+    /// The count of open tasks in the planner's latest list, left in place.
     ///
-    /// Labelled as the list is: the caller reads it with `Policy::read_trusted_content`.
-    pub fn take_open_tasks(&mut self) -> Option<Labelled<usize>> {
-        self.open_tasks.take()
+    /// Read by the reminder that a list may be behind the work and by the question put when the
+    /// planner answers, neither of which uses up the other. Labelled as the list is: the caller reads
+    /// it with `Policy::read_trusted_content`.
+    pub fn open_tasks(&self) -> Option<&Labelled<usize>> {
+        self.open_tasks.as_ref()
+    }
+
+    /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in
+    /// answer to being asked or reminded.
+    pub fn open_tasks_asked(&self) -> bool {
+        self.open_tasks_asked
+    }
+
+    /// Record that the planner has been asked about the list `open_tasks` counts.
+    pub fn open_tasks_were_asked_about(&mut self) {
+        self.open_tasks_asked = true;
     }
 
     /// Record what the last request built from this conversation came to.
@@ -847,6 +1035,11 @@ impl Conversation {
         }
         self.messages.drain(mark.0..end);
         self.masked_before = self.masked_before.min(mark.0);
+        self.prompt_at = None;
+        if self.retrieval_cut > mark.0 {
+            self.retrieval_cut = mark.0;
+            self.pinned = self.pinned_at(mark.0);
+        }
         true
     }
 
@@ -863,6 +1056,15 @@ impl Conversation {
     /// Whether a write has been asked for since a turn last ended with an answer.
     pub fn asked_to_write(&self) -> bool {
         self.asked_to_write
+    }
+
+    /// Whether the kept messages last say that plan mode is on, which a turn that starts outside it
+    /// has to retract before its first request (MODE-8).
+    ///
+    /// Read from the newest [`Composed::ModeNotice`] among the kept messages, so a notice a
+    /// compaction moved to the archive, or that a drain removed, no longer counts.
+    pub fn plan_mode_told(&self) -> bool {
+        plan_mode_said(&self.messages, &self.archive, self.untagged_plan_mode_told)
     }
 
     /// Whether `skills_overview_said` is set.
@@ -917,9 +1119,10 @@ impl Conversation {
     /// The start of the last [`RECENT_ROUNDS_KEPT`] rounds.
     ///
     /// The fallback, for the turn that is long by itself. It may cut away the prompt the turn
-    /// began with, which is the point: that prompt is one of the things the summary is required
-    /// to carry, and a turn on its fortieth round has more history behind it than the sentence
-    /// that started it.
+    /// began with, which is the point: a turn on its fortieth round has more history behind it than
+    /// the sentence that started it, and the summary carries it. A delegate's task is the exception:
+    /// it is the whole of what the delegate was told, so a cut that takes it sends it again after
+    /// the summary (COMPACT-19).
     ///
     /// A round that answered by id is found by the field alone: its results carry one and its
     /// own start does not. A round sent as prose carries no ids anywhere, so the field alone
@@ -958,8 +1161,9 @@ impl Conversation {
             .iter()
             .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
-        let carried = self.skills_to_carry(cut);
-        if given_up < kept + carried.len() {
+        let carried = self.skills_to_carry(cut, Gone::Summarised);
+        let task = self.task_to_carry(cut).or(self.carried_task.as_deref());
+        if given_up < kept + carried.len() + usize::from(task.is_some()) {
             return None;
         }
 
@@ -974,8 +1178,19 @@ impl Conversation {
         let retained: usize = (cut..self.messages.len())
             .map(|index| self.sent_bytes(index))
             .chain(carried.iter().map(stored_bytes))
-            .sum();
+            .sum::<usize>()
+            + task.map_or(0, str::len);
         (freed >= retained).then_some(cut)
+    }
+
+    /// A delegate's task, when a cut at `boundary` would take it out of the request.
+    ///
+    /// Found from the position the turn recorded and from nothing the task says.
+    fn task_to_carry(&self, boundary: usize) -> Option<&str> {
+        self.task_at
+            .filter(|&at| at < boundary)
+            .and_then(|at| self.messages.get(at))
+            .and_then(|stored| stored.message.content.as_text())
     }
 
     /// The skills a cut at `boundary` would have to carry, as the result of the newest load of
@@ -1011,7 +1226,7 @@ impl Conversation {
     /// [`SKILLS_KEPT_BYTES`] for all of them, so one long skill cannot push out the rest and a
     /// session that loaded many does not trade a short summary for a long list. What does not fit
     /// is left to the summary, which says what the conversation did with it.
-    fn skills_to_carry(&self, boundary: usize) -> Vec<Stored> {
+    fn skills_to_carry(&self, boundary: usize, gone: Gone) -> Vec<Stored> {
         // What the turn wrote in front of the skill. Formatting only: a skill is found by its tag.
         let header = format!("{TOOL_RESULT_PREFIX}load_skill:\n\n");
         let mut room = SKILLS_KEPT_BYTES;
@@ -1035,7 +1250,7 @@ impl Conversation {
             // other words, and the rest of one cut short is the person's to ask for again.
             let named = matches!(stored.composed, Some(Composed::SkillNamed { .. }));
             carried.push(Stored {
-                message: Arc::new(Message::user(kept_skill(name, shown, cut, named))),
+                message: Arc::new(Message::user(kept_skill(name, shown, cut, named, gone))),
                 composed: Some(Composed::SkillKept { name: name.clone() }),
                 address: None,
                 source: stored.source.clone(),
@@ -1105,10 +1320,30 @@ impl Conversation {
 
     /// What the request holds for the message at `index`, in bytes.
     fn sent_bytes(&self, index: usize) -> usize {
+        if self.excerpts_stubbed(index) {
+            return RETRIEVED_STUB.len();
+        }
         match self.stub_at(index) {
             Some(stub) => stub.len(),
             None => stored_bytes(&self.messages[index]),
         }
+    }
+
+    /// Whether the message at `index` holds excerpts a later move of the cut replaced, and so goes
+    /// as a stub (RETRIEVE-8). Excerpts found for a later prompt replace none (RETRIEVE-30).
+    fn excerpts_stubbed(&self, index: usize) -> bool {
+        matches!(
+            self.messages[index].composed,
+            Some(Composed::Retrieved { .. })
+        ) && self.messages[index + 1..].iter().any(|stored| {
+            matches!(
+                stored.composed,
+                Some(Composed::Retrieved {
+                    refreshed: false,
+                    ..
+                })
+            )
+        })
     }
 
     fn stub_len(&self, index: usize) -> usize {
@@ -1175,12 +1410,336 @@ impl Conversation {
         ))
     }
 
+    /// Where the next retrieval cut would fall, or `None` while moving it frees too little.
+    ///
+    /// Compaction's points ([RETRIEVE-10](../../../docs/specs/retrieval.md#RETRIEVE-10)): the
+    /// start of the last [`RECENT_EXCHANGES_KEPT`] exchanges, or of the last
+    /// [`RECENT_ROUNDS_KEPT`] rounds for a turn long by itself, so a cut never falls inside a
+    /// round. It moves only when what it passes is at least a quarter of `budget` tokens, so
+    /// requests between two moves share their prefix
+    /// ([RETRIEVE-8](../../../docs/specs/retrieval.md#RETRIEVE-8)).
+    pub fn retrieval_boundary(&self, budget: u64) -> Option<usize> {
+        let step = usize::try_from(budget / 4)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(BYTES_PER_TOKEN);
+        [
+            self.cut_point(&self.boundaries(opens_an_exchange), RECENT_EXCHANGES_KEPT),
+            self.cut_point(&self.boundaries(opens_a_round), RECENT_ROUNDS_KEPT),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|&cut| cut > self.retrieval_cut)
+        .find(|&cut| {
+            let passed: usize = (self.retrieval_cut..cut)
+                .map(|index| self.sent_bytes(index))
+                .sum();
+            passed >= step
+        })
+    }
+
+    /// Where the request starts: messages before it are not sent.
+    pub fn retrieval_cut(&self) -> usize {
+        self.retrieval_cut
+    }
+
+    /// How many of the conversation's messages its request has left out, compaction's and the
+    /// retrieval cut's together. It only ever rises, and rises exactly when the request stopped
+    /// carrying something it carried before (RETRIEVE-28).
+    pub fn out_of_request(&self) -> usize {
+        self.left_out.max(self.archive.len() + self.retrieval_cut)
+    }
+
+    /// About how many tokens the messages from `index` on come to as a request sends them.
+    pub fn tokens_from(&self, index: usize) -> u64 {
+        let bytes: usize = (index.min(self.messages.len())..self.messages.len())
+            .map(|at| self.sent_bytes(at))
+            .sum();
+        (bytes / BYTES_PER_TOKEN) as u64
+    }
+
+    /// Move the retrieval cut to `cut`, a point [`Conversation::retrieval_boundary`] gave, and take
+    /// what is pinned there.
+    pub fn cut_for_retrieval(&mut self, cut: usize) {
+        self.retrieval_cut = cut.min(self.messages.len());
+        self.pinned = self.pinned_at(self.retrieval_cut);
+        self.measured = 0;
+    }
+
+    /// The place in the record of the message at `index`, as the vectors number it: the archive
+    /// first, then the messages, counting only those that hold one.
+    pub fn ordinal_at(&self, index: usize) -> u32 {
+        let counted = self
+            .archive
+            .iter()
+            .chain(self.messages.iter().take(index))
+            .filter(|stored| stored.holds_an_ordinal())
+            .count();
+        u32::try_from(counted).unwrap_or(u32::MAX)
+    }
+
+    /// Record that the message pushed last is the prompt of the turn now running.
+    pub fn prompt_given(&mut self) {
+        self.prompt_at = self.messages.len().checked_sub(1);
+    }
+
+    /// Whether the turn's prompt is past a retrieval cut and has no excerpts of its own in front of
+    /// it yet (RETRIEVE-30).
+    pub fn excerpts_owed(&self) -> bool {
+        self.retrieval_cut > 0
+            && self.prompt_at.is_some_and(|at| {
+                at > self.retrieval_cut
+                    && at < self.messages.len()
+                    && !matches!(
+                        self.messages[at - 1].composed,
+                        Some(Composed::Retrieved { .. })
+                    )
+            })
+    }
+
+    /// Store excerpts a retrieval that moved the cut chose as one message just before the turn's
+    /// prompt, or at the end where the prompt is behind the cut (RETRIEVE-8).
+    pub fn insert_retrieved(&mut self, text: String, excerpts: impl Into<Excerpts>, model: String) {
+        self.insert_excerpts(text, excerpts.into(), model, false);
+    }
+
+    /// Store excerpts found for the turn's prompt without moving the cut, just before the prompt,
+    /// leaving the excerpts already sent as they were (RETRIEVE-30).
+    pub fn insert_recalled(&mut self, text: String, excerpts: impl Into<Excerpts>, model: String) {
+        self.insert_excerpts(text, excerpts.into(), model, true);
+    }
+
+    /// Every position recorded at or after the place the excerpts go moves one along with them.
+    fn insert_excerpts(
+        &mut self,
+        text: String,
+        excerpts: Excerpts,
+        model: String,
+        refreshed: bool,
+    ) {
+        let at = self
+            .prompt_at
+            .filter(|&at| at >= self.retrieval_cut && at < self.messages.len())
+            .unwrap_or(self.messages.len());
+        let after = |position: &mut usize| {
+            if *position >= at {
+                *position += 1;
+            }
+        };
+        for position in [&mut self.task_at, &mut self.task_list, &mut self.prompt_at]
+            .into_iter()
+            .flatten()
+        {
+            after(position);
+        }
+        if let Some(end) = &mut self.opening_end
+            && *end > at
+        {
+            *end += 1;
+        }
+        if self.masked_before > at {
+            self.masked_before += 1;
+        }
+        for (position, _) in &mut self.reads.shown {
+            after(position);
+        }
+        self.messages.insert(
+            at,
+            Stored {
+                message: Arc::new(Message::user(text)),
+                composed: Some(Composed::Retrieved {
+                    excerpts: excerpts.sent,
+                    model,
+                    refreshed,
+                    context: excerpts.context,
+                }),
+                address: None,
+                source: Some(Provenance::Trusted(RETRIEVED_PROVENANCE)),
+            },
+        );
+    }
+
+    /// Where each message of `ordinals` was said, as a transcript places it, once each and in the
+    /// order they were said (RETRIEVE-27). An ordinal the record does not hold is left out.
+    pub fn places(&self, ordinals: &[u32]) -> Vec<crate::report::Place> {
+        let wanted: std::collections::BTreeSet<u32> = ordinals.iter().copied().collect();
+        self.walked()
+            .into_iter()
+            .filter_map(|walked| walked.place)
+            .filter(|place| wanted.contains(&place.ordinal))
+            .collect()
+    }
+
+    /// What each exchange's retrievals drew on, as the record keeps it in its
+    /// [`Composed::Retrieved`] messages: the prompt the excerpts were put in front of and the
+    /// messages they came from, so a resumed transcript draws the same line a live one did
+    /// (RETRIEVE-27).
+    pub fn retrieved_by_prompt(&self) -> Vec<(u32, Vec<crate::report::Place>)> {
+        let mut found: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (prompt, stored) in self.retrievals() {
+            let Some(Composed::Retrieved { excerpts, .. }) = &stored.composed else {
+                continue;
+            };
+            let ordinals = excerpts.iter().map(|&(ordinal, _)| ordinal);
+            match found.iter_mut().find(|(at, _)| *at == prompt) {
+                Some((_, kept)) => kept.extend(ordinals),
+                None => found.push((prompt, ordinals.collect())),
+            }
+        }
+        found
+            .into_iter()
+            .map(|(prompt, ordinals)| (prompt, self.places(&ordinals)))
+            .collect()
+    }
+
+    /// Each retrieval's message the record holds, with the exchange it was sent for as
+    /// [`Conversation::retrieved_by_prompt`] attributes it, in the order they were put in.
+    pub fn retrievals(&self) -> Vec<(u32, &Stored)> {
+        let walked = self.walked();
+        let stored = self.archive.iter().chain(self.messages.iter());
+        walked
+            .iter()
+            .zip(stored)
+            .enumerate()
+            .filter_map(|(index, (step, stored))| {
+                step.excerpts?;
+                // Put just before the prompt, or after it where the prompt was behind the cut. A
+                // second retrieval in the same turn goes in after the first, so both are the
+                // prompt's that follows them.
+                let next = walked[index + 1..]
+                    .iter()
+                    .find(|next| next.excerpts.is_none());
+                let prompt = match next.and_then(|next| next.place) {
+                    Some(place) if place.said == crate::report::Spoken::Prompt => place.prompt,
+                    _ => step.prompt,
+                };
+                Some((prompt?, stored))
+            })
+            .collect()
+    }
+
+    /// Every message of the record with its place, counted as [`Conversation::recounted`] counts
+    /// prompts and as the vectors number messages.
+    fn walked(&self) -> Vec<Walked<'_>> {
+        use crate::report::{Place, Spoken};
+        let mut ordinal = 0u32;
+        let mut prompts = 0u32;
+        let mut prompt = None;
+        let mut replies = 0u32;
+        let mut calls: Vec<&str> = Vec::new();
+        let mut walked = Vec::new();
+        for stored in self.archive.iter().chain(self.messages.iter()) {
+            let composed = stored
+                .composed
+                .as_ref()
+                .filter(|why| **why != Composed::Imported);
+            let message = &stored.message;
+            let said = match (composed, message.role) {
+                (Some(Composed::ToolResult), _) => Spoken::Tool { nth: None },
+                (Some(_), _) | (None, Role::System) => Spoken::Other,
+                (None, Role::User) => {
+                    prompt = Some(prompts);
+                    prompts += 1;
+                    replies = 0;
+                    calls.clear();
+                    Spoken::Prompt
+                }
+                (None, Role::Assistant) => {
+                    let nth = replies;
+                    if !message.content.text().trim().is_empty() {
+                        replies += 1;
+                    }
+                    calls.extend(
+                        message
+                            .tool_calls
+                            .iter()
+                            .flatten()
+                            .map(|call| call.id.as_str()),
+                    );
+                    Spoken::Reply { nth }
+                }
+                (None, Role::Tool) => Spoken::Tool {
+                    nth: message.tool_call_id.as_deref().and_then(|id| {
+                        calls
+                            .iter()
+                            .position(|call| *call == id)
+                            .and_then(|at| u32::try_from(at).ok())
+                    }),
+                },
+            };
+            let place = stored.holds_an_ordinal().then(|| {
+                ordinal += 1;
+                Place {
+                    ordinal: ordinal - 1,
+                    prompt,
+                    said,
+                }
+            });
+            let excerpts = match &stored.composed {
+                Some(Composed::Retrieved { excerpts, .. }) => Some(excerpts.as_slice()),
+                _ => None,
+            };
+            walked.push(Walked {
+                place,
+                prompt,
+                excerpts,
+            });
+        }
+        walked
+    }
+
+    /// Whether the person has been told retrieval fell back since it last worked (RETRIEVE-7).
+    pub fn recall_fallback_said(&self) -> bool {
+        self.recall_fallback_said
+    }
+
+    /// Record that they have been told, or with `false` that retrieval has worked since.
+    pub fn set_recall_fallback_said(&mut self, said: bool) {
+        self.recall_fallback_said = said;
+    }
+
+    /// What a cut at `cut` sends in front of the messages it keeps: the delegate's task and the
+    /// task list where the cut passes them, then the skills it passes (RETRIEVE-10).
+    ///
+    /// Each from a position or a tag, as compaction finds them, and never from what a message
+    /// says. What an earlier summary carried is carried again once the cut passes the summary.
+    fn pinned_at(&self, cut: usize) -> Vec<Stored> {
+        if cut == 0 {
+            return Vec::new();
+        }
+        let task = self.task_to_carry(cut).or(self.carried_task.as_deref());
+        let list = match self.task_list {
+            Some(at) if at < cut => self.messages[at].message.content.as_text(),
+            Some(_) => None,
+            None => self.carried_task_list.as_deref(),
+        };
+        let mut pinned = Vec::new();
+        if task.is_some() || list.is_some() {
+            let mut note = PINNED_PREFIX.to_string();
+            if let Some(task) = task {
+                note.push_str("\n\nThe task you were given, word for word:\n");
+                note.push_str(task);
+            }
+            if let Some(list) = list {
+                note.push_str("\n\nYour task list, as you last wrote it:\n");
+                note.push_str(list);
+            }
+            pinned.push(Stored {
+                message: Arc::new(Message::user(note)),
+                composed: Some(Composed::Notice),
+                address: None,
+                source: Some(Provenance::Driver),
+            });
+        }
+        pinned.extend(self.skills_to_carry(cut, Gone::NoLongerSent));
+        pinned
+    }
+
     /// The part compaction would replace, as one request's messages.
     ///
     /// The system prompt is the summariser's, so it is passed in the same way a turn passes its
     /// own: the conversation stores neither.
     pub fn to_summarise(&self, boundary: usize, system: &str) -> Vec<Message> {
-        self.assembled(system, boundary)
+        self.assembled(system, 0, boundary)
     }
 
     /// Put a summary in place of everything before `boundary`.
@@ -1194,9 +1753,23 @@ impl Conversation {
     /// The replaced messages go to the archive rather than into a bin. See the field.
     ///
     /// Skills the planner loaded in what is replaced are sent again after the summary, because a
-    /// summary of instructions is not the instructions (COMPACT-17).
+    /// summary of instructions is not the instructions (COMPACT-17). So is a delegate's task,
+    /// which is the whole of what it was told (COMPACT-19).
     pub fn compacted(&mut self, boundary: usize, summary: &str) {
-        let carried = self.skills_to_carry(boundary);
+        let carried = self.skills_to_carry(boundary, Gone::Summarised);
+        // Before the drain, while the message is still there to copy.
+        match self.task_at {
+            Some(at) if at < boundary => {
+                self.carried_task = self.messages[at]
+                    .message
+                    .content
+                    .as_text()
+                    .map(str::to_string);
+                self.task_at = None;
+            }
+            Some(at) => self.task_at = Some(at - boundary + 1 + carried.len()),
+            None => {}
+        }
         // Before the drain, while the message is still there to copy. Only a list the cut takes
         // is carried: one in the kept part is sent word for word already, and would be sent twice.
         match self.task_list {
@@ -1218,6 +1791,14 @@ impl Conversation {
             _ => 0,
         };
         self.opening_end = None;
+        self.prompt_at = self
+            .prompt_at
+            .and_then(|at| at.checked_sub(boundary))
+            .map(|past| past + 1 + carried.len());
+        self.left_out = self.out_of_request();
+        // The summary stands for everything before it, so nothing is cut from in front of it.
+        self.retrieval_cut = 0;
+        self.pinned.clear();
         let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
         self.reads.compacted(boundary, 1 + carried.len());
@@ -1226,6 +1807,10 @@ impl Conversation {
         if let Some(live) = self.live_references() {
             note.push_str("\n\n");
             note.push_str(&live);
+        }
+        if let Some(task) = &self.carried_task {
+            note.push_str("\n\nThe task you were given, word for word:\n");
+            note.push_str(task);
         }
         if let Some(list) = &self.carried_task_list {
             note.push_str("\n\nYour task list, as you last wrote it:\n");
@@ -1392,6 +1977,14 @@ pub struct Snapshot {
     /// needless line to the planner.
     #[serde(default)]
     pub asked_to_write: bool,
+    /// Whether the last plan-mode notice in the messages said plan mode is on (MODE-8).
+    ///
+    /// The fallback for a record written before the notices were tagged. It is read only when the
+    /// kept messages and the archive hold no tagged notice, because a tagged notice carries the
+    /// answer itself. Defaulted to false, so a record written before the flag existed reads as it
+    /// did then.
+    #[serde(default)]
+    pub plan_mode_told: bool,
     /// Whether the planner had been shown private content: `public`, or anything else.
     ///
     /// A word for the reason `context` is one, and read the same way: anything but `public` is
@@ -1399,6 +1992,69 @@ pub struct Snapshot {
     /// nothing says what that session's planner was shown.
     #[serde(default = "unrecorded")]
     pub holds: String,
+    /// Where a retrieval cut stood in `messages` (RETRIEVE-8), so a resumed session sends what the
+    /// last request sent. Left out at the start, which is where a record written without it reads.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retrieval_cut: usize,
+    /// What [`Conversation::out_of_request`] had reached, so a resumed session does not count down
+    /// from it. Left out at none, which is where a record written without it reads.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub left_out: usize,
+    /// What was pinned at the cut (RETRIEVE-10), as it was taken when the cut moved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned: Vec<Stored>,
+}
+
+impl Snapshot {
+    /// [`Conversation::out_of_request`] as this record left it.
+    pub fn out_of_request(&self) -> usize {
+        self.left_out.max(self.archive.len() + self.retrieval_cut)
+    }
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+impl Snapshot {
+    /// What the child of a fork cut from this record records for the messages it keeps (MODE-8).
+    ///
+    /// Read from the notices that remain when the record holds tagged ones, so a cut that takes
+    /// the newest away reports the one before it, or none. A record with no tagged notice is from
+    /// before the tag existed and the flag is all it has, so it is carried as it stands.
+    #[must_use]
+    pub fn plan_mode_told_after_cut(&self, kept: &[Stored], kept_archive: &[Stored]) -> bool {
+        if holds_a_mode_notice(self.archive.iter().chain(&self.messages)) {
+            plan_mode_said(kept, kept_archive, false)
+        } else {
+            self.plan_mode_told
+        }
+    }
+}
+
+/// Whether any of `messages` is a [`Composed::ModeNotice`].
+fn holds_a_mode_notice<'a>(mut messages: impl Iterator<Item = &'a Stored>) -> bool {
+    messages.any(|stored| matches!(stored.composed, Some(Composed::ModeNotice { .. })))
+}
+
+/// Whether the newest [`Composed::ModeNotice`] in `messages` says plan mode is on.
+///
+/// `untagged` is what a record written before the tag existed said, and it counts only while no
+/// tagged notice has been sent since: one in the archive is newer than it and no longer in the
+/// request, so it leaves the request saying nothing.
+fn plan_mode_said(messages: &[Stored], archive: &[Stored], untagged: bool) -> bool {
+    let mode_notice = |stored: &Stored| match stored.composed {
+        Some(Composed::ModeNotice { plan }) => Some(plan),
+        _ => None,
+    };
+    if let Some(plan) = messages.iter().rev().find_map(mode_notice) {
+        return plan;
+    }
+    untagged && !holds_a_mode_notice(archive.iter())
 }
 
 /// The word for an integrity, as it is written down.
@@ -1435,10 +2091,18 @@ impl Conversation {
             archive: self.archive.clone(),
             measured: self.measured,
             asked_to_write: self.asked_to_write,
+            plan_mode_told: self.plan_mode_told(),
             holds: match self.holds {
                 Confidentiality::Public => PUBLIC.to_string(),
                 Confidentiality::Private => PRIVATE.to_string(),
             },
+            // Counted without the notes left out above, so it stands in front of the same message.
+            retrieval_cut: self.messages[..self.retrieval_cut]
+                .iter()
+                .filter(|stored| !matches!(stored.composed, Some(Composed::Resumed)))
+                .count(),
+            left_out: self.out_of_request(),
+            pinned: self.pinned.clone(),
         }
     }
 
@@ -1485,6 +2149,13 @@ impl Conversation {
     /// here, from a counter the kernel kept, and holds no byte of what was quarantined.
     pub fn restored(snapshot: Snapshot) -> Self {
         let mut messages = snapshot.messages;
+        // A cut past the end is a record something else shortened, and is not trusted to say
+        // where the request starts.
+        let (retrieval_cut, pinned) = if snapshot.retrieval_cut <= messages.len() {
+            (snapshot.retrieval_cut, snapshot.pinned)
+        } else {
+            (0, Vec::new())
+        };
         if let Some(note) = dead_references(snapshot.references) {
             messages.push(Stored {
                 message: Arc::new(Message::user(note)),
@@ -1493,6 +2164,11 @@ impl Conversation {
                 source: None,
             });
         }
+
+        // A record that holds a tagged notice answers from it. The stored flag is read only for a
+        // record written before the tag existed.
+        let untagged_plan_mode_told = snapshot.plan_mode_told
+            && !holds_a_mode_notice(snapshot.archive.iter().chain(&messages));
 
         Self {
             messages,
@@ -1511,14 +2187,23 @@ impl Conversation {
             archive: snapshot.archive,
             measured: snapshot.measured,
             asked_to_write: snapshot.asked_to_write,
+            untagged_plan_mode_told,
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            open_tasks_asked: false,
             carried_task_list: None,
+            task_at: None,
+            carried_task: None,
             opening_end: None,
             masked_before: 0,
             skills_overview_said: false,
             long_descriptions_said: false,
+            retrieval_cut,
+            left_out: snapshot.left_out,
+            pinned,
+            prompt_at: None,
+            recall_fallback_said: false,
         }
     }
 
@@ -1737,7 +2422,11 @@ fn within(text: &str, limit: usize) -> (&str, bool) {
 /// A skill the planner loaded is its own to read again with `load_skill`. One the person named is
 /// not offered to it, so it is told the instructions are for the line that named it and that only the
 /// person can have the rest loaded again.
-fn kept_skill(name: &str, body: &str, cut: bool, named: bool) -> String {
+fn kept_skill(name: &str, body: &str, cut: bool, named: bool, gone: Gone) -> String {
+    let gone = match gone {
+        Gone::Summarised => "are summarised above",
+        Gone::NoLongerSent => "are no longer sent",
+    };
     let ending = match (cut, named) {
         (false, _) => String::new(),
         (true, false) => format!(
@@ -1751,15 +2440,24 @@ fn kept_skill(name: &str, body: &str, cut: bool, named: bool) -> String {
     match named {
         false => format!(
             "You loaded the skill {name} earlier in this conversation, and the messages that held \
-             it are summarised above. Its instructions still apply. This is what you were given:\n\n\
+             it {gone}. Its instructions still apply. This is what you were given:\n\n\
              {body}{ending}"
         ),
         true => format!(
             "{NAMED_SKILL_OPENING}{name} earlier in this conversation, and the messages that held \
-             it are summarised above. Apply its instructions as the line that named it asked. This \
+             it {gone}. Apply its instructions as the line that named it asked. This \
              is what you were given:\n\n{body}{ending}"
         ),
     }
+}
+
+/// What became of the messages a skill sent again was in.
+#[derive(Debug, Clone, Copy)]
+enum Gone {
+    /// A compaction summarised them.
+    Summarised,
+    /// A retrieval cut passed them.
+    NoLongerSent,
 }
 
 /// Whether a message begins a round, so a cut may fall in front of it: anything that is not the
@@ -1768,7 +2466,12 @@ fn opens_a_round(stored: &Stored) -> bool {
     stored.message.tool_call_id.is_none()
         && !matches!(
             stored.composed,
-            Some(Composed::ToolResult | Composed::SkillNamed { .. } | Composed::SkillKept { .. })
+            Some(
+                Composed::ToolResult
+                    | Composed::SkillNamed { .. }
+                    | Composed::SkillKept { .. }
+                    | Composed::Retrieved { .. }
+            )
         )
 }
 
@@ -1787,6 +2490,8 @@ fn opens_an_exchange(stored: &Stored) -> bool {
                     | Composed::SkillNamed { .. }
                     | Composed::SkillKept { .. }
                     | Composed::Notice
+                    | Composed::ModeNotice { .. }
+                    | Composed::Retrieved { .. }
             )
         )
 }
@@ -2126,6 +2831,77 @@ mod tests {
         let notice = &conversation.messages()[1];
         assert!(!opens_an_exchange(notice), "compaction may cut at a nudge");
         assert!(opens_an_exchange(&conversation.messages()[2]));
+    }
+
+    /// Four exchanges, the first two long enough that a cut gives up more than it keeps, with a
+    /// plan-mode notice between the third and the fourth when `notice` is set.
+    fn exchanges_with_a_notice_before_the_last(notice: bool) -> Conversation {
+        let long = "x".repeat(2000);
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("first", long.as_str()),
+            ("second", long.as_str()),
+            ("third", "c"),
+        ] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        if notice {
+            conversation.push_composed(
+                Message::user("plan on"),
+                Composed::ModeNotice { plan: true },
+            );
+        }
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
+        conversation
+    }
+
+    /// COMPACT-4: a plan-mode notice between two exchanges does not open one, so compaction cuts
+    /// in front of the same prompt with it as without it.
+    ///
+    /// The fault this rejects: a notice counted as the start of an exchange. The last two
+    /// exchanges kept would then begin at the notice, so the cut would fall at the notice and give
+    /// up the third exchange as well.
+    #[test]
+    fn a_mode_notice_between_exchanges_is_not_a_place_to_cut() {
+        let without = exchanges_with_a_notice_before_the_last(false);
+        let with = exchanges_with_a_notice_before_the_last(true);
+
+        let notice = &with.messages()[6];
+        assert!(
+            matches!(notice.composed, Some(Composed::ModeNotice { .. })),
+            "the message at 6 is not the notice, so this says nothing"
+        );
+        assert!(!opens_an_exchange(notice), "compaction may cut at a notice");
+        assert_eq!(without.compaction_boundary(), Some(4));
+        assert_eq!(with.compaction_boundary(), Some(4));
+    }
+
+    /// LAYER-6: a plan-mode notice is written for the planner and no transcript draws it, as a
+    /// resumed session's transcript does not either.
+    ///
+    /// The fault this rejects: a notice recounted as a message of its own, which a window draws as
+    /// something the person said.
+    #[test]
+    fn a_mode_notice_is_left_out_of_what_is_recounted() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("typed words"));
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push(Message::assistant("a reply"));
+        let drawn = vec![
+            Said::User("typed words".into(), None),
+            Said::Assistant("a reply".into()),
+        ];
+
+        assert_eq!(conversation.recounted(), drawn);
+        assert_eq!(
+            Conversation::restored(conversation.snapshot()).recounted(),
+            drawn
+        );
     }
 
     /// And the tag is not sent. The messages are the request body, so a field inside one would be
@@ -2553,6 +3329,26 @@ mod tests {
             failed_turn(Diagnosis::of(Category::Refused).after(1)),
             "the account's failure reached the planner"
         );
+
+        // The backend and the request fields a refusal left out are for the person's screen too.
+        let mut given = bravebot_aichat::call::Conceded::default();
+        given.push(bravebot_aichat::call::Concession::Effort);
+        given.push(bravebot_aichat::call::Concession::Ceiling);
+        let on_a_backend = Diagnosis::of(Category::Refused)
+            .with_status(400)
+            .after(3)
+            .with_conceded(given)
+            .on_backend(crate::BackendKind::Bedrock);
+        let note = failed_turn(on_a_backend);
+        assert_eq!(
+            note,
+            failed_turn(Diagnosis::of(Category::Refused).after(3)),
+            "the backend or a conceded field reached the planner"
+        );
+        assert!(
+            !note.contains("Bedrock") && !note.contains("effort"),
+            "{note}"
+        );
     }
 
     /// Four exchanges, the shape most of the compaction tests need.
@@ -2915,6 +3711,207 @@ mod tests {
             restored.asked_to_write(),
             "a write asked for before the record was written came back unasked"
         );
+    }
+
+    /// A plan-mode notice in the kept messages is as current in a later process as in this one.
+    /// Dropped on the way to disk, a resumed session that starts outside plan mode would never
+    /// be told that plan mode ended. A record written before the notices were tagged reads the
+    /// stored flag, and one written before the flag existed reads as false.
+    #[test]
+    fn a_restored_conversation_remembers_that_its_last_notice_said_plan_mode_is_on() {
+        let mut conversation = four_exchanges();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
+        assert!(
+            restored.plan_mode_told(),
+            "a plan-mode notice before the record was written came back retracted"
+        );
+
+        let untagged =
+            r#"{"messages":[],"context":"trusted","references":0,"plan_mode_told":true}"#;
+        let untagged =
+            Conversation::restored(serde_json::from_str(untagged).expect("an untagged record"));
+        assert!(
+            untagged.plan_mode_told(),
+            "a record from before the notices were tagged lost the flag it stored"
+        );
+
+        let older = r#"{"messages":[],"context":"trusted","references":0}"#;
+        let older = Conversation::restored(serde_json::from_str(older).expect("an older record"));
+        assert!(!older.plan_mode_told());
+    }
+
+    /// A tagged notice outranks the flag a record stored, so a notice that ended plan mode after
+    /// an untagged one is not read as plan mode still being on.
+    #[test]
+    fn a_tagged_notice_outranks_the_flag_an_untagged_record_stored() {
+        let untagged =
+            r#"{"messages":[],"context":"trusted","references":0,"plan_mode_told":true}"#;
+        let mut conversation =
+            Conversation::restored(serde_json::from_str(untagged).expect("an untagged record"));
+        conversation.push_composed(Message::user("ended"), Composed::ModeNotice { plan: false });
+
+        assert!(!conversation.plan_mode_told());
+    }
+
+    /// Compaction moves a notice it cuts into the archive, and the request no longer holds it. The
+    /// planner has nothing to be told ended.
+    ///
+    /// The fault this rejects: a flag kept apart from the messages that compaction leaves alone,
+    /// which keeps saying plan mode is on after the notice that said so is out of the request.
+    #[test]
+    fn compacting_away_the_plan_mode_notice_leaves_nothing_to_retract() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push(Message::assistant("a"));
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        assert!(conversation.plan_mode_told());
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they asked about the first thing");
+
+        assert!(
+            conversation
+                .messages()
+                .iter()
+                .all(|stored| !matches!(stored.composed, Some(Composed::ModeNotice { .. }))),
+            "the notice stayed in the request, so this says nothing"
+        );
+        assert!(!conversation.plan_mode_told());
+        assert!(
+            !Conversation::restored(conversation.snapshot()).plan_mode_told(),
+            "a resume read the notice in the archive as current"
+        );
+    }
+
+    /// A notice that compaction keeps is still in front of the planner, so it is still to be
+    /// retracted.
+    ///
+    /// The fault this rejects: a flag cleared by every compaction.
+    #[test]
+    fn compacting_around_the_plan_mode_notice_keeps_it_to_be_retracted() {
+        let mut conversation = Conversation::new();
+        let long = "x".repeat(2000);
+        for prompt in ["first", "second", "third"] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(&long));
+        }
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they asked about the first things");
+
+        assert!(
+            conversation
+                .messages()
+                .iter()
+                .any(|stored| matches!(stored.composed, Some(Composed::ModeNotice { .. }))),
+            "the notice left the request, so this says nothing"
+        );
+        assert!(conversation.plan_mode_told());
+        assert!(Conversation::restored(conversation.snapshot()).plan_mode_told());
+    }
+
+    /// Only the newest notice says what the mode is: one that ended plan mode retracts the one
+    /// before it, and the end is said once.
+    #[test]
+    fn the_newest_mode_notice_decides_whether_plan_mode_is_on() {
+        let mut conversation = four_exchanges();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        conversation.push_composed(
+            Message::user("plan off"),
+            Composed::ModeNotice { plan: false },
+        );
+        assert!(!conversation.plan_mode_told());
+
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        assert!(conversation.plan_mode_told());
+    }
+
+    /// A rewind restores the conversation as it was snapshotted, so the flag is what the messages
+    /// of that moment say and not what the conversation says by now.
+    ///
+    /// The fault this rejects: a flag that is not derived from the messages, which a restore of an
+    /// earlier snapshot would leave as the later conversation set it.
+    #[test]
+    fn restoring_an_earlier_snapshot_reports_what_its_messages_said() {
+        let mut conversation = four_exchanges();
+        let before = conversation.snapshot();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        let during = conversation.snapshot();
+
+        assert!(!Conversation::restored(before).plan_mode_told());
+        assert!(Conversation::restored(during).plan_mode_told());
+    }
+
+    /// The turn pushes its mode notice after the opening, so taking the opening back never takes a
+    /// notice, and a notice an earlier turn left is before the mark. Either way the record stays
+    /// with the notice that is still in the conversation.
+    ///
+    /// The fault this rejects: a drain that clears the record, which would leave a notice standing
+    /// with nothing to retract it.
+    #[test]
+    fn taking_a_turn_back_leaves_the_plan_mode_notice_and_what_it_said() {
+        let mut conversation = four_exchanges();
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+        let began = conversation.mark();
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+        conversation.push_composed(
+            Message::user("plan off"),
+            Composed::ModeNotice { plan: false },
+        );
+        conversation.push_composed(
+            Message::user("plan on"),
+            Composed::ModeNotice { plan: true },
+        );
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(
+            conversation
+                .messages()
+                .iter()
+                .filter(|stored| matches!(stored.composed, Some(Composed::ModeNotice { .. })))
+                .count(),
+            3,
+            "the drain took a notice"
+        );
+        assert!(conversation.plan_mode_told());
     }
 
     /// The figure said how large the conversation was before it was shortened. Kept, it would
@@ -3543,7 +4540,11 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                plan_mode_told: false,
                 holds: PUBLIC.to_string(),
+                retrieval_cut: 0,
+                left_out: 0,
+                pinned: Vec::new(),
             });
             assert_eq!(
                 restored.context(),
@@ -3605,7 +4606,11 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                plan_mode_told: false,
                 holds: word.to_string(),
+                retrieval_cut: 0,
+                left_out: 0,
+                pinned: Vec::new(),
             });
             assert_eq!(
                 restored.holds(),
@@ -3638,6 +4643,373 @@ mod tests {
             Confidentiality::Private,
             "a later turn shown nothing private does not un-see what an earlier one was shown"
         );
+    }
+
+    /// A round in which the planner read a file, for the tests of a turn that is long by itself.
+    fn a_read_round(conversation: &mut Conversation, round: usize) {
+        let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
+        call.id = format!("call-{round}");
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result(format!("call-{round}"), "some lines"));
+    }
+
+    /// A delegate's conversation: its task, then the rounds it has worked.
+    fn a_delegate_after(task: &str, rounds: usize) -> Conversation {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user(task));
+        conversation.task_given();
+        for round in 0..rounds {
+            a_read_round(&mut conversation, round);
+        }
+        conversation
+    }
+
+    /// How many messages of the request hold `text`.
+    fn holding(conversation: &Conversation, text: &str) -> usize {
+        conversation
+            .messages()
+            .iter()
+            .filter(|stored| stored.message.content.text().contains(text))
+            .count()
+    }
+
+    /// COMPACT-19: a delegate's task is cut away by the round cut and comes back word for word.
+    /// Carrying the trimmed summary text, or only what the summariser kept, would lose items 2 to 4.
+    #[test]
+    fn a_delegates_task_is_in_the_request_after_the_cut_byte_for_byte() {
+        let task = "  Items:\n1. caf\u{e9} \u{20ac}\n2. second\n3. third\n4. fourth\n\n  ";
+        let mut conversation = a_delegate_after(task, 20);
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("a long turn is cut by round");
+        assert!(boundary > 0, "the task has to be inside what is given up");
+        conversation.compacted(boundary, "  only item 1 was started  ");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains(task), "{note:?}");
+        assert_eq!(holding(&conversation, "4. fourth"), 1);
+    }
+
+    /// COMPACT-19: a second cut summarises the first summary, and the task is still there once.
+    #[test]
+    fn the_carried_task_survives_a_second_compaction_once() {
+        let task = "TASK-ITEMS 1 2 3 4";
+        let mut conversation = a_delegate_after(task, 20);
+        for round in 0..2 {
+            let boundary = conversation
+                .compaction_boundary()
+                .expect("something to compact");
+            conversation.compacted(boundary, &format!("summary {round}"));
+            assert_eq!(holding(&conversation, task), 1, "cut {round}");
+            for more in 0..20 {
+                a_read_round(&mut conversation, 100 * (round + 1) + more);
+            }
+        }
+    }
+
+    /// COMPACT-19: a task in the part the cut keeps is sent as it was, not twice.
+    #[test]
+    fn a_task_the_cut_leaves_in_place_is_not_sent_again() {
+        let mut conversation = Conversation::new();
+        for prompt in ["first", "second", "third"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push(Message::user("THE-TASK"));
+        conversation.task_given();
+        conversation.push(Message::assistant("ok"));
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "they started");
+
+        assert_eq!(holding(&conversation, "THE-TASK"), 1);
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("THE-TASK"), "{note}");
+    }
+
+    /// COMPACT-19: a conversation nobody recorded a task in gains none, so a person's own long turn
+    /// is unchanged.
+    #[test]
+    fn a_conversation_that_never_recorded_a_task_gains_none() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("find and fix the bug"));
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        assert_eq!(holding(&conversation, "find and fix the bug"), 0);
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("word for word"), "{note}");
+    }
+
+    /// COMPACT-19: the task is found by the position recorded and not by being the first message.
+    #[test]
+    fn a_task_not_at_the_start_is_found_by_its_position() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("CONTEXT-FILE"));
+        conversation.push(Message::user("THE-TASK"));
+        conversation.task_given();
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains("THE-TASK"), "{note}");
+        assert!(!note.contains("CONTEXT-FILE"), "{note}");
+    }
+
+    /// COMPACT-19, COMPACT-5: a carried task counts as kept, so a delegate waits one round longer
+    /// than a conversation with no task recorded before its first cut, as with a carried skill.
+    #[test]
+    fn a_carried_task_counts_as_kept_for_the_cut() {
+        let first_cut = |recorded: bool| {
+            (1..20)
+                .find(|&exchanges| {
+                    let mut conversation = Conversation::new();
+                    conversation.push(Message::user("prompt 0"));
+                    if recorded {
+                        conversation.task_given();
+                    }
+                    conversation.push(Message::assistant("ok ".repeat(200)));
+                    for index in 1..exchanges {
+                        an_exchange(&mut conversation, &format!("prompt {index}"));
+                    }
+                    conversation.compaction_boundary().is_some()
+                })
+                .expect("enough exchanges are cut")
+        };
+        assert_eq!(first_cut(true), first_cut(false) + 1);
+    }
+
+    /// COMPACT-19, COMPACT-5: the carried task is one more message kept, whatever it weighs. Here
+    /// the exchanges given up outweigh the exchanges kept by far, so only the count can decline the
+    /// cut: two exchanges given up are not enough to keep two and bring a task back.
+    #[test]
+    fn a_carried_task_is_one_more_message_kept_whatever_it_weighs() {
+        let exchanges = |recorded: bool| {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("t"));
+            if recorded {
+                conversation.task_given();
+            }
+            conversation.push(Message::assistant("big ".repeat(2_000)));
+            for prompt in ["a", "b", "c"] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant("ok"));
+            }
+            conversation
+        };
+
+        assert!(exchanges(false).compaction_boundary().is_some());
+        assert!(exchanges(true).compaction_boundary().is_none());
+    }
+
+    /// COMPACT-19: the task is not capped at the share a skill gets.
+    #[test]
+    fn a_task_past_the_size_of_a_skill_is_carried_whole() {
+        let task = "y".repeat(SKILL_KEPT_BYTES + 5_000);
+        let mut conversation = a_delegate_after(&task, 14);
+        // Enough given up to pay for the task, as COMPACT-5 asks.
+        for round in 14..40 {
+            conversation.push(Message::assistant("z".repeat(8_000)));
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains(&task));
+    }
+
+    /// COMPACT-19, COMPACT-5: after the first cut the carried task is part of what the next cut
+    /// would have to bring back, so a large task makes the next cut wait until the rounds given
+    /// up outweigh it, and the delegate does not summarise once per round.
+    #[test]
+    fn a_large_carried_task_delays_the_next_cut() {
+        let rounds_to_the_next_cut = |task: &str| {
+            let mut conversation = a_delegate_after(task, 20);
+            compact_now(&mut conversation);
+            let mut round = 100;
+            while conversation.compaction_boundary().is_none() {
+                assert!(round < 5_000, "no cut was ever made");
+                a_read_round(&mut conversation, round);
+                round += 1;
+            }
+            round - 100
+        };
+
+        let small = rounds_to_the_next_cut("short task");
+        let large = rounds_to_the_next_cut(&"t".repeat(32_000));
+        assert!(large > small + 100, "small {small}, large {large}");
+    }
+
+    /// COMPACT-19, COMPACT-18: dropping old tool results leaves the carried task whole, because it
+    /// is the driver's note and not a tool result. A task sent as a stub would be lost again.
+    #[test]
+    fn a_carried_task_is_not_dropped_with_the_old_tool_results() {
+        let task = format!("THE-TASK {}", "item ".repeat(600));
+        let mut conversation = a_delegate_after(&task, 20);
+        compact_now(&mut conversation);
+        for round in 0..8 {
+            a_round_that_read(
+                &mut conversation,
+                &format!("big-{round}"),
+                "read_file",
+                "BULK ".repeat(20_000),
+            );
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let sent = sent_text(&conversation);
+        assert!(
+            sent.contains("dropped from the request"),
+            "nothing was masked"
+        );
+        assert_eq!(sent.matches(&task).count(), 1);
+    }
+
+    /// COMPACT-19, COMPACT-4: the carried task adds no place to cut, so the next cut falls in front
+    /// of a round, behind the note that holds the task, and never on the note itself or inside a
+    /// round.
+    #[test]
+    fn the_carried_task_is_not_a_place_to_cut() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        compact_now(&mut conversation);
+        for round in 100..120 {
+            a_read_round(&mut conversation, round);
+        }
+        conversation.push(Message::assistant("done"));
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        assert!(boundary > 0, "the cut fell on the note holding the task");
+        assert!(opens_a_round(&conversation.messages()[boundary]));
+        assert!(
+            conversation.messages()[boundary]
+                .message
+                .tool_call_id
+                .is_none(),
+            "the cut fell on the answer to a call"
+        );
+        assert!(!matches!(
+            conversation.messages()[boundary].composed,
+            Some(Composed::Summary)
+        ));
+    }
+
+    /// COMPACT-19, COMPACT-6: the task stays in the archive and in the record, and the note holding
+    /// its copy is not drawn as something anybody said.
+    #[test]
+    fn the_carried_task_is_in_the_archive_and_not_drawn_twice() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        compact_now(&mut conversation);
+
+        let drawn = conversation.recounted();
+        let users: Vec<&Said> = drawn
+            .iter()
+            .filter(|said| matches!(said, Said::User(text, _) if text == "THE-TASK"))
+            .collect();
+        assert_eq!(users.len(), 1, "{drawn:?}");
+        assert!(
+            !drawn.iter().any(|said| matches!(
+                said,
+                Said::Composed { text, .. } if text.contains("THE-TASK")
+            )),
+            "the note holding the copy was drawn: {drawn:?}"
+        );
+    }
+
+    /// COMPACT-19, COMPACT-1: the carried task rides in the summary message, which is tagged and
+    /// attributed as the driver's summary note and not as something the person typed. Putting it
+    /// in a message that claims to be the person's words, or in an untagged one, would misstate who
+    /// said it.
+    #[test]
+    fn the_carried_task_rides_in_the_summary_note_and_is_attributed_as_one() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        compact_now(&mut conversation);
+
+        let holders: Vec<&Stored> = conversation
+            .messages()
+            .iter()
+            .filter(|stored| stored.message.content.text().contains("THE-TASK"))
+            .collect();
+        assert_eq!(holders.len(), 1);
+        assert!(matches!(holders[0].composed, Some(Composed::Summary)));
+        assert!(matches!(holders[0].provenance(), Provenance::Summary));
+    }
+
+    /// COMPACT-19, COMPACT-3: carrying the task changes nothing the compaction leaves alone: the
+    /// content behind a live reference, the reference counter and what the context has read.
+    #[test]
+    fn carrying_a_task_leaves_the_quarantine_the_counter_and_the_integrity_alone() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        let slot = conversation.next_reference();
+        conversation
+            .quarantine()
+            .writer_for(slot.clone(), Label::untrusted_private())
+            .expect("a writer")
+            .write("what nobody may read")
+            .expect("written");
+        conversation.observed(Label::untrusted_private());
+        let integrity = conversation.context();
+        let holds = conversation.holds();
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains("THE-TASK"), "{note}");
+        assert!(conversation.quarantine().take_for_effect(&slot).is_ok());
+        assert_eq!(conversation.next_reference(), SlotId::new("ref:1"));
+        assert_eq!(conversation.context(), integrity);
+        assert_eq!(conversation.holds(), holds);
+    }
+
+    /// COMPACT-19, COMPACT-18: masking drops old tool results and nothing else. The task is a
+    /// user message, and after a compaction its copy is a summary note, so neither is stubbed
+    /// however large it is.
+    #[test]
+    fn masking_old_results_leaves_the_task_and_its_carried_copy_whole() {
+        let task = format!("{}\nEND-OF-TASK", "TASK-LINE\n".repeat(400));
+        let big_rounds = |conversation: &mut Conversation, rounds: std::ops::Range<usize>| {
+            for round in rounds {
+                let mut call = a_call("read_file", r#"{"path":"big.log"}"#);
+                call.id = format!("m{round}");
+                conversation.push(Message::assistant_calling("looking", vec![call]));
+                conversation.push(Message::tool_result(
+                    format!("m{round}"),
+                    "BULK-LINE\n".repeat(2_000),
+                ));
+            }
+        };
+
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user(task.clone()));
+        conversation.task_given();
+        big_rounds(&mut conversation, 0..20);
+        assert!(conversation.mask_old_results().is_some(), "nothing masked");
+        assert_eq!(sent_text(&conversation).matches("END-OF-TASK").count(), 1);
+        assert!(sent_text(&conversation).contains(&task));
+
+        let mut conversation = a_delegate_after(&task, 20);
+        compact_now(&mut conversation);
+        big_rounds(&mut conversation, 100..120);
+        assert!(conversation.mask_old_results().is_some(), "nothing masked");
+        assert_eq!(sent_text(&conversation).matches("END-OF-TASK").count(), 1);
+        assert!(sent_text(&conversation).contains(&task));
+    }
+
+    /// COMPACT-19: a restored conversation records no task and carries nothing.
+    #[test]
+    fn a_restored_conversation_carries_no_task() {
+        let mut conversation = Conversation::restored(a_delegate_after("THE-TASK", 20).snapshot());
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("THE-TASK"), "{note}");
     }
 
     /// A prompt and an answer, the filler between the parts of the skill tests.
@@ -4635,5 +6007,472 @@ mod tests {
 
         conversation.mask_old_results();
         assert_eq!(conversation.compaction_boundary(), None);
+    }
+
+    /// A conversation of `exchanges` prompts, each answered at about 150 tokens.
+    fn long_bot_conversation(exchanges: usize) -> Conversation {
+        let mut conversation = Conversation::new();
+        for n in 0..exchanges {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        conversation
+    }
+
+    /// Messages as the bytes a request carries them in.
+    fn wire(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .map(|message| serde_json::to_string(message).expect("serialises"))
+            .collect()
+    }
+
+    /// The request's messages after the system prompt, as text.
+    fn request_texts(conversation: &Conversation) -> Vec<String> {
+        conversation
+            .with_system("SYSTEM")
+            .into_iter()
+            .skip(1)
+            .map(|message| message.content.text())
+            .collect()
+    }
+
+    /// RETRIEVE-27. A message is placed by the prompt whose exchange it is in and by what it was
+    /// there, counted as the transcript counts prompts, replies and calls.
+    #[test]
+    fn a_retrieved_message_is_placed_by_its_exchange_and_its_kind() {
+        use crate::report::{Place, Spoken};
+        let calling = |id: &str| ToolCallRequest {
+            id: id.to_string(),
+            ..a_call("read_file", "{}")
+        };
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push(Message::assistant("first answer"));
+        conversation.push(Message::user("second"));
+        conversation.push(Message::assistant_calling(
+            "reading two",
+            vec![calling("call-a"), calling("call-b")],
+        ));
+        conversation.push(Message::tool_result("call-a", "one"));
+        conversation.push(Message::tool_result("call-b", "two"));
+        conversation.push(Message::assistant("read them"));
+
+        let place = |ordinal, prompt, said| Place {
+            ordinal,
+            prompt: Some(prompt),
+            said,
+        };
+        assert_eq!(
+            conversation.places(&[6, 5, 0, 3, 5, 40]),
+            vec![
+                place(0, 0, Spoken::Prompt),
+                place(3, 1, Spoken::Reply { nth: 0 }),
+                place(5, 1, Spoken::Tool { nth: Some(1) }),
+                place(6, 1, Spoken::Reply { nth: 1 }),
+            ],
+        );
+
+        conversation.push(Message::user("third"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("excerpts".into(), vec![(0, 0), (5, 0)], "m".into());
+        assert_eq!(
+            conversation.retrieved_by_prompt(),
+            vec![(
+                2,
+                vec![
+                    place(0, 0, Spoken::Prompt),
+                    place(5, 1, Spoken::Tool { nth: Some(1) }),
+                ]
+            )],
+        );
+    }
+
+    /// RETRIEVE-27. Two retrievals in one turn both go in front of its prompt, the second after
+    /// the first, and both are that prompt's, not the exchange before it.
+    #[test]
+    fn two_retrievals_in_one_turn_are_both_the_prompts() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push(Message::assistant("first answer"));
+        conversation.push(Message::user("second"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("one".into(), vec![(0, 0)], "m".into());
+        conversation.insert_retrieved("two".into(), vec![(1, 0)], "m".into());
+
+        let found: Vec<(u32, String)> = conversation
+            .retrievals()
+            .into_iter()
+            .map(|(prompt, stored)| (prompt, stored.message.content.text()))
+            .collect();
+        assert_eq!(found, vec![(1, "one".to_string()), (1, "two".to_string())]);
+        let by_prompt = conversation.retrieved_by_prompt();
+        assert_eq!(by_prompt.len(), 1, "{by_prompt:?}");
+        assert_eq!(by_prompt[0].0, 1);
+        assert_eq!(by_prompt[0].1.len(), 2);
+    }
+
+    /// RETRIEVE-2. The cut is a view of the request: every message is still in the record, the
+    /// transcript and the written snapshot, and none went to the archive.
+    #[test]
+    fn a_retrieval_cut_leaves_the_record_whole() {
+        let mut conversation = long_bot_conversation(8);
+        let before = conversation.recounted();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+
+        assert_eq!(conversation.len(), 16);
+        assert_eq!(conversation.given(), 16);
+        assert_eq!(conversation.recounted(), before);
+        let snapshot = conversation.snapshot();
+        assert_eq!(snapshot.messages.len(), 16);
+        assert!(snapshot.archive.is_empty());
+        assert_eq!(snapshot.retrieval_cut, cut);
+        // The request is what was cut from.
+        let sent = request_texts(&conversation);
+        assert_eq!(sent.len(), 16 - cut);
+        assert_eq!(sent[0], "prompt 6");
+    }
+
+    /// RETRIEVE-8. A cut passing less than a quarter of the budget is not made, and once made it
+    /// stays put while the next exchanges are small, so each request starts with the bytes the
+    /// last one did.
+    #[test]
+    fn the_retrieval_cut_moves_only_in_steps() {
+        let mut conversation = long_bot_conversation(8);
+        // Six exchanges of about 150 tokens are under a quarter of 8,000.
+        assert_eq!(conversation.retrieval_boundary(8_000), None);
+        let cut = conversation
+            .retrieval_boundary(1_000)
+            .expect("a quarter of 1,000 tokens is passed");
+        conversation.cut_for_retrieval(cut);
+        let first = conversation.with_system("SYSTEM");
+
+        an_exchange(&mut conversation, "prompt 8");
+        assert_eq!(
+            conversation.retrieval_boundary(1_000),
+            None,
+            "one exchange more is not a step"
+        );
+        let second = conversation.with_system("SYSTEM");
+        assert_eq!(wire(&second[..first.len()]), wire(&first));
+
+        for n in 9..12 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let moved = conversation
+            .retrieval_boundary(1_000)
+            .expect("enough has built up again");
+        assert!(moved > cut);
+    }
+
+    /// RETRIEVE-10. A turn long by itself is cut between rounds, never between a call and its
+    /// result, and the request it leaves answers every call it holds.
+    #[test]
+    fn a_retrieval_cut_keeps_rounds_whole() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read everything"));
+        a_read_rounds(&mut conversation, 0..12);
+        let cut = conversation
+            .retrieval_boundary(400)
+            .expect("rounds to pass");
+        let opening = &conversation.messages()[cut];
+        assert!(opening.message.tool_call_id.is_none());
+        assert_eq!(opening.message.role, Role::Assistant);
+        conversation.cut_for_retrieval(cut);
+
+        let sent = conversation.with_system("SYSTEM");
+        for (index, message) in sent.iter().enumerate() {
+            if let Some(id) = &message.tool_call_id {
+                let called = sent[..index]
+                    .iter()
+                    .flat_map(|earlier| earlier.tool_calls.iter().flatten())
+                    .any(|call| &call.id == id);
+                assert!(called, "a result whose call was cut away: {id}");
+            }
+        }
+    }
+
+    /// RETRIEVE-10. A skill loaded before the cut is sent after it word for word, and so is the
+    /// task list the cut passes, ahead of the first message still sent.
+    #[test]
+    fn a_pinned_skill_is_sent_after_the_cut() {
+        let mut conversation = Conversation::new();
+        an_exchange(&mut conversation, "first");
+        a_skill_load(&mut conversation, "s1", "ship-it", "ALWAYS RUN THE TESTS");
+        conversation.push(Message::tool_result("t1", "0 of 1 done\n[pending] ship"));
+        conversation.task_list_shown();
+        for n in 0..6 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        assert!(cut > 4, "the skill and the list have to be passed");
+        conversation.cut_for_retrieval(cut);
+
+        let sent = request_texts(&conversation);
+        assert!(sent[0].starts_with(PINNED_PREFIX), "{}", sent[0]);
+        assert!(
+            sent[0].ends_with("0 of 1 done\n[pending] ship"),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[1].contains("are no longer sent"), "{}", sent[1]);
+        assert!(sent[1].ends_with("ALWAYS RUN THE TESTS"), "{}", sent[1]);
+        assert_eq!(sent[2], "prompt 4");
+        // Written down with the cut, so a resumed session sends the same.
+        let resumed = Conversation::restored(conversation.snapshot());
+        assert_eq!(
+            wire(&resumed.with_system("SYSTEM")),
+            wire(&conversation.with_system("SYSTEM"))
+        );
+    }
+
+    /// RETRIEVE-10. Nothing is pinned where the cut passes nothing to carry, so a plain bot
+    /// conversation gains no message of the driver's at the start.
+    #[test]
+    fn a_cut_that_passes_nothing_to_carry_pins_nothing() {
+        let mut conversation = long_bot_conversation(8);
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        assert_eq!(request_texts(&conversation)[0], "prompt 6");
+    }
+
+    /// RETRIEVE-8. Excerpts go in front of the turn's prompt as one message, and once a later
+    /// message of excerpts is added the earlier one is sent as a fixed stub.
+    #[test]
+    fn excerpts_are_one_message_in_front_of_the_prompt() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("what did I say first?"));
+        conversation.prompt_given();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        conversation.insert_retrieved("FIRST EXCERPTS".into(), vec![(0, 0)], "m".into());
+        conversation.push(Message::assistant("you said prompt 0"));
+
+        let sent = request_texts(&conversation);
+        let at = sent.iter().position(|text| text == "FIRST EXCERPTS");
+        assert_eq!(sent[at.expect("sent") + 1], "what did I say first?");
+        assert_eq!(
+            conversation.messages()[cut..]
+                .iter()
+                .filter(|stored| matches!(stored.composed, Some(Composed::Retrieved { .. })))
+                .count(),
+            1
+        );
+        // Not a turn of its own, so it does not count as an exchange the cut keeps.
+        assert!(!opens_an_exchange(
+            &conversation.messages()[cut + at.expect("sent")]
+        ));
+
+        conversation.push(Message::user("and second?"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("SECOND EXCERPTS".into(), vec![(2, 0)], "m".into());
+        let sent = request_texts(&conversation);
+        assert!(sent.contains(&RETRIEVED_STUB.to_string()), "{sent:?}");
+        assert!(!sent.contains(&"FIRST EXCERPTS".to_string()));
+        assert_eq!(sent[sent.len() - 2], "SECOND EXCERPTS");
+        assert_eq!(sent[sent.len() - 1], "and second?");
+        // The record still holds both whole (RETRIEVE-2), and a transcript draws neither.
+        assert!(
+            conversation
+                .messages()
+                .iter()
+                .any(|stored| stored.message.content.text() == "FIRST EXCERPTS")
+        );
+        assert!(
+            !conversation
+                .recounted()
+                .iter()
+                .any(|said| format!("{said:?}").contains("EXCERPTS"))
+        );
+    }
+
+    /// RETRIEVE-30. Excerpts found for a later prompt are owed only past a cut, leave the earlier
+    /// excerpts sent whole, and are written down as such; the next move of the cut stubs both.
+    #[test]
+    fn excerpts_for_a_later_prompt_leave_the_earlier_ones_whole() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("first?"));
+        conversation.prompt_given();
+        assert!(!conversation.excerpts_owed(), "nothing is cut yet");
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        conversation.insert_retrieved("FIRST EXCERPTS".into(), vec![(0, 0)], "m".into());
+        assert!(!conversation.excerpts_owed(), "the prompt has its excerpts");
+        conversation.push(Message::assistant("first answer"));
+
+        conversation.push(Message::user("second?"));
+        conversation.prompt_given();
+        assert!(conversation.excerpts_owed());
+        conversation.insert_recalled("SECOND EXCERPTS".into(), vec![(2, 0)], "m".into());
+        assert!(!conversation.excerpts_owed());
+        let sent = request_texts(&conversation);
+        assert!(sent.contains(&"FIRST EXCERPTS".to_string()), "{sent:?}");
+        assert!(!sent.contains(&RETRIEVED_STUB.to_string()), "{sent:?}");
+        assert_eq!(sent[sent.len() - 2], "SECOND EXCERPTS");
+        assert_eq!(sent[sent.len() - 1], "second?");
+        let resumed = Conversation::restored(conversation.snapshot());
+        assert_eq!(
+            wire(&resumed.with_system("SYSTEM")),
+            wire(&conversation.with_system("SYSTEM"))
+        );
+        conversation.push(Message::assistant("second answer"));
+
+        conversation.push(Message::user("third?"));
+        conversation.prompt_given();
+        conversation.insert_retrieved("THIRD EXCERPTS".into(), vec![(4, 0)], "m".into());
+        let sent = request_texts(&conversation);
+        assert!(!sent.contains(&"FIRST EXCERPTS".to_string()), "{sent:?}");
+        assert!(!sent.contains(&"SECOND EXCERPTS".to_string()), "{sent:?}");
+        assert_eq!(sent[sent.len() - 2], "THIRD EXCERPTS");
+    }
+
+    /// The excerpts sent as context lines are written down with the retrieval, and a record
+    /// written before they were reads as one with none.
+    #[test]
+    fn the_context_lines_a_retrieval_sent_survive_a_resume_and_older_records_read() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("now?"));
+        conversation.prompt_given();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        conversation.insert_retrieved(
+            "EXCERPTS".into(),
+            Excerpts {
+                sent: vec![(0, 0), (0, 1), (1, 0)],
+                context: vec![2],
+            },
+            "m".into(),
+        );
+        let retrieved = |conversation: &Conversation| {
+            conversation
+                .messages()
+                .iter()
+                .find_map(|stored| match &stored.composed {
+                    Some(Composed::Retrieved { context, .. }) => Some(context.clone()),
+                    _ => None,
+                })
+                .expect("the retrieval's message")
+        };
+        let written = serde_json::to_string(&conversation.snapshot()).expect("the record");
+        let resumed =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
+        assert_eq!(retrieved(&resumed), vec![2]);
+
+        let older: Composed =
+            serde_json::from_str(r#"{"kind":"retrieved","excerpts":[[0,0],[4,1]],"model":"m"}"#)
+                .expect("a record written before the context lines were kept");
+        assert_eq!(
+            older,
+            Composed::Retrieved {
+                excerpts: vec![(0, 0), (4, 1)],
+                model: "m".into(),
+                refreshed: false,
+                context: Vec::new(),
+            }
+        );
+        let none = serde_json::to_string(&older).expect("written again");
+        assert!(!none.contains("context"), "{none}");
+    }
+
+    /// The vectors number messages without the summary and the resume's note, and so does the
+    /// ordinal a cut is asked about by.
+    #[test]
+    fn the_ordinal_at_a_position_skips_what_is_not_numbered() {
+        let mut conversation = long_bot_conversation(4);
+        compact_now(&mut conversation);
+        let archived = conversation.snapshot().archive.len();
+        assert_eq!(conversation.ordinal_at(0), archived as u32);
+        assert_eq!(
+            conversation.ordinal_at(1),
+            archived as u32,
+            "the summary is not numbered"
+        );
+        assert_eq!(conversation.ordinal_at(2), archived as u32 + 1);
+    }
+
+    /// A compaction stands for everything before it, so the cut starts again from the summary,
+    /// and a prompt the drain moved is still found.
+    #[test]
+    fn a_compaction_resets_the_retrieval_cut() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("now"));
+        conversation.prompt_given();
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        compact_now(&mut conversation);
+
+        assert_eq!(conversation.retrieval_cut(), 0);
+        assert!(request_texts(&conversation)[0].starts_with(COMPACTED_PREFIX));
+        conversation.insert_retrieved("EXCERPTS".into(), Vec::new(), "m".into());
+        let sent = request_texts(&conversation);
+        assert_eq!(sent[sent.len() - 2], "EXCERPTS");
+        assert_eq!(sent[sent.len() - 1], "now");
+    }
+
+    /// RETRIEVE-28. What the request leaves out rises with each move of the cut and with each
+    /// compaction, a compaction that sends some of it again does not lower it, and a resumed
+    /// session counts on from it.
+    #[test]
+    fn what_the_request_leaves_out_only_rises_and_survives_a_resume() {
+        let mut conversation = long_bot_conversation(8);
+        conversation.push(Message::user("now"));
+        conversation.prompt_given();
+        assert_eq!(conversation.out_of_request(), 0);
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+        assert_eq!(conversation.out_of_request(), cut);
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary.min(cut - 1), "a summary");
+        assert!(
+            conversation.archive.len() < cut,
+            "the compaction took everything"
+        );
+        assert_eq!(
+            conversation.out_of_request(),
+            cut,
+            "a compaction lowered it"
+        );
+
+        let resumed = Conversation::restored(conversation.snapshot());
+        assert_eq!(resumed.out_of_request(), cut);
+    }
+
+    /// A resume's note in front of the cut is not written down, so the cut written down stands in
+    /// front of the same message.
+    #[test]
+    fn the_cut_written_down_skips_a_resumes_note() {
+        let mut conversation = long_bot_conversation(2);
+        conversation.note_unfinished_turn();
+        for n in 2..8 {
+            an_exchange(&mut conversation, &format!("prompt {n}"));
+        }
+        let cut = conversation
+            .retrieval_boundary(200)
+            .expect("enough to pass");
+        conversation.cut_for_retrieval(cut);
+
+        let snapshot = conversation.snapshot();
+        assert_eq!(snapshot.retrieval_cut, cut - 1);
+        let resumed = Conversation::restored(snapshot);
+        assert_eq!(request_texts(&resumed), request_texts(&conversation));
     }
 }

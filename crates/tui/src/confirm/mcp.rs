@@ -633,35 +633,55 @@ pub(super) fn draw_mcp_call(
         width,
     );
     lines.push(Line::raw(""));
-    match request.arguments.is_empty() {
-        true => lines.extend(indented(t!(mcp_call_no_arguments), muted, width)),
-        false => {
-            let widest = request
-                .arguments
-                .iter()
-                .map(|(name, _)| name.chars().count())
-                .max()
-                .unwrap_or(0);
-            for (name, value) in &request.arguments {
-                let shown = shown_argument(value);
-                lines.extend(marked_rows(
-                    &Span::raw("  "),
-                    &[Span::raw(format!(
-                        "{:<widest$} {}",
-                        format!("{name}:"),
-                        shown.head,
-                        widest = widest + 1
-                    ))],
-                    width,
-                ));
-                for row in &shown.rows {
-                    lines.extend(marked_rows(
-                        &Span::raw("    "),
-                        &[Span::raw(row.clone())],
+    let argument_rows = |arguments: &[(String, String)]| -> Vec<Line<'static>> {
+        let mut rows = Vec::new();
+        match arguments.is_empty() {
+            true => rows.extend(indented(t!(mcp_call_no_arguments), muted, width)),
+            false => {
+                let widest = arguments
+                    .iter()
+                    .map(|(name, _)| name.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                for (name, value) in arguments {
+                    let shown = shown_argument(value);
+                    rows.extend(marked_rows(
+                        &Span::raw("  "),
+                        &[Span::raw(format!(
+                            "{:<widest$} {}",
+                            format!("{name}:"),
+                            shown.head,
+                            widest = widest + 1
+                        ))],
                         width,
                     ));
+                    for row in &shown.rows {
+                        rows.extend(marked_rows(
+                            &Span::raw("    "),
+                            &[Span::raw(row.clone())],
+                            width,
+                        ));
+                    }
                 }
             }
+        }
+        rows
+    };
+    lines.extend(argument_rows(&request.arguments));
+    // The later calls of the round that this answer covers, drawn before the rows that decide, so
+    // no key that approves is taken until a person has seen each of them (SERVERS-7).
+    if !request.also.is_empty() {
+        lines.push(Line::raw(""));
+        lines.extend(indented(
+            t!(mcp_call_also, count = request.also.len()),
+            bold,
+            width,
+        ));
+        for (at, arguments) in request.also.iter().enumerate() {
+            if at > 0 {
+                lines.push(Line::raw(""));
+            }
+            lines.extend(argument_rows(arguments));
         }
     }
 
@@ -715,9 +735,12 @@ pub(super) fn draw_mcp_call(
                     approving(theme::muted(), answerable),
                     Span::styled(stand, muted),
                 ));
-                let reason = match request.asked_every_call {
-                    true => t!(mcp_call_cannot_stand_asked_every_time),
-                    false => t!(mcp_call_cannot_stand),
+                let reason = if request.asked_every_call {
+                    t!(mcp_call_cannot_stand_asked_every_time)
+                } else if request.asked_for_private_arguments {
+                    t!(mcp_call_cannot_stand_private_arguments)
+                } else {
+                    t!(mcp_call_cannot_stand)
                 };
                 rows.extend(marked_rows(&hanging, &[Span::styled(reason, muted)], width));
             }
@@ -1239,6 +1262,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         }
     }
 
@@ -1386,6 +1411,8 @@ mod tests {
 
         let request = McpCallRequest {
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
             ..call(false, None)
         };
         let drawn = drawn_call(&request, false);
@@ -1411,6 +1438,70 @@ mod tests {
                 "`{key}`"
             );
         }
+    }
+
+    /// SERVERS-7: a call asked because its arguments are private is drawn with its own reason for
+    /// offering no lasting answer, not the reason of a session that records nothing, and `2`
+    /// answers nothing. The regressions it rejects are a prompt that blames the session and a key
+    /// that stands for a call no stored answer covers.
+    #[test]
+    fn a_call_asked_for_private_arguments_is_drawn_with_its_own_reason_for_offering_no_lasting_answer()
+     {
+        let request = McpCallRequest {
+            asked_for_private_arguments: true,
+            also: Vec::new(),
+            ..call(false, None)
+        };
+        let drawn = drawn_call(&request, false);
+        assert!(
+            drawn.contains(
+                "not offered: this call is asked because something read earlier was private"
+            ),
+            "the prompt did not say why no lasting answer is offered: {drawn}"
+        );
+        assert!(
+            !drawn.contains("nothing answered in this session can be recorded")
+                && !drawn.contains("every call to this server is asked about"),
+            "the prompt gave another reason: {drawn}"
+        );
+        for key in ['2', 'a', 'A'] {
+            assert_eq!(
+                call_answer_for(press(KeyCode::Char(key)), &request, &Drawn::taking_yes()),
+                None,
+                "`{key}` answered a call asked for private arguments"
+            );
+        }
+        let declared = McpCallRequest {
+            asked_every_call: true,
+            ..request
+        };
+        let drawn = drawn_call(&declared, false);
+        assert!(
+            drawn.contains("not offered: every call to this server is asked about")
+                && !drawn.contains("something read earlier was private"),
+            "the declaration's reason did not win: {drawn}"
+        );
+    }
+
+    /// SERVERS-7: a question that also covers later calls of the round draws each of them under
+    /// the line saying so, and a call asked on its own draws no such line. The regressions it
+    /// rejects are a card that omits the later calls, which would let a yes make a call the person
+    /// was not shown, and one that draws the line over a call that covers nothing.
+    #[test]
+    fn a_call_draws_the_later_calls_its_answer_also_covers() {
+        let request = McpCallRequest {
+            also: vec![vec![("city".into(), "\"Lyon\"".into())]],
+            ..call(false, None)
+        };
+        let drawn = drawn_call(&request, false);
+        assert!(
+            drawn
+                .contains("Your answer also covers this later call to the same tool in this round"),
+            "{drawn}"
+        );
+        assert!(drawn.contains("Lyon"), "{drawn}");
+        let alone = drawn_call(&call(false, None), false);
+        assert!(!alone.contains("also covers"), "{alone}");
     }
 
     /// MCP-14, ROUTE-10, SERVERS-7: the pair a call filled from a choice puts in the question is
@@ -1441,6 +1532,8 @@ mod tests {
                     description: None,
                     may_stand: false,
                     asked_every_call: true,
+                    asked_for_private_arguments: false,
+                    also: Vec::new(),
                 };
                 for width in [120, 80, 50] {
                     let (rows, _) = pinned_screen((width, 30), |frame| {

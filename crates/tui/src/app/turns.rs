@@ -215,6 +215,14 @@ pub(super) fn manifest_animated(
                     let answer = crate::confirm::ask_exposure(terminal, &request);
                     replying.plainly(session, answer, crate::remote_confirm::Reply::Exposure);
                 }
+                // A server's list is put before the plan, and each call as its step reaches it
+                // (MANIFEST-15), drawn as a turn draws them.
+                crate::remote_confirm::ToMain::ToolList(request) => {
+                    answer_tool_list_in_a_turn(terminal, session, &replying, &request);
+                }
+                crate::remote_confirm::ToMain::McpCall(request) => {
+                    answer_mcp_call_in_a_turn(terminal, session, &replying, &request);
+                }
                 // The questions a turn asks that this mode cannot. There is no shell and no `run` in
                 // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
                 // there is no step that asks to be shown a slot; and there is no planner left to pose
@@ -790,7 +798,7 @@ pub(super) fn run_turn_animated(
         session.give_way_to_the_queue(Instant::now());
     }
 
-    end_aside_beside_a_turn(session);
+    leave_the_aside_at_the_end_of_a_turn(session, &cancel);
     session.set_turn_files(None);
     let finished = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The
@@ -922,6 +930,7 @@ pub(super) fn finish_turn(
             comparable: bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
                 config, &chosen,
             ),
+            configured: chosen,
         };
         fold_outcome(
             session,
@@ -1485,6 +1494,10 @@ pub(super) struct Asked {
     pub(super) name: String,
     /// Whether that name and the one a reply reports are drawn from one roster.
     pub(super) comparable: bool,
+    /// The model the person configured or chose for the turn, the driver's own state. A failure
+    /// line names it (BACKEND-37). Not `name`, which for a gateway is the wire name, and never a
+    /// name a reply reported.
+    pub(super) configured: String,
 }
 
 /// Record what the turn asked for against what answered, and say so once where they differ.
@@ -1685,7 +1698,7 @@ pub(super) fn refusal_note(
 
 /// Record a finished turn in the session, charging what it cost along with how that divides into
 /// what the model read and what it wrote, which only the worker's own count (`output_tokens`)
-/// says.
+/// says, and how much of the reading the service's cache served or was written.
 ///
 /// Split out from `fold_outcome` so a test can call it: that function takes a whole
 /// [`turn::Outcome`], which nothing outside the agent crate can build.
@@ -1695,10 +1708,13 @@ pub(super) fn complete_turn(
     trail: Vec<bravebot_session::audit::TrailLine>,
     tokens: u64,
     output_tokens: u64,
+    cached: bravebot_aichat::protocol::Cached,
     answered_as: Option<String>,
 ) {
     session.complete_as(reply, trail, tokens, answered_as);
-    session.charged_split(tokens, output_tokens);
+    session.charged_split(
+        bravebot_session::sessions::Split::of(tokens, output_tokens).with_cache(cached),
+    );
 }
 
 /// Fold a finished turn into the session.
@@ -1727,6 +1743,7 @@ pub(super) fn fold_outcome(
                 trail,
                 outcome.tokens,
                 outcome.output_tokens,
+                outcome.cached,
                 outcome
                     .addressed
                     .as_ref()
@@ -1819,7 +1836,11 @@ pub(super) fn fold_outcome(
             match ending {
                 bravebot_agent::Ending::Failed(diagnosis) => {
                     session.fail(
-                        bravebot_session::sessions::failure_reason(diagnosis, error.cut_off()),
+                        bravebot_session::sessions::failure_line(
+                            &error,
+                            diagnosis,
+                            Some(&asked.configured),
+                        ),
                         ending,
                     );
                 }

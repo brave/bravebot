@@ -748,6 +748,18 @@ impl Catalogue {
         self
     }
 
+    /// Every skill but the one of that name, in the order they were found.
+    ///
+    /// The baseline of a skill evaluation: `search_skills` no longer finds the skill and
+    /// `load_skill` refuses it, because both read this catalogue. Unlike [`Catalogue::only`] it does
+    /// not mark the catalogue as curated, so what is listed to the planner and what is left for
+    /// `search_skills` stay as they were for every other skill. A name matching none of it removes
+    /// nothing.
+    pub fn without(mut self, name: &str) -> Self {
+        self.entries.retain(|skill| skill.name != name);
+        self
+    }
+
     /// Add a skill, replacing one of the same name.
     ///
     /// Later wins, and discovery visits the home directory before the workspace, so a project's
@@ -1217,22 +1229,97 @@ fn resolve<S: Sink>(
     sink: &mut S,
     list_files: bool,
 ) -> Catalogue {
+    let Some(mut policy) = reading_policy(workspace, trust, permissions, sink) else {
+        return Catalogue::default();
+    };
+    discover_listing(&mut policy, workspace, home, list_files).0
+}
+
+/// The policy that holds only the read, which is how a skill and the files beside it are read.
+fn reading_policy<'s, S: Sink>(
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &'s mut S,
+) -> Option<Policy<'s, S>> {
     let mut routing = bravebot_core::policy::Routing::new();
     routing.insert_trusted("skills", WORKSPACE_SKILL_ROOTS.join(", "));
-    let Ok(policy) = Policy::begin(
+    let policy = Policy::begin(
         routing,
         bravebot_core::policy::ReleasePlan::new(),
         bravebot_core::capability::CapabilitySet::from_iter([Capability::FileRead]),
         sink,
-    ) else {
-        return Catalogue::default();
+    )
+    .ok()?;
+    Some(
+        policy
+            .with_trust(trust)
+            .with_permissions(permissions)
+            .with_root(workspace.root())
+            .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES),
+    )
+}
+
+/// The text of a file beside a skill's `SKILL.md`, read the way the skill itself was and gated the
+/// same way, or `None` where it may not be read.
+///
+/// `relative` must be one of the names in [`Skill::files`], which the driver listed when the
+/// catalogue was resolved, so a name that is not in that set reaches nothing. A user's own skill is
+/// trusted by provenance (SKILL-3) and only a deny rule keeps a file of it. A project's file is read
+/// through the trust map and is given up when its label is not trusted (SKILL-4), so the bytes of a
+/// file nobody vouched for never leave this function.
+pub fn read_beside<S: Sink>(
+    skill: &Skill,
+    relative: &str,
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+) -> Option<String> {
+    if !skill.files.iter().any(|listed| listed == relative) {
+        return None;
+    }
+    let mut policy = reading_policy(workspace, trust, permissions, sink)?;
+    match (skill.source, &skill.reach, &skill.directory) {
+        (Source::Home, Some(reach), _) => {
+            let file = reach.join(relative);
+            if workspace.rule_denies_reading(&policy, &file.to_string_lossy()) {
+                return None;
+            }
+            let text = std::fs::read_to_string(&file).ok()?;
+            let origin = format!("{}/{relative}", skill.origin);
+            let labelled = policy.label_user_configuration(&origin, text);
+            policy.read_trusted_content("skills", &labelled).ok()
+        }
+        (Source::Workspace, _, Some(directory)) => {
+            let named = format!("{directory}/{relative}");
+            if workspace.rule_denies_reading(&policy, &named) {
+                return None;
+            }
+            let contents = workspace
+                .read(&mut policy, &Labelled::trusted(named))
+                .ok()?;
+            if !contents.label().is_trusted() {
+                return None;
+            }
+            policy.read_trusted_content("skills", &contents).ok()
+        }
+        _ => None,
+    }
+}
+
+/// How many files lie beside a skill's `SKILL.md` that [`Skill::files`] leaves out, which are the
+/// ones a deny rule or the trust map keeps from the planner. Only a count: a name there is content
+/// nobody vouched for and is never held (SKILL-6).
+pub fn unlisted_beside(skill: &Skill, workspace: &Workspace) -> usize {
+    let directory = match (skill.source, &skill.reach, &skill.directory) {
+        (Source::Home, Some(reach), _) => reach.clone(),
+        (Source::Workspace, _, Some(directory)) => workspace.root().join(directory),
+        _ => return 0,
     };
-    let mut policy = policy
-        .with_trust(trust)
-        .with_permissions(permissions)
-        .with_root(workspace.root())
-        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
-    discover_listing(&mut policy, workspace, home, list_files).0
+    files_beside(&directory, |_| true)
+        .len()
+        .saturating_sub(skill.files.len())
 }
 
 /// Skills from a directory of the person's own, `~/.bravebot/skills` or a shared one they named,
@@ -1722,14 +1809,106 @@ fn skill_entries(root: &Path) -> impl Iterator<Item = std::fs::DirEntry> {
         .filter(|entry| is_skill_directory(&entry.path()))
 }
 
-/// Only a directory can have a `SKILL.md` beneath it, so the one lookup also says it is a directory.
+/// Whether `directory` holds a file spelled exactly `SKILL.md` (INSTR-1). Only a directory can have
+/// one beneath it, so the one lookup also says it is a directory.
+///
+/// On a volume that folds case, `skill.md` opens as `SKILL.md`, so a lookup that only tried to open
+/// the name would offer a differently spelled file as a skill. The directory's own listing is
+/// compared with the fixed name and nothing a file holds is consulted.
 fn is_skill_directory(directory: &Path) -> bool {
-    directory.join(SKILL_FILE).is_file()
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+    holds_skill_file(entries.flatten().map(|entry| entry.file_name()), || {
+        directory.join(SKILL_FILE).is_file()
+    })
+}
+
+/// Whether `listed`, the entry names of a directory, includes `SKILL.md` byte for byte and `opens`,
+/// which asks the volume whether that name is a file, agrees.
+///
+/// The decision is made on the names given, so a test can hand it a listing and an answer from the
+/// volume that no case-sensitive host produces, such as `skill.md` listed while `SKILL.md` opens.
+fn holds_skill_file(
+    listed: impl IntoIterator<Item = std::ffi::OsString>,
+    opens: impl FnOnce() -> bool,
+) -> bool {
+    crate::preamble::names_include(listed, SKILL_FILE) && opens()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SKILL-1, INSTR-1: a directory is a skill directory only when its own entry is spelled
+    /// `SKILL.md`, checked against real directories. Where the volume folds case `skill.md` opens as
+    /// `SKILL.md`, so a lookup that only opens the name offers it as a skill. Where the volume tells
+    /// the two names apart `skill.md` is not `SKILL.md` either way, so this test does not pin the
+    /// lookup there: `a_listing_holding_skill_md_does_not_hold_the_skill_file` does, on any host.
+    #[test]
+    fn a_directory_holding_skill_md_in_another_case_is_not_a_skill_directory() {
+        let root = crate::testutil::scratch_dir("skill-directory-cased");
+        let _ = std::fs::remove_dir_all(&root);
+        let lower = root.join("lower");
+        let exact = root.join("exact");
+        std::fs::create_dir_all(&lower).unwrap();
+        std::fs::create_dir_all(&exact).unwrap();
+        std::fs::write(
+            lower.join("skill.md"),
+            "---\nname: lower\ndescription: d\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            exact.join(SKILL_FILE),
+            "---\nname: exact\ndescription: d\n---\n",
+        )
+        .unwrap();
+        assert!(!is_skill_directory(&lower));
+        assert!(is_skill_directory(&exact));
+        assert_eq!(skill_directories(&root), vec!["exact".to_string()]);
+        assert_eq!(skill_entries(&root).count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn listing(names: &[&str]) -> Vec<std::ffi::OsString> {
+        names.iter().map(std::ffi::OsString::from).collect()
+    }
+
+    /// SKILL-1, INSTR-1: a listing that holds `skill.md` does not hold the skill file, although the
+    /// volume answers that `SKILL.md` opens, which is what a volume that folds case says. The answer
+    /// is given here, so the test fails on any host for the fault it rejects: the open standing for
+    /// the lookup, as `directory.join("SKILL.md").is_file()` does, with the listing not consulted.
+    #[test]
+    fn a_listing_holding_skill_md_does_not_hold_the_skill_file() {
+        assert!(!holds_skill_file(listing(&["skill.md"]), || true));
+        assert!(!holds_skill_file(
+            listing(&["Skill.MD", "notes.md"]),
+            || { true }
+        ));
+    }
+
+    /// SKILL-1: a listing with neither spelling holds nothing, and an empty one holds nothing, even
+    /// where the volume answers that the name opens.
+    #[test]
+    fn a_listing_without_the_skill_file_does_not_hold_it() {
+        assert!(!holds_skill_file(
+            listing(&["notes.md", "SKILL.md.bak"]),
+            || { true }
+        ));
+        assert!(!holds_skill_file(listing(&[]), || true));
+    }
+
+    /// SKILL-1: a listing holding `SKILL.md` holds the skill file when the name is a file, with
+    /// `skill.md` beside it or not, and does not when it is something else, such as a directory or a
+    /// link to nothing. The fault this rejects is the listing alone standing for the lookup.
+    #[test]
+    fn a_listing_holding_skill_md_exactly_holds_the_skill_file_only_when_it_is_a_file() {
+        assert!(holds_skill_file(listing(&["SKILL.md"]), || true));
+        assert!(holds_skill_file(listing(&["skill.md", "SKILL.md"]), || {
+            true
+        }));
+        assert!(!holds_skill_file(listing(&["SKILL.md"]), || false));
+    }
 
     /// The planner chooses a skill from its name and description alone, so a file declaring only
     /// one of them offers nothing to choose on and must not be advertised at all.
@@ -1986,5 +2165,92 @@ mod tests {
                 "'{near}' selected a skill nobody named"
             );
         }
+    }
+
+    fn skill_of(name: &str, description: &str, source: Source) -> Skill {
+        Skill {
+            name: name.to_string(),
+            description: description.to_string(),
+            argument_hint: None,
+            origin: "SKILL.md".to_string(),
+            directory: None,
+            files: Vec::new(),
+            landed: None,
+            reach: None,
+            source,
+            runs_as: RunsAs::default(),
+            unread: Vec::new(),
+            person_only: false,
+            body: Labelled::trusted("body".to_string()),
+        }
+    }
+
+    /// The baseline arm of a skill evaluation: the named skill is neither found by
+    /// `search_skills` nor selectable by `load_skill` (both read the catalogue), and every other
+    /// skill is still there. Rejects a `without` that leaves the entry in, one that removes by
+    /// description or prefix and so takes a neighbour with it, and one that clears the catalogue.
+    #[test]
+    fn without_removes_the_named_skill_and_only_that_one() {
+        let mut catalogue = Catalogue::default();
+        catalogue.insert(skill_of("alpha", "tidy the imports", Source::Home));
+        catalogue.insert(skill_of(
+            "alpha-two",
+            "tidy the imports again",
+            Source::Home,
+        ));
+        catalogue.insert(skill_of("beta", "write the changelog", Source::Home));
+
+        let baseline = catalogue.clone().without("alpha");
+
+        assert!(baseline.get("alpha").is_none(), "load_skill would find it");
+        assert!(
+            baseline.search("tidy").0.iter().all(|s| s.name != "alpha"),
+            "search_skills would find it"
+        );
+        assert!(baseline.get("alpha-two").is_some(), "a neighbour went too");
+        assert!(baseline.get("beta").is_some());
+        assert_eq!(baseline.len(), 2);
+        assert_eq!(
+            catalogue.len(),
+            3,
+            "the catalogue it was made from changed, so the with-skill arm lost the skill"
+        );
+        assert_eq!(
+            catalogue.clone().without("nothing-of-that-name").len(),
+            3,
+            "a name matching nothing removed something"
+        );
+    }
+
+    /// The baseline is not a curated catalogue. `only` marks a catalogue curated, which lists every
+    /// entry to the planner and stops `search_skills` being the way to the rest (SKILL-18), so a
+    /// baseline built that way would differ from the with-skill arm in more than the one skill.
+    /// Rejects a `without` written as `only` of the other names.
+    #[test]
+    fn without_leaves_the_catalogue_as_uncurated_as_it_was() {
+        let mut catalogue = Catalogue::default();
+        catalogue.insert(skill_of("built-in", "ships here", Source::BuiltIn));
+        catalogue.insert(skill_of("alpha", "the skill under test", Source::Home));
+        catalogue.insert(skill_of("beta", "another of the person's", Source::Home));
+
+        let baseline = catalogue.clone().without("alpha");
+
+        assert!(!baseline.is_curated());
+        assert_eq!(
+            baseline.describe_for_prompt(),
+            catalogue.clone().describe_for_prompt(),
+            "the listing the planner is given changed beyond the one skill"
+        );
+        assert_eq!(baseline.other_skill_names(), ["beta"]);
+        assert!(
+            baseline
+                .search("another")
+                .0
+                .iter()
+                .any(|s| s.name == "beta")
+        );
+
+        let curated = catalogue.only(&["alpha".to_string(), "beta".to_string()]);
+        assert!(curated.without("alpha").is_curated(), "curation was undone");
     }
 }

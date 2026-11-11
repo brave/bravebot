@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Security
-description: What Brave Bot defends against, what it does not, and what leaves the process.
+description: Security guarantees, threat model and exceptions, network egress, certificates and proxies, process confinement, data collection and retention, crash reports and reporting vulnerabilities.
 ---
 
 # Security
@@ -122,8 +122,10 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   `allowRead` entry, scope or `/reach` grant lifts, except that a program reads, and never writes,
   the session records in `~/.bravebot/sessions`) and can write only the directories the session
   was opened on, its scratch directory, the system temporary directory (unless you [hold it back](sandbox.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
-  command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
-  agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
+  command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` is lent
+  the agent socket, never a private key. The socket is lent only where the path `SSH_AUTH_SOCK` leads
+  to is a socket outside the credential and persistence locations; a name relinked to anything else,
+  and a session with no home directory, lend none, and the push still runs. The files a tool reads by name to do its job, such as the `gh`
   login, `~/.npmrc` and `~/.netrc`, are readable. So are the shell startup files, `~/.gitconfig`,
   `~/.pgpass`, `~/.my.cnf`, `~/.vault-token` and the configuration of tools such as `helm`, `glab`,
   `doctl` and `rclone`.
@@ -158,13 +160,14 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Nine deliberate exceptions
+## Ten deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in nine places, three in the policy layer,
+Brave Bot looks at untrusted bytes to decide something in ten places, three in the policy layer,
 four in the agent, the search, the diagnostics sentence, reading a repository's history and telling
 a text file from a binary one, one in the MCP client, the choice of which parts of a tool
-result are taken, and one in the crate that reads a processor's answer for the number it chose, all
-written down rather than left to be found.
+result are taken, one in the crate that reads a processor's answer for the number it chose, and one
+in the listener `bravebot trigger serve` starts, which decides from a request's line and headers
+and never from its body, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -323,6 +326,32 @@ variables above: a second statement by the same person, on the same machine, tha
 on it is held to as well. A proxy nobody stated sees nothing, and one somebody stated sees what they
 already let it see.
 
+**A client certificate.** A gateway or proxy that requires mutual TLS is reached by naming a
+certificate and its private key: `BRAVEBOT_CLIENT_CERT` is a file holding the certificate, with its
+chain where there is one, and `BRAVEBOT_CLIENT_KEY` is a file holding the key. The key may be
+unencrypted or an encrypted PKCS#8 key (`BEGIN ENCRYPTED PRIVATE KEY`), which is opened with the
+passphrase in `BRAVEBOT_CLIENT_KEY_PASSPHRASE`. The two paths and the passphrase are read from the
+environment only, not from a settings file. The pair is offered to a server that asks for a
+certificate during the handshake, on a request to a model provider or its gateway and only at that
+request's own scheme, host and port. A redirect to another host or port, and every other request,
+including the ChatGPT and xAI sign-ins, goes out without it.
+
+Naming only one of the two, a file that cannot be read, a file with no certificate or no key in it,
+an encrypted key with no passphrase or with one that does not open it, and a key that does not belong
+to the certificate are each reported by path, all of them rather than the first. A key in OpenSSL's
+legacy encrypted form (`Proc-Type: 4,ENCRYPTED`) is reported as that form and is not opened: convert
+it with `openssl pkcs8 -topk8`. While any of these is reported, every TLS handshake is refused, so a
+request never goes out without the certificate to a server that would have been given it.
+`bravebot doctor` names the two paths in
+its `network` section and says they loaded, says whether a passphrase was given and where it is read
+from, or names each path that did not and ends on a configuration error. It never prints the key or
+the passphrase.
+
+After a connection failure on the first hop of such a request, both files are read again together,
+and the request is sent once more only if that pair differs from the one in use. A certificate
+rotated under a running process is picked up without a restart, and a reading that cannot be used
+keeps the pair in use.
+
 ## Confinement
 
 `bravebot doctor` reports the operating-system confinement available on your platform and whether
@@ -393,8 +422,7 @@ directory as not in force.
 
 **More places a stage cannot reach.** The browser relay's default directory `~/.bravebot-browser`,
 which holds the secret that drives the browser, is refused like `~/.bravebot` (a relay told to use
-another directory is not covered, and neither is a state directory that `BRAVEBOT_HOME` puts
-somewhere other than `~/.bravebot`). On Windows `gcloud` and `gpg` keep their data under
+another directory is not covered). On Windows `gcloud` and `gpg` keep their data under
 `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, and those are refused too, with the browser
 profiles under `~/AppData/Local` (`BraveSoftware`, `Google/Chrome`, `Chromium`, `Microsoft/Edge`) and
 `~/AppData/Roaming/Mozilla`, and the Windows stores for credentials, keys and vaults under
@@ -418,7 +446,11 @@ therefore cannot run `git config --global`. The locations are fixed paths, so a 
 `~/.local/bin` stays writable.
 
 **On macOS a stage reaches only a fixed list of system services.** The pasteboard and LaunchServices
-(opening a file or URL in another application) are refused. A program that needs another service,
+(opening a file or URL in another application) are refused. So `open` and `osascript` fail under
+the sandbox. Where the session would accept a request to run a line with no sandbox, a failed step
+that ran one of them carries a sentence from Brave Bot saying so, and that launching an application,
+opening a URL in one or scripting one needs the line run again with `unconfined`, with the refusal
+given in `why`. A program that needs another service,
 such as a file watcher built on FSEvents or Spotlight, loses that feature. The certificate trust
 services are in the list only for a stage allowed to reach the network. A stage held to a host list
 has them, and macOS fetches a certificate's issuer from its own process, so the host list does not
@@ -451,7 +483,9 @@ inside a credential location is left out.
 
 **A program Brave Bot starts itself is never one a stage wrote.** The AWS CLI, the clipboard tools,
 `osascript` and the inhibitor `/caffeinate` start outside the sandbox, so each is looked up only in
-absolute `PATH` entries that lie outside every directory a stage may write. Someone whose only `aws`
+absolute `PATH` entries that lie outside every directory a stage may write. On Unix an entry is compared with those directories by device and inode, so a spelling
+the volume opens as the same directory (a macOS firmlink, a Linux bind mount, a case-folded name) is left
+out as well. Someone whose only `aws`
 is in an activated virtualenv, or in the session's own directory, is told it is not installed until
 it is installed elsewhere. In bypass mode in a trusted directory, a stage may write every path your
 account can write, so an `aws` in a directory your account owns (a Homebrew prefix, say) is found
@@ -461,9 +495,10 @@ The editor, a hook, the AWS CLI, the clipboard tools and `osascript` are also st
 those same entries only, in the order written, so a program any of them starts by name (an `env`
 shebang, an `$EDITOR` of `env vim`, or a bare `credential_process` command) is not found in a
 directory a stage may write. A program the editor, a hook, the CLI or a clipboard tool needs that lives only in such a directory,
-for example a tool run from a project's `node_modules/.bin`, is not found by it. `bravebot doctor --push-identity` looks up
-`ssh-keygen`, `ssh` and `git` the same way, leaving out the directory it ran in and the checkout
-holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials and
+for example a tool run from a project's `node_modules/.bin`, is not found by it. Every command leaves out the directory it ran in and the checkout
+holding it, so `bravebot schedule`, `bravebot auth login` and `bravebot auth status` start no program found only there.
+`bravebot doctor --push-identity` looks up
+`ssh-keygen`, `ssh` and `git` the same way, reports one found only there as absent, and starts them without Brave Bot's own credentials and
 with a `PATH` of those same entries only, so a `ProxyCommand` in your ssh configuration that names a bare
 program does not find one a stage wrote. The inhibitor `/caffeinate` starts is given a `PATH` of those
 same entries only as well, so a program `systemd-inhibit` starts by name is not found in a directory a
@@ -560,6 +595,10 @@ how Brave Bot quotes it. That is when an argument holds a quotation mark, `&`, `
 `/r` is quoted and another follows it. Run the program directly instead. One argument after the
 switch still starts.
 
+A program whose file name ends in a dot or a space, or holds a colon, is refused, since Windows reads
+such a name as another file. `cmd.exe` is recognised by its file name, so a copy of it under another
+name is started like any program.
+
 ## Data collection, usage, and retention
 
 Brave does not use your data and does not store it. Prompts and used file contents are sent to Brave's
@@ -613,7 +652,9 @@ variable.
 When bravebot panics it writes one small file to `~/.bravebot/crash-reports`, and the next launch
 sends it to a Backtrace project Brave owns and deletes it. The process that panics sends nothing: it
 may be holding a lock or out of memory, and a request made there could hang the process you are
-watching fail.
+watching fail. A launch sends the waiting reports, oldest first, only after it has run for three
+seconds, so a command that ends sooner such as `--version` makes no request. At most five reports wait,
+the oldest being deleted first, and one older than two weeks is deleted unsent.
 
 A report is numbers, words fixed in the source and one source location, by what each field can be
 rather than by each call site's care. It holds the version and build, the operating system and

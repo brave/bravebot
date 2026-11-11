@@ -12,10 +12,12 @@
 //!
 //! # Only an installation there is a command for
 //!
-//! Two ways of installing bravebot have an update command this program can name: the npm package,
-//! whose launcher says which it is, and the install script, which writes down where it put the
-//! binary. Everything else, a build from source above all, is left alone. Telling somebody who
-//! compiled this that a release exists, without a command that would install it, is noise.
+//! Seven ways of installing bravebot have an update command this program can name: the npm package,
+//! whose launcher says which it is, the install script and the PowerShell script, which write down
+//! where they put the binary, and the Homebrew cask, the WinGet package, the Debian package and the
+//! Fedora package, which are recognised by where the binary is. Everything else, a build from
+//! source above all, is left alone. Telling somebody who compiled this that a release exists,
+//! without a command that would install it, is noise.
 //!
 //! # What the fetched number decides
 //!
@@ -100,9 +102,12 @@ impl Registry {
     fn of(install: Install) -> Self {
         match install {
             Install::Npm => Self::Npm,
-            Install::Script | Install::PowerShell | Install::Homebrew | Install::Winget => {
-                Self::Releases
-            }
+            Install::Script
+            | Install::PowerShell
+            | Install::Homebrew
+            | Install::Winget
+            | Install::Apt
+            | Install::Dnf => Self::Releases,
         }
     }
 
@@ -709,12 +714,24 @@ mod tests {
         assert!(brew.contains("brew upgrade --cask bravebot"), "{brew}");
         let winget = line(Install::Winget, version(0, 5, 0), version(1, 0, 0)).expect("newer");
         assert!(winget.contains("winget upgrade Brave.Bravebot"), "{winget}");
-        for said in [&brew, &winget] {
+        let apt = line(Install::Apt, version(0, 5, 0), version(1, 0, 0)).expect("newer");
+        assert!(
+            apt.contains("sudo apt update && sudo apt upgrade bravebot"),
+            "{apt}"
+        );
+        let dnf = line(Install::Dnf, version(0, 5, 0), version(1, 0, 0)).expect("newer");
+        assert!(dnf.contains("sudo dnf upgrade bravebot"), "{dnf}");
+        for said in [&brew, &winget, &apt, &dnf] {
             assert!(!said.contains("npm install"), "the wrong command: {said}");
             assert!(!said.contains("install.sh"), "the wrong command: {said}");
         }
         let listing = br#"{"tag_name":"v0.7.2"}"#;
-        for install in [Install::Homebrew, Install::Winget] {
+        for install in [
+            Install::Homebrew,
+            Install::Winget,
+            Install::Apt,
+            Install::Dnf,
+        ] {
             assert_eq!(
                 version_in(Registry::of(install), listing),
                 Some(version(0, 7, 2)),
@@ -1361,14 +1378,24 @@ mod tests {
             fn source(self) -> &'static str {
                 match self {
                     Self::Npm => "npm",
-                    Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => "releases",
+                    Self::Script
+                    | Self::PowerShell
+                    | Self::Homebrew
+                    | Self::Winget
+                    | Self::Apt
+                    | Self::Dnf => "releases",
                 }
             }
 
             fn other(self) -> Self {
                 match self {
                     Self::Npm => Self::Script,
-                    Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => Self::Npm,
+                    Self::Script
+                    | Self::PowerShell
+                    | Self::Homebrew
+                    | Self::Winget
+                    | Self::Apt
+                    | Self::Dnf => Self::Npm,
                 }
             }
         }

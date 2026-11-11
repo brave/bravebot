@@ -358,11 +358,11 @@ pub enum Event {
     /// The service declined to write the reply, in a content part of type `refusal`. Carries none
     /// of the words the service wrote, so they reach no screen, record or error.
     Declined,
-    /// The service says it could not write the reply.
-    Failed(Failure),
+    /// The service says it could not write the reply, in the kind of event the [`Carrier`] names.
+    Failed(Failure, Carrier),
     /// The service says what it says to an account that may not be used this way, in a code of
-    /// [`REFUSAL_CODES`].
-    Refused(Refusal),
+    /// [`REFUSAL_CODES`], in the kind of event the [`Carrier`] names.
+    Refused(Refusal, Carrier),
 }
 
 /// What reading one payload of the stream came to.
@@ -462,9 +462,10 @@ pub fn stream_event(value: &Value) -> Decoded {
             value
                 .pointer("/response/error/code")
                 .and_then(Value::as_str),
+            Carrier::Failed,
         ),
         // An error the service raised on the stream itself, outside any response.
-        "error" => failed(error_event_code(value)),
+        "error" => failed(error_event_code(value), Carrier::Error),
         _ => Decoded::Ignored,
     }
 }
@@ -652,11 +653,39 @@ pub(crate) fn model_not_offered_in(body: &[u8]) -> bool {
 }
 
 /// What a failure event says, from the `code` the service wrote in it: the account's refusal where it
-/// is one of [`REFUSAL_CODES`], and otherwise the failure the code stands for.
-fn failed(code: Option<&str>) -> Decoded {
+/// is one of [`REFUSAL_CODES`], and otherwise the failure the code stands for. `carrier` is given by
+/// the arm of [`stream_event`] that routed the event, so it is this crate's own value and nothing is
+/// read from the event to choose it.
+fn failed(code: Option<&str>, carrier: Carrier) -> Decoded {
     match code.and_then(refusal_named) {
-        Some(refusal) => Decoded::Event(Event::Refused(refusal)),
-        None => Decoded::Event(Event::Failed(code.map_or(Failure::Unknown, failure_named))),
+        Some(refusal) => Decoded::Event(Event::Refused(refusal, carrier)),
+        None => Decoded::Event(Event::Failed(
+            code.map_or(Failure::Unknown, failure_named),
+            carrier,
+        )),
+    }
+}
+
+/// Which kind of event carried a failure.
+///
+/// A closed pair set by the arm of [`stream_event`] that read the event as a failure or a refusal,
+/// one arm for `response.failed` and one for `error`. The word that reaches the diagnostic log is
+/// this crate's own and is not derived from the event's text after the arm has run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carrier {
+    /// A `response.failed` event.
+    Failed,
+    /// An `error` event.
+    Error,
+}
+
+impl Carrier {
+    /// The word the diagnostic log says it with.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+            Self::Error => "error",
+        }
     }
 }
 
@@ -1060,11 +1089,11 @@ mod tests {
         };
         assert_eq!(
             failed("rate_limit_exceeded"),
-            Decoded::Event(Event::Failed(Failure::RateLimit))
+            Decoded::Event(Event::Failed(Failure::RateLimit, Carrier::Failed))
         );
         assert_eq!(
             failed("server_error"),
-            Decoded::Event(Event::Failed(Failure::Api))
+            Decoded::Event(Event::Failed(Failure::Api, Carrier::Failed))
         );
         for (code, failure) in [
             ("invalid_request_error", Failure::InvalidRequest),
@@ -1077,22 +1106,71 @@ mod tests {
         ] {
             assert_eq!(
                 failed(code),
-                Decoded::Event(Event::Failed(failure)),
+                Decoded::Event(Event::Failed(failure, Carrier::Failed)),
                 "{code}"
             );
         }
         assert_eq!(
             failed("a code nobody documented"),
-            Decoded::Event(Event::Failed(Failure::Unknown))
+            Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Failed))
         );
         assert_eq!(
             event(json!({"type": "error", "code": "insufficient_quota", "message": "x"})),
-            Decoded::Event(Event::Failed(Failure::Billing))
+            Decoded::Event(Event::Failed(Failure::Billing, Carrier::Error))
         );
         assert_eq!(
             event(json!({"type": "response.failed", "response": {}})),
-            Decoded::Event(Event::Failed(Failure::Unknown))
+            Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Failed))
         );
+    }
+
+    /// DIAG-7: the kind of event that carried a failure or a refusal is set by the arm of
+    /// `stream_event` that routed the event, `failed` for a `response.failed` and `error` for an
+    /// `error`, whether the code is unlisted, listed as a failure or a refusal of the account. A
+    /// decoder that swapped the two words in its arms, or that named the kind from anything but
+    /// the arm, would fail this.
+    #[test]
+    fn the_kind_of_event_that_carried_a_failure_is_set_by_the_arm_that_read_it() {
+        let unlisted = "private_code_nobody_documented";
+        for (code, failure) in [
+            (unlisted, Failure::Unknown),
+            ("rate_limit_exceeded", Failure::RateLimit),
+        ] {
+            assert_eq!(
+                event(json!({"type": "response.failed",
+                             "response": {"error": {"code": code, "message": "x"}}})),
+                Decoded::Event(Event::Failed(failure, Carrier::Failed)),
+                "{code}"
+            );
+            assert_eq!(
+                event(json!({"type": "error", "error": {"code": code, "message": "x"}})),
+                Decoded::Event(Event::Failed(failure, Carrier::Error)),
+                "{code}"
+            );
+        }
+        assert_eq!(
+            event(json!({"type": "response.failed", "response": {}})),
+            Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Failed))
+        );
+        assert_eq!(
+            event(json!({"type": "error"})),
+            Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Error))
+        );
+        for (code, refusal) in REFUSAL_CODES {
+            assert_eq!(
+                event(json!({"type": "response.failed",
+                             "response": {"error": {"code": code}}})),
+                Decoded::Event(Event::Refused(*refusal, Carrier::Failed)),
+                "{code}"
+            );
+            assert_eq!(
+                event(json!({"type": "error", "code": code})),
+                Decoded::Event(Event::Refused(*refusal, Carrier::Error)),
+                "{code}"
+            );
+        }
+        assert_eq!(Carrier::Failed.as_str(), "failed");
+        assert_eq!(Carrier::Error.as_str(), "error");
     }
 
     use super::refusal_codes::{INVALID_USER, NOT_ELIGIBLE, USAGE_LIMIT, WORKPLACE_USAGE_LIMIT};
@@ -1223,7 +1301,7 @@ mod tests {
         assert_eq!(
             event(json!({"type": "response.failed",
                          "response": {"error": {"code": "model_not_found"}}})),
-            Decoded::Event(Event::Failed(Failure::Unknown))
+            Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Failed))
         );
     }
 
@@ -1236,12 +1314,12 @@ mod tests {
             assert_eq!(
                 event(json!({"type": "response.failed",
                              "response": {"error": {"code": code, "message": "x"}}})),
-                Decoded::Event(Event::Refused(*refusal)),
+                Decoded::Event(Event::Refused(*refusal, Carrier::Failed)),
                 "{code}"
             );
             assert_eq!(
                 event(json!({"type": "error", "code": code, "message": "x"})),
-                Decoded::Event(Event::Refused(*refusal)),
+                Decoded::Event(Event::Refused(*refusal, Carrier::Error)),
                 "{code}"
             );
         }
@@ -1251,7 +1329,7 @@ mod tests {
         ] {
             assert_eq!(
                 event(json!({"type": "response.failed", "response": {"error": {"code": code}}})),
-                Decoded::Event(Event::Failed(Failure::Unknown)),
+                Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Failed)),
                 "{code}"
             );
         }
@@ -1275,12 +1353,12 @@ mod tests {
         };
         assert_eq!(
             nested(json!("insufficient_quota")),
-            Decoded::Event(Event::Failed(Failure::Billing))
+            Decoded::Event(Event::Failed(Failure::Billing, Carrier::Error))
         );
         for (code, refusal) in REFUSAL_CODES {
             assert_eq!(
                 nested(json!(code)),
-                Decoded::Event(Event::Refused(*refusal)),
+                Decoded::Event(Event::Refused(*refusal, Carrier::Error)),
                 "{code}"
             );
         }
@@ -1291,35 +1369,35 @@ mod tests {
         // request.
         assert_eq!(
             nested(Value::Null),
-            Decoded::Event(Event::Failed(Failure::Unknown))
+            Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Error))
         );
 
         assert_eq!(
             event(json!({"type": "error", "code": USAGE_LIMIT, "message": "x"})),
-            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit, Carrier::Error)),
             "the form the OpenAPI description states is still read"
         );
         assert_eq!(
             event(json!({"type": "error", "code": USAGE_LIMIT, "error": {"code": null}})),
-            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit, Carrier::Error)),
             "an `error` object with no code leaves the event's own"
         );
         assert_eq!(
             event(json!({"type": "error", "code": USAGE_LIMIT, "error": {"code": 7}})),
-            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit, Carrier::Error)),
             "an `error` object whose code is not a string leaves the event's own"
         );
 
         assert_eq!(
             event(json!({"type": "error", "code": "rate_limit_exceeded",
                          "error": {"code": USAGE_LIMIT}})),
-            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit, Carrier::Error)),
             "the object's code wins over the event's"
         );
         assert_eq!(
             event(json!({"type": "error", "code": USAGE_LIMIT,
                          "error": {"code": "rate_limit_exceeded"}})),
-            Decoded::Event(Event::Failed(Failure::RateLimit)),
+            Decoded::Event(Event::Failed(Failure::RateLimit, Carrier::Error)),
             "the object's code wins over the event's, listed or not"
         );
 
@@ -1333,7 +1411,7 @@ mod tests {
         ] {
             assert_eq!(
                 event(none.clone()),
-                Decoded::Event(Event::Failed(Failure::Unknown)),
+                Decoded::Event(Event::Failed(Failure::Unknown, Carrier::Error)),
                 "{none}"
             );
         }

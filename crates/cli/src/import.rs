@@ -227,9 +227,11 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return Start::Ended(fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             ));
         }
     };
@@ -904,51 +906,57 @@ fn unset_line(provider: &Provider, file: &Path, later: bool) -> String {
     }
 }
 
-/// Put the destination on disk, whole, in place of the file it was read from.
-///
-/// Written beside it under a name of its own at STATE-1's mode, then renamed over it, so a failed
-/// write leaves the old file as it was and no copy of a key is readable by another user in between.
-/// Through a link rather than over it, so a settings file kept among somebody's dotfiles stays
-/// where they keep it. `unwritable` words a refusal of the document for the command writing it.
+/// Put the destination on disk, whole, in place of the file it was read from, as
+/// [`bravebot_agent::accounts::write_settings`] does. `unwritable` words a refusal of the document
+/// for the command writing it.
 pub(crate) fn write(
     destination: &Destination,
     unwritable: fn(import::Unwritable, &Path) -> String,
 ) -> Result<(), String> {
     let path = destination.path();
-    let said = |problem: String| {
-        t!(
+    bravebot_agent::accounts::write_settings(destination)
+        .map_err(|failure| not_written(failure, path, unwritable))
+}
+
+/// The words for a write that left the file as it was. The file system's own words can name a
+/// path an environment variable chose, so they are drawn (LAYER-3).
+fn not_written(
+    failure: bravebot_agent::accounts::SettingsNotWritten,
+    path: &Path,
+    unwritable: fn(import::Unwritable, &Path) -> String,
+) -> String {
+    use bravebot_agent::accounts::SettingsNotWritten;
+    match failure {
+        SettingsNotWritten::Unwritable(why) => unwritable(why, path),
+        SettingsNotWritten::Refused(problem) => t!(
             import_not_written,
             file = printable(&path.display().to_string()),
-            problem = problem
-        )
-    };
-    // The questions take as long as the person does, and another program may write the file
-    // meanwhile.
-    if destination.changed() {
-        return Err(unwritable(import::Unwritable::Changed, path));
+            problem = printable(&problem)
+        ),
     }
-    let text = destination
-        .text()
-        .map_err(|why| unwritable(why, destination.path()))?;
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let Some(parent) = target.parent() else {
-        return Err(said(target.display().to_string()));
-    };
-    bravebot_agent::home::create_directory(parent).map_err(|err| said(err.to_string()))?;
-    let temporary = parent.join(format!(".settings.json.import-{}", std::process::id()));
-    let written = bravebot_agent::home::write_file(&temporary, text.expose().as_bytes())
-        .and_then(|()| std::fs::rename(&temporary, &target));
-    if let Err(err) = written {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(said(err.to_string()));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bravebot_config::import::Places;
+
+    /// LAYER-3. The file system's words for a refused write can carry a path an environment
+    /// variable chose. Rejects: `not_written` interpolating the problem as it stands, which lets
+    /// an escape in the path reach the terminal.
+    #[test]
+    fn a_refused_write_is_worded_with_its_control_characters_drawn() {
+        let said = not_written(
+            bravebot_agent::accounts::SettingsNotWritten::Refused(
+                "No such file: /tmp/a\u{1b}[31m\u{202e}b".to_string(),
+            ),
+            Path::new("/tmp/settings.json"),
+            unwritable,
+        );
+        assert!(said.chars().all(|c| !c.is_control()), "{said:?}");
+        assert!(said.contains("a\u{241b}[31m"), "{said:?}");
+        assert!(!said.contains('\u{202e}'), "{said:?}");
+    }
 
     /// A scratch profile directory that removes itself.
     struct Scratch {

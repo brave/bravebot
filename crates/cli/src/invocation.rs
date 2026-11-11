@@ -84,6 +84,10 @@ pub(crate) struct Invocation {
     /// Whether the person typed `--trust-input-lines`, which makes those lines their own words
     /// where otherwise they are a program's (CLI-36).
     pub(crate) trust_input_lines: bool,
+    /// Whether the person typed `--approve-input-lines`, which lets the program sending those
+    /// lines approve or decline one write, run or fetch after it is shown what the call is
+    /// (CLI-36).
+    pub(crate) approve_input_lines: bool,
     /// The limits the command line gave the run, which end it where they are reached (CLI-38).
     pub(crate) limits: RunLimits,
 }
@@ -156,6 +160,7 @@ pub(crate) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut goal = None;
     let mut input_lines = false;
     let mut trust_input_lines = false;
+    let mut approve_input_lines = false;
     let mut limits = RunLimits::default();
     let mut index = 0;
 
@@ -314,6 +319,10 @@ pub(crate) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 trust_input_lines = true;
                 index += 1;
             }
+            "--approve-input-lines" => {
+                approve_input_lines = true;
+                index += 1;
+            }
             "-p" | "--print" => {
                 print = true;
                 index += 1;
@@ -349,6 +358,7 @@ pub(crate) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         goal,
         input_lines,
         trust_input_lines,
+        approve_input_lines,
         limits,
     })
 }
@@ -420,17 +430,54 @@ pub(crate) fn manifest_conflict(
     })
 }
 
-/// Why `--input-format lines` or `--trust-input-lines` cannot go with the rest of the command line,
-/// as the sentence that refuses it, or `None` where nothing is wrong (CLI-36).
+/// Why `--input-format lines`, `--trust-input-lines` or `--approve-input-lines` cannot go with the
+/// rest of the command line, as the sentence that refuses it, or `None` where nothing is wrong
+/// (CLI-36).
 pub(crate) fn input_lines_conflict(
     input_lines: bool,
     trust_input_lines: bool,
+    approve_input_lines: bool,
     mode: Mode,
 ) -> Option<String> {
     if !input_lines {
-        return trust_input_lines.then(|| t!(cli_trust_input_lines_needs_lines).to_string());
+        return trust_input_lines
+            .then(|| t!(cli_trust_input_lines_needs_lines).to_string())
+            .or_else(|| {
+                approve_input_lines.then(|| t!(cli_approve_input_lines_needs_lines).to_string())
+            });
     }
     (mode == Mode::Manifest).then(|| t!(cli_input_lines_not_with_a_manifest).to_string())
+}
+
+/// Why `--approve-input-lines` cannot go with the permission flag the command line also gave, as
+/// the sentence that refuses it, or `None` where it gave none (CLI-1, CLI-36).
+///
+/// The flag answers the write, run and fetch questions of a run for the program sending the lines,
+/// one call at a time. Each of the others answers them all, so a line that gave two does not say
+/// which its author meant, and the pairs are refused as the permission flags are refused in pairs.
+/// `bypass_flag` names the one typed where `skip_permissions` is set.
+pub(crate) fn approve_input_lines_conflict(
+    approve_input_lines: bool,
+    skip_permissions: bool,
+    bypass_flag: &'static str,
+    starts_in: Option<bravebot_agent::PermissionMode>,
+) -> Option<String> {
+    if !approve_input_lines {
+        return None;
+    }
+    if skip_permissions {
+        return Some(t!(cli_approve_input_lines_not_with, flag = bypass_flag));
+    }
+    match starts_in {
+        Some(bravebot_agent::PermissionMode::Auto) => {
+            Some(t!(cli_approve_input_lines_not_with, flag = "--auto"))
+        }
+        Some(_) => Some(t!(
+            cli_approve_input_lines_not_with,
+            flag = "--accept-edits"
+        )),
+        None => None,
+    }
 }
 
 /// The sentence that refuses a run limit given to a manifest run, which plans before it makes any

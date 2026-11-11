@@ -82,11 +82,11 @@ Every `Closes` line comes first, then the `Part of` lines, each in the `brave/br
 bare `#<n>` closes nothing in another repository). The first line is the issue number `... open`
 is given. An item gets `Closes` when every row of its checklist is `met`, and that is the default.
 An item with a `blocked` row gets `Part of`, and its entry under `## The problem` ends with a
-sentence naming the follow-up that holds the rest, which is an issue of its own and never the issue
-the pull request is for:
+sentence saying what is left and why. The item's own issue stays open and holds it, and no new
+issue is filed for it:
 
 ```text
-Left: <what is left of #103> (#NNNN).
+Left: <what is left of #103, and what it waits on>.
 ```
 
 An item that is blocked and has no commits gets no closing line and the same sentence.

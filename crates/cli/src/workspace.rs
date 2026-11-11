@@ -1,10 +1,12 @@
 //! The workspace, trust map, rules and definition a run starts with.
 
+use crate::exit::{Ending, fail};
 use bravebot_agent::Workspace;
 use bravebot_config::{Config, Managed};
 use bravebot_core::event::RecordingSink;
 use bravebot_i18n::t;
 use std::path::Path;
+use std::process::ExitCode;
 
 /// The workspace is the current directory: file arguments resolve relative to it, and
 /// confinement keeps reads inside it.
@@ -38,12 +40,28 @@ pub(crate) fn current_workspace(
         })
 }
 
+/// The exit for a workspace that could not be opened, with the problem drawn: it can name a
+/// directory a checkout chose (LAYER-3).
+pub(crate) fn workspace_problem(problem: &str) -> ExitCode {
+    fail(
+        Ending::Failed,
+        crate::progress::printable_lines(&t!(cli_workspace_problem, problem = problem)),
+    )
+}
+
 /// The directory this run writes what is not part of the project into, made and reachable.
 ///
 /// Nothing on a machine that cannot give it one, which is not a reason to refuse to run: a full or
 /// read-only temporary directory leaves a turn with nowhere to put an intermediate file and nothing
 /// else. On stderr, beside every other line this run has to say about itself, because a turn told
 /// there is nowhere to write leaves nothing else to read it off.
+///
+/// The problem is printed as it stands, without [`crate::progress::printable_lines`] (LAYER-3).
+/// `SessionScratch::create` fails only with an `io::Error` that the operating system made, and
+/// that error's text is the system's own words and an error number. It holds no path, no
+/// environment value and nothing a checkout or a model chose, so there is no control character in
+/// it to draw. A test in `bravebot-agent` pins that the error names neither the directory it was
+/// asked to make nor anything else beyond the system's text.
 pub(crate) fn scratch_for_this_run(
     workspace: &mut Workspace,
 ) -> Option<bravebot_agent::SessionScratch> {
@@ -124,9 +142,17 @@ pub(crate) fn unattended_trust_with(
 /// checkout would leave the tree the run was pointed at more trusted than the one it works in.
 /// Reads there are on the same footing as reads of the project's own files.
 ///
-/// `~` is left to the shell, which expands it before this ever sees the path. A path that is not
-/// absolute, does not exist, is not a directory, or lies inside the working one is refused by the
-/// workspace, and the refusal names which.
+/// A relative name, such as `--add-dir ../notes`, is resolved against the working directory
+/// first (CLI-11), through the one implementation `/cd` and `/add-dir` resolve a name against it
+/// with (TRUST-9), so the two cannot come to resolve the same name apart.
+///
+/// `~` is left to the shell, which expands it before this ever sees the path: unlike a relative
+/// name, an unexpanded `~` is read as an ordinary directory component rather than as the home
+/// directory, since giving it a second, possibly different reading here is a second place for a
+/// `~` the person types to resolve apart from the one the shell already gave it.
+///
+/// A path that is not absolute once resolved, does not exist, is not a directory, or lies inside
+/// the working one is refused by the workspace, and the refusal names which.
 ///
 /// Returns what the person is to be told about the ones that opened: a directory holding the
 /// working directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is
@@ -137,7 +163,15 @@ pub(crate) fn open_directories(
 ) -> Result<Vec<String>, String> {
     let mut notices = Vec::new();
     for directory in directories {
-        let added = workspace.add_directory(directory).map_err(|problem| {
+        let named = bravebot_agent::workspace::named_directory(workspace.root(), directory)
+            .map_err(|problem| {
+                t!(
+                    session_directory_not_added,
+                    directory = directory,
+                    problem = problem.to_string()
+                )
+            })?;
+        let added = workspace.add_directory(&named).map_err(|problem| {
             t!(
                 session_directory_not_added,
                 directory = directory,

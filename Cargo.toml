@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/choice", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files", "crates/update"]
+members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/choice", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/schedule", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files", "crates/update"]
+
+exclude = ["third_party/crossterm"]
 
 [workspace.package]
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 # Matches the pinned cross-build container, so `cargo build` fails on a feature the
 # release build could not compile rather than deferring that to CI.
@@ -102,6 +104,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
 ] }
+
+# crossterm 0.29.0 as published, kept in the tree so that the programs it starts are ours to
+# remove (SANDBOX-30). ratatui and ratatui-image take their crossterm from here too.
+# third_party/README.md says what differs from the published crate.
+[patch.crates-io]
+crossterm = { path = "third_party/crossterm" }
 
 # Rust's built-in strip can corrupt some targets under cargo-zigbuild, so
 # release builds leave symbols in place and strip during packaging instead.

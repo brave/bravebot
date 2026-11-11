@@ -290,6 +290,14 @@ try {
     await escape()
   })
 
+  await scene('19a-providers', async () => {
+    await page.locator('[data-test="agent-settings"]').click()
+    await page.locator('[data-test="settings-page-providers"]').click()
+    await page.locator('[data-test="settings-view"] [data-test="settings-body"]').waitFor()
+    await variants('19a-providers')
+    await escape()
+  })
+
   await scene('19-agent-settings', async () => {
     await page.locator('[data-test="agent-settings"]').click()
     await page.locator('[data-test="settings-page-agent"]').click()

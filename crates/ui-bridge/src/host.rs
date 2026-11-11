@@ -35,6 +35,7 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -44,9 +45,58 @@ use std::time::Duration;
 pub const MAX_LINE: usize = 8 * 1024 * 1024;
 
 /// The connection being served, and where its lines go. Empty between clients.
+///
+/// Lines are queued for a thread of the connection's own to write, so a client that reads slowly
+/// never holds up the thread that produced them: a turn reporting progress goes on at once.
 struct Attached {
     connection: u64,
-    writer: UnixStream,
+    lines: mpsc::SyncSender<String>,
+    /// The bytes of the lines in `lines` that the writer has not yet taken.
+    waiting: Arc<AtomicUsize>,
+    /// The channel itself, shut when the host gives up on the client.
+    channel: UnixStream,
+}
+
+impl Attached {
+    /// Start writing `channel`'s queue, giving up on it in `output` when a write fails or waits
+    /// more than `patience`.
+    fn start(
+        output: &Sink,
+        connection: u64,
+        channel: &UnixStream,
+        patience: Duration,
+    ) -> io::Result<Self> {
+        let mut writer = channel.try_clone()?;
+        writer.set_write_timeout(Some(patience))?;
+        let (lines, queued) = mpsc::sync_channel::<String>(QUEUED_LINES);
+        let waiting = Arc::new(AtomicUsize::new(0));
+        let (output, taken) = (Arc::clone(output), Arc::clone(&waiting));
+        std::thread::spawn(move || {
+            // Ends when the queue's sender is dropped, which is when the host stops serving the
+            // connection, once what was queued before then has been written.
+            for line in queued {
+                // The line being written no longer waits, so a long one does not refuse the next.
+                taken.fetch_sub(line.len(), Ordering::SeqCst);
+                if writeln!(writer, "{line}")
+                    .and_then(|()| writer.flush())
+                    .is_err()
+                {
+                    if let Ok(mut output) = output.lock()
+                        && output.as_ref().is_some_and(|a| a.connection == connection)
+                    {
+                        give_up_on(&mut output);
+                    }
+                    return;
+                }
+            }
+        });
+        Ok(Self {
+            connection,
+            lines,
+            waiting,
+            channel: channel.try_clone()?,
+        })
+    }
 }
 
 type Sink = Arc<Mutex<Option<Attached>>>;
@@ -99,6 +149,14 @@ type Sessions = HashMap<String, Option<Arc<Workers>>>;
 /// The longest a write to a client may wait. A client that reads nothing for this long is treated
 /// as gone for output, so the host can go on reading and see it leave.
 const WRITE_PATIENCE: Duration = Duration::from_secs(5);
+
+/// How many lines may wait to be written to a client. A client this far behind is treated as gone
+/// for output, as one whose write waited too long is. It takes the session over again to be told
+/// where it stands (HOST-11).
+pub const QUEUED_LINES: usize = 1024;
+
+/// How many bytes of lines may wait to be written to a client, beside [`QUEUED_LINES`].
+pub const QUEUED_BYTES: usize = 16 << 20;
 
 /// A bridge, the workspaces it may open sessions in, and the sessions it holds for clients.
 pub struct Host {
@@ -159,10 +217,9 @@ impl Host {
     pub fn serve(&mut self, channel: UnixStream) -> io::Result<Ended> {
         self.connections += 1;
         let connection = self.connections;
-        let writer = channel.try_clone()?;
-        writer.set_write_timeout(Some(WRITE_PATIENCE))?;
+        let attached = Attached::start(&self.output, connection, &channel, WRITE_PATIENCE)?;
         if let Ok(mut output) = self.output.lock() {
-            *output = Some(Attached { connection, writer });
+            *output = Some(attached);
         }
         self.bridge.ready();
 
@@ -444,20 +501,33 @@ fn for_a_client_info(mut info: Value) -> Value {
     info
 }
 
-/// One line to `connection`, if it is the one attached. A write that fails or times out ends the
-/// connection's output: the client is gone or reads nothing, and the host must not wait on it.
+/// One line to `connection`, if it is the one attached.
 fn write_line(output: &Sink, connection: u64, value: &Value) {
     let Ok(mut output) = output.lock() else {
         return;
     };
-    let failed = match output.as_mut().filter(|a| a.connection == connection) {
-        Some(attached) => writeln!(attached.writer, "{value}")
-            .and_then(|()| attached.writer.flush())
-            .is_err(),
-        None => false,
+    if output.as_ref().is_some_and(|a| a.connection == connection) {
+        queue(&mut output, value.to_string());
+    }
+}
+
+/// Queue `line` for the client attached. A queue that is full, in lines or in bytes, ends the
+/// connection's output: the client is gone or reads too slowly, and the host must not wait on it.
+/// A line is queued whatever its length while what waits is within the budget, so a long event
+/// and its view update, written back to back, are queued together. Only the length is taken.
+fn queue(output: &mut Option<Attached>, line: String) {
+    let Some(attached) = output.as_ref() else {
+        return;
     };
-    if failed {
-        give_up_on(&mut output);
+    let (bytes, waiting) = (line.len(), attached.waiting.load(Ordering::SeqCst));
+    if waiting > QUEUED_BYTES {
+        give_up_on(output);
+        return;
+    }
+    // Counted before it is sent, so the writer never takes away more than was added.
+    attached.waiting.fetch_add(bytes, Ordering::SeqCst);
+    if attached.lines.try_send(line).is_err() {
+        give_up_on(output);
     }
 }
 
@@ -476,17 +546,11 @@ fn write_event(output: &Sink, owners: &Owners, event: &Event) {
     let Ok(mut output) = output.lock() else {
         return;
     };
-    let failed = match output
-        .as_mut()
-        .filter(|a| owner.is_none_or(|owner| owner == a.connection))
+    if output
+        .as_ref()
+        .is_some_and(|a| owner.is_none_or(|owner| owner == a.connection))
     {
-        Some(attached) => writeln!(attached.writer, "{}", event.to_value())
-            .and_then(|()| attached.writer.flush())
-            .is_err(),
-        None => false,
-    };
-    if failed {
-        give_up_on(&mut output);
+        queue(&mut output, event.to_value().to_string());
     }
 }
 
@@ -495,7 +559,7 @@ fn write_event(output: &Sink, owners: &Owners, event: &Event) {
 /// and a question would wait for an answer nobody can read.
 fn give_up_on(output: &mut Option<Attached>) {
     if let Some(attached) = output.take() {
-        let _ = attached.writer.shutdown(std::net::Shutdown::Both);
+        let _ = attached.channel.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -578,7 +642,9 @@ mod tests {
         let mut host = a_host_with_a_session_controlled_by_connection_one();
         for method in [
             "turn.send",
+            "turn.lookup",
             "trust.reply",
+            "session.view.resync",
             "session.close",
             "session.attach",
         ] {
@@ -588,7 +654,13 @@ mod tests {
                 "{method}"
             );
         }
-        for method in ["turn.send", "trust.reply", "session.close"] {
+        for method in [
+            "turn.send",
+            "turn.lookup",
+            "trust.reply",
+            "session.view.resync",
+            "session.close",
+        ] {
             assert_eq!(code(&host, 1, method), None, "{method}");
         }
         assert_eq!(
@@ -601,7 +673,13 @@ mod tests {
         for method in ["session.close", "session.attach"] {
             assert_eq!(code(&host, 2, method), None, "{method}");
         }
-        for method in ["turn.send", "turn.cancel", "trust.reply", "confirm.reply"] {
+        for method in [
+            "turn.send",
+            "turn.cancel",
+            "trust.reply",
+            "confirm.reply",
+            "session.view.resync",
+        ] {
             assert_eq!(
                 code(&host, 2, method),
                 Some(ErrorCode::NotAllowed),
@@ -628,41 +706,166 @@ mod tests {
         }
     }
 
+    /// A channel whose client reads nothing, filled so the next write to it waits, and a sink
+    /// serving it with writes that wait `patience` before giving up.
+    fn a_client_that_reads_nothing(patience: Duration) -> (UnixStream, UnixStream, Sink) {
+        let (host_end, client_end) = UnixStream::pair().unwrap();
+        host_end
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut filling = host_end.try_clone().unwrap();
+        filling.set_nonblocking(true).unwrap();
+        let chunk = [b'x'; 64 * 1024];
+        while filling.write(&chunk).is_ok() {}
+        // The descriptors share one socket, so the writer's writes wait again from here.
+        filling.set_nonblocking(false).unwrap();
+        let sink: Sink = Arc::new(Mutex::new(None));
+        let attached = Attached::start(&sink, 1, &host_end, patience).unwrap();
+        *sink.lock().unwrap() = Some(attached);
+        (host_end, client_end, sink)
+    }
+
+    /// Whether the host has shut `host_end`, so that the thread reading it sees the end.
+    fn shut(host_end: &UnixStream) -> bool {
+        let mut read = [0u8; 1];
+        matches!((&*host_end).read(&mut read), Ok(0))
+    }
+
     /// A client that reads nothing is treated as gone when a write to it gives up. The thread
     /// that reads the channel is told by the end of its input, so the connection is lost and a
     /// question its session asks is refused, and not left waiting for an answer nobody can read.
     #[test]
     fn a_write_that_gives_up_ends_the_connection_the_host_is_reading() {
-        let (host_end, _client_end) = UnixStream::pair().unwrap();
-        host_end
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let writer = host_end.try_clone().unwrap();
-        writer
-            .set_write_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-        let mut filling = writer.try_clone().unwrap();
-        let chunk = [b'x'; 64 * 1024];
-        while filling.write(&chunk).is_ok() {}
-        let sink: Sink = Arc::new(Mutex::new(Some(Attached {
-            connection: 1,
-            writer,
-        })));
+        let (host_end, _client_end, sink) = a_client_that_reads_nothing(Duration::from_millis(100));
         let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
 
         write_event(&sink, &owners, &Event::global("agent.ready", json!({})));
 
+        assert!(shut(&host_end), "the channel was left open for reading");
         assert!(
             sink.lock().unwrap().is_none(),
             "the connection stayed attached"
         );
-        let mut read = [0u8; 1];
-        assert_eq!(
-            (&host_end)
-                .read(&mut read)
-                .expect("the read ended, not timed out"),
-            0,
-            "the channel was left open for reading"
+    }
+
+    /// An event for a client that reads slowly is queued, so the turn that reported it goes on at
+    /// once. A client so far behind that the queue is full is given up on at once, as one whose
+    /// write waited too long is.
+    #[test]
+    fn a_slow_client_holds_up_no_event_and_a_full_queue_ends_its_connection() {
+        let (host_end, _client_end, sink) = a_client_that_reads_nothing(PATIENCE_LONGER_THAN_TEST);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+
+        let (emitting, owners_now) = (Arc::clone(&sink), Arc::clone(&owners));
+        let (done, returned) = mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..QUEUED_LINES {
+                write_event(
+                    &emitting,
+                    &owners_now,
+                    &Event::global("agent.ready", json!({})),
+                );
+            }
+            let _ = done.send(());
+        });
+        returned
+            .recv_timeout(Duration::from_secs(10))
+            .expect("an event waited for a client that reads nothing");
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "a client was given up on before its queue was full"
+        );
+
+        write_event(&sink, &owners, &Event::global("agent.ready", json!({})));
+        write_event(&sink, &owners, &Event::global("agent.ready", json!({})));
+
+        assert!(
+            sink.lock().unwrap().is_none(),
+            "a client whose queue is full stayed attached"
+        );
+        assert!(shut(&host_end), "the channel was left open for reading");
+    }
+
+    /// A queue is bounded in bytes as well as lines. A line longer than the budget is queued while
+    /// what waits is within it, so one long reply does not end a connection that is keeping up. Lines
+    /// waiting past the budget end it, long before the queue holds its count of lines.
+    #[test]
+    fn a_queue_past_its_byte_budget_ends_the_connection_and_one_long_line_alone_does_not() {
+        let (host_end, _client_end, sink) = a_client_that_reads_nothing(PATIENCE_LONGER_THAN_TEST);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+        let line = |bytes: usize| Event::global("agent.ready", json!({"text": "x".repeat(bytes)}));
+
+        write_event(&sink, &owners, &line(QUEUED_BYTES + 1));
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "one long line alone ended the connection"
+        );
+        let mut written = 0;
+        while written < 20 && sink.lock().unwrap().is_some() {
+            write_event(&sink, &owners, &line(QUEUED_BYTES / 8));
+            written += 1;
+        }
+        assert!(
+            sink.lock().unwrap().is_none(),
+            "a client with {written} lines past its byte budget waiting stayed attached"
+        );
+        assert!(shut(&host_end), "the channel was left open for reading");
+    }
+
+    /// An event on a session with a view is written twice, as its view update and as itself, back
+    /// to back. A pair of long lines is queued even before the writer takes the first.
+    #[test]
+    fn a_long_event_and_its_view_update_are_queued_together() {
+        let (_host_end, _client_end, sink) = a_client_that_reads_nothing(PATIENCE_LONGER_THAN_TEST);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+        let line = Event::global(
+            "agent.ready",
+            json!({"text": "x".repeat(QUEUED_BYTES * 3 / 5)}),
+        );
+        // The writer is held on this one, which the client never reads.
+        let held = Event::global("agent.ready", json!({"text": "x".repeat(2 << 20)}));
+        write_event(&sink, &owners, &held);
+        write_event(&sink, &owners, &line);
+        write_event(&sink, &owners, &line);
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "a long event and its view update ended the connection"
         );
     }
+
+    /// A line the writer has taken no longer counts toward the budget, so a client that keeps
+    /// up is sent any number of bytes.
+    #[test]
+    fn a_client_that_keeps_up_is_sent_more_than_the_byte_budget() {
+        let (host_end, client_end) = UnixStream::pair().unwrap();
+        let sink: Sink = Arc::new(Mutex::new(None));
+        let attached = Attached::start(&sink, 1, &host_end, PATIENCE_LONGER_THAN_TEST).unwrap();
+        *sink.lock().unwrap() = Some(attached);
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+        client_end
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reading = BufReader::new(client_end);
+        for _ in 0..4 {
+            let text = "x".repeat(QUEUED_BYTES / 2);
+            write_event(
+                &sink,
+                &owners,
+                &Event::global("agent.ready", json!({"text": text})),
+            );
+            let mut line = String::new();
+            reading.read_line(&mut line).expect("the line arrives");
+            assert!(
+                line.len() > QUEUED_BYTES / 2,
+                "the channel was shut on a client that read every line"
+            );
+        }
+        assert!(
+            sink.lock().unwrap().is_some(),
+            "a client that read every line was given up on"
+        );
+    }
+
+    /// Longer than any test waits, so a write that waits this long is one the test sees waiting.
+    const PATIENCE_LONGER_THAN_TEST: Duration = Duration::from_secs(600);
 }

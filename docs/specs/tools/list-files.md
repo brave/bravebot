@@ -21,7 +21,8 @@ see them.
 <a id="LIST-1"></a>
 ### LIST-1: a filename is content, so an untrusted listing is quarantined
 
-A listing is trusted only if every file it touched is. A file can be named to read like an
+A listing is trusted only if every file it touched is, each asked about under every name it has, as
+a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). A file can be named to read like an
 instruction, so the names are treated as content and not shown to the planner.
 
 **The same bytes come back from a language server, and [LSP-3](lsp.md#LSP-3) treats them the same
@@ -33,6 +34,7 @@ would have typed a path, carries no position.
 `verified-by: bravebot_agent::turn::untrusted_listings_never_reach_the_model`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
 `verified-by: bravebot_agent::workspace::a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted`
+`verified-by: bravebot_agent::workspace::a_listing_of_a_hard_link_to_a_distrusted_file_is_untrusted`
 
 <a id="LIST-2"></a>
 ### LIST-2: a quarantined listing returns one reference per entry, not one for the listing
@@ -48,9 +50,25 @@ withholds, arriving in the strongest position the design has.
 A symbolic link is not named either. The walk counts the links it meets and does not enter, and the
 result carries that count ([LIST-6](#LIST-6)).
 
-**Why.** One reference for the whole listing would leave the planner holding an address it cannot
-use. What came of that in practice was a planner guessing globs to see which came back empty.
+The result says once what its references are: where the entries are from, what a reference to a file
+is for, and what a reference to a directory is for. Each file then has a line of its own with its
+reference and label. The directories a bounded walk stopped at ([LIST-5](#LIST-5)) are given as a
+run, a count with the first and last reference and the label they share, and a directory whose label
+differs from its neighbour's starts a new run. Every reference in a run is a directory, and each is
+still a reference the planner can name. Which entries are files and which are directories comes from
+where the entry sits in the listing, never from its name. The header names only the tools the run is
+offered, as the description of a single reference does.
 
+**Why.** One reference for the whole listing would leave the planner holding an address it cannot
+use, and it would guess globs to see which came back empty. Describing every entry in full repeats
+the same sentence for each one, and the result is sent again every round: at 110 entries that is
+about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
+
+`verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
+`verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`
+`verified-by: bravebot_core::reference::directories_with_different_labels_are_not_counted_together`
+`verified-by: bravebot_core::reference::the_header_of_a_listing_names_only_the_moves_the_run_is_offered`
+`verified-by: bravebot_core::reference::a_listing_of_one_directory_is_one_line_and_names_no_file_move`
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
@@ -130,9 +148,9 @@ pattern does not apply to those: it says which files are wanted, and a directory
 answer might be rather than an answer.
 
 A quarantined listing names them the only way it names anything, as one of the references
-[LIST-2](#LIST-2) hands over per entry, and each of those says whether it stands for a file or for
-a directory the walk stopped at. A reference standing for a directory is refused where a path is
-expected, so the difference is enforced and not only stated.
+[LIST-2](#LIST-2) hands over per entry, and the result says which of them stand for a directory the
+walk stopped at, as a run with a count and its first and last reference. A reference standing for a
+directory is refused where a path is expected, so the difference is enforced and not only stated.
 
 **Why.** Without a bound the only listing on offer is every path at every depth, which in a real
 repository is thousands of them. That is paid for in the planner's context, again on every round
@@ -186,3 +204,35 @@ count: [repo-map.md](repo-map.md).
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter`
 `verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
 `verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
+
+<a id="LIST-7"></a>
+### LIST-7: a listing whose pattern selected no file says so, and names syntax the matcher lacks
+
+A call with a `pattern` whose result holds no file says that no file matched the pattern and that
+this says nothing about whether such a file exists. The sentence also says that matching is
+case-sensitive and that a brace group such as `{r,R}eadme*` covers both cases. It is written when
+the result is empty and when it holds only the directories a bounded walk stopped at
+([LIST-5](#LIST-5)), which the pattern does not apply to and which would otherwise read as a listing
+in which the pattern worked. A call with no pattern words its empty result as before.
+
+When the pattern holds a character class, an extended glob or a leading `!`, the sentence adds the
+advice `search` gives for an `include` ([SEARCH-5](search.md#SEARCH-5)), from the same function. The
+advice is decided from the pattern the planner typed and reads nothing in the tree. Whether a file
+was selected is the count of files in the result, which is released with the entry count and the
+directory count of [LIST-5](#LIST-5) and adds no use of `declassify`. Like the link count of
+[LIST-6](#LIST-6) the sentence travels beside the references when the listing is quarantined, since
+a sentence inside that body reaches nobody.
+
+The tool description says that matching is case-sensitive and that `{r,R}eadme*` matches both
+cases, in the same words as the `include` of `search`. `list_files` has no switch for case. The
+`case_sensitive` argument of `search` applies to its pattern and not to its `include`, so the
+description of `include` carries the same statement.
+
+**Why.** `readme*` does not list `README.md`, and the answer was empty or only subdirectories. The
+planner took that for a directory with no readme, or retried with a character class that fails the
+same way. An unreadable pattern must not come back looking like a fact about the tree.
+
+`verified-by: bravebot_agent::tools::a_pattern_that_selects_no_file_says_so_and_says_matching_is_case_sensitive`
+`verified-by: bravebot_agent::tools::a_pattern_leaning_on_missing_syntax_is_named_even_when_directories_are_listed`
+`verified-by: bravebot_agent::tools::the_glob_arguments_say_matching_is_case_sensitive`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_when_its_pattern_selected_no_file`

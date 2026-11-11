@@ -133,16 +133,12 @@ fn mode_of(hosting: Option<&crate::host::Hosting>, skip_permissions: bool) -> Pe
     }
 }
 
-/// Whether the vetting prompts are answered from a safe verdict. Never in a background session,
-/// where only the mode the person chose answers in their absence (BG-8): the flag is refused there
-/// and the other two routes are standing answers somebody gave earlier.
-fn standing_vetting(
-    hosted: bool,
-    asked: bool,
-    chosen: Option<bool>,
-    configured: Option<bool>,
-) -> bool {
-    !hosted && bravebot_core::vetting::auto(asked, chosen, configured)
+/// Whether the vetting prompts are answered from a safe verdict, given what the three routes
+/// resolved to (`bravebot_session::store::auto_vetting`). Never in a background session, where only
+/// the mode the person chose answers in their absence (BG-8): the flag is refused there and the
+/// other two routes are standing answers somebody gave earlier.
+fn standing_vetting(hosted: bool, resolved: bool) -> bool {
+    !hosted && resolved
 }
 
 /// The prompt line, the answers, what is said beside the work, and where a background session's
@@ -183,9 +179,11 @@ fn run(
     let mut config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             );
         }
     };
@@ -211,7 +209,7 @@ fn run(
     let mut workspace =
         match crate::workspace::current_workspace(&settings, &bravebot_config::Managed::load()) {
             Ok(workspace) => workspace,
-            Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
+            Err(err) => return crate::workspace::workspace_problem(&err),
         };
 
     // Somewhere of its own to write what is not part of the project, for the length of the
@@ -426,7 +424,10 @@ fn run(
                 None
             }
             Ok(bravebot_tui::app::Settled::Nothing) => None,
-            Err(refused) => return fail(Ending::Argument, refused),
+            // Names the definition and the model it writes, which a checkout chose (LAYER-3).
+            Err(refused) => {
+                return fail(Ending::Argument, crate::progress::printable_lines(&refused));
+            }
         };
     // With the definition's model, because the opening line named the session's before the name
     // was matched, and every prompt asks for the definition's.
@@ -461,8 +462,9 @@ fn run(
             false => bravebot_agent::servers::Asking::Person,
         },
         asker,
-        // Where this session's own lines go, since nothing draws over them.
-        bravebot_sandbox::Stream::Inherited,
+        // Nowhere: the questions above are drawn on the stream a server's stderr would share, and
+        // a server's bytes could rewrite them (SERVERS-25).
+        bravebot_sandbox::Stream::Null,
     );
     for note in std::mem::take(&mut reached.notes) {
         asking.say(&crate::progress::printable_lines(&note));
@@ -521,8 +523,11 @@ fn run(
             notice = crate::progress::printable_lines(&failure.to_string())
         ));
     }
-    if skip_permissions {
-        asking.say(&t!(cli_notice, notice = t!(session_permissions_skipped)));
+    // Resolved once, here, where the first line about it is said, and handed to the session below.
+    let standing_vetting =
+        standing_vetting(hosted, bravebot_session::store::auto_vetting(&settings));
+    for line in crate::progress::bypass_notices(skip_permissions, standing_vetting) {
+        asking.say(&line);
     }
 
     // A background session's process has no interface a person opened and leaves, so it fires
@@ -582,12 +587,7 @@ fn run(
         courier,
         // Not a standing answer in a session nobody is watching: only the mode the person chose
         // answers there, so the prompts a safe verdict would have answered are held (BG-8).
-        auto_vetting: standing_vetting(
-            hosted,
-            bravebot_core::vetting::asked_for(),
-            bravebot_session::store::load_vetting(),
-            settings.auto_vetting(),
-        ),
+        auto_vetting: standing_vetting,
     };
 
     // Every question that precedes the first prompt is settled, so the session has begun and the
@@ -634,7 +634,9 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
         // the reply and nothing else (CLI-5). The session goes on: a backend that was unreachable
         // a moment ago is worth another prompt, and the conversation is still here.
         if let Some(failure) = &said.failure {
-            let _ = writeln!(beside, "{failure}");
+            // Drawn: the failure can name a path, a tool or a provider text a checkout or a
+            // backend chose (LAYER-3).
+            let _ = writeln!(beside, "{}", crate::progress::printable_lines(failure));
             crate::finish::say_notices(beside, &said.notices);
             continue;
         }
@@ -865,10 +867,8 @@ impl Kept {
     ) {
         self.turns += 1;
         self.tokens += outcome.tokens;
-        self.split.add(bravebot_session::sessions::Split::of(
-            outcome.tokens,
-            outcome.output_tokens,
-        ));
+        self.split
+            .add(bravebot_session::sessions::Split::of_outcome(outcome));
         *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
         self.timing
             .entry(self.turns)
@@ -1520,7 +1520,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         .plan
         .writes
         .iter()
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| bravebot_agent::confirm::shown_path(path))
         .collect();
     let confinement = request
         .confined
@@ -1530,7 +1530,7 @@ fn program(request: &RunRequest) -> Vec<String> {
             directories: confined
                 .directories
                 .iter()
-                .map(|directory| directory.to_string_lossy().into_owned())
+                .map(|directory| bravebot_agent::confirm::shown_path(directory))
                 .collect(),
             sentences: confined.sentences(),
         });
@@ -1679,6 +1679,8 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             description: request.description.as_deref(),
             offers_remember: false,
             asked_every_call: request.asked_every_call,
+            asked_for_private_arguments: request.asked_for_private_arguments,
+            also: &request.also,
         });
         self.about(Held::Tools);
         match self.ask(&lines, t!(mcp_call_question)) {
@@ -1808,6 +1810,17 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             });
         }
 
+        // What was put and what came back, once, so the transcript of a session in lines says what
+        // was decided without the planner's reply (ASK-13). Each line goes through `shown` like
+        // the questions themselves.
+        // Nothing is said when no question was put, since there is then nothing to say became of
+        // anything. The test is on how many questions were put and never on what came back.
+        if !fresh.is_empty() {
+            for line in bravebot_agent::settled::lines(settled.outstanding(), &fresh) {
+                self.say(&shown(&line));
+            }
+        }
+
         settled.finish(&mut self.answers, fresh)
     }
 
@@ -1884,7 +1897,7 @@ mod tests {
             .join("../../target/test-scratch")
             .join(format!("plain-failed-{}", std::process::id()));
         let mut kept = Kept::opening(&root, "id", None).expect("a new session holds nothing");
-        let spent = bravebot_agent::Spent {
+        let mut spent = bravebot_agent::Spent {
             tokens: 107,
             output_tokens: 40,
             timing: Timing {
@@ -1892,21 +1905,28 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
+                ..Default::default()
             },
             ..Default::default()
         };
+        spent.cached.read_tokens = 60;
+        spent.cached.written_tokens = 10;
 
         assert!(!kept.charge_failure(Default::default(), std::time::Duration::ZERO));
         assert_eq!((kept.turns, kept.tokens), (0, 0));
 
         assert!(kept.charge_failure(spent, std::time::Duration::from_millis(500)));
         assert_eq!((kept.turns, kept.tokens), (1, 107));
+        let mut divided = bravebot_session::sessions::Split {
+            read: 67,
+            written: 40,
+            ..Default::default()
+        };
+        divided.cache.read_tokens = 60;
+        divided.cache.written_tokens = 10;
         assert_eq!(
-            kept.split,
-            bravebot_session::sessions::Split {
-                read: 67,
-                written: 40
-            },
+            kept.split, divided,
             "the failed turn's tokens were not divided as the report counted them"
         );
         assert_eq!(kept.spend.get(&1), Some(&107));
@@ -1917,6 +1937,8 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
+                ..Default::default()
             })
         );
     }
@@ -1939,11 +1961,10 @@ mod tests {
     /// prompts and none of a background session's.
     #[test]
     fn a_standing_vetting_answer_does_not_reach_a_hosted_session() {
-        assert!(standing_vetting(false, false, Some(true), None));
-        assert!(standing_vetting(false, false, None, Some(true)));
-        assert!(!standing_vetting(true, false, Some(true), None));
-        assert!(!standing_vetting(true, false, None, Some(true)));
-        assert!(!standing_vetting(true, true, Some(true), Some(true)));
+        assert!(standing_vetting(false, true));
+        assert!(!standing_vetting(false, false));
+        assert!(!standing_vetting(true, true));
+        assert!(!standing_vetting(true, false));
     }
 
     /// BG-8: a hosted session's turns run in the mode its process was started in, whatever the
@@ -2033,6 +2054,31 @@ mod tests {
             String::from_utf8(reply).expect("what was written is text"),
             aside,
         )
+    }
+
+    /// LAYER-3: a turn that could not run is said beside the reply with a path, a tool or a provider's
+    /// text drawn as pictures, so the failure cannot move the cursor or write the clipboard.
+    ///
+    /// Rejects writing the failure as it was given.
+    #[test]
+    fn a_turn_that_could_not_run_is_said_beside_the_reply_drawn_as_pictures() {
+        let (reply, beside) = session_over(
+            "do it\n",
+            vec![Said {
+                failure: Some("BB1003: no 'a\u{1b}]0;T\u{7}file' here".to_string()),
+                ..Said::default()
+            }],
+        );
+
+        assert_eq!(reply, "");
+        assert!(
+            beside.contains("no 'a\u{241b}]0;T\u{2407}file' here"),
+            "the failure was not drawn as pictures: {beside:?}"
+        );
+        assert!(
+            !beside.contains('\u{1b}') && !beside.contains('\u{7}'),
+            "the failure sent a control character beside the reply: {beside:?}"
+        );
     }
 
     /// The reply is what a pipe gets, and nothing else is (CLI-5). A session in lines is
@@ -3264,6 +3310,60 @@ mod tests {
         }
     }
 
+    /// PROMPT-1, PATH-003: the plain question for a run draws a written file and a confined
+    /// directory whose name holds a byte that is not text as `\xNN`, and not as the U+FFFD a lossy
+    /// conversion gives, so two names that differ only in such a byte are not drawn alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_is_not_text() {
+        use std::os::unix::ffi::OsStrExt;
+        let drawn =
+            |written: &std::ffi::OsStr, directory: &std::ffi::OsStr| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], "/work");
+                request.plan.writes = vec![written.into()];
+                request.confined = Some(bravebot_agent::Confined {
+                    reads_the_machine: false,
+                    directories: vec![directory.into()],
+                    network: bravebot_sandbox::network::Network::Open,
+                    filesystem: Default::default(),
+                    requested: Vec::new(),
+                    requested_reaches: Vec::new(),
+                    carried: Vec::new(),
+                    writes_git_directories: false,
+                });
+                program(&request)
+            };
+        let invalid = std::ffi::OsStr::from_bytes(b"out-\xff.txt");
+        let lookalike = std::ffi::OsStr::new("out-\u{FFFD}.txt");
+        let plain = std::ffi::OsStr::new("/work");
+        let written = drawn(invalid, plain);
+        let looked_alike = drawn(lookalike, plain);
+        assert!(
+            written.contains(&"  \"out-\\xff.txt\"".to_string()),
+            "{written:?}"
+        );
+        assert_ne!(written, looked_alike);
+        let confined = drawn(
+            std::ffi::OsStr::new("note.md"),
+            std::ffi::OsStr::from_bytes(b"/w-\xff"),
+        );
+        assert!(
+            confined.contains(&"  \"/w-\\xff\"".to_string()),
+            "{confined:?}"
+        );
+        assert_ne!(
+            confined,
+            drawn(
+                std::ffi::OsStr::new("note.md"),
+                std::ffi::OsStr::new("/w-\u{FFFD}")
+            )
+        );
+    }
+
     /// PROMPT-1: the plain question for a run names the directory the line runs in on its summary
     /// row, and the file each step runs under it, spelled where the name would draw as another, so
     /// a line in `/work ` is not read as one in `/work`.
@@ -3547,6 +3647,52 @@ mod tests {
         assert!(later.contains("(1 of 2)"), "{later}");
         assert!(later.contains("(2 of 2)"), "{later}");
         assert!(!later.contains("of 3"), "{later}");
+    }
+
+    /// ASK-13: a session in lines says what each question put was and how it ended, directly
+    /// under the questions, and says nothing for one a remembered answer settled. The regressions
+    /// it rejects: no rows, rows for the remembered question, and a newline in a typed line
+    /// starting a row of its own.
+    #[test]
+    fn each_question_put_is_followed_by_what_became_of_it() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\nblue\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+        let before = asking.output.len();
+        asking.ask_user(&series_of(&[
+            ("Colour", "Which colour?"),
+            ("Region", "Which region?"),
+        ]));
+
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(
+            later.contains("Colour: Which colour?\n  answered: blue\n"),
+            "{later}"
+        );
+        assert!(!later.contains("Region: Which region?"), "{later}");
+    }
+
+    /// ASK-13: a series every question of which a remembered answer settled puts no question, so
+    /// it says nothing became of anything. The regressions it rejects: rows built from the whole
+    /// series instead of the questions put, and a "skipped" row for each remembered question.
+    #[test]
+    fn a_series_wholly_remembered_draws_no_rows() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+        let before = asking.output.len();
+        let again = asking.ask_user(&series_of(&[("Region", "Which region?")]));
+
+        assert_eq!(again, vec![Answer::Typed("east".to_string())]);
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(!later.contains("skipped"), "{later}");
+        assert!(!later.contains("answered:"), "{later}");
+        assert!(later.contains("answered already"), "{later}");
+        assert!(!later.contains("Region: Which region?"), "{later}");
     }
 
     /// A lone question has nowhere else in anything to be, so it carries no position.
@@ -3956,6 +4102,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         for (asked_every_call, said) in [(true, true), (false, false)] {
             for (typed, expected) in [
@@ -3983,6 +4131,34 @@ mod tests {
         }
     }
 
+    /// SERVERS-7: a call whose answer also covers later calls is asked in lines that hold each
+    /// later call's arguments, and a call asked for private arguments says so. The regression it
+    /// rejects is a plain interface that drops either field, so a yes covers calls never drawn.
+    #[test]
+    fn a_call_draws_the_later_calls_it_also_covers_and_the_private_arguments_sentence() {
+        let request = McpCallRequest {
+            alias: "weather".to_string(),
+            tool: "get_forecast".to_string(),
+            arguments: vec![("city".to_string(), "\"Paris\"".to_string())],
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: true,
+            also: vec![vec![("city".to_string(), "\"Rome\"".to_string())]],
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_mcp_call(&request), CallDecision::approve());
+        let drawn = String::from_utf8(asking.output).expect("text");
+        assert!(drawn.contains("\"Rome\""), "{drawn}");
+        assert!(
+            drawn.contains(t!(mcp_call_asked_for_private_arguments)),
+            "{drawn}"
+        );
+    }
+
     /// MCP-14, ROUTE-10, SERVERS-7: a call a choice fills is asked in lines that name the argument
     /// and give the number and which reference it came from, for 0 and 99 as for any other, before
     /// the question is put. A yes is the one call. The regression it rejects is a question that
@@ -4005,6 +4181,8 @@ mod tests {
                 description: None,
                 may_stand: false,
                 asked_every_call: true,
+                asked_for_private_arguments: false,
+                also: Vec::new(),
             };
             for (typed, expected) in [
                 ("y\n", CallDecision::approve()),
@@ -4051,6 +4229,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4096,6 +4276,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4284,6 +4466,8 @@ mod tests {
                     description: None,
                     may_stand: false,
                     asked_every_call: false,
+                    asked_for_private_arguments: false,
+                    also: Vec::new(),
                 });
             }),
             held(Held::Tools)

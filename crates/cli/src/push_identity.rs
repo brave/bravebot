@@ -10,6 +10,7 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
+use bravebot_sandbox::programs::{Names, selectors};
 use bravebot_sandbox::scope::Address;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -163,10 +164,7 @@ struct Machine;
 
 impl Ssh for Machine {
     fn fingerprint(&self, key: &Path) -> Option<String> {
-        let answer = run(
-            "ssh-keygen",
-            &[std::ffi::OsStr::new("-lf"), key.as_os_str()],
-        )?;
+        let answer = run("ssh-keygen", |program| fingerprint_command(program, key))?;
         // `256 SHA256:<hash> <comment> (ED25519)`: the comment is file content and is not kept.
         let hash = answer.split_whitespace().nth(1)?;
         let (kind, body) = hash.split_once(':')?;
@@ -178,49 +176,70 @@ impl Ssh for Machine {
     }
 
     fn greeting(&self, key: &Path, host: &str) -> Greeting {
-        use std::ffi::OsStr;
-        let target = format!("git@{host}");
-        let args = [
-            OsStr::new("-T"),
-            OsStr::new("-i"),
-            key.as_os_str(),
-            OsStr::new("-o"),
-            OsStr::new("IdentitiesOnly=yes"),
-            OsStr::new("-o"),
-            OsStr::new("ConnectTimeout=15"),
-            OsStr::new(&target),
-        ];
-        run("ssh", &args).map_or(Greeting::Unanswered, |answer| classify(&answer))
+        run("ssh", |program| greeting_command(program, key, host))
+            .map_or(Greeting::Unanswered, |answer| classify(&answer))
     }
 }
 
-/// The directories a confined stage opened here could have written: the one this command ran in
-/// and the checkout holding it, which is the nearest ancestor with a `.git`.
+/// `ssh-keygen -lf <key>`: the fingerprint of a public key file.
+fn fingerprint_command(program: &Path, key: &Path) -> std::process::Command {
+    let mut command = started(program);
+    command.arg("-lf").arg(key);
+    command
+}
+
+/// `ssh -T -i <key> -o IdentitiesOnly=yes -o ConnectTimeout=15 git@<host>`: a connection that
+/// offers `key` and no other.
+fn greeting_command(program: &Path, key: &Path, host: &str) -> std::process::Command {
+    let mut command = started(program);
+    command
+        .args(["-T", "-i"])
+        .arg(key)
+        .args(["-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=15"])
+        .arg(format!("git@{host}"));
+    command
+}
+
+/// `git config --get remote.origin.url`: the address `origin` has.
+fn origin_command(program: &Path) -> std::process::Command {
+    let mut command = started(program);
+    command.args(["config", "--get", "remote.origin.url"]);
+    command
+}
+
+/// The variables `ssh-keygen`, `ssh` and `git` read to choose a program to run
+/// ([SANDBOX-30], [PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
 ///
-/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session. A checkout's
-/// `bin` first on `PATH` would otherwise be searched for the programs started below.
-fn checkout(cwd: &Path) -> Vec<PathBuf> {
-    let mut directories = vec![cwd.to_path_buf()];
-    if let Some(root) = cwd
-        .ancestors()
-        .find(|ancestor| ancestor.join(".git").exists())
-        && root != cwd
-    {
-        directories.push(root.to_path_buf());
-    }
-    directories
-}
+/// - `SSH_ASKPASS` is the program `ssh` runs to ask for a passphrase, and `SSH_ASKPASS_REQUIRE`
+///   makes it run with a terminal present. `SSH_SK_PROVIDER` is a library `ssh` and `ssh-keygen`
+///   load for a hardware key, and `SSH_SK_HELPER` is the helper program `ssh` runs. This command
+///   asks for no passphrase and no hardware key from the environment, so none is kept
+///   ([`Names::Options`] never passes).
+/// - `DEVELOPER_DIR` is where the macOS `/usr/bin/git` shim finds the toolchain it runs, so one
+///   outside every directory a stage may write is kept.
+/// - `BROWSER` and the four `XDG_` directories are what `xdg-open` and Python's `webbrowser` read to
+///   choose the program that opens a page. None of the three commands opens one itself, but `git`
+///   reads the configuration under `XDG_CONFIG_HOME`, and a `credential.helper` or `core.sshCommand`
+///   it names can be a login flow that does. The names and kinds are those of the browser opener
+///   (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list and is repeated here
+///   so this list reads as complete.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
+const CODE_SELECTORS: [(&str, Names); 10] = [
+    ("SSH_ASKPASS", Names::Options),
+    ("SSH_ASKPASS_REQUIRE", Names::Options),
+    ("SSH_SK_PROVIDER", Names::Options),
+    ("SSH_SK_HELPER", Names::Options),
+    ("DEVELOPER_DIR", Names::Directory),
+    selectors::BROWSER,
+    ("XDG_DATA_HOME", Names::Directory),
+    ("XDG_DATA_DIRS", Names::Directories),
+    ("XDG_CONFIG_HOME", Names::Directory),
+    ("XDG_CONFIG_DIRS", Names::Directories),
+];
 
-/// Leave out of the lookup for programs the directory this command ran in and the checkout holding
-/// it. A command that starts programs with no session of its own calls this before its first
-/// lookup.
-pub(crate) fn keep_out_where_this_ran() {
-    if let Ok(cwd) = std::env::current_dir() {
-        for directory in checkout(&cwd) {
-            bravebot_sandbox::programs::keep_out(&directory);
-        }
-    }
-}
+/// The shell `ssh` runs a `ProxyCommand` or a `LocalCommand` with when `SHELL` names one.
+const SHELL: &str = "/bin/sh";
 
 /// A command for `program`, with this agent's own credentials taken off it.
 ///
@@ -228,29 +247,51 @@ pub(crate) fn keep_out_where_this_ran() {
 /// `~/.ssh`, and [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) keeps what this
 /// agent authenticates with out of reach of such a program. Its `PATH` is reduced to the entries
 /// the lookup searches, so a program `ssh` starts by name from the person's configuration, a
-/// `ProxyCommand` among them, is not one a stage wrote ([SANDBOX-30]).
+/// `ProxyCommand` among them, is not one a stage wrote ([SANDBOX-30]). Each of [`CODE_SELECTORS`]
+/// is taken off unless it passes the check the other starts share, and `SHELL` is [`SHELL`]
+/// whatever the person's is.
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn started(program: &Path) -> std::process::Command {
-    bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
-        bravebot_sandbox::programs::SearchPath::Reduced,
+    started_with(
+        program,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     )
 }
 
-/// Standard output and standard error of `program`, run to completion within [`WAIT`].
+/// [`started`] against a given environment and a given judgment of which files are outside the
+/// directories a stage may write.
+fn started_with(
+    program: &Path,
+    held: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start_against(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+        bravebot_sandbox::programs::CodeSelectors::Checked(&CODE_SELECTORS),
+        held,
+        outside_stage_writable,
+    );
+    command.env("SHELL", SHELL);
+    command
+}
+
+/// Standard output and standard error of the command `build` makes from `program`, run to
+/// completion within [`WAIT`].
 ///
 /// `program` is found as [SANDBOX-30] says, and one found only where a stage could have written is
-/// not started: it reads as absent.
+/// not started: it reads as absent. `build` is one of the `_command` functions above, each of which
+/// begins from [`started`].
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
-fn run(program: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
+fn run(program: &str, build: impl FnOnce(&Path) -> std::process::Command) -> Option<String> {
     use std::io::Read;
     use std::process::Stdio;
     let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))?;
-    let mut child = started(&found)
-        .args(args)
+    let mut child = build(&found)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -299,14 +340,7 @@ fn run(program: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
 /// directory the command ran in. Display only, so a repository's own configuration choosing
 /// nothing here is not a trust question.
 fn origin() -> Option<Address> {
-    let answer = run(
-        "git",
-        &[
-            std::ffi::OsStr::new("config"),
-            std::ffi::OsStr::new("--get"),
-            std::ffi::OsStr::new("remote.origin.url"),
-        ],
-    )?;
+    let answer = run("git", origin_command)?;
     bravebot_sandbox::scope::ssh_address(&["push".to_string(), answer.lines().next()?.to_string()])
 }
 
@@ -337,11 +371,13 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
-    keep_out_where_this_ran();
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
-    let keys = bravebot_sandbox::scope::candidate_public_keys(&home);
+    let keys = bravebot_sandbox::scope::candidate_public_keys(
+        &home,
+        bravebot_agent::home::directory().as_deref(),
+    );
     if keys.is_empty() {
         return fail(Ending::Failed, t!(doctor_push_no_keys));
     }
@@ -368,15 +404,19 @@ fn chosen_for(
     home: &Path,
 ) -> Option<(PathBuf, ChosenBy)> {
     if let Some(entry) = settings.git_identities().for_address(address) {
-        return bravebot_sandbox::scope::identity_key(&entry.key, home)
-            .map(|key| (key, ChosenBy::Settings));
+        return bravebot_sandbox::scope::identity_key(
+            &entry.key,
+            home,
+            bravebot_agent::home::directory().as_deref(),
+        )
+        .map(|key| (key, ChosenBy::Settings));
     }
     let state = bravebot_agent::home::directory()?;
     let chosen = bravebot_agent::reach::Store::new(&state)
         .chosen_keys()
         .into_iter()
         .find(|held| held.address.same_as(address))?;
-    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home)
+    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home, Some(&state))
         .map(|key| (key, ChosenBy::Prompt))
 }
 
@@ -566,6 +606,80 @@ mod tests {
         names
     }
 
+    /// Whether the start takes `name` off, when the person's environment holds `name` set to `value`
+    /// and only a path under `/safe` is outside the directories a stage may write.
+    fn withheld_value(name: &str, value: &str) -> bool {
+        let command = started_with(
+            Path::new("/usr/bin/git"),
+            [(
+                std::ffi::OsString::from(name),
+                std::ffi::OsString::from(value),
+            )],
+            &|path: &Path| path.starts_with("/safe"),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. `git` reads `XDG_CONFIG_HOME` and the helper its configuration names, which may
+    /// open a browser with `xdg-open` or Python's `webbrowser`. The regression it rejects: the start
+    /// left as `Checked(&[])`, so a value naming a file a stage wrote reaches `git`, `ssh` and
+    /// `ssh-keygen` as the person set it.
+    #[test]
+    fn a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here() {
+        assert!(withheld_value("BROWSER", "/stage/browser.sh %s"));
+        assert!(withheld_value(
+            "BROWSER",
+            "/safe/bin/firefox:/stage/browser.sh"
+        ));
+        assert!(withheld_value("BROWSER", "firefox --new-window %s"));
+        assert!(!withheld_value("BROWSER", "firefox"));
+        assert!(!withheld_value("BROWSER", "/safe/bin/firefox %s"));
+
+        assert!(withheld_value("XDG_DATA_HOME", "/stage/share"));
+        assert!(!withheld_value("XDG_DATA_HOME", "/safe/share"));
+        assert!(withheld_value("XDG_DATA_DIRS", "/safe/share:/stage/share"));
+        assert!(!withheld_value("XDG_DATA_DIRS", "/safe/share"));
+        assert!(withheld_value("XDG_CONFIG_HOME", "/stage/config"));
+        assert!(!withheld_value("XDG_CONFIG_HOME", "/safe/config"));
+        assert!(withheld_value("XDG_CONFIG_DIRS", "/safe/etc:/stage/etc"));
+        assert!(!withheld_value("XDG_CONFIG_DIRS", "/safe/etc/xdg"));
+    }
+
+    /// Variables the three programs are run to read stay as the person set them. Rejects a start
+    /// that removes the whole `XDG_` family or `HOME`, which would move `git` off the person's
+    /// configuration.
+    #[test]
+    fn the_variables_the_programs_started_here_are_run_to_read_are_kept() {
+        for name in ["HOME", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "DISPLAY"] {
+            assert!(
+                !withheld_value(name, "/stage/anything"),
+                "{name} was removed"
+            );
+        }
+    }
+
+    /// A `BROWSER` entry that is not text is judged as the bytes it is: a lossy rendering would
+    /// read `fire\u{FFFD}ox` as a bare program name and keep it.
+    #[cfg(unix)]
+    #[test]
+    fn a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here() {
+        use std::os::unix::ffi::OsStrExt;
+        let removed = |value: &std::ffi::OsStr| {
+            started_with(
+                Path::new("/usr/bin/git"),
+                [(std::ffi::OsString::from("BROWSER"), value.to_os_string())],
+                &|path: &Path| path.starts_with("/safe"),
+            )
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new("BROWSER") && now.is_none())
+        };
+
+        assert!(removed(std::ffi::OsStr::from_bytes(b"fire\xffox")));
+        assert!(!removed(std::ffi::OsStr::new("fire\u{FFFD}ox")));
+    }
+
     /// Every program this command starts is built by [`started`], so the one place that removes this
     /// agent's own credentials covers all three. Rejects a command built without `env_remove`,
     /// which hands the signing key to whatever `ssh-keygen` resolves to.
@@ -574,31 +688,283 @@ mod tests {
         let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
 
-        assert_eq!(withheld_from(&started(Path::new("/usr/bin/ssh"))), expected);
+        // An environment that holds none of the selector names, so what is removed is the
+        // credentials alone whatever the machine running the test has set.
+        let command = started_with(
+            Path::new("/usr/bin/ssh"),
+            [],
+            &bravebot_sandbox::programs::outside_stage_writable,
+        );
+        assert_eq!(withheld_from(&command), expected);
     }
 
-    /// The directory the command ran in and the checkout holding it are both left out of the lookup.
-    /// Rejects a lookup that leaves out only the directory itself, which finds a repository's
-    /// `bin` when the command runs in a subdirectory.
-    #[test]
-    fn the_checkout_holding_the_directory_is_left_out_with_it() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/push-identity-checkout");
-        let _ = std::fs::remove_dir_all(&root);
-        let here = root.join("crates").join("cli");
-        std::fs::create_dir_all(&here).unwrap();
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-
-        assert_eq!(checkout(&here), [here.clone(), root]);
+    /// A command built for each start, with the program path a lookup would have given.
+    #[cfg(unix)]
+    fn the_three_starts() -> [std::process::Command; 3] {
+        [
+            fingerprint_command(
+                Path::new("/usr/bin/ssh-keygen"),
+                Path::new("/h/.ssh/bot.pub"),
+            ),
+            greeting_command(
+                Path::new("/usr/bin/ssh"),
+                Path::new("/h/.ssh/bot.pub"),
+                "github.com",
+            ),
+            origin_command(Path::new("/usr/bin/git")),
+        ]
     }
 
-    /// A directory under no checkout is left out by itself. Rejects a lookup that leaves out the
-    /// checkout alone, which finds the `bin` of a project that has no `.git`.
+    /// The `ssh-keygen`, `ssh` and `git` starts are each built from [`started`], so the removal of
+    /// the selector variables and the `SHELL` it sets cover all three. A start built from
+    /// `programs::start` directly carries neither the credentials removal nor `SHELL`. Rejects a
+    /// start that leaves `started` out, and arguments that changed with the move.
+    #[cfg(unix)]
     #[test]
-    fn a_directory_under_no_checkout_is_left_out_by_itself() {
-        let here = Path::new("/bravebot-no-such-directory/project");
+    fn the_ssh_keygen_ssh_and_git_starts_all_go_through_started() {
+        let mut credentials = bravebot_config::scrub::own_credentials();
+        credentials.sort();
+        let [keygen, ssh, git] = the_three_starts();
 
-        assert_eq!(checkout(here), [here.to_path_buf()]);
+        for (command, program, args) in [
+            (
+                &keygen,
+                "/usr/bin/ssh-keygen",
+                vec!["-lf", "/h/.ssh/bot.pub"],
+            ),
+            (
+                &ssh,
+                "/usr/bin/ssh",
+                vec![
+                    "-T",
+                    "-i",
+                    "/h/.ssh/bot.pub",
+                    "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "ConnectTimeout=15",
+                    "git@github.com",
+                ],
+            ),
+            (
+                &git,
+                "/usr/bin/git",
+                vec!["config", "--get", "remote.origin.url"],
+            ),
+        ] {
+            assert_eq!(command.get_program(), program);
+            assert_eq!(command.get_args().collect::<Vec<_>>(), args, "{program}");
+            let shell = command
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new("SHELL"));
+            assert_eq!(
+                shell.and_then(|(_, value)| value),
+                Some(std::ffi::OsStr::new("/bin/sh")),
+                "{program}"
+            );
+            let withheld = withheld_from(command);
+            assert!(
+                credentials.iter().all(|name| withheld.contains(name)),
+                "{program} was handed one of this agent's own credentials"
+            );
+        }
+    }
+
+    /// Whether `name` is taken off the environment the start is given, when the person's
+    /// environment holds `value` for it and `writable` is the directory a stage may write.
+    #[cfg(unix)]
+    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+        let row = writable.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let command = started_with(
+            Path::new("/usr/bin/ssh"),
+            [(
+                std::ffi::OsString::from(name),
+                value.as_os_str().to_os_string(),
+            )],
+            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == std::ffi::OsStr::new(name) && now.is_none())
+    }
+
+    /// A script a stage can plant under a row it holds, and a genuine one beside it outside every
+    /// row. Each records that it ran in a file next to it, which no test here lets happen.
+    #[cfg(unix)]
+    fn planted_and_genuine(
+        name: &str,
+    ) -> (
+        crate::test_support::Scratch,
+        crate::test_support::Scratch,
+        PathBuf,
+        PathBuf,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let session = crate::test_support::Scratch::new(&format!("push-identity-{name}-session"));
+        let safe = crate::test_support::Scratch::new(&format!("push-identity-{name}-safe"));
+        let mut made = Vec::new();
+        for root in [&session.path, &safe.path] {
+            let file = root.join(".venv/bin/helper");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(
+                &file,
+                format!("#!/bin/sh\n: > '{}'\n", root.join("ran").display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+            made.push(file);
+        }
+        let genuine = made.pop().unwrap();
+        let planted = made.pop().unwrap();
+        (session, safe, planted, genuine)
+    }
+
+    /// SANDBOX-30. A list in `XDG_DATA_DIRS` or `XDG_CONFIG_DIRS` is judged entry by entry on the
+    /// disk. The regression it rejects: a list judged as one path, which names no directory, so a
+    /// person's list of installed directories is removed from the programs started here.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here()
+     {
+        let (session, safe, planted, _genuine) = planted_and_genuine("xdg-list");
+        let inner = safe.path.join(".venv");
+        let genuine_list = std::env::join_paths([&inner, &safe.path]).unwrap();
+        let mixed_list = std::env::join_paths([&inner, planted.parent().unwrap()]).unwrap();
+
+        for name in ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
+            assert!(
+                !withheld(name, Path::new(&genuine_list), &session.path),
+                "{name}: a genuine list"
+            );
+            assert!(
+                withheld(name, Path::new(&mixed_list), &session.path),
+                "{name}: a list with a directory a stage may write"
+            );
+        }
+    }
+
+    /// The regression it rejects: starting `ssh` with `SSH_ASKPASS` as the person set it, so a
+    /// program a stage wrote is run to ask for a passphrase, outside confinement. The variable
+    /// names a program this command has no use for, so it is taken off whatever it holds.
+    #[cfg(unix)]
+    #[test]
+    fn an_askpass_program_is_never_handed_to_the_start() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("askpass");
+
+        assert!(withheld("SSH_ASKPASS", &planted, &session.path));
+        assert!(withheld("SSH_ASKPASS", &genuine, &session.path));
+        assert!(withheld("SSH_ASKPASS", Path::new("askpass"), &session.path));
+    }
+
+    /// `SSH_ASKPASS_REQUIRE=force` makes `ssh` run the askpass program even with a terminal, so it
+    /// is taken off with it. Rejects a start that removes the program and leaves the switch.
+    #[cfg(unix)]
+    #[test]
+    fn the_switch_that_forces_the_askpass_program_is_never_handed_to_the_start() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("askpass-require");
+
+        assert!(withheld(
+            "SSH_ASKPASS_REQUIRE",
+            Path::new("force"),
+            &session.path
+        ));
+        assert!(withheld("SSH_ASKPASS_REQUIRE", &planted, &session.path));
+    }
+
+    /// The regression it rejects: starting `ssh` or `ssh-keygen` with `SSH_SK_PROVIDER` naming a
+    /// library a stage wrote, which is loaded for a hardware key.
+    #[cfg(unix)]
+    #[test]
+    fn a_security_key_provider_is_never_handed_to_the_start() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("sk-provider");
+
+        assert!(withheld("SSH_SK_PROVIDER", &planted, &session.path));
+        assert!(withheld("SSH_SK_PROVIDER", &genuine, &session.path));
+    }
+
+    /// The regression it rejects: starting `ssh` with `SSH_SK_HELPER` naming a program a stage
+    /// wrote, which `ssh` runs for a hardware key.
+    #[cfg(unix)]
+    #[test]
+    fn a_security_key_helper_is_never_handed_to_the_start() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("sk-helper");
+
+        assert!(withheld("SSH_SK_HELPER", &planted, &session.path));
+        assert!(withheld("SSH_SK_HELPER", &genuine, &session.path));
+    }
+
+    /// The regression it rejects: leaving `SHELL` as the person's environment has it. `ssh` runs a
+    /// `ProxyCommand` and a `LocalCommand` with `$SHELL -c`, so a program a stage wrote there runs
+    /// outside confinement. Each start is given `/bin/sh` whatever `SHELL` holds, and also when it
+    /// holds nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_start_is_given_bin_sh_for_shell_whatever_the_person_has() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("shell");
+        let rows = [session.path.clone()];
+        for held in [Some(planted), Some(genuine), None] {
+            let command = started_with(
+                Path::new("/usr/bin/ssh"),
+                held.clone()
+                    .map(|shell| (std::ffi::OsString::from("SHELL"), shell.into_os_string())),
+                &|file: &Path| {
+                    bravebot_sandbox::programs::outside_stage_writable_with(file, &rows, &[])
+                },
+            );
+            let shell: Vec<_> = command
+                .get_envs()
+                .filter(|(name, _)| *name == std::ffi::OsStr::new("SHELL"))
+                .collect();
+            assert_eq!(
+                shell,
+                [(
+                    std::ffi::OsStr::new("SHELL"),
+                    Some(std::ffi::OsStr::new("/bin/sh"))
+                )],
+                "{held:?}"
+            );
+        }
+    }
+
+    /// The regression it rejects: starting the macOS `/usr/bin/git` shim with `DEVELOPER_DIR`
+    /// naming a directory a stage wrote, whose `usr/bin/xcrun` the shim runs. A relative or missing
+    /// directory is read from, or made in, a directory a stage writes.
+    #[cfg(unix)]
+    #[test]
+    fn a_developer_directory_a_stage_may_write_is_not_handed_to_the_start() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("developer-dir");
+        let xcrun = session.path.join("Xcode/usr/bin/xcrun");
+        std::fs::create_dir_all(xcrun.parent().unwrap()).unwrap();
+        std::fs::copy(&planted, &xcrun).unwrap();
+        let linked = safe.path.join("linked-developer-dir");
+        std::os::unix::fs::symlink(session.path.join("Xcode"), &linked).unwrap();
+
+        assert!(withheld(
+            "DEVELOPER_DIR",
+            &session.path.join("Xcode"),
+            &session.path
+        ));
+        assert!(withheld("DEVELOPER_DIR", &linked, &session.path));
+        assert!(withheld("DEVELOPER_DIR", Path::new("Xcode"), &session.path));
+        assert!(withheld(
+            "DEVELOPER_DIR",
+            &safe.path.join("not-made-yet"),
+            &session.path
+        ));
+    }
+
+    /// A `DEVELOPER_DIR` outside every directory a stage may write still reaches the start, so a
+    /// person who selects a toolchain with it keeps `git`. Rejects a start that removes it whatever
+    /// it holds.
+    #[cfg(unix)]
+    #[test]
+    fn a_developer_directory_outside_every_directory_a_stage_may_write_still_reaches_the_start() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("developer-dir-kept");
+        let developer = safe.path.join("Xcode");
+        std::fs::create_dir_all(developer.join("usr/bin")).unwrap();
+
+        assert!(!withheld("DEVELOPER_DIR", &developer, &session.path));
     }
 
     /// SANDBOX-30: `ssh` reads the person's configuration, and a `ProxyCommand` there names a
@@ -622,7 +988,7 @@ mod tests {
             std::fs::write(session.join("ran"), "").unwrap();
             bravebot_sandbox::programs::keep_out(&session);
 
-            let answer = run("ssh", &[]);
+            let answer = run("ssh", started);
             assert!(answer.is_some(), "the installed ssh was not started");
             assert!(
                 !session.join("planted-ran").exists(),
@@ -666,6 +1032,7 @@ mod tests {
             &own,
             bravebot_sandbox::programs::Inherits::All,
             bravebot_sandbox::programs::SearchPath::Inherited,
+            bravebot_sandbox::programs::CodeSelectors::Kept,
         )
         .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
         .env(SESSION, &session.path)

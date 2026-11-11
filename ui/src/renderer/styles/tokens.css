@@ -34,14 +34,27 @@
 
   /* Status. Only ever systemfeedback. */
   --status-success: var(--leo-color-systemfeedback-success-icon);
+  --status-success-ink: var(--leo-color-systemfeedback-success-text);
   --status-success-bg: var(--leo-color-systemfeedback-success-background);
   --status-warning: var(--leo-color-systemfeedback-warning-icon);
+  --status-warning-ink: var(--leo-color-systemfeedback-warning-text);
   --status-warning-bg: var(--leo-color-systemfeedback-warning-background);
   --status-error: var(--leo-color-systemfeedback-error-icon);
   --status-error-ink: var(--leo-color-systemfeedback-error-text);
   --status-error-bg: var(--leo-color-systemfeedback-error-background);
   --status-info: var(--leo-color-systemfeedback-info-icon);
   --status-info-bg: var(--leo-color-systemfeedback-info-background);
+
+  /* The approval modes, each a hue of its own: the background is the hue's 10 and the text and icon
+     its 60, which Leo flips between light and dark. */
+  --mode-ask-bg: var(--leo-color-yellow-10);
+  --mode-ask-ink: var(--leo-color-yellow-60);
+  --mode-accept-bg: var(--leo-color-green-10);
+  --mode-accept-ink: var(--leo-color-green-60);
+  --mode-plan-bg: var(--leo-color-blue-10);
+  --mode-plan-ink: var(--leo-color-blue-60);
+  --mode-auto-bg: var(--leo-color-pink-10);
+  --mode-auto-ink: var(--leo-color-pink-60);
 
   /* Type roles, as font shorthands. */
   --type-page-title: var(--leo-font-heading-h1);
@@ -90,6 +103,10 @@
   --icon-meta: 14px;
   --icon-control: 16px;
   --icon-hero: 20px;
+  /* An account's mark in the Providers list. */
+  --icon-account: 24px;
+  /* Every spinner, wherever it is drawn. */
+  --spinner: var(--icon-hero);
 
   /* Motion. FOLD_MS in columns.ts must match --leo-duration-m. */
   --motion-fast: var(--leo-duration-s) var(--leo-easing-out);

@@ -53,13 +53,21 @@ pub fn find(program: &str, working: &Path) -> Option<Found> {
         return usable(&candidate);
     }
 
-    for directory in std::env::split_paths(&std::env::var_os("PATH")?) {
+    find_in(program, working, &std::env::var_os("PATH")?)
+}
+
+/// [`find`] for a bare name, looked up in the `$PATH`-shaped list `path`.
+fn find_in(program: &str, working: &Path, path: &std::ffi::OsStr) -> Option<Found> {
+    for directory in std::env::split_paths(path) {
         // An empty entry in $PATH means the current directory, which is a long-standing footgun:
         // it would let a file in the workspace shadow a system program. Skipped rather than
         // honoured, since nothing here needs it and the surprise is all downside.
         if directory.as_os_str().is_empty() {
             continue;
         }
+        // A relative entry is read under the directory the stage runs in, the one the policy
+        // judges, and not under this process's own, which `/cd` does not change (#3894).
+        let directory = working.join(directory);
         for name in candidates(program) {
             if let Some(found) = usable(&directory.join(&name)) {
                 return Some(found);
@@ -154,6 +162,42 @@ mod tests {
         let found = resolve("sh", Path::new("/")).expect("sh is on the path");
         assert!(found.is_absolute());
         assert!(found.is_file());
+    }
+
+    /// A relative `$PATH` entry means the same directory to the policy and to the stage: the one
+    /// the stage runs in. Joined to this process's directory it meant a different one after `/cd`
+    /// (#3894). The control is an absolute entry, which finds its program whatever the working
+    /// directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_path_entry_is_read_under_the_working_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::testutil::scratch_dir("bravebot-programs-relative-entry");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("project/bin")).unwrap();
+        std::fs::create_dir_all(scratch.join("elsewhere")).unwrap();
+        std::fs::create_dir_all(scratch.join("absolute")).unwrap();
+        let tool = scratch.join("project/bin/tool");
+        let control = scratch.join("absolute/control");
+        for file in [&tool, &control] {
+            std::fs::write(file, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let path = std::ffi::OsStr::new("bin");
+        let found = find_in("tool", &scratch.join("project"), path)
+            .expect("the entry is read under the working directory");
+        assert_eq!(found.resolved, tool.canonicalize().unwrap());
+        assert!(
+            find_in("tool", &scratch.join("elsewhere"), path).is_none(),
+            "a relative entry was read under some other directory"
+        );
+
+        let absolute = scratch.join("absolute");
+        let found = find_in("control", &scratch.join("elsewhere"), absolute.as_os_str())
+            .expect("the control: an absolute entry does not depend on the working directory");
+        assert_eq!(found.resolved, control.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

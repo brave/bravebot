@@ -1,20 +1,16 @@
 import { Modal } from './Modal'
+import { t } from '../i18n'
 import { Button, Collapse } from '../nala'
 
-export function Unconfigured({ detail, onClose }: { detail: string; onClose: () => void }): React.JSX.Element {
-  return <Modal title="Connect the agent backend" size="md" className="unconfigured" onClose={onClose}
-    subtitle="This build cannot load its backend credentials. You can continue browsing conversations and writing drafts."
-    actions={<Button kind="filled" onClick={onClose} data-test="unconfigured-continue">Continue browsing</Button>}>
-    <p>If you installed Brave Bot, obtain a configured build from its distributor. Credentials are currently provided when the agent is built.</p>
-    <Collapse className="dialog-collapse" title="Development setup" isOpen={undefined} data-test="unconfigured-setup">
-      <ol>
-        <li>Provide the backend credentials through the project’s approved environment configuration.</li>
-        <li>Run <code>pnpm run bridge</code> from the interface checkout.</li>
-        <li>Restart Brave Bot, then use <strong>Check again</strong>.</li>
-      </ol>
-      <p>See <code>docs/setup.md</code> for the configuration layout. Keep credentials outside the repository.</p>
-    </Collapse>
-    <Collapse className="dialog-collapse" title="Technical details" isOpen={undefined} data-test="unconfigured-details">
+export function Unconfigured({ detail, onClose, onSettings }: { detail: string; onClose: () => void; onSettings: () => void }): React.JSX.Element {
+  return <Modal title={t.uiUnconfiguredTitle()} size="md" className="unconfigured" onClose={onClose}
+    subtitle={t.uiUnconfiguredSubtitle()}
+    actions={<>
+      <Button kind="plain-faint" onClick={onClose} data-test="unconfigured-continue">{t.uiUnconfiguredContinue()}</Button>
+      <Button kind="filled" onClick={onSettings} data-test="unconfigured-settings">{t.uiUnconfiguredOpenSettings()}</Button>
+    </>}>
+    <p>{t.uiUnconfiguredBody()}</p>
+    <Collapse className="dialog-collapse" title={t.uiUnconfiguredDetails()} isOpen={undefined} data-test="unconfigured-details">
       <pre>{detail}</pre>
     </Collapse>
   </Modal>

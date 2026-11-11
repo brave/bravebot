@@ -1,47 +1,71 @@
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import { providerLogo } from '../../shared/accounts'
+import { arrange } from '../../shared/model-preferences'
+import { EFFORT_LEVELS, type EffortLevel, type EffortReport, type ModelCatalogue, type ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
 import { rememberCatalogue } from '../context-window'
 import { useDelayedFlag, useFocusReturn } from '../hooks'
-import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
+import { Alert, Button, ButtonMenu, Hr, Icon, Input, type IconName } from '../nala'
+import { IconButton } from './IconButton'
 import { ModelWarnings } from './ModelWarnings'
+import { Skeleton } from './Skeleton'
 
-/** The two capabilities this app uses; the rest are in the catalogue but not shown. */
-const CAPABILITY_ICONS: Record<string, IconName> = { text: 'message-bubble-text', tools: 'wrench' }
-
-const CAPABILITIES: Record<string, [string, string]> = {
-  text: ['Text', 'Generates text'],
-  vision: ['Vision', 'Understands image input'],
-  'image-output': ['Images out', 'Generates images'],
-  'audio-input': ['Audio in', 'Accepts audio input'],
-  'audio-output': ['Audio out', 'Generates audio'],
-  video: ['Video', 'Accepts video input'],
-  files: ['Files', 'Accepts file input'],
-  tools: ['Tools', 'Supports tool calling'],
-  reasoning: ['Reasoning', 'Supports reasoning parameters'],
-  'structured-output': ['Structured', 'Supports structured outputs'],
+/** Words a capability adds to what a search matches, so "vision" finds the models that see. */
+const CAPABILITIES: Record<string, string> = {
+  text: 'text generates text',
+  vision: 'vision understands image input',
+  'image-output': 'images out generates images',
+  'audio-input': 'audio in accepts audio input',
+  'audio-output': 'audio out generates audio',
+  video: 'video accepts video input',
+  files: 'files accepts file input',
+  tools: 'tools supports tool calling',
+  reasoning: 'reasoning supports reasoning parameters',
+  'structured-output': 'structured supports structured outputs',
 }
+
+/** The rows of the Reasoning column: the service's own default, then the levels, cheapest first. */
+const EFFORT_ROWS: readonly { level: EffortLevel | null; label: string }[] = [
+  { level: null, label: 'Default' },
+  ...EFFORT_LEVELS.map((level) => ({ level, label: ({ low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Ultra' } as const)[level] })),
+]
 
 /** How many rows PageDown / PageUp jumps. */
 const PAGE_SIZE = 6
 
+/** The rail entry that lists every service's models. */
+const ALL = 'all'
+
+/** Where the rail stood when a picker last closed, so the next one opens on it, in any conversation. */
+const RAIL_KEY = 'bravebot.model-picker-rail'
+const lastRail = (): string => { try { return localStorage.getItem(RAIL_KEY) || ALL } catch { return ALL } }
+const keepRail = (key: string) => { try { localStorage.setItem(RAIL_KEY, key) } catch { /* the next open starts on All */ } }
+
+/** Where the keyboard is: the service rail, the model list, or the Reasoning column. */
+type Zone = 'rail' | 'models' | 'effort'
+
+const searchable = (row: ModelOption) =>
+  `${row.name} ${row.id} ${row.provider} ${(row.capabilities ?? []).map((key) => `${key} ${CAPABILITIES[key] ?? ''}`).join(' ')}`.toLowerCase()
+
 /**
- * The model list for a conversation or a bot.
+ * The model list for a conversation or a bot, and the effort level every turn asks for.
  *
- * Leo's ButtonMenu owns the popup: where it sits, the elevation, and dismissal
- * when the pointer goes outside. Rows are `leo-option`s, the search field is a
- * Leo input, and the chips are Leo labels.
+ * Leo's ButtonMenu owns the popup: where it sits, the elevation, and dismissal when the pointer
+ * goes outside. Inside it a rail of service marks sits on the left, the first listing every
+ * service's models, then the models of the service chosen, then the Reasoning column. It opens on
+ * the service it was left on, or on every service where that one is no longer listed.
  *
- * Hover used to close this menu. Entering a row called `scrollIntoView`, which
- * scrolls every ancestor, and a window scroll listener read that as the page
- * moving and shut the popup. The keyboard highlight only moves the list's own
- * scroll offset, so a pointer moving across the rows leaves the menu up.
+ * What a person hid or reordered in Settings › Providers is applied here (`arrange`), except that
+ * the model in use is always listed. Typing searches every service at once.
  *
- * Provider sections are collapsible. ArrowLeft on any row in a section, or on
- * the section heading itself, collapses it and moves the highlight to the first
- * visible row at or after the collapsed block. ArrowRight on a collapsed heading
- * re-expands it. PageDown / PageUp jump PAGE_SIZE rows at a time through
- * visible (non-collapsed) rows. Home / End jump to the first / last visible row.
+ * Choosing a model or a level keeps the menu open, so both can be chosen in one visit; Enter on a
+ * model chooses it and closes. The level is the machine's, recorded where `/effort` records it, so
+ * it applies to every conversation, and a checkout whose settings name one outranks it there.
+ *
+ * The keyboard stays in the search field. ArrowUp and ArrowDown move within the zone the
+ * highlight is in, and with the field empty ArrowLeft and ArrowRight move between the rail, the
+ * models and the Reasoning column. PageUp, PageDown, Home and End move through the models.
  */
 export function ModelPicker({ model, disabled, onChoose, scope = 'conversation', session, compact = false }: {
   model: string | null
@@ -58,11 +82,17 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const [loading, setLoading] = useState(false)
   const showLoading = useDelayedFlag(loading)
   const [problem, setProblem] = useState<string | null>(null)
+  const [effort, setEffort] = useState<EffortReport | null>(null)
+  const [effortProblem, setEffortProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [rail, setRailState] = useState<string>(lastRail)
+  const setRail = useCallback((key: string) => { setRailState(key); keepRail(key) }, [])
+  const [zone, setZone] = useState<Zone>('models')
   const [active, setActive] = useState(0)
+  const [activeEffort, setActiveEffort] = useState(0)
   const [revision, setRevision] = useState(0)
-  /** Providers whose rows are hidden. Cleared when the query changes (search shows all). */
-  const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<string>>(() => new Set())
+  /** The height the popup has between the trigger and the window's edge, on the side it opens. */
+  const [room, setRoom] = useState<number | null>(null)
   const trigger = useRef<HTMLElement>(null)
   const search = useRef<HTMLElement>(null)
   const list = useRef<HTMLElement>(null)
@@ -87,51 +117,64 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     }).catch(() => {
       if (!gone) setProblem('Could not load models. Try again.')
     }).finally(() => { if (!gone) setLoading(false) })
+    void window.bravebot.request<EffortReport>('effort.get', { session }).then((answer) => {
+      if (gone) return
+      if (answer.ok) { setEffort(answer.ok); setEffortProblem(null) } else setEffortProblem('Could not read the reasoning level. Try again.')
+    }).catch(() => { if (!gone) setEffortProblem('Could not read the reasoning level. Try again.') })
     // Closing the menu abandons the load, so the next open waits its 150ms again.
     return () => { gone = true; setLoading(false) }
   }, [open, revision, session])
 
-  const options = useMemo(() => {
-    const rows = [...(catalogue?.models ?? [])]
+  /** Every model the picker may list, the one in use first among them where no service lists it. */
+  const arranged = useMemo(() => {
+    // A bridge from before rows named their service sends none, and its rows count as the default's.
+    const rows = (catalogue?.models ?? []).map((row) => typeof row.providerKey === 'string' ? row : { ...row, providerKey: 'default' })
     if (model && !rows.some((row) => row.id === model)) {
-      rows.unshift({ id: model, name: model, provider: 'Current selection', premium: false, contextWindow: null })
+      rows.unshift({ id: model, name: model, provider: 'Current selection', providerKey: 'current', readsEffort: true, premium: false, contextWindow: null })
     }
-    const words = query.toLowerCase().trim().split(/\s+/)
-    const sorted = rows.filter((row) => {
-      const capabilities = (row.capabilities ?? []).map((key) =>
-        `${key} ${CAPABILITIES[key]?.join(' ') ?? ''}`).join(' ')
-      const searchable = `${row.name} ${row.id} ${row.provider} ${capabilities}`.toLowerCase()
-      return words.every((word) => searchable.includes(word))
-    }).sort((a, b) => {
-      const rank = (row: ModelOption) => row.id === model ? -2 : preferences.recentModels.includes(row.id) ? preferences.recentModels.indexOf(row.id) : 100
-      return rank(a) - rank(b)
-    })
-    // Rows sit under their provider. Providers keep the order of their best-ranked row, so the
-    // current and recent models stay at the top; the keyboard walks this same flat order.
-    const providers: string[] = []
-    for (const row of sorted) if (!providers.includes(row.provider)) providers.push(row.provider)
-    return providers.flatMap((provider) => sorted.filter((row) => row.provider === provider))
-  }, [catalogue, model, query, preferences.recentModels])
+    return arrange(rows, preferences.providers, model)
+  }, [catalogue, model, preferences.providers])
 
-  /** Indices of rows that are visible (their provider is not collapsed). */
-  const visibleIndices = useMemo(
-    () => options.map((row, i) => ({ row, i })).filter(({ row }) => !collapsedProviders.has(row.provider)).map(({ i }) => i),
-    [options, collapsedProviders],
-  )
+  const providerName = useCallback((key: string) =>
+    arranged.models.find((row) => row.providerKey === key)?.provider ?? key, [arranged])
 
-  /** Clamp active to the nearest visible index at or after target. Falls back to last visible. */
-  const nearestVisible = useCallback((target: number, indices: readonly number[]): number => {
-    if (!indices.length) return 0
-    return indices.find((i) => i >= target) ?? indices[indices.length - 1]!
-  }, [])
+  const searching = query.trim() !== ''
+  // A service hidden since it was chosen leaves the rail, and the list falls back to every service.
+  const shownRail = rail !== ALL && arranged.providers.includes(rail) ? rail : ALL
+  const options = useMemo(() => {
+    if (searching) {
+      const words = query.toLowerCase().trim().split(/\s+/)
+      return arranged.models.filter((row) => { const text = searchable(row); return words.every((word) => text.includes(word)) })
+    }
+    return shownRail === ALL ? arranged.models : arranged.models.filter((row) => row.providerKey === shownRail)
+  }, [arranged, query, searching, shownRail])
+  /** Rows carry their service's mark where more than one service is listed. */
+  const marked = searching || shownRail === ALL
+  const railKeys = useMemo(() => [ALL, ...arranged.providers], [arranged.providers])
 
   useEffect(() => {
     if (!open) return
     search.current?.focus()
   }, [open])
+  // Leo opens the popup on whichever side of the trigger has more room and scrolls the whole of it
+  // when it is taller than that. Sizing it to the room instead keeps the search field and the
+  // footnote in view and scrolls only the lists.
+  useEffect(() => {
+    if (!open) return
+    const measure = () => {
+      const box = trigger.current?.getBoundingClientRect()
+      if (box) setRoom(Math.max(box.top, window.innerHeight - box.bottom) - 24)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [open])
 
   // The field Playwright and the accessibility tree fill is the inner input.
   // A role on the Leo host makes a second combobox that cannot be typed into.
+  const activeId = zone === 'rail' ? `${id}-rail-${railKeys.indexOf(shownRail)}`
+    : zone === 'effort' ? `${id}-effort-${activeEffort}`
+      : options[active] ? `${id}-option-${active}` : null
   useEffect(() => {
     const inner = search.current?.shadowRoot?.querySelector('input')
     if (!inner) return
@@ -140,18 +183,21 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     inner.setAttribute('aria-autocomplete', 'list')
     inner.setAttribute('aria-expanded', String(open))
     inner.setAttribute('aria-controls', `${id}-list`)
-    if (open && options[active]) inner.setAttribute('aria-activedescendant', `${id}-option-${active}`)
+    if (open && activeId) inner.setAttribute('aria-activedescendant', activeId)
     else inner.removeAttribute('aria-activedescendant')
-  }, [open, id, active, options])
+  }, [open, id, activeId])
 
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+  // A new list starts on the model in use where it is in it, and on the first row otherwise.
   useEffect(() => {
-    setActive(0)
-    setCollapsedProviders(new Set())
-  }, [query, catalogue])
+    const current = options.findIndex((row) => row.id === model)
+    setActive(current >= 0 && !searching ? current : 0)
+    // Only when what is listed changes, not when a choice moves the model in use.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, catalogue, shownRail])
   useEffect(() => {
     if (list.current) list.current.scrollTop = 0
-  }, [query])
+  }, [query, shownRail])
   useEffect(() => {
     if (!byKeyboard.current) return
     byKeyboard.current = false
@@ -164,18 +210,14 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     else if (rowBox.bottom > frameBox.bottom) frame.scrollTop += rowBox.bottom - frameBox.bottom
   }, [active])
 
-  const collapseProvider = useCallback((provider: string) => {
-    setCollapsedProviders((prev) => new Set([...prev, provider]))
-  }, [])
-
-  const expandProvider = useCallback((provider: string) => {
-    setCollapsedProviders((prev) => { const next = new Set(prev); next.delete(provider); return next })
-  }, [])
-
   const heading = scope === 'bot' ? 'Bot model' : 'Conversation model'
   const selected = catalogue?.models.find((row) => row.id === model)
   const label = selected?.name ?? model ?? 'Configured default'
   const compactLabel = label.split('/').pop() || label
+  const inUse = catalogue?.models.find((row) => row.id === (model ?? catalogue.defaultModel))
+  const takesNoLevel = inUse?.readsEffort === false
+  const effortLocked = !effort || effort.outranked || takesNoLevel
+  const listTitle = searching ? 'Results' : shownRail === ALL ? 'All models' : providerName(shownRail)
 
   // Leo's React wrapper assigns `aria-label` as a property, and the button host
   // only exposes `ariaLabel`, so the attribute the accessibility tree and the
@@ -190,83 +232,89 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     else button.removeAttribute('aria-controls')
   }, [label, open, id])
 
-  const choose = (row: ModelOption) => {
+  const choose = (row: ModelOption, then: 'stay' | 'close') => {
     setExperience('recentModels', [row.id, ...preferences.recentModels.filter((id) => id !== row.id)].slice(0, 8))
     onChoose(row.id)
-    close()
+    if (then === 'close') close()
+  }
+
+  const chooseEffort = (level: EffortLevel | null) => {
+    if (effortLocked) return
+    const was = effort
+    setEffort((report) => report && { ...report, recorded: level, inForce: level })
+    void window.bravebot.request<{ recorded: EffortLevel | null }>('effort.set', { level }).then((answer) => {
+      if (answer.error) { setEffort(was); setEffortProblem(answer.error.message) } else setEffortProblem(null)
+    }).catch(() => { setEffort(was); setEffortProblem('Could not save the reasoning level. Try again.') })
+  }
+
+  const chooseRail = (key: string) => {
+    setRail(key)
+    setQuery('')
+    search.current?.focus()
   }
 
   const handleKey = useCallback((key: string): boolean => {
+    const move = (count: number, length: number, set: (update: (index: number) => number) => void) => {
+      if (!length) return
+      set((index) => Math.min(length - 1, Math.max(0, index + count)))
+    }
     if (key === 'ArrowDown' || key === 'ArrowUp') {
-      byKeyboard.current = true
       const dir = key === 'ArrowDown' ? 1 : -1
-      setActive((index) => {
-        const pos = visibleIndices.indexOf(index)
-        if (pos === -1) return nearestVisible(index, visibleIndices)
-        const next = pos + dir
-        if (next < 0) return visibleIndices[0] ?? 0
-        if (next >= visibleIndices.length) return visibleIndices[visibleIndices.length - 1] ?? 0
-        return visibleIndices[next] ?? 0
-      })
+      byKeyboard.current = true
+      if (zone === 'rail') {
+        const next = railKeys[Math.min(railKeys.length - 1, Math.max(0, railKeys.indexOf(shownRail) + dir))]
+        if (next) setRail(next)
+      } else if (zone === 'effort') move(dir, EFFORT_ROWS.length, setActiveEffort)
+      else move(dir, options.length, setActive)
       return true
     }
-    if (key === 'PageDown' || key === 'PageUp') {
+    if (zone === 'models' && (key === 'PageDown' || key === 'PageUp')) {
       byKeyboard.current = true
-      const dir = key === 'PageDown' ? 1 : -1
-      setActive((index) => {
-        const pos = visibleIndices.indexOf(index)
-        if (pos === -1) return nearestVisible(index, visibleIndices)
-        const next = pos + dir * PAGE_SIZE
-        if (next < 0) return visibleIndices[0] ?? 0
-        if (next >= visibleIndices.length) return visibleIndices[visibleIndices.length - 1] ?? 0
-        return visibleIndices[next] ?? 0
-      })
+      move((key === 'PageDown' ? 1 : -1) * PAGE_SIZE, options.length, setActive)
       return true
     }
-    if (key === 'Home') {
+    if (zone === 'models' && (key === 'Home' || key === 'End')) {
+      // With text in the field the caret takes them, as it takes ArrowLeft and ArrowRight.
+      if (searching) return false
       byKeyboard.current = true
-      setActive(visibleIndices[0] ?? 0)
+      setActive(key === 'Home' ? 0 : Math.max(0, options.length - 1))
       return true
     }
-    if (key === 'End') {
-      byKeyboard.current = true
-      setActive(visibleIndices[visibleIndices.length - 1] ?? 0)
-      return true
-    }
-    if (key === 'ArrowLeft') {
-      // Only claim the key when the query is empty: when there is text in the
-      // field the caret should move normally, and the user navigates by editing.
-      if (query) return false
-      const provider = options[active]?.provider
-      if (provider && !collapsedProviders.has(provider)) {
-        byKeyboard.current = true
-        collapseProvider(provider)
-        setActive((index) => {
-          const remaining = options.map((r, i) => ({ r, i }))
-            .filter(({ r }) => r.provider !== provider)
-            .map(({ i }) => i)
-          return nearestVisible(index, remaining)
-        })
-        return true
-      }
-      return false
-    }
-    if (key === 'ArrowRight') {
-      // Only claim the key when the query is empty: same reason as ArrowLeft.
-      if (query) return false
-      if (collapsedProviders.size === 0) return false
-      byKeyboard.current = true
-      let target: string | null = null
-      for (let i = active; i >= 0; i--) {
-        const p = options[i]?.provider
-        if (p && collapsedProviders.has(p) && p !== target) { target = p; break }
-      }
-      if (!target) target = [...collapsedProviders][0] ?? null
-      if (target) expandProvider(target)
+    // Only claimed with the field empty: with text in it the caret moves instead.
+    if ((key === 'ArrowLeft' || key === 'ArrowRight') && !searching) {
+      const order: Zone[] = ['rail', 'models', 'effort']
+      const next = order[order.indexOf(zone) + (key === 'ArrowRight' ? 1 : -1)]
+      if (!next) return true
+      if (next === 'effort') setActiveEffort(Math.max(0, EFFORT_ROWS.findIndex((row) => row.level === (effort?.recorded ?? null))))
+      setZone(next)
       return true
     }
     return false
-  }, [visibleIndices, options, active, query, collapsedProviders, collapseProvider, expandProvider, nearestVisible])
+  }, [zone, railKeys, shownRail, options.length, searching, effort])
+
+  // Leo hands a changed `onKeyDown` to its field a tick after a render, and the field's events are
+  // not React's, so what one key changes is drawn after the next key has arrived. The field is given
+  // one function for good, which reads the handler of the latest render and draws what the key
+  // changed before returning, so each key is read against the state the one before it left.
+  const searchKey = useRef<(innerEvent: Event) => void>(() => {})
+  searchKey.current = (innerEvent: Event) => {
+    const key = (innerEvent as unknown as KeyboardEvent).key
+    if (handleKey(key)) {
+      innerEvent.preventDefault()
+      innerEvent.stopPropagation()
+    } else if (key === 'Enter') {
+      innerEvent.preventDefault()
+      innerEvent.stopPropagation()
+      if (zone === 'effort') { const row = EFFORT_ROWS[activeEffort]; if (row) chooseEffort(row.level) }
+      else if (zone === 'rail') setZone('models')
+      else { const row = options[Math.min(active, options.length - 1)]; if (row) choose(row, 'close') }
+    } else if (key === 'Escape') {
+      innerEvent.preventDefault()
+      innerEvent.stopPropagation()
+      close()
+    }
+  }
+  const onSearchKey = useCallback(({ innerEvent }: { innerEvent: Event }) => flushSync(() => searchKey.current(innerEvent)), [])
 
   return <div className="model-picker">
     <ButtonMenu
@@ -279,7 +327,8 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         if (next) {
           if (disabled) return
           setQuery('')
-          setActive(0)
+          setRailState(lastRail())
+          setZone('models')
           setOpen(true)
           return
         }
@@ -289,7 +338,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         restoreFocus()
       }}
     >
-      <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
+      <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' && !compact ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
         data-tooltip={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
         aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
         data-test="model-trigger">
@@ -297,87 +346,96 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         <span className="model-current" aria-hidden="true">{compactLabel}</span>
         <Icon name={open ? 'carat-up' : 'carat-down'} slot="icon-after" />
       </Button>
-      <div className="model-heading model-popover" id={id} data-test="model-popover">
-        <span className="model-heading-title">{heading}</span>
-        <Button size="small" kind="plain-faint" className="model-refresh" isDisabled={loading} onClick={() => setRevision((n) => n + 1)} data-test="model-refresh">Refresh</Button>
-      </div>
-      <Input ref={search} className="model-search" type="search" placeholder="Search models…" value={query}
-        data-test="model-search"
-        onInput={({ value }) => setQuery(value)}
-        onChange={({ value }) => setQuery(value)}
-        onKeyDown={({ innerEvent }) => {
-          const key = (innerEvent as unknown as KeyboardEvent).key
-          if (handleKey(key)) {
-            innerEvent.preventDefault()
-            innerEvent.stopPropagation()
-          } else if (key === 'Enter') {
-            innerEvent.preventDefault()
-            innerEvent.stopPropagation()
-            const activeRow = options[active]
-            if (activeRow && !collapsedProviders.has(activeRow.provider)) choose(activeRow)
-          } else if (key === 'Escape') {
-            innerEvent.preventDefault()
-            innerEvent.stopPropagation()
-            close()
-          }
-        }} />
-      <div className="model-notices">
-        {loading && <p className="model-status" role="status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading available models…</p>}
-        {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
-        {catalogue && <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} />}
-        {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
-      </div>
-      <leo-menu-section id={`${id}-list`} aria-label="Models" ref={list}>
-        {options.map((row, index) => {
-          const isFirstInProvider = index === 0 || options[index - 1]?.provider !== row.provider
-          const isCollapsed = collapsedProviders.has(row.provider)
-          return <Fragment key={row.id}>
-            {isFirstInProvider && <div
-              className={`model-group${isCollapsed ? ' model-group-collapsed' : ''}`}
-              role="button"
-              tabIndex={-1}
-              aria-expanded={!isCollapsed}
-              aria-label={`${row.provider} — ${isCollapsed ? 'expand' : 'collapse'}`}
-              data-test={`model-group-${row.provider}`}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                if (isCollapsed) expandProvider(row.provider)
-                else collapseProvider(row.provider)
-              }}
-            >
-              <span className="model-group-chevron" aria-hidden="true">
-                <Icon name={isCollapsed ? 'carat-right' : 'carat-down'} />
-              </span>
-              {row.provider}
-            </div>}
-            {!isCollapsed && <leo-option id={`${id}-option-${index}`} value={row.id}
-              role="option" data-index={index} data-current={row.id === model ? 'true' : undefined}
-              className={index === active ? 'active' : undefined}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setActive(index)}
-              onClick={() => choose(row)}>
-              <span className="model-description">
-                <span className="model-name">{row.name}</span>
-                <span className="model-detail">{[row.premium ? 'Premium' : null, row.contextWindow ? `${row.contextWindow.toLocaleString()} context tokens` : null, preferences.recentModels.includes(row.id) ? 'Recent' : null].filter(Boolean).join(' · ')}</span>
-              </span>
-              {!!row.capabilities?.length && <span className="model-capabilities" aria-label="Provider-reported capabilities">
-                {row.capabilities.map((key) => {
-                  const badge = CAPABILITIES[key]
-                  const icon = CAPABILITY_ICONS[key]
-                  if (!badge || !icon) return null
-                  return <span className="model-capability" key={key} role="img" aria-label={badge[0]} data-tooltip={`${badge[1]} · Supported by this app and reported by the provider`}>
-                    <Icon name={icon} />
+      <div className="model-popover" id={id} role="group" aria-label={heading} data-test="model-popover"
+        style={room ? { '--model-room': `${room}px` } as React.CSSProperties : undefined}>
+        <div className="model-search-row">
+          <Input ref={search} className="model-search" type="search" size="small" placeholder="Search models…" value={query}
+            data-test="model-search"
+            onInput={({ value }) => flushSync(() => { setQuery(value); setZone('models'); setActive(0) })}
+            onChange={({ value }) => setQuery(value)}
+            onKeyDown={onSearchKey}>
+            <Icon name="search" slot="left-icon" />
+          </Input>
+          <Button size="small" kind="plain-faint" className="model-refresh" isDisabled={loading} onClick={() => setRevision((n) => n + 1)} data-test="model-refresh">
+            <Icon name="refresh" slot="icon-before" />Refresh
+          </Button>
+        </div>
+        <Hr />
+        <div className="model-notices">
+          {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
+          {catalogue && <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} session={session} onSignedIn={() => setRevision((n) => n + 1)} />}
+        </div>
+        <div className="model-columns">
+          <div className="model-rail" role="toolbar" aria-orientation="vertical" aria-label="Model services" data-test="model-rail">
+            {railKeys.map((key, index) => {
+              const name = key === ALL ? 'All models' : providerName(key)
+              const icon = (key === ALL ? 'content-compact' : providerLogo(key)) as IconName
+              return <IconButton key={key} icon={icon} label={name} placement="right" size="small"
+                pressed={!searching && key === shownRail}
+                className={`model-rail-item${zone === 'rail' && key === shownRail ? ' active' : ''}`}
+                id={`${id}-rail-${index}`} data-test={`model-rail-${key}`}
+                onClick={() => chooseRail(key)} />
+            })}
+          </div>
+          <div className="model-column model-list-column">
+            <div className="model-column-title" id={`${id}-list-title`} data-test="model-list-title">{listTitle}</div>
+            <leo-menu-section id={`${id}-list`} role="listbox" aria-labelledby={`${id}-list-title`} ref={list}>
+              {options.map((row, index) => (
+                <leo-option key={`${row.providerKey}:${row.id}`} id={`${id}-option-${index}`} value={row.id}
+                  role="option" aria-selected={row.id === model ? 'true' : 'false'} data-is-interactive="true"
+                  data-index={index} data-current={row.id === model ? 'true' : undefined} data-provider={row.providerKey}
+                  className={zone === 'models' && index === active ? 'active' : undefined}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => { setZone('models'); setActive(index) }}
+                  onClick={() => choose(row, 'stay')}>
+                  {marked && <Icon className="model-provider-mark" name={providerLogo(row.providerKey) as IconName} aria-hidden="true" data-test="model-provider-mark" />}
+                  <span className="model-description">
+                    <span className="model-name" data-tooltip={row.name}>{row.name}</span>
+                    <span className="model-detail">{[
+                      row.id === catalogue?.defaultModel ? 'Default' : null,
+                      row.premium ? 'Premium' : null,
+                      row.contextWindow ? `${row.contextWindow.toLocaleString()} context tokens` : null,
+                      preferences.recentModels.includes(row.id) ? 'Recent' : null,
+                    ].filter(Boolean).join(' · ')}</span>
                   </span>
-                })}
-              </span>}
-              {row.id === catalogue?.defaultModel && <Label className="model-default" mode="outline" color="neutral">Default</Label>}
-              <span className="model-check" aria-hidden="true">{row.id === model ? <Icon name="check-normal" /> : null}</span>
-            </leo-option>}
-          </Fragment>
-        })}
-      </leo-menu-section>
-      <Hr />
-      <p className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'} Brave Bot uses text and tools; pricing is not supplied by this catalogue.</p>
+                  <span className="model-check" aria-hidden="true">{row.id === model ? <Icon name="check-normal" /> : null}</span>
+                </leo-option>
+              ))}
+            </leo-menu-section>
+            {/* Rows the shape of the ones to come, until the first listing arrives. Mounted when the
+                load starts and hidden for its first 150ms, so a quick answer draws no flash. */}
+            {loading && !catalogue && <Skeleton label="Loading available models" count={4} mark delayed={!showLoading}
+              className="model-skeleton" data-test="model-skeleton" />}
+            {!loading && options.length === 0 && <p className="model-status" data-test="model-empty">
+              {searching ? 'No models match your search.' : catalogue?.models.length ? 'Every model is hidden. Show some in Settings, under Providers.' : 'No models available. Check your backend settings.'}
+            </p>}
+          </div>
+          <div className="model-column model-effort-column" data-test="model-effort">
+            <div className="model-column-title" id={`${id}-effort-title`}>Reasoning</div>
+            <div className="model-effort-rows" role="radiogroup" aria-labelledby={`${id}-effort-title`} aria-disabled={effortLocked ? 'true' : undefined}>
+              {EFFORT_ROWS.map((row, index) => {
+                const checked = !!effort && (effort.outranked ? effort.inForce : effort.recorded) === row.level
+                return <leo-option key={row.label} id={`${id}-effort-${index}`} role="radio" aria-checked={checked ? 'true' : 'false'}
+                  aria-disabled={effortLocked ? 'true' : undefined} data-is-interactive="true" data-level={row.level ?? 'default'}
+                  data-current={checked ? 'true' : undefined} data-test={`model-effort-${row.level ?? 'default'}`}
+                  className={zone === 'effort' && index === activeEffort ? 'active' : undefined}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => { setZone('effort'); setActiveEffort(index) }}
+                  onClick={() => chooseEffort(row.level)}>
+                  <span className="model-name">{row.label}</span>
+                  <span className="model-check" aria-hidden="true">{checked ? <Icon name="check-normal" /> : null}</span>
+                </leo-option>
+              })}
+            </div>
+            {effort?.outranked
+              ? <p className="model-effort-note" data-test="model-effort-note">This folder’s settings set the level.</p>
+              : takesNoLevel && <p className="model-effort-note" data-test="model-effort-note">This model takes no reasoning level.</p>}
+            {effortProblem && <p className="model-effort-note" role="alert">{effortProblem}</p>}
+          </div>
+        </div>
+        <Hr />
+        <p className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'} The reasoning level applies to every conversation. Brave Bot uses text and tools; pricing is not supplied by this catalogue.</p>
+      </div>
     </ButtonMenu>
   </div>
 }

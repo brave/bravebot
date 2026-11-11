@@ -26,8 +26,8 @@
   --leo-icon-color: var(--ink-tertiary);
 }
 .tool.failed .tool-status { --leo-icon-color: var(--status-error); }
+.tool-status:has(.tool-ring) { width: var(--spinner); height: var(--spinner); }
 .tool-ring {
-  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }
@@ -139,12 +139,12 @@
 .working-ring {
   display: grid;
   place-items: center;
-  width: var(--icon-control);
-  --leo-progressring-size: var(--icon-control);
+  width: var(--spinner);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }
 .working-word {
+  font-variant-numeric: tabular-nums;
   background: linear-gradient(90deg, var(--ink-tertiary) 20%, var(--ink-primary) 50%, var(--ink-tertiary) 80%);
   background-size: 200% 100%;
   background-clip: text;
@@ -231,6 +231,8 @@
 .watch-turn leo-icon { flex: none; align-self: center; }
 /* Line breaks are kept: a manifest run narrates its goal and its plan as several lines. */
 .narration { font-style: italic; white-space: pre-wrap; }
+/* A refusal says so in the status ink, and the text says what was refused, so colour is not alone. */
+.narration.refused { color: var(--status-error); }
 /* A command a notice names is code, in the code type role like the rest of the window's code. */
 .narration code { font: var(--type-code); overflow-wrap: anywhere; }
 .attached {
@@ -240,6 +242,11 @@
   font-family: var(--font-mono);
 }
 .attached.consolidation { font-family: inherit; }
+/* The questions an ask_user call put and what became of each: one block per question, wrapped. */
+.attached.ask-settled { font-family: inherit; white-space: normal; overflow: visible; align-items: flex-start; }
+.ask-settled ul { margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ask-settled li { display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.ask-settled-outcome { color: var(--ink-secondary); padding-inline-start: var(--leo-spacing-m); }
 .watch-turn { flex-wrap: wrap; }
 .watch-turn strong { font: var(--type-caption-strong); color: var(--ink-secondary); }
 

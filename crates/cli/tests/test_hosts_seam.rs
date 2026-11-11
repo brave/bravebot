@@ -1595,7 +1595,8 @@ fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the
         // The constructor that is not a constant exists with the seam, and nothing a release
         // compiles calls it.
         ("Hosts::at(", vec![]),
-        // The compiled-in hosts are asked for by each renewer's source and by each command.
+        // The compiled-in hosts are asked for by each renewer's source, by each command and once
+        // for each account by the desktop bridge's sign-in.
         (
             "Hosts::compiled_in",
             vec![
@@ -1603,6 +1604,7 @@ fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the
                 (xai_agent.clone(), 1),
                 (chatgpt_command.clone(), 1),
                 ("crates/cli/src/xai.rs".to_string(), 1),
+                ("crates/ui-bridge/src/accounts.rs".to_string(), 2),
             ],
         ),
         // The one renewer of the process for each account.

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 10
 title: ChatGPT
-description: Sign in with a ChatGPT Plus or Pro account in a browser, and use the models the account reaches.
+description: ChatGPT account sign-in, model names, request destinations, token refresh, stored credentials, status and sign-out, observed support and documented account restrictions.
 ---
 
 # Reaching a model with a ChatGPT account
@@ -137,7 +137,8 @@ gateway's key are not looked for, and the account's tokens are never sent to a g
 
 ## Staying signed in
 
-The access token is replaced before it expires, with the refresh token, inside the turn that needs it.
+The access token is replaced with the refresh token, inside the turn that needs it, once a minute or less of it is left.
+A token already past its expiry is never sent. If the renewal fails and the token has not yet expired, the request is sent with it.
 Sessions on one machine take turns at that, since OpenAI replaces the refresh token each time it is used.
 A token OpenAI turns away early is replaced once and the request sent again.
 

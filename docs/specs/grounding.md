@@ -39,11 +39,15 @@ bravebot already knows what commands ran and what files were written. This spec 
 
 Each run's work record ([TURN-4](turns.md#TURN-4)) also keeps:
 
-- **writes:** calls that changed a file
+- **writes:** calls that changed a file, including a `run` line that left a file in the workspace different from how it found it, other than a write that landed in the session's own directory
 - **commands:** calls that ran a program
 - whether the last command came after the last write
 
 They are counted by the rules [TURN-4](turns.md#TURN-4) already uses. A write the person declined or a mode refused changed nothing and does not count. A command stopped with the turn does count. One command line is one command, however many programs it starts. Each write call is one write, even when two calls touch the same file. A call that both ran a program and changed a file counts as the write coming last, since nothing ran after what it wrote.
+
+Whether a `run` line changed a file is the driver's own measurement. The workspace tree is listed before the line starts and again after it has stopped and any destination a scan refused has been put back (one the line created is removed, so it counts for nothing; one that existed is written back with its old bytes and a new modification time, so it counts), and the line changed a file if a path was added or removed or a file's length or modification time differs. Names, lengths and times are compared and no file is opened, so the driver reads only metadata and the result is one fact, a yes or a no. A program chooses the names, lengths and times it leaves, so it can make that fact true or false by what it writes, as it can with its exit status. The directories every walk of the tree steps over, such as `target`, `node_modules`, `.git` and `__pycache__`, are not listed, so an ordinary build that writes only there is a command and not a write, and "a command ran after the last write" stays true after it. The session stores are not listed either, so a workspace rooted at the home directory does not count the session records a running session saves as the line's write. The line need not have ended well: one that failed halfway has still left what it got to. A line the person declined or a mode refused ran nothing and counts neither. A line that was moved to the background or started there is recorded as a command and no write, because the listing after the line is taken only for a line that stopped in the foreground: nothing it writes, before or after the move, is counted.
+
+A write that landed in the session's own directory is not counted. What a turn puts there is for its own use, outside the project and gone when the session ends, so it leaves nothing to build, and a rewind does not restore it ([sessions.md](sessions.md) records it as a coverage gap). It does not change the order either: a project write followed by a write there is still a write with no command after it, and a command after a project write still follows it. For a write call, whether it landed there is decided on the resolved destination, never on the name typed or on what the file holds. The listing of a `run` line covers the workspace tree only, so what a line writes in that directory is not listed while the directory is outside the tree. Delegates and goals add records that already exclude it, so the sentences of [GROUND-2](#GROUND-2) to [GROUND-4](#GROUND-4) leave it out too.
 
 Records are added in the order the work happened. The later record's counts are added to the earlier one's. A later record with a write settles the order by its own flag. A later record with commands and no write means a command ran after the last write. A record with neither leaves the order as it was. The same rule adds a delegate's record to the turn that takes it back, and a turn's record to a goal's.
 
@@ -54,10 +58,30 @@ A delegate in the turn's workspace adds its whole record. One in a checkout give
 **Why count calls.** The record is already kept per call, and each call is something you approved. Two writes to one file are two approvals.
 
 `verified-by: bravebot_agent::outcome::each_write_that_changed_a_file_is_counted`
+`verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
+`verified-by: bravebot_agent::turn::an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_write`
 `verified-by: bravebot_agent::outcome::a_command_after_the_last_write_is_recorded_as_after_it`
 `verified-by: bravebot_agent::outcome::a_command_in_a_later_turn_is_after_a_write_in_an_earlier_one`
 `verified-by: bravebot_agent::turn::a_delegates_counts_are_added_to_the_turns_where_it_worked_on_the_turns_files`
+`verified-by: bravebot_agent::turn::a_file_a_worker_delegate_changed_through_a_run_line_is_a_write_of_the_turn`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_in_a_checkout_changed_through_a_run_line_is_not_a_write_of_the_turn`
 `verified-by: bravebot_agent::turn::a_turns_outcome_carries_the_summary_of_its_work`
+`verified-by: bravebot_agent::turn::a_run_line_that_changes_a_file_is_recorded_as_a_write`
+`verified-by: bravebot_agent::turn::the_record_of_a_turn_that_delivers_its_change_through_run_lines_counts_those_writes`
+`verified-by: bravebot_agent::turn::a_run_line_started_in_the_background_is_a_command_and_no_write`
+`verified-by: bravebot_agent::turn::a_run_line_that_writes_only_build_output_is_not_a_write`
+`verified-by: bravebot_agent::turn::a_run_line_that_changes_nothing_is_not_a_write`
+`verified-by: bravebot_agent::turn::a_run_line_that_writes_and_then_exits_nonzero_is_recorded_as_a_write`
+`verified-by: bravebot_agent::turn::a_run_line_that_writes_and_then_cannot_open_a_redirection_is_recorded_as_a_write`
+`verified-by: bravebot_agent::turn::a_declined_run_line_is_neither_a_write_nor_a_command`
+`verified-by: bravebot_agent::turn::a_change_made_by_a_run_line_is_an_unbuilt_change_until_a_command_runs_after_it`
+`verified-by: bravebot_agent::workspace::tree_mark::a_new_a_removed_and_a_rewritten_file_each_differ`
+`verified-by: bravebot_agent::workspace::tree_mark::what_lands_in_a_directory_every_walk_skips_does_not_differ`
+`verified-by: bravebot_agent::workspace::tree_mark::what_lands_in_the_stores_under_a_workspace_holding_home_does_not_differ`
+`verified-by: bravebot_agent::workspace::tree_mark::a_tree_past_the_bound_reports_no_change`
+`verified-by: bravebot_agent::workspace::tree_mark::a_link_to_a_directory_is_one_entry_and_is_not_followed`
+`verified-by: bravebot_agent::workspace::tree_mark::an_unreadable_directory_marks_nothing_and_the_rest_of_the_tree_is_still_marked`
 
 <a id="GROUND-2"></a>
 ### GROUND-2: tell the planner what each delegate actually did
@@ -141,5 +165,12 @@ No new row is needed in [LABEL-8](labels.md#LABEL-8). The counts are bravebot's 
 
 ## Known costs
 
+- **A run line's writes are seen only inside the workspace tree, and only for a line that ends in the foreground.** A file written outside the workspace root or in a directory added by name is not counted, and neither is anything written by a line that moved to the background or started there, which is recorded as a command and no write. A file rewritten to the same length within the file system's time resolution is not seen. A tree of more than 100,000 files is not compared, and a line run there counts no write. The directories to skip are chosen by name, inside a git repository and outside one, and no `.gitignore` is read.
+- **A line that writes into a skipped directory is a command and not a write.** A source file kept under `build`, `dist` or `vendor` is not seen.
+- **A file changed by something else while a line runs is counted as that line's write.** Another worker delegate in the same workspace, a background job started earlier, an editor, another session or the person changing a file during the line is indistinguishable from the line changing it, so a line that only reads can be recorded as a write, and two lines that overlap can each count the same change.
+- **A build that writes outside the skipped directories counts as a write.** Object files next to the sources, `.coverage`, `out/` and `bin/` are listed, so a line that produces them is a write and "a command ran after the last write" is false until another command runs.
 - **A compromised delegate controls its own counts.** A delegate that read untrusted content picks how many commands and writes it makes, and the planner and judge see those numbers. Each of those calls still passed a gate or a person. Kept checkout paths, which carry much more, already reach the planner.
+- **A write through a link that lands in the session's own directory is not counted**
+  ([GROUND-1](#GROUND-1)), so it is hidden from the unbuilt-changes warning
+  ([open-loops.md](open-loops.md#known-costs)).
 - **A command is not a test run.** `ls` counts as a command. The judge is told the count says nothing about what ran or how it went.

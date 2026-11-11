@@ -20,7 +20,7 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
-use bravebot_agent::report::{self, Activity, Landing, Phase, Reporter, Shown, Why};
+use bravebot_agent::report::{self, Activity, CallId, Landing, Phase, Reporter, Shown, Why};
 use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
@@ -349,7 +349,10 @@ impl Reporter for BridgeReporter {
     }
 
     fn phase(&mut self, phase: Phase) {
-        self.say("phase", json!({ "phase": wire::phase(phase) }));
+        self.say(
+            "phase",
+            json!({ "phase": wire::phase(phase), "retry": wire::retry(phase) }),
+        );
     }
 
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {
@@ -506,8 +509,11 @@ impl Reporter for BridgeReporter {
         self.say("quarantined", wire::shown(&shown));
     }
 
-    fn landed(&mut self, landing: Landing) {
-        self.say("landed", json!({ "landing": wire::landing(landing) }));
+    fn landed(&mut self, call: Option<CallId>, landing: Landing) {
+        self.say(
+            "landed",
+            json!({ "call": call.map(CallId::get), "landing": wire::landing(landing) }),
+        );
     }
 
     fn tool_started(&mut self, activity: Activity) {
@@ -565,8 +571,8 @@ impl BridgeSink {
     }
 }
 
-/// Each top-level string field of a recorded event, drawn by `bravebot_approval::printable`, keyed
-/// by the field's name (TRACE-11).
+/// Each top-level string field of a recorded event, drawn by `bravebot_agent::confirm::printable`,
+/// keyed by the field's name (TRACE-11).
 ///
 /// Sent beside the event, which stays as the audit file holds it. The window draws these words
 /// instead of the field, so the terminal and the window picture a control character with one
@@ -583,7 +589,7 @@ fn pictured_fields(event: &serde_json::Value) -> serde_json::Map<String, serde_j
             let text = value.as_str()?;
             Some((
                 field.clone(),
-                serde_json::Value::String(bravebot_approval::printable(text)),
+                serde_json::Value::String(bravebot_agent::confirm::printable(text)),
             ))
         })
         .collect()
@@ -1057,6 +1063,17 @@ impl Confirmer for BridgeConfirmer {
         }) {
             Some(Reply::Ask(answers)) => {
                 let fresh = wire::fitted(answers, settled.outstanding());
+                // Said to the window as data, from the values it was asked for and gave back, once
+                // for the questions put (ASK-13). It is for the screen: the planner is told the
+                // answers by the call's result, and a front end that answered nothing is not drawn
+                // as having skipped.
+                if !fresh.is_empty() {
+                    self.emitter.send(Event::new(
+                        "ask.settled",
+                        &self.session,
+                        wire::ask_settled(settled.outstanding(), &fresh),
+                    ));
+                }
                 settled.finish(&mut self.memo(), fresh)
             }
             // Nobody could be asked. What the person answered before still stands, and the rest

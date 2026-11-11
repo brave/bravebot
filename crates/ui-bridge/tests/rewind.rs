@@ -6,6 +6,8 @@
 
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
 
@@ -62,7 +64,9 @@ impl Window {
 
     /// Send `prompt` and return the response, which names the turn and its target.
     fn send(&mut self, session: &str, prompt: &str) -> Value {
-        let params = json!({"session": session, "prompt": prompt, "model": "undo-test/test"});
+        let params = message_ids::with_fresh(
+            json!({"session": session, "prompt": prompt, "model": "undo-test/test"}),
+        );
         self.once_finished(|window| window.dispatch("turn.send", params.clone()))
             .unwrap()
     }
@@ -278,7 +282,9 @@ fn a_rewind_while_a_turn_runs_is_refused() {
     );
     let (mut window, session) = Window::on(&project, &config.endpoint);
     window.turn(&session, "first");
-    let params = json!({"session": session, "prompt": "second", "model": "undo-test/test"});
+    let params = message_ids::with_fresh(
+        json!({"session": session, "prompt": "second", "model": "undo-test/test"}),
+    );
     window
         .once_finished(|window| window.dispatch("turn.send", params.clone()))
         .unwrap();

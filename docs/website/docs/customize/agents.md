@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Delegate definitions
-description: Define a kind of delegate in a file, so the standing part of what it is told has somewhere to live.
+description: Define delegates with standing instructions, tool and model limits, persistent memory, isolated checkouts, definition precedence and trust.
 ---
 
 # Delegate definitions
@@ -25,13 +25,36 @@ including the one the app sends after a compaction and the one a watch you armed
 addressed to that definition, as if you had typed `/agent <name>` for it. The bot's memory is the
 definition's own, `.bravebot/memory/<name>.md` in the bot's folder.
 
+A bot's face is chosen in a popover that the edit button on the face opens, in the create dialog and
+in the bot's details panel. It offers eight shapes and eight colours, and **Randomize** picks both.
+Each choice is saved as soon as you make it. A click outside the popover or Escape closes it and
+keeps the choice.
+
+Opening a bot opens its newest conversation in its own folder, or a new one
+when it has none. A bot is sent into a project by summoning it there, as described next, and not by
+choosing a project for its conversation. The bot's earlier conversations, in its own folder and in
+projects, are listed on a page of their own, reached from the conversation's header.
+
 A bot is brought into another chat by typing `@` and picking it from the list, where bots come
-before files. That one message is addressed to the bot's definition and runs in the chat's folder,
+before files. The list leaves out archived bots and the bot whose conversation is open. That one message is addressed to the bot's definition and runs in the chat's folder,
 a project or another bot's, so its memory there is `.bravebot/memory/<name>.md` in that folder. The
 next message is answered as before. The reply is labelled with the bot's face and name, and the
-bot's own conversation shows a **Replied to** card that opens it. If the file is removed or no
+bot's own conversation shows a **Replied to** card that opens it. The card is drawn beside the bot's conversation and nothing on it reaches the bot's turns. If the file is removed or no
 longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
-hand is how you narrow the bot's tools. Bots made before definitions existed keep working as they
+hand is how you narrow the bot's tools.
+
+The bot's details panel has a **Servers** choice for which of your [MCP servers](mcp-servers.md) the
+bot may use. **Every connected server** removes the `mcpServers` line from the definition. **Only
+these** writes a line naming the servers you tick, and a line with none ticked selects none. It
+rewrites that line and leaves every other line as it was. The choice is read from the file each time
+the panel opens, so a line you wrote by hand shows, and it applies from the bot's next turn, in a
+conversation already open too. A server the line names that is not set up is shown ticked, so saving
+keeps it. The choice cannot be changed here for a definition whose kind is not `worker`, or whose line
+declares a server inline: the panel says so, and you edit the file. Where the definition has a `tools`
+line, **Every connected server** is not offered, since removing the `mcpServers` line would leave the
+bot no server. When your servers cannot be listed, the panel says so and offers no change.
+
+Bots made before definitions existed keep working as they
 did until they are opened. Opening one gives it a definition, and when its first turn ends the app
 asks it to carry what still holds of its old notes, `.bravebot-ui/bots/<slug>.md`, into its new
 memory. Those notes count as untrusted, so you are asked before the bot reads them.
@@ -64,6 +87,11 @@ and `/goal` rounds, and `/agent other <task>` still addresses another definition
 `bravebot --agent rule-reviewer -p "check this branch"` does the same for one run. A one-shot run
 does not ask whether to trust the checkout, so it reads only the definitions in
 `~/.bravebot/agents`.
+
+A terminal session that works under a definition notes, when it opens or resumes, the three newest
+turns in the project's other sessions that were addressed to that definition for one turn alone. Each
+note gives the session's title, how long ago it was asked and the start of the reply, and one more
+note counts the rest. A fork does not list the turns it copied.
 
 ## The keys
 
@@ -129,7 +157,10 @@ list: a file in a repository you cloned cannot hand an agent a shell it was neve
 as a list: a coordinator written `spawns: reader, checker` is offered those two by `spawn_agent`, is
 refused a `worker`, and the delegates it starts are held to the same list. Absent, it may start any
 the turn resolved; an empty line, none. The list only takes names away, so a later file of the same
-name can shorten it and cannot lengthen it. A turn you start with `/agent` is held to it too. A name
+name can shorten it and cannot lengthen it. A turn you start with `/agent` is held to it too. What
+`spawn_agent` offers is that list met with the kinds the delegate itself can reach: a `checker`
+is not offered the `worker` whatever the list says, since it could only start one without writing.
+A list naming only kinds the delegate cannot reach is offered as written. A name
 no definition goes by picks nothing, and the turn says so:
 
 ```
@@ -175,8 +206,24 @@ for. A name no skill goes by picks nothing, and the turn says so:
 one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
 `checker` and 120 for a `worker`. When a delegate reaches its bound, the planner and you are told in
 the delegate's report how many rounds it spent and that it may not be finished. The same is said when
-it spent the bound and then failed to answer, so the planner does not start the identical task again. A definition written for a long job, a staged refactor say, can
-ask for more, up to its kind's ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
+it spent the bound and then failed to answer, so the planner does not start the identical task again.
+
+A round is one reply of the delegate with its tool calls, however many calls it holds. The delegate
+is told that its rounds are bounded, and it is warned once before the last of them, when ten remain
+(or one fewer than its bound, for a bound of ten or less). The warning gives the count left and asks
+the delegate to leave the working tree consistent, by completing or aborting a rebase it has
+started and committing or discarding its edits, and to answer with what is left. A delegate bound
+to one round is not warned, and neither is a turn you run yourself.
+
+**`budget` sets how many tokens the delegate may spend.** Every request counts the whole
+conversation so far, so a budget buys a few dozen requests and not a few dozen thousand tokens of
+reading. A delegate with a budget is told its tokens are bounded, and it is warned once, in the
+request after the round at which it has spent four fifths of the budget or has less left than two
+requests at its current context size cost. The warning asks it to leave the working tree
+consistent and to answer with what it did and what is left. A turn you run yourself is not warned.
+
+A definition written for a long job, a staged refactor say, can ask for more, up to its kind's
+ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
 `worker`, which is the bound on a one-shot run nobody is watching. Asking for more than that gives
 the delegate the ceiling, and the turn says so:
 
@@ -253,7 +300,7 @@ withheld, without reading any of them.
 A `checker` or `worker` definition with `isolation: checkout` has each of its delegates work in a
 checkout bravebot makes for it under `~/.bravebot/checkouts`, holding the last commit of the
 repository the session is in. Its writes land there and not in your working tree, and changes you
-have not committed are not in it. `worktree`, the value Claude Code reads, asks for the same thing.
+have not committed are not in it unless the planner's call carries them in, as described below. `worktree`, the value Claude Code reads, asks for the same thing.
 The planner cannot start the delegate without one. Where the session is in bypass, a delegate in a checkout
 is given the reach the session has outside the workspace, except the working directory and every other
 checkout, which no path of its reaches and its programs are given no write in.
@@ -276,8 +323,13 @@ Any other value loads the definition working in your working tree, and the turn 
 The planner can also ask for the changes in your working tree to be carried in, with
 `isolation: checkout_with_changes` on the call, so a `checker` builds and tests what the planner
 just wrote and not the last commit. A definition cannot ask for that: the call is what knows which
-tree the session has. The delegate is told which files were carried, and the planner is told in the
-answer to the call, along with any file that was left and why.
+tree the session has. The files carried are the ones the session wrote and, where the session trusts
+the whole working tree, the paths `git status` lists as changed. A file you deleted is deleted in the
+checkout. A file a deny rule covers, a link, a file over 16 MiB and anything past 1,000 files or 64 MiB
+is left as the commit has it. The delegate is told which files were carried, and the planner is told in
+the answer to the call, along with any file that was left and why. Git in the checkout reports each
+carried file as changed, so `apply_checkout` without `paths` and `/checkouts apply` ask about each of
+them as well, whether or not the delegate changed it.
 
 A `reader` is never given one, since it writes nothing, and the turn says that too. Where a
 checkout cannot be made, as when the delegate starting it already works in one, the session keeps

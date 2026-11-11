@@ -279,11 +279,27 @@ fetch `bravebot-archive-keyring.gpg` and `bravebot.sources` from the first host 
 from the second. A change to the host, the key or those file names changes the README, the install
 page and `crates/cli/tests/release_instructions.rs` with it.
 
+**What was checked.** On 2026-11-01 the served files were fetched and read. `bravebot.sources` has
+`Suites: stable`, `Components: main`, `Architectures: amd64 arm64` and
+`Signed-By: /usr/share/keyrings/bravebot-archive-keyring.gpg`. `dists/stable/Release` has
+`Suite: stable`, `Codename: stable` and `Architectures: amd64 arm64`, and `InRelease`, `Release.gpg`
+and both `Packages` files are served. The keyring and `bravebot-release.asc` each hold one key,
+with fingerprint `13F28F0405C49B0B232DBA1BC1E827646A2DE416`. `bravebot.repo` has `gpgcheck=1`, a
+`gpgkey` of `https://bravebot-rpm-release.s3.brave.com/bravebot-release.asc` and a `baseurl` of
+`https://bravebot-rpm-release.s3.brave.com/$basearch`, and `repomd.xml` and `repomd.xml.asc` are
+served for `x86_64` and `aarch64`. The deb and the rpm require `libc6 (>= 2.30)` and `glibc >= 2.30`.
+The apt source is a `stable` suite and not the flat `Suites: ./` form.
+
 **What is not checked here.** That `apt` and `dnf` install the package from the published
-repositories. By hand, in a container of each supported release: follow the instructions on the
-install page, check that the key's fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`,
-install, run `bravebot --version` and remove the package. The supported releases and this check are
-[#3466](https://github.com/brave/bravebot/issues/3466).
+repositories, because the machine this was written on had no container runtime or `gpg`. By hand,
+in a container of each release the install page lists (`debian:12`, `debian:13`, `ubuntu:22.04`,
+`ubuntu:24.04`, `ubuntu:26.04` and a supported `fedora`, each on amd64 and arm64 where the host
+runs both): install `curl`, `gpg` and `ca-certificates` on a Debian or Ubuntu image, follow the
+install page, check that the key's fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416` (for
+dnf, at the key import prompt), confirm `apt update` reports no `NO_PUBKEY`, `not signed` or
+`Architectures` warning, install, run `bravebot --version` and remove the package. No test or
+make target runs this, because it needs a container runtime and the network. The result of a run is
+recorded in [#3466](https://github.com/brave/bravebot/issues/3466).
 
 ### The Windows installers
 

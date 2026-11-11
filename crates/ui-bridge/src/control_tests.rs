@@ -114,8 +114,8 @@ fn a_set_of_answerers_is_only_made_for_a_session_that_is_open() {
 }
 
 /// The client is handed the session before it is sent anything of it and after the previous
-/// client was sent the last of it, is told where the session stands and that its rows are not
-/// there, and can answer from then on and not before.
+/// client was sent the last of it, is told where the session stands with the rows so far, and can
+/// answer from then on and not before.
 #[test]
 fn taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot() {
     let directory = tempfile::tempdir().unwrap();
@@ -148,10 +148,12 @@ fn taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot(
     assert_eq!(snapshot.data["status"], "running");
     assert_eq!(snapshot.data["turn"], 1);
     assert_eq!(snapshot.data["target"], 9);
-    assert_eq!(snapshot.data["rows"], json!([]));
-    assert_eq!(snapshot.data["history"], "omitted");
+    assert_eq!(snapshot.data["rows"].as_array().map(Vec::len), Some(1));
+    assert_eq!(snapshot.data["rows"][0]["kind"], "prompt");
+    assert_eq!(snapshot.data["rows"][0]["data"], json!({"text": "go"}));
+    assert_eq!(snapshot.data["omitted"], 0);
     assert_eq!(attached["sequence"], snapshot.data["sequence"]);
-    assert_eq!(attached["history"], "omitted");
+    assert_eq!(attached["omitted"], 0);
     drop(events);
     let answerers = bridge.answerers_of(&handle);
     assert!(answerers.can_answer(Kind::Write) && answerers.can_answer(Kind::Ask));
@@ -254,6 +256,51 @@ fn the_startup_question_carries_the_directory_and_the_record_spelled_for_a_perso
     }
 }
 
+/// PROMPT-1: the bridge sends a directory whose name holds a zero-width space and a right-to-left
+/// override spelled in `shownDirectory`, equal to `shown_path`. `directory` stays as held, which is
+/// what mobile and the editor key on, and differs from the spelled field. This pins the bridge's
+/// field only; the spelling was already sent before the window's yes was gated, and that the window
+/// draws the field is pinned in ui/scripts/shown-name.test.mjs.
+#[test]
+fn the_startup_question_spells_a_directory_that_holds_invisible_characters() {
+    let (mut bridge, said) = a_bridge();
+    let project = Path::new("/work/pro\u{200b}j\u{202e}ect");
+    let identity = trusted::Identity::of(tempfile::tempdir().unwrap().path()).expect("a directory");
+    let handle = bridge.mint(Open::opened(
+        project.to_path_buf(),
+        State::fresh(TrustStore::new(project)),
+        false,
+        Some((
+            trusted::Store::new(Path::new("/home/me/state"), project),
+            identity,
+        )),
+        false,
+    ));
+    bridge.ask_about_trust(&handle);
+    let events = said.lock().unwrap();
+    let [event] = events.as_slice() else {
+        panic!("one event was expected: {:?}", names(&said));
+    };
+    assert_eq!(event.name, "trust.request");
+    let shown = event.data["shownDirectory"]
+        .as_str()
+        .expect("a spelled directory");
+    assert_eq!(shown, bravebot_agent::confirm::shown_path(project));
+    assert!(
+        shown.contains("\\u{200b}") && shown.contains("\\u{202e}"),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains('\u{200b}') && !shown.contains('\u{202e}'),
+        "{shown}"
+    );
+    assert_eq!(
+        event.data["directory"],
+        json!("/work/pro\u{200b}j\u{202e}ect")
+    );
+    assert_ne!(event.data["directory"], event.data["shownDirectory"]);
+}
+
 /// A session with no view has nothing to hand over, and a session that is not open cannot be
 /// taken. Neither runs the hand-over or changes who can answer.
 #[test]
@@ -341,6 +388,123 @@ fn updates_during_a_take_over_fall_on_one_side_of_the_snapshot() {
             snapshot, before as u64,
             "the snapshot is not where it was taken"
         );
+    }
+}
+
+/// Rows as a client holds them after applying `update`: each listed row replaces the row with its
+/// id where it is, and a row with a new id goes last.
+fn apply(rows: &mut Vec<Value>, update: &Value) {
+    for row in update["rows"].as_array().unwrap() {
+        match rows.iter_mut().find(|held| held["id"] == row["id"]) {
+            Some(held) => *held = row.clone(),
+            None => rows.push(row.clone()),
+        }
+    }
+}
+
+/// A turn that reports calls starting and finishing, with labelled narration between, while a
+/// client takes the session over and then asks for a snapshot again. Starting from either snapshot
+/// and applying each update after it, the client holds the rows a snapshot taken at the end holds:
+/// none missing, none twice, each finished call on its own row, and every payload whole with its
+/// label. The turn reports more rows than a snapshot keeps, so the end's snapshot says how many it
+/// leaves out, and the client's own rows from before it are kept by the client.
+#[test]
+fn a_client_that_applies_the_updates_after_a_snapshot_holds_what_a_later_snapshot_holds() {
+    let calls = crate::view::RETAINED_ROWS as u64;
+    for take_over in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut bridge, said) = a_bridge();
+        let handle = open(&mut bridge, directory.path(), true, None);
+        bridge.emitter.start_view(&handle, true).unwrap();
+        bridge
+            .emitter
+            .view_started(&handle, 1, 1, json!({"text": "go"}));
+        let emitter = bridge.emitter.clone();
+        let session = handle.clone();
+        let (go, started) = mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            started.recv().unwrap();
+            for call in 1..=calls {
+                let says = |name, note| {
+                    Event::new(
+                        name,
+                        &session,
+                        json!({"call": call, "verb": "read", "target": "a.rs", "note": note}),
+                    )
+                };
+                emitter.send(says("tool.started", Value::Null));
+                emitter.send(Event::new(
+                    "narration",
+                    &session,
+                    json!({"text": call, "label": "(U,priv)"}),
+                ));
+                emitter.send(says("tool.finished", json!(call)));
+            }
+        });
+        go.send(()).unwrap();
+        let first = if take_over {
+            bridge.attach_view(&handle, &[], || Ok(())).unwrap()
+        } else {
+            let resync = Request {
+                id: 1,
+                method: "session.view.resync".into(),
+                params: json!({"session": handle}),
+            };
+            bridge.dispatch(&resync).unwrap()
+        };
+        worker.join().unwrap();
+        let last = bridge.attach_view(&handle, &[], || Ok(())).unwrap();
+
+        let events = said.lock().unwrap();
+        let snapshots: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.name == "session.view.snapshot")
+            .map(|(at, _)| at)
+            .collect();
+        let [from, to] = snapshots[..] else {
+            panic!("two snapshots were expected, not {}", snapshots.len());
+        };
+        assert_eq!(events[from].data["sequence"], first["sequence"]);
+        let mut rows = events[from].data["rows"].as_array().unwrap().clone();
+        let mut sequence = events[from].data["sequence"].as_u64().unwrap();
+        for event in &events[from + 1..to] {
+            if event.name == "session.view.update" {
+                sequence += 1;
+                assert_eq!(
+                    event.data["sequence"], sequence,
+                    "an update was missed or repeated"
+                );
+                apply(&mut rows, &event.data);
+            }
+        }
+        let end = &events[to].data;
+        assert_eq!(end["sequence"], sequence);
+        assert_eq!(last["sequence"], sequence);
+        let kept = end["rows"].as_array().unwrap();
+        assert_eq!(kept.len(), crate::view::RETAINED_ROWS);
+        // The prompt and one row for each call and each narration.
+        let total = 1 + 2 * calls;
+        assert_eq!(end["omitted"], total - kept.len() as u64);
+        assert_eq!(last["omitted"], end["omitted"]);
+        assert!(rows.len() >= kept.len(), "the client lost rows it was sent");
+        assert_eq!(
+            &rows[rows.len() - kept.len()..],
+            kept.as_slice(),
+            "the client's rows differ from the snapshot's"
+        );
+        let ids: Vec<u64> = kept.iter().map(|row| row["id"].as_u64().unwrap()).collect();
+        assert_eq!(
+            ids,
+            ((total - ids.len() as u64 + 1)..=total).collect::<Vec<_>>()
+        );
+        for row in kept {
+            match row["event"].as_str() {
+                Some("narration") => assert_eq!(row["data"]["label"], "(U,priv)", "{row}"),
+                Some("tool.finished") => assert_eq!(row["data"]["note"], row["data"]["call"]),
+                other => panic!("a call left unfinished, or another row: {other:?} {row}"),
+            }
+        }
     }
 }
 

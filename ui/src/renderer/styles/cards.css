@@ -123,6 +123,10 @@
 }
 .mcp-arguments { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; }
 .mcp-arguments dd { margin: 0; }
+/* The later calls one answer also covers: each is its own list of arguments, set apart from the
+   next so two calls never read as one. */
+.mcp-also { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
+.mcp-also > p { margin: 0; }
 /* Not `pre.preview`: that is released content, and a card holding one keeps its answers pinned. */
 .mcp-argument {
   margin: var(--leo-spacing-xs) 0 0;

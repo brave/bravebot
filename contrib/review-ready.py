@@ -5,7 +5,9 @@
 
 A pull request is ready when it is mergeable, is not a draft, has every check passed or skipped,
 has an approval as the latest review by the reviewer and has no latest review, by anyone, that
-requests changes. Each is printed to stdout as `<url>  <title>`, once, as soon as it is seen.
+requests changes. Each is printed to stdout as `<url>  <title>`, once, after the last read, with the
+pull request that has waited longest first and the most recent last. A pull request has waited since
+the reviewer's latest approval, or since it was opened where that has no time.
 
 A check counts by its latest run. GitHub keeps every run of a check on the commit, including one
 cancelled because a newer run of the workflow started, and the pull request page shows only the
@@ -37,7 +39,7 @@ LIMIT = 500
 WAIT = 30.0
 INTERVAL = 3.0
 
-FIELDS = "number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup"
+FIELDS = "number,title,url,createdAt,mergeable,latestReviews,isDraft,statusCheckRollup"
 PASSED = ("SUCCESS", "NEUTRAL", "SKIPPED")
 
 READY = "ready"
@@ -95,6 +97,14 @@ def classify(pr, reviewer):
     return READY if mergeable == "MERGEABLE" else PENDING
 
 
+def waiting_since(pr, reviewer):
+    """When the pull request began waiting for a person: the time of the reviewer's approval, else the
+    time it was opened, else the empty string. Both are UTC timestamps, which order as text."""
+    approvals = [review.get("submittedAt") or "" for review in pr.get("latestReviews") or []
+                 if (review.get("author") or {}).get("login") == reviewer and review.get("state") == "APPROVED"]
+    return max(approvals, default="") or pr.get("createdAt") or ""
+
+
 def numbers(prs):
     return ", ".join(f"#{pr['number']}" for pr in sorted(prs, key=lambda pr: pr["number"]))
 
@@ -126,25 +136,33 @@ def read(repo, limit):
 
 
 def watch(fetch, reviewer, wait, interval, out, err, clock=time.monotonic, sleep=time.sleep):
-    """Prints each ready pull request once, and reads again while any are pending until `wait` seconds
-    have gone by. `fetch` returns one list of pull requests."""
+    """Reads again while any pull request is pending until `wait` seconds have gone by, then prints each
+    ready one once, the one that has waited longest first. Nothing is printed before the last read,
+    since a pull request seen later can have waited longer than one seen earlier. `fetch` returns one
+    list of pull requests."""
     deadline = clock() + wait
-    printed = set()
+    ready = {}
+
+    def emit():
+        for pr in sorted(ready.values(), key=lambda pr: (waiting_since(pr, reviewer), pr["number"])):
+            print(f"{pr['url']}  {pr['title']}", file=out, flush=True)
+
     while True:
         pending = []
         for pr in fetch():
-            if pr["number"] in printed:
+            if pr["number"] in ready:
                 continue
             verdict = classify(pr, reviewer)
             if verdict == READY:
-                printed.add(pr["number"])
-                print(f"{pr['url']}  {pr['title']}", file=out, flush=True)
+                ready[pr["number"]] = pr
             elif verdict == PENDING:
                 pending.append(pr)
         if not pending:
+            emit()
             return
         remaining = deadline - clock()
         if remaining <= 0:
+            emit()
             print(f"incomplete: {noun(len(pending))} still not computed as mergeable (UNKNOWN) after "
                   f"{wait:g} seconds, so the list above leaves them out: {numbers(pending)}",
                   file=err, flush=True)

@@ -11,6 +11,7 @@ import type { Experience } from '../src/shared/experience'
 import { EMPTY_CONVERSATION, parseExperience } from '../src/shared/experience'
 import type { Appearance } from '../src/shared/theme'
 import type { Bot } from '../src/shared/bots'
+import type { EffortLevel } from '../src/shared/protocol'
 import type {
   BridgeEvent, EventMap, EventName, ForkedSession, OpenedSession, RewindPoint, RewoundSession, Said, SessionSummary,
 } from '../src/shared/protocol'
@@ -74,6 +75,7 @@ const themeListeners = new Set<(state: ThemeState) => void>()
 let rows: SessionSummary[] = SESSIONS()
 let bots: Bot[] = BOTS()
 let experience: Experience = parseExperience(null)
+let effort: EffortLevel | null = null
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
 let requests = 100
 let created = 0
@@ -309,6 +311,8 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'update.status': return ok({ check: 'on', running: '0.19.0', newer: false, checked: null })
     case 'session.list': return ok({ sessions: rows })
     case 'models.list': return ok(MODELS)
+    case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false })
+    case 'effort.set': effort = (params.level as EffortLevel | null | undefined) ?? null; return ok({ recorded: effort })
     case 'mentions.named': return ok({ files: [] })
     case 'mentions.offer': {
       const line = String(params.line ?? '')
@@ -354,6 +358,11 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
       return ok({ accepted: true })
     }
     case 'turn.cancel': if (session) stop(session.handle); return ok({})
+    case 'schedule.command': {
+      const argument = String(params.argument ?? '').trim()
+      if (!argument || argument === 'list') return ok({ lines: ['No scheduled runs.'], refused: false, running: false })
+      return ok({ lines: ['The playground does not keep a schedule.'], refused: true, running: false })
+    }
     case 'session.fork': {
       if (!session) return failed('no-session', 'That session is closed.')
       const at = session.said.findIndex((entry) => entry.kind === 'user' && entry.prompt === params.prompt)
@@ -434,6 +443,7 @@ const bridge: BravebotApi = {
   writeExperience: async (key, value) => {
     if (key === 'dismissedUpdate') experience = { ...experience, dismissedUpdate: typeof value === 'string' ? value : null }
     else if (key === 'recentModels') experience = { ...experience, recentModels: Array.isArray(value) ? value as string[] : [] }
+    else if (key === 'providers') experience = { ...experience, providers: parseExperience({ providers: value }).providers }
     else if (key.startsWith('[')) experience = { ...experience, conversations: { ...experience.conversations, [key]: { ...EMPTY_CONVERSATION, ...experience.conversations[key], ...(value as object) } } }
     return experience
   },
@@ -498,6 +508,15 @@ const bridge: BravebotApi = {
   saveBugReport: async () => ({ status: 'saved', where: '/Users/example/Desktop/report.txt' }),
   showBugReportLog: async () => false,
   openPage: async () => true,
+  signIn: async () => null,
+  signInCurrent: async () => null,
+  cancelSignIn: async () => undefined,
+  showSignInWindow: async () => false,
+  onSignIn: () => () => undefined,
+  enterKey: async () => null,
+  enterKeyCurrent: async () => null,
+  showKeyWindow: async () => false,
+  onKeyEntry: () => () => undefined,
   onCommand: () => () => undefined,
   popupContext: () => undefined,
   publishState: () => undefined,

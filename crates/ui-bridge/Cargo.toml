@@ -34,9 +34,13 @@ bravebot-net = { path = "../net" }
 # For `Stream`: where a confined MCP server's stderr goes when a session starts one, which is
 # nowhere, since this process has no screen of its own for it.
 bravebot-sandbox = { path = "../sandbox" }
+# The code of `bravebot schedule`, so the window's `/schedule` lists and manages entries with it.
+bravebot-schedule = { path = "../schedule" }
 bravebot-core = { path = "../core" }
 # Session records, state storage, and audit trails are shared with the terminal UI.
 bravebot-session = { path = "../session" }
+# The ChatGPT and xAI sign-ins the window starts, from one file (accounts.rs).
+bravebot-skus = { path = "../skus" }
 # Which build wrote a record. The stamp is a crate of its own, so naming the build no longer
 # costs a front end that draws nothing a dependency on the terminal library.
 bravebot-stamp = { path = "../stamp" }
@@ -44,6 +48,8 @@ bravebot-stamp = { path = "../stamp" }
 bravebot-update = { path = "../update" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The digest a send is recorded under, so a repeat can be told from other parameters under its id.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # The test of what the bridge sends and keeps for a failed ChatGPT turn signs in to a stand-in and

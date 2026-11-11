@@ -99,6 +99,9 @@ struct Open {
     /// (INPUT-50). Left in place once it has answered: stopping a request that has ended does
     /// nothing, and the next one replaces it.
     enhancing: Option<Cancel>,
+    /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
+    /// (RPCVIEW-11).
+    sends: crate::sends::Sends,
 }
 
 impl Open {
@@ -125,6 +128,7 @@ impl Open {
             sandbox: None,
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
+            sends: crate::sends::Sends::default(),
         }
     }
 
@@ -168,6 +172,8 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// The ChatGPT or xAI sign-in the window started, while it runs.
+    sign_ins: crate::accounts::SignIns,
 }
 
 impl Bridge {
@@ -182,6 +188,7 @@ impl Bridge {
             closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
+            sign_ins: crate::accounts::SignIns::default(),
         }
     }
 
@@ -236,6 +243,7 @@ impl Bridge {
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
             "session.view.start" => self.start_view(request),
+            "session.view.resync" => self.resync_view(request),
             "session.fork" => self.fork_session(request),
             "session.addressed" => addressed_sessions(request),
             "session.delete" => self.delete_session(request),
@@ -247,6 +255,14 @@ impl Bridge {
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "turn.send" => self.send_turn(request),
+            "turn.lookup" => {
+                let id = crate::wire::message_id(request.params.get("messageId"))?;
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                Ok(open.sends.lookup(&id))
+            }
             "mentions.offer" => {
                 let open = self
                     .open
@@ -330,13 +346,10 @@ impl Bridge {
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
-            "settings.inspect" => {
-                let project = request
-                    .optional_string("session")
-                    .and_then(|id| self.open.get(&id))
-                    .map(|s| s.project.as_path());
-                Ok(crate::settings::report(project, self.settings.as_deref()))
-            }
+            "settings.inspect" => Ok(crate::settings::report(
+                self.project_of(request),
+                self.settings.as_deref(),
+            )),
             "settings.select" => {
                 let path = request.optional_string("path").map(PathBuf::from);
                 if let Some(path) = &path {
@@ -351,9 +364,17 @@ impl Bridge {
             "connectors.disconnect" => crate::connectors::disconnect(request),
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
+            "effort.get" => {
+                let directory = request.optional_string("directory").map(PathBuf::from);
+                let settings =
+                    crate::settings::layers(directory.as_deref(), self.settings.as_deref());
+                Ok(crate::effort::get(&settings))
+            }
+            "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
             "changelog.read" => Ok(crate::help::changelog()),
+            "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -375,8 +396,46 @@ impl Bridge {
                 self.settings.as_deref(),
             )),
             "window.fault" => crate::window_fault::record(request),
+            "accounts.list" => crate::accounts::list_asked(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
+            "accounts.signOut" => crate::accounts::sign_out(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
+            "accounts.signIn" => {
+                let project = self.project_of(request).map(Path::to_path_buf);
+                self.sign_ins.start(
+                    request,
+                    project.as_deref(),
+                    self.settings.as_deref(),
+                    &self.emitter,
+                )
+            }
+            "accounts.cancelSignIn" => self.sign_ins.cancel(request),
+            "accounts.keyBefore" => crate::key_entry::before(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
+            "accounts.storeKey" => crate::key_entry::store_key(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
             other => Err(Failure::bad_request(format!("unknown method `{other}`"))),
         }
+    }
+
+    /// The project of the open session a request names, where it names one.
+    fn project_of(&self, request: &Request) -> Option<&Path> {
+        request
+            .optional_string("session")
+            .and_then(|id| self.open.get(&id))
+            .map(|open| open.project.as_path())
     }
 
     /// Whether a newer release than this one is recorded, as a yes or no and never the version
@@ -497,10 +556,11 @@ impl Bridge {
             .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
         // Held from here for as long as the session stays open, so a record a terminal holds is
         // refused in the words the terminal uses (SESSION-38).
-        let state = match State::resumed(&directory, &record, opening.trust) {
+        let mut state = match State::resumed(&directory, &record, opening.trust) {
             Ok(state) => state,
             Err(held) => return Ok(Stored::Refused(held)),
         };
+        state.account = self.account_session(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open::opened(
@@ -599,6 +659,17 @@ impl Bridge {
             .get(handle)
             .and_then(|open| open.state.lock().ok().map(|state| state.scratch.report()))
             .unwrap_or(Value::Null)
+    }
+
+    /// A ChatGPT account session, which is sent one level for the whole of a session (BACKEND-22), begun with
+    /// the level a turn in `project` would ask for: the recorded pick, ranked against the settings
+    /// of that project and of the file selected in the window as BACKEND-43 ranks them.
+    fn account_session(
+        &self,
+        project: &std::path::Path,
+    ) -> bravebot_agent::chatgpt::AccountSession {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -733,6 +804,7 @@ impl Bridge {
         let opening = Opening::of(&directory, None);
         let reported = opening.json(&directory);
         let mut state = State::fresh(opening.trust);
+        state.account = self.account_session(&directory);
         state.directories = additional;
         let handle = self.mint(Open::opened(
             directory.clone(),
@@ -912,6 +984,7 @@ impl Bridge {
                 );
                 // The map is the parent's, so what the mode answered in it is still the mode's.
                 forked.answered_by_mode = by_mode;
+                forked.account = self.account_session(&project);
                 forked
             },
             // Inherited along with the map itself: the same person, in the same directory, in
@@ -1163,9 +1236,9 @@ impl Bridge {
     ///
     /// `hand_over` switches where the session's events go, and runs between the end of what the
     /// previous client was sent and the start of what the new one is. The client is sent the
-    /// session's current state as `session.view.snapshot`, with the startup question again if it
-    /// is still unanswered, and is then able to answer the `kinds` named. The session must have
-    /// started a view.
+    /// session's current state and most recent rows as `session.view.snapshot`, with the startup
+    /// question again if it is still unanswered, and is then able to answer the `kinds` named. The
+    /// session must have started a view.
     pub fn attach_view(
         &mut self,
         handle: &str,
@@ -1176,7 +1249,7 @@ impl Bridge {
             return Err(Failure::no_such_session());
         }
         let answerers = self.answerers_of(handle);
-        let sequence = self.emitter.resume_view(handle, || {
+        let snapshot = self.emitter.snapshot_view(handle, || {
             // Who can answer is set first, so a failure to set it leaves the previous controller
             // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
             // set here, since no client has the session.
@@ -1188,7 +1261,19 @@ impl Bridge {
             Ok(())
         })?;
         self.ask_about_trust(handle);
-        Ok(json!({"version": 1, "sequence": sequence, "history": "omitted"}))
+        Ok(snapshot_answer(snapshot))
+    }
+
+    /// Send the session's view again as a snapshot, for a client that missed an update
+    /// (RPCVIEW-9). Who can answer is unchanged.
+    fn resync_view(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        if !self.open.contains_key(&handle) {
+            return Err(Failure::no_such_session());
+        }
+        let snapshot = self.emitter.snapshot_view(&handle, || Ok(()))?;
+        self.ask_about_trust(&handle);
+        Ok(snapshot_answer(snapshot))
     }
 
     /// Whether a thread is still working for the session: a turn or a run that has not yet
@@ -1264,6 +1349,7 @@ impl Bridge {
     pub fn shut_down(&mut self, limit: Duration) -> bool {
         self.emitter.go_quiet();
         self.stop_all();
+        self.sign_ins.stop_running();
         crate::workers::Workers::all_end_within(&self.closing, limit)
     }
 
@@ -1328,12 +1414,30 @@ impl Bridge {
     /// began, because a turn takes as long as a model does and a front-end that blocked
     /// on it would show nothing until it ended.
     fn send_turn(&mut self, request: &Request) -> Result<Value, Failure> {
+        // Checked here and not in `start_turn`, which also starts the turn of a watch: that has no
+        // client behind it, so no id.
+        let id = crate::wire::message_id(request.params.get("messageId"))?;
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(earlier) = open.sends.earlier(&id, &request.params) {
+            return earlier;
+        }
+        // Requests are served one at a time, so nothing can ask about this id before it is
+        // recorded.
+        //
         // The one tag a request may claim, and every other word refused. A front end composes
         // prompts of its own, so it has to be able to say which those are or its transcript is
         // back to recognising them by their wording; what it may not do is claim one of the
         // agent's, which is [`wire::composed`]'s whole job.
-        let composed = crate::wire::composed(request.params.get("composed"))?;
-        self.start_turn(request, composed)
+        let answer = crate::wire::composed(request.params.get("composed"))
+            .and_then(|composed| self.start_turn(request, composed));
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.sends.record(id, &request.params, answer.clone());
+        }
+        answer
     }
 
     /// The same, for a turn this crate asked for and knows what it composed.
@@ -1437,6 +1541,10 @@ impl Bridge {
             return Err(Failure::bad_request(refused));
         }
         let attribution = settings.attribution().clone();
+        // The level the terminal's `/effort` and this window's picker record, ranked against the
+        // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
+        // between turns applies to the next one.
+        let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
@@ -1518,6 +1626,7 @@ impl Bridge {
                 state,
                 config,
                 attribution,
+                effort,
                 output_cap,
                 download_cap,
                 deadlines,
@@ -1688,6 +1797,7 @@ impl Bridge {
         }
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
+        let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
@@ -1752,6 +1862,7 @@ impl Bridge {
                 state,
                 config,
                 attribution,
+                effort,
                 output_cap,
                 deadlines,
                 sandbox,
@@ -1862,6 +1973,14 @@ impl Bridge {
         }
         let gaps = point.coverage.gaps();
         let snapshot = point.snapshot;
+        // As in the terminal: every answer to the planner's questions goes, because the memo does
+        // not say which turn an answer came in (ASK-8). Read as it stands if a turn panicked
+        // holding the lock, since the memo only gains or replaces a whole entry.
+        state
+            .question_answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .forget();
         let (trust, programs, servers) = state.answers.what_a_rewind_takes_back();
         let refused = bravebot_agent::rewind::restore(
             &workspace,
@@ -2264,6 +2383,28 @@ impl Bridge {
         }))
     }
 
+    /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
+    ///
+    /// The window sends it only for a line a person typed (CMD-1). The session's sandbox mode is
+    /// not read: an entry added here holds read mode whatever mode the session is in.
+    fn schedule_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        crate::schedule_command::run(
+            &argument,
+            &handle,
+            &open.project,
+            open.running.is_some(),
+            &self.emitter,
+            bravebot_schedule::in_session,
+        )
+    }
+
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
@@ -2517,6 +2658,12 @@ impl Bridge {
         self.open.insert(handle.clone(), session);
         handle
     }
+}
+
+/// What `session.attach` and `session.view.resync` answer: the sequence of the snapshot sent
+/// before the answer, and how many earlier rows it leaves out.
+fn snapshot_answer((sequence, omitted): (u64, u64)) -> Value {
+    json!({"version": 1, "sequence": sequence, "omitted": omitted})
 }
 
 /// The files a turn is told a person dropped, each one accounted for as far as a string can be.
@@ -2907,6 +3054,12 @@ fn take_back_touched(
     }
 }
 
+/// The effort level a turn or plan run in this window asks for: the one recorded with `/effort` or
+/// this window's picker, ranked against `settings` as BACKEND-43 ranks them.
+pub(crate) fn recorded_effort(settings: &Settings) -> Option<bravebot_session::store::Effort> {
+    bravebot_session::store::effort(bravebot_session::store::load_effort(), settings)
+}
+
 /// Everything a worker needs to run one turn.
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
@@ -2919,6 +3072,9 @@ struct Work {
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
+    /// How hard the model is asked to think: the recorded level and the settings layers, ranked as
+    /// BACKEND-43 ranks them. `None` asks for the service's own default.
+    effort: Option<bravebot_session::store::Effort>,
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
@@ -3045,6 +3201,7 @@ fn work(work: Work) {
         state,
         mut config,
         attribution,
+        effort,
         output_cap,
         download_cap,
         deadlines,
@@ -3154,6 +3311,7 @@ fn work(work: Work) {
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
         .with_model(model)
+        .with_effort(effort)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
@@ -3227,6 +3385,8 @@ fn work(work: Work) {
     open_rewind_point(&mut state, &workspace, &prompt);
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
+    #[cfg(test)]
+    crate::running::built_in::record_level("turn", task.effort);
     let began_at = std::time::Instant::now();
     let mut completed = agent_turn::resume(
         &config,
@@ -3275,9 +3435,12 @@ fn work(work: Work) {
     state.turns = turn;
     let ended = match &outcome {
         Ok(_) => bravebot_session::sessions::StoredOutcome::Completed,
-        Err(error) => {
-            bravebot_session::sessions::StoredOutcome::ended(turn, error.ending(), error.cut_off())
-        }
+        Err(error) => bravebot_session::sessions::StoredOutcome::ended_by(
+            turn,
+            error,
+            // The configured name, as `chosen` below is, and never one a reply reported.
+            Some(task.model.as_deref().unwrap_or(&config.default_model)),
+        ),
     };
     record_turn(
         &mut state,
@@ -3312,10 +3475,9 @@ fn work(work: Work) {
                 }
             }
             state.tokens += outcome.tokens;
-            state.split.add(bravebot_session::sessions::Split::of(
-                outcome.tokens,
-                outcome.output_tokens,
-            ));
+            state
+                .split
+                .add(bravebot_session::sessions::Split::of_outcome(&outcome));
             // Added to rather than set: a turn that compacted part way through has already put
             // that cost here under the same number, and the breakdown has to add up to the total.
             *state.spend.entry(turn).or_insert(0) += outcome.tokens;
@@ -3576,7 +3738,7 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         // this one, and a stop is what it would be: the ending says `Stopped`.
         TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
-        TurnError::Workspace(_) => "workspace",
+        TurnError::Workspace(_) | TurnError::Named { .. } => "workspace",
         TurnError::Chat(_) => "chat",
         // Only a manifest run fails this way, and `crate::manifest` reports the cause inside
         // it, so a turn never sends this kind.

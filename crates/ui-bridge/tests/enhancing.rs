@@ -10,6 +10,8 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[path = "../test-support/message_ids.rs"]
+mod message_ids;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -241,7 +243,10 @@ impl Window {
 
     fn say(&mut self, prompt: &str) {
         let session = self.session.clone();
-        let answered = self.ask("turn.send", json!({"session": session, "prompt": prompt}));
+        let answered = self.ask(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
         assert!(answered.get("ok").is_some(), "{answered}");
         until(&self.said, |m| m["event"] == "turn.done");
     }
@@ -366,7 +371,9 @@ fn a_running_turn_refuses_a_rewrite_and_asks_nothing_of_the_service() {
     let session = window.session.clone();
     let sent = window.ask(
         "turn.send",
-        json!({"session": session, "prompt": format!("{HELD} for the turn")}),
+        message_ids::with_fresh(
+            json!({"session": session, "prompt": format!("{HELD} for the turn")}),
+        ),
     );
     assert!(sent.get("ok").is_some(), "{sent}");
     window.wait_for_requests(1);

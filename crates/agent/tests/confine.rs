@@ -53,8 +53,23 @@ fn touch(file: impl std::fmt::Display) -> String {
     }
 }
 
+/// Where the directories of this suite are made, relative to this crate.
+///
+/// It holds nothing but this suite's directories. A stage that is given what a request would be
+/// granted (SANDBOX-28) holds a write row and a socket row for every entry of `/`, of each
+/// directory above the home and of the home, and Seatbelt takes longer than linearly to compile
+/// those rows: a profile of about 2000 rows takes seconds, and one run starts a stage for every
+/// line. `target/test-scratch` is shared by every test binary and keeps what each of them made, so
+/// a home beneath it takes a row for each of those entries, which took a run of this suite from
+/// seconds to minutes on a checkout that had run many tests.
+const SCRATCH: &str = "../../target/confine-scratch";
+
+/// The directory the other test binaries keep their scratch directories in.
+#[cfg(unix)]
+const SHARED_SCRATCH: &str = "../../target/test-scratch";
+
 /// A session directory, a second one beside it that the session was not opened on, and a home
-/// directory holding a credential of each kind, all under the build directory.
+/// directory holding a credential of each kind, all under [`SCRATCH`].
 struct Places {
     session: PathBuf,
     beside: PathBuf,
@@ -111,7 +126,7 @@ impl Places {
         #[cfg(windows)]
         hold_path_to_what_every_container_reads();
         let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
+            .join(SCRATCH)
             .join(format!("confine-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let session = top.join("session");
@@ -278,6 +293,92 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
             held_back.display()
         );
     }
+}
+
+/// SANDBOX-12, #2917. The regression it rejects: a run base built from the home directory alone, so
+/// a state directory `BRAVEBOT_HOME` puts outside `~/.bravebot` is read by a stage (its gateway keys
+/// print), or one that lifts the named directory whole instead of its `sessions` subtree. The
+/// confinement with no state directory is the control that the file is there to be read under the
+/// same base, and the default directory is refused alongside.
+#[cfg(unix)]
+#[test]
+fn a_stage_cannot_read_a_state_directory_that_is_moved_out_of_the_default() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("moved-state");
+    let moved = places.home.parent().expect("a parent").join("moved-state");
+    std::fs::create_dir_all(moved.join("sessions/-repo")).expect("the moved directory");
+    std::fs::write(moved.join("gateway-keys.json"), "moved gateway secret\n").expect("a file");
+    std::fs::write(moved.join("sessions/-repo/1.json"), "moved record\n").expect("a file");
+    let moved = resolved(&moved);
+    let confinement = places
+        .confinement()
+        .with_state_directory(Some(moved.clone()));
+    let reads = |path: &Path, confinement: Option<&Confinement>| {
+        places.run(&format!("cat {}", path.display()), confinement)
+    };
+
+    let keys = moved.join("gateway-keys.json");
+    let unmoved = reads(&keys, Some(&places.confinement()));
+    assert!(
+        unmoved.ended_well && unmoved.stdout.contains("moved gateway secret"),
+        "the control does not read the file: {unmoved:?}"
+    );
+    for held_back in [keys, places.home.join(".bravebot/gateway-keys.json")] {
+        let confined = reads(&held_back, Some(&confinement));
+        assert!(
+            !confined.ended_well && !confined.stdout.contains("secret"),
+            "{} was read: {confined:?}",
+            held_back.display()
+        );
+    }
+    let record = reads(&moved.join("sessions/-repo/1.json"), Some(&confinement));
+    assert!(
+        record.ended_well && record.stdout.contains("moved record"),
+        "the session record was not read: {record:?}"
+    );
+}
+
+/// SANDBOX-12, #2917. A state directory `BRAVEBOT_HOME` puts inside a session directory is held back
+/// from a stage although the session directory is read and written whole. The regression it rejects:
+/// the moved directory left out of the refusals, so the grant of the session directory above it
+/// reaches the gateway keys. The confinement with no state directory is the control that the file is
+/// read under the same grant, and a file beside the moved directory is read under the refusal.
+#[cfg(unix)]
+#[test]
+fn a_stage_cannot_read_a_state_directory_that_lies_inside_its_session_directory() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("moved-state-in-session");
+    let moved = places.session.join("state");
+    std::fs::create_dir_all(&moved).expect("the moved directory");
+    std::fs::write(moved.join("gateway-keys.json"), "inside gateway secret\n").expect("a file");
+    std::fs::write(places.session.join("notes.txt"), "a note\n").expect("a file");
+    let confinement = places
+        .confinement()
+        .with_state_directory(Some(moved.clone()));
+    let reads = |path: &Path, confinement: &Confinement| {
+        places.run(&format!("cat {}", path.display()), Some(confinement))
+    };
+
+    let keys = moved.join("gateway-keys.json");
+    let unmoved = reads(&keys, &places.confinement());
+    assert!(
+        unmoved.ended_well && unmoved.stdout.contains("inside gateway secret"),
+        "the control does not read the file: {unmoved:?}"
+    );
+    let confined = reads(&keys, &confinement);
+    assert!(
+        !confined.ended_well && !confined.stdout.contains("secret"),
+        "the keys were read from inside the session directory: {confined:?}"
+    );
+    let note = reads(&places.session.join("notes.txt"), &confinement);
+    assert!(
+        note.ended_well && note.stdout.contains("a note"),
+        "the session directory beside the moved one was refused: {note:?}"
+    );
 }
 
 /// SANDBOX-26: a strict stage that asked for `aws` reads the aws credential directory and nothing
@@ -472,6 +573,234 @@ fn a_stage_that_relinks_the_scratch_directory_hands_the_next_stage_nothing() {
         let _ = std::fs::remove_file(&own);
         let _ = std::fs::remove_dir_all(&aside);
     }
+}
+
+/// SANDBOX-18: a session directory is the one the session was opened on or added, and not whatever
+/// its name leads to later. A stage replaces an added directory with a link to a directory the
+/// person never added, and the next `run` of the session is not given that directory to write. The
+/// regression it rejects: every build resolving the stored name again, so the second stage's row is
+/// wherever the link leads and `planted` is written beside.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_relinks_an_added_directory_hands_the_next_stage_nothing() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("added-relinked");
+    let added = places.session.join("added");
+    std::fs::create_dir(&added).expect("an added directory");
+    let scratch = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(scratch.path());
+    let recorded: Vec<_> = [places.session.clone(), added.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confine = || {
+        Confinement::here(
+            vec![places.session.clone(), added.clone()],
+            scratch.directory().as_ref(),
+            Some(&places.home),
+        )
+        .expect("a platform with a base")
+        .with_session_directories(&recorded)
+    };
+    let aside = places.session.join("added.aside");
+
+    let relink = places.run_given(
+        &format!(
+            "sh -c 'mv {} {} && ln -s {} {}'",
+            added.display(),
+            aside.display(),
+            places.beside.display(),
+            added.display()
+        ),
+        Some(&confine()),
+        Some(&own),
+    );
+    let planted = places.beside.join("planted");
+    let next = places.try_run_given(
+        &format!("touch '{}/planted'", added.display()),
+        Some(&confine()),
+        Some(&own),
+    );
+
+    assert!(relink.ended_well, "the link was not made: {relink:?}");
+    assert!(
+        !planted.exists(),
+        "the second stage wrote {} through the link: {next:?}",
+        planted.display()
+    );
+    assert!(
+        next.as_ref().map_or(true, |ran| !ran.ended_well),
+        "the second stage was not refused and did not fail: {next:?}"
+    );
+}
+
+/// SANDBOX-18: a refused line names the session directory and says what happened to it.
+#[cfg(unix)]
+fn refused_for_a_session_directory(
+    result: Result<exec::Ran, exec::ExecError>,
+    directory: &Path,
+    line: &str,
+) {
+    match result {
+        Err(exec::ExecError::NotConfined { detail, .. }) => assert!(
+            detail.contains("session directory")
+                && detail.contains(&directory.display().to_string()),
+            "`{line}` was refused for another reason: {detail}"
+        ),
+        other => panic!("`{line}` was not refused: {other:?}"),
+    }
+}
+
+/// SANDBOX-18: the same, on one line. The confinement of a line is built before its first stage,
+/// so a session directory relinked by the first stage is held at the stage after. The regression
+/// it rejects: the check made when the confinement is built and not again as each stage starts.
+#[cfg(unix)]
+#[test]
+fn a_line_that_relinks_an_added_directory_is_refused_at_the_stage_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("added-relinked-in-a-line");
+    let added = places.session.join("added");
+    std::fs::create_dir(&added).expect("an added directory");
+    let recorded: Vec<_> = [places.session.clone(), added.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confinement = Confinement::here(
+        vec![places.session.clone(), added.clone()],
+        None,
+        Some(&places.home),
+    )
+    .expect("a platform with a base")
+    .with_session_directories(&recorded);
+    let line = format!(
+        "sh -c 'mv {} {} && ln -s {} {}' && touch '{}/planted'",
+        added.display(),
+        places.session.join("added.aside").display(),
+        places.beside.display(),
+        added.display(),
+        added.display()
+    );
+
+    let refused = places.try_run_given(&line, Some(&confinement), None);
+
+    refused_for_a_session_directory(refused, &added, &line);
+    assert!(!places.beside.join("planted").exists());
+}
+
+/// SANDBOX-18: the primary root is held as an added directory is, because the session's directories
+/// are one list. The regression it rejects: the check made on the added directories alone.
+#[cfg(unix)]
+#[test]
+fn a_line_that_relinks_the_primary_root_is_refused_at_the_stage_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("root-relinked-in-a-line");
+    let root = places.session.join("project");
+    std::fs::create_dir(&root).expect("a project directory");
+    let recorded: Vec<_> = [root.clone(), places.session.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confinement = Confinement::here(
+        vec![root.clone(), places.session.clone()],
+        None,
+        Some(&places.home),
+    )
+    .expect("a platform with a base")
+    .with_session_directories(&recorded);
+    let line = format!(
+        "sh -c 'mv {} {} && ln -s {} {}' && touch '{}/planted'",
+        root.display(),
+        places.session.join("project.aside").display(),
+        places.beside.display(),
+        root.display(),
+        root.display()
+    );
+
+    let refused = places.try_run_given(&line, Some(&confinement), None);
+
+    refused_for_a_session_directory(refused, &root, &line);
+    assert!(!places.beside.join("planted").exists());
+}
+
+/// SANDBOX-18: an added directory that a program removed and made again is not the one the session
+/// recorded, and the stages after it still start. The regression it rejects: a refusal for every
+/// name that leads to anything but the directory recorded, which ends every later `run`.
+#[cfg(unix)]
+#[test]
+fn an_added_directory_made_again_by_a_program_does_not_stop_the_stages_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("added-made-again");
+    let added = places.session.join("added");
+    std::fs::create_dir(&added).expect("an added directory");
+    let recorded: Vec<_> = [places.session.clone(), added.clone()]
+        .into_iter()
+        .map(|dir| bravebot_agent::ScratchDirectory::observed(dir).expect("a directory"))
+        .collect();
+    let confine = || {
+        Confinement::here(
+            vec![places.session.clone(), added.clone()],
+            None,
+            Some(&places.home),
+        )
+        .expect("a platform with a base")
+        .with_session_directories(&recorded)
+    };
+    let aside = places.session.join("added.aside");
+
+    let again = places.run_given(
+        &format!(
+            "sh -c 'mv {} {} && mkdir {}'",
+            added.display(),
+            aside.display(),
+            added.display()
+        ),
+        Some(&confine()),
+        None,
+    );
+    let next = places.try_run_given("cat inside.txt", Some(&confine()), None);
+
+    assert!(
+        again.ended_well,
+        "the directory was not made again: {again:?}"
+    );
+    let next = next.expect("a stage after the directory was made again starts");
+    assert_eq!(next.stdout, "inside\n", "{next:?}");
+
+    // The directory made again is not the one recorded, so it is given no row, while the session
+    // directory that stands is. The regression it rejects: a row for the name, which a program
+    // that made the directory again would be handed to write.
+    let step = bravebot_core::command::Step {
+        program: "cat".to_string(),
+        resolved: "/bin/cat".into(),
+        started_as: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Vec::new(),
+        expansions: Vec::new(),
+        routes: Vec::new(),
+    };
+    let policy = confine().policy(&step, &places.session, &[]);
+    let remade = resolved(&added);
+    let session = resolved(&places.session);
+    assert!(
+        policy.writable.iter().any(|row| row.path == session),
+        "no row for the session directory that stands"
+    );
+    assert!(
+        !policy.writable.iter().any(|row| row.path == remade),
+        "a write row for a directory made again"
+    );
+    assert!(
+        !policy.readable.contains(&remade),
+        "a read row for a directory made again"
+    );
 }
 
 /// SANDBOX-18: the same, on one line. The confinement of a line is built before its first stage,
@@ -792,7 +1121,7 @@ fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
 #[cfg(unix)]
 #[test]
 fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
-    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath, start};
+    use bravebot_sandbox::programs::{CodeSelectors, Inherits, Resolved, SearchPath, start};
     use std::os::unix::fs::PermissionsExt;
     if !can_confine() {
         return;
@@ -826,7 +1155,13 @@ fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
 
         let found = Resolved::find_on(OsStr::new("probe"), bin.as_os_str());
         if let Some(program) = &found {
-            let _ = start(program, Inherits::All, SearchPath::Reduced).status();
+            let _ = start(
+                program,
+                Inherits::All,
+                SearchPath::Reduced,
+                CodeSelectors::Kept,
+            )
+            .status();
         }
 
         // A read-only tree cannot be removed by the next run of this test, so it is opened again
@@ -839,6 +1174,45 @@ fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
             "{name}: bravebot started a program a stage wrote: {found:?}"
         );
     }
+}
+
+/// SANDBOX-28 under bypass: the rows a stage is given for the directories above the home do not
+/// include an entry of the directory every test binary keeps its scratch in. The regression it
+/// rejects is a home made under `target/test-scratch`, where each entry another test left becomes
+/// a write row and a socket row, and a stage takes minutes to start once a few thousand are
+/// there. The decoys stand for those entries, so the check does not depend on what has run before.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_holds_no_row_for_what_other_tests_keep_in_the_shared_scratch_directory() {
+    let shared = Path::new(env!("CARGO_MANIFEST_DIR")).join(SHARED_SCRATCH);
+    let decoys: Vec<PathBuf> = (0..40)
+        .map(|number| shared.join(format!("confine-decoy-{}-{number}", std::process::id())))
+        .collect();
+    for decoy in &decoys {
+        std::fs::create_dir_all(decoy).expect("a decoy directory");
+    }
+    let places = Places::new("scratch-rows");
+    let rows = bravebot_sandbox::rules::writable_without_a_request(&places.home, None);
+    for decoy in &decoys {
+        let _ = std::fs::remove_dir_all(decoy);
+    }
+
+    let shared = resolved(&shared);
+    let inside: Vec<&PathBuf> = rows.iter().filter(|row| row.starts_with(&shared)).collect();
+    assert!(
+        inside.len() <= 1,
+        "{} rows lie in {}, the first {:?}",
+        inside.len(),
+        shared.display(),
+        inside.iter().take(3).collect::<Vec<_>>()
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with(&places.beside)
+            || row.starts_with(&places.session)
+            || places.home.starts_with(row)),
+        "no row reaches the directories of the suite itself, {} rows",
+        rows.len()
+    );
 }
 
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
@@ -1659,6 +2033,70 @@ fn a_denied_entry_under_the_session_stops_the_stage() {
     assert!(
         matches!(&refused, Err(exec::ExecError::NotConfined { .. })),
         "the stage started: {refused:?}"
+    );
+}
+
+/// SANDBOX-12 and TRUST-14 through the agent, on Windows: with a session directory of its own, the
+/// stage can make a directory in the session's `temp` directory, and it cannot make one in the
+/// account's temporary directory, which its `TEMP` and `TMP` do not name. The regression it rejects
+/// is a stage that still gets the account's `%TEMP%` (granting it, and writing an entry onto
+/// everything in it). The write in the session's directory is the control that the refusal in the
+/// account's is not made for every temporary directory. Whether the stage's `TEMP` names the
+/// session's directory is not asserted, since a container was seen to be given its own.
+#[cfg(windows)]
+#[test]
+fn a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("session-temp");
+    let made = bravebot_agent::scratch::SessionScratch::create().expect("a session directory");
+    let directory = made
+        .directory()
+        .expect("a directory that can be told again");
+    let confinement = Confinement::here(
+        vec![places.session.clone()],
+        Some(&directory),
+        Some(&places.home),
+    )
+    .expect("a platform with a base");
+    let own = resolved(made.path()).join("temp");
+    let account_temp = resolved(&std::env::temp_dir());
+
+    // Observed on the Windows runner: `set TEMP` in a container names the container's own
+    // `AC\Temp`, not the directory the agent passed. The property that matters is that the name
+    // is not the account's temporary directory, so that is what is asserted, and the name seen is
+    // printed (#3883).
+    for name in ["TEMP", "TMP"] {
+        let ran = places.run(&format!("cmd /c set {name}"), Some(&confinement));
+        eprintln!("{name} in the stage: {}", ran.stdout.trim());
+        assert!(
+            ran.stdout.contains('='),
+            "{name} is not set in the stage: {}",
+            ran.stdout
+        );
+        assert!(
+            !ran.stdout
+                .to_lowercase()
+                .contains(&format!("{name}={}", account_temp.display()).to_lowercase()),
+            "{name} names the account's temporary directory: {}",
+            ran.stdout
+        );
+    }
+    let inside = own.join("made-by-a-stage");
+    let ran = places.run(&touch(inside.display()), Some(&confinement));
+    assert!(ran.ended_well, "the session's temp was not writable");
+    assert!(inside.is_dir());
+
+    // Nothing but a name is made here, and the stage is expected to be refused it.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let account = std::env::temp_dir().join(format!("bravebot-refused-{}", std::process::id()));
+    let refused = places.try_run_given(&touch(account.display()), Some(&confinement), None);
+    let reached = account.exists();
+    let _ = std::fs::remove_dir_all(&account);
+    assert!(
+        !reached && !refused.is_ok_and(|ran| ran.ended_well),
+        "a stage wrote the account's temporary directory"
     );
 }
 

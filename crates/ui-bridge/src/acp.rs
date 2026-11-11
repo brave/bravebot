@@ -32,10 +32,9 @@ const ALLOW_ONCE: &str = "allow-once";
 const ALLOW_ALWAYS: &str = "allow-always";
 const REJECT_ONCE: &str = "reject-once";
 
-/// A tool call the editor was told about and has not been told the end of.
+/// A tool call the editor was told about and has not been told the end of, by the id dispatch gave it.
 struct Tool {
-    verb: String,
-    target: String,
+    call: u64,
     id: String,
 }
 
@@ -49,6 +48,8 @@ struct Session {
     cancelled: bool,
     tools: Vec<Tool>,
     next_tool: u64,
+    /// How many prompts this session has sent, which names the next one's `messageId`.
+    sent: u64,
 }
 
 /// A question put to the editor and not yet answered.
@@ -320,7 +321,7 @@ impl Acp {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let turn = match turn_params(&session, params.get("prompt")) {
+        let mut turn = match turn_params(&session, params.get("prompt")) {
             Ok(turn) => turn,
             Err(message) => {
                 self.lock().reply(id, Err((INVALID_PARAMS, message)));
@@ -342,6 +343,10 @@ impl Acp {
             }
             held.prompt = Some(id);
             held.cancelled = false;
+            // A new id for each prompt, made before a trust question can hold the turn back, so
+            // the turn that question releases is sent under it too.
+            held.sent += 1;
+            turn["messageId"] = json!(format!("acp-{}", held.sent));
             let directory = held.directory.clone();
             shared
                 .unasked
@@ -502,7 +507,7 @@ fn options(remember: bool, allow: &str, reject: &str) -> Value {
 fn pictured(text: &str) -> String {
     text.replace("\r\n", "\n")
         .split('\n')
-        .map(bravebot_approval::printable)
+        .map(bravebot_agent::confirm::printable)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -752,20 +757,23 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
         }
         "tool.started" => {
             let verb = data["verb"].as_str().unwrap_or_default().to_string();
-            let target = data["target"].as_str().unwrap_or_default().to_string();
+            let target = data["target"].as_str().unwrap_or_default();
             // What the editor is shown, spelled so a file name that is blank or ends in whitespace
-            // is visible. Calls are matched on `target`, as the finished event carries it.
-            let shown = data["shownTarget"].as_str().unwrap_or(&target).to_string();
+            // is visible.
+            let shown = data["shownTarget"].as_str().unwrap_or(target).to_string();
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
             held.next_tool += 1;
             let id = format!("tool-{}", held.next_tool);
-            held.tools.push(Tool {
-                verb: verb.clone(),
-                target: target.clone(),
-                id: id.clone(),
-            });
+            // The call id is the engine's dispatch counter, never content. A start without one is
+            // shown and no finish is matched to it.
+            if let Some(call) = data["call"].as_u64() {
+                held.tools.push(Tool {
+                    call,
+                    id: id.clone(),
+                });
+            }
             shared.notify(
                 &session,
                 json!({
@@ -778,8 +786,6 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
             );
         }
         "tool.finished" => {
-            let verb = data["verb"].as_str().unwrap_or_default();
-            let target = data["target"].as_str().unwrap_or_default();
             let status = if data["failed"].as_bool() == Some(true) {
                 "failed"
             } else {
@@ -788,11 +794,12 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
-            let Some(at) = held
-                .tools
-                .iter()
-                .position(|tool| tool.verb == verb && tool.target == target)
-            else {
+            // Matched on the call id alone. A call's verb and target can be content from outside,
+            // and two calls can have the same ones.
+            let Some(call) = data["call"].as_u64() else {
+                return;
+            };
+            let Some(at) = held.tools.iter().position(|tool| tool.call == call) else {
                 return;
             };
             let tool = held.tools.remove(at);
@@ -1012,7 +1019,7 @@ fn run_text(data: &Value) -> Option<String> {
         let confined = &data["confinement"];
         bravebot_approval::Confinement {
             heading: text_of(confined, "heading").to_string(),
-            directories: strings(&confined["directories"]),
+            directories: strings(&confined["shownDirectories"]),
             sentences: strings(&confined["sentences"]),
         }
     });
@@ -1020,7 +1027,7 @@ fn run_text(data: &Value) -> Option<String> {
         bravebot_approval::run_lines(&bravebot_approval::Run {
             summary: text_of(data, "summary"),
             steps: &steps,
-            writes: &strings(&data["writes"]),
+            writes: &strings(&data["shownWrites"]),
             confinement: confinement.as_ref(),
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
@@ -1075,16 +1082,25 @@ fn tools_text(data: &Value) -> String {
 }
 
 fn call_text(data: &Value) -> String {
-    let arguments: Vec<(String, String)> = data["arguments"]
+    let listed = |arguments: &Value| -> Vec<(String, String)> {
+        arguments
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|argument| {
+                (
+                    text_of(argument, "name").to_string(),
+                    text_of(argument, "value").to_string(),
+                )
+            })
+            .collect()
+    };
+    let arguments = listed(&data["arguments"]);
+    let also: Vec<Vec<(String, String)>> = data["also"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|argument| {
-            (
-                text_of(argument, "name").to_string(),
-                text_of(argument, "value").to_string(),
-            )
-        })
+        .map(listed)
         .collect();
     bravebot_approval::call_lines(&bravebot_approval::Call {
         name: text_of(data, "name"),
@@ -1093,6 +1109,8 @@ fn call_text(data: &Value) -> String {
         offers_remember: data["mayStand"].as_bool() == Some(true),
         // The bridge refuses such a call before a question is sent (SERVERS-21).
         asked_every_call: false,
+        asked_for_private_arguments: data["askedForPrivateArguments"].as_bool() == Some(true),
+        also: &also,
     })
     .join("\n")
 }
@@ -1365,6 +1383,50 @@ mod tests {
         }
     }
 
+    /// PROMPT-1, PATH-003: the editor is read a written file and a confined directory whose name
+    /// holds a byte that is not text as `\xNN`, as the terminal draws it, and not as the U+FFFD the
+    /// wire's lossy `writes` and `directories` hold.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_is_not_text_to_the_editor() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        use std::os::unix::ffi::OsStrExt;
+        let drawn = |written: &std::ffi::OsStr, directory: &std::ffi::OsStr| {
+            let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+            let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+            run.plan.writes = vec![written.into()];
+            run.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_text(&crate::wire::run_request(1, &run)).expect("text")
+        };
+        let plain = std::ffi::OsStr::new("/work");
+        let written = drawn(std::ffi::OsStr::from_bytes(b"out-\xff.txt"), plain);
+        assert!(
+            written.lines().any(|line| line == "  \"out-\\xff.txt\""),
+            "{written}"
+        );
+        assert_ne!(
+            written,
+            drawn(std::ffi::OsStr::new("out-\u{FFFD}.txt"), plain)
+        );
+        let note = std::ffi::OsStr::new("note.md");
+        let confined = drawn(note, std::ffi::OsStr::from_bytes(b"/w-\xff"));
+        assert!(
+            confined.lines().any(|line| line == "  \"/w-\\xff\""),
+            "{confined}"
+        );
+        assert_ne!(confined, drawn(note, std::ffi::OsStr::new("/w-\u{FFFD}")));
+    }
+
     /// PROMPT-1: the editor is read the directory a line runs in and the file each step runs
     /// spelled as the terminal spells them, so a binary ending in a space is not read as the one
     /// without it.
@@ -1407,7 +1469,7 @@ mod tests {
                 .plan
                 .writes
                 .iter()
-                .map(|path| path.to_string_lossy().into_owned())
+                .map(|path| bravebot_agent::confirm::shown_path(path))
                 .collect();
             let confinement =
                 run.confined
@@ -1417,7 +1479,7 @@ mod tests {
                         directories: confined
                             .directories
                             .iter()
-                            .map(|directory| directory.to_string_lossy().into_owned())
+                            .map(|directory| bravebot_agent::confirm::shown_path(directory))
                             .collect(),
                         sentences: confined.sentences(),
                     });
@@ -1547,6 +1609,8 @@ mod tests {
             description: Some("does it".into()),
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let (_, _, text) = shown("mcp-call", crate::wire::mcp_call_request(4, &call));
         assert_eq!(
@@ -1557,6 +1621,8 @@ mod tests {
                 description: call.description.as_deref(),
                 offers_remember: false,
                 asked_every_call: false,
+                asked_for_private_arguments: false,
+                also: &[],
             })
             .join("\n")
         );
@@ -1612,6 +1678,8 @@ mod tests {
                 description: None,
                 may_stand: false,
                 asked_every_call: false,
+                asked_for_private_arguments: false,
+                also: Vec::new(),
             };
             let (title, _, text) = shown("mcp-call", crate::wire::mcp_call_request(1, &call));
             assert_eq!(title, "call brave-input:click_element");
@@ -1631,6 +1699,8 @@ mod tests {
                     description: None,
                     offers_remember: false,
                     asked_every_call: false,
+                    asked_for_private_arguments: false,
+                    also: &[],
                 })
                 .join("\n"),
                 "{number}"
@@ -1680,6 +1750,8 @@ mod tests {
             description: None,
             may_stand: true,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let standing_text = call_text(&crate::wire::mcp_call_request(3, &standing));
         assert!(
@@ -1697,6 +1769,66 @@ mod tests {
             !once_text.contains("Allow and remember"),
             "a call that offers no standing answer got a sentence about one anyway: {once_text}"
         );
+    }
+
+    /// SERVERS-7: a call asked for private arguments reads to the editor with the reason, from the
+    /// wire field. The regression it rejects is a bridge that drops the field, so the editor draws
+    /// the call with no reason for the missing remember option.
+    #[test]
+    fn a_call_asked_for_private_arguments_reads_to_the_editor_with_its_reason() {
+        use bravebot_agent::confirm::McpCallRequest;
+        let call = McpCallRequest {
+            alias: "weather".into(),
+            tool: "forecast".into(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: true,
+            also: Vec::new(),
+        };
+        let text = call_text(&crate::wire::mcp_call_request(7, &call));
+        assert!(
+            text.contains("something read earlier was private"),
+            "{text}"
+        );
+        let other = McpCallRequest {
+            asked_for_private_arguments: false,
+            also: Vec::new(),
+            ..call
+        };
+        let text = call_text(&crate::wire::mcp_call_request(8, &other));
+        assert!(
+            !text.contains("something read earlier was private"),
+            "{text}"
+        );
+    }
+
+    /// SERVERS-7: the later calls a question also covers read to the editor under the line saying
+    /// so, from the wire field. The regression it rejects is a bridge that drops `also`, so the
+    /// editor shows one call and a yes makes several.
+    #[test]
+    fn the_later_calls_a_question_also_covers_read_to_the_editor() {
+        use bravebot_agent::confirm::McpCallRequest;
+        let call = McpCallRequest {
+            alias: "weather".into(),
+            tool: "forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: None,
+            may_stand: true,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: vec![vec![("city".into(), "\"Lyon\"".into())]],
+        };
+        let text = call_text(&crate::wire::mcp_call_request(7, &call));
+        assert!(text.contains("also covers this later call"), "{text}");
+        assert!(text.contains("Lyon"), "{text}");
+        let alone = McpCallRequest {
+            also: Vec::new(),
+            ..call
+        };
+        let text = call_text(&crate::wire::mcp_call_request(8, &alone));
+        assert!(!text.contains("also covers"), "{text}");
     }
 
     /// SERVERS-7, PROMPT-13: a call that carries code reads to the editor with each line of the
@@ -1718,6 +1850,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let text = call_text(&crate::wire::mcp_call_request(5, &call));
         assert!(
@@ -1747,6 +1881,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let text = call_text(&crate::wire::mcp_call_request(6, &call));
         assert!(
@@ -1777,9 +1913,11 @@ mod tests {
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
                     {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls",
                      "shownBinary": "/bin/ls"}],
-                    "writes": ["out"], "stdin": "file", "releasesPrivate": true,
+                    "writes": ["raw-out"], "shownWrites": ["out"], "stdin": "file",
+                    "releasesPrivate": true,
                     "requestedScopes": ["aws"], "confinement": {"heading": "confined",
-                    "directories": ["/w"], "sentences": ["it reads /w"]},
+                    "directories": ["/raw"], "shownDirectories": ["/w"],
+                    "sentences": ["it reads /w"]},
                     "ambient": [{"authority": "container-daemon", "named": "docker"}]}),
             ),
             (
@@ -1855,6 +1993,28 @@ mod tests {
             }
         }
         assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
+    }
+
+    /// PROMPT-1: a `run` question draws the files it writes and the directories it is confined to
+    /// from the `shownWrites` and `shownDirectories` the wire sends, one row each. The regression
+    /// it rejects: reading `writes` or `directories`, or no field, so the rows are not drawn.
+    #[test]
+    fn a_run_question_draws_the_written_files_and_directories_from_the_shown_fields() {
+        let (_, data) = every_question()
+            .into_iter()
+            .find(|(stem, _)| *stem == "run")
+            .expect("a run fixture");
+        let (_, _, text) = shown("run", data);
+        let rows: Vec<&str> = text.lines().collect();
+        let position = |row: &str| rows.iter().position(|line| line.trim() == row);
+        let written = position("out").unwrap_or_else(|| panic!("no row for the file: {text}"));
+        let directory =
+            position("/w").unwrap_or_else(|| panic!("no row for the directory: {text}"));
+        assert!(written < directory, "{text}");
+        assert!(
+            !text.contains("raw-out") && !text.contains("/raw"),
+            "{text}"
+        );
     }
 
     /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
@@ -2004,10 +2164,9 @@ mod tests {
     }
 
     /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,
-    /// while the end of the call is matched on the name as held, so a title that ends in a space
-    /// is not read as the one without and the call still closes.
+    /// so a name that ends in a space is not shown as the one without, and the call still closes.
     #[test]
-    fn a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held() {
+    fn a_call_is_titled_with_the_file_as_spelled() {
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&written);
         let shared = Arc::new(Mutex::new(Shared {
@@ -2020,6 +2179,7 @@ mod tests {
             queued: Vec::new(),
         }));
         let data = json!({
+            "call": 1,
             "verb": "Write",
             "target": "note.md ",
             "shownTarget": "\"note.md\u{2423}\"",
@@ -2037,6 +2197,47 @@ mod tests {
             written[1]["params"]["update"]["toolCallId"],
             written[0]["params"]["update"]["toolCallId"]
         );
+    }
+
+    /// Three calls with the same verb and target, where the middle one finishes first, each
+    /// close the editor's entry for their own start, because a finish is matched on the call id
+    /// and nothing in the call's content. Pairing with the first or the latest call still
+    /// running closes the wrong entry. A finish for no call it was told of sends nothing.
+    #[test]
+    fn a_finished_call_closes_the_editor_entry_with_its_call_id() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let event = |name: &'static str, call: Value, failed: bool| {
+            let data = json!({"call": call, "verb": "Read", "target": "a.rs", "failed": failed});
+            on_event(&shared, Event::new(name, "s", data));
+        };
+        event("tool.started", json!(7), false);
+        event("tool.started", json!(8), false);
+        event("tool.started", json!(9), false);
+        event("tool.finished", json!(8), true);
+        event("tool.finished", json!(7), false);
+        event("tool.finished", json!(7), false);
+        event("tool.finished", Value::Null, false);
+        event("tool.finished", json!(9), false);
+
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 6);
+        let id = |at: usize| written[at]["params"]["update"]["toolCallId"].clone();
+        let status = |at: usize| written[at]["params"]["update"]["status"].clone();
+        assert_ne!(id(0), id(1));
+        assert_ne!(id(1), id(2));
+        assert_eq!((id(3), status(3)), (id(1), json!("failed")));
+        assert_eq!((id(4), status(4)), (id(0), json!("completed")));
+        assert_eq!((id(5), status(5)), (id(2), json!("completed")));
     }
 
     #[test]

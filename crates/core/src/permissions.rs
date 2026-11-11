@@ -414,11 +414,17 @@ impl Rule {
     /// written out: a wildcard in that stretch is a pattern about more than the one directory and
     /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
     /// through a link is, and never floats.
-    fn copy_beneath(&mut self, from: &[String], to: &[String]) {
+    ///
+    /// `full_fold` is whether the segments are compared in the full case fold, which joins
+    /// `class` with `cla\u{df}`. A rule that restricts is matched that way on a volume that folds
+    /// case, so its copy is made for every checkout it applies to. A rule that grants is compared
+    /// as it is stored, in the fold that leaves such a letter alone, since a copy of a grant under
+    /// a checkout of another file would grant a place nobody approved.
+    fn copy_beneath(&mut self, from: &[String], to: &[String], full_fold: bool) {
         let copies: Vec<Pattern> = std::iter::once(&self.pattern)
             .chain(&self.landed)
             .filter_map(|pattern| match pattern {
-                Pattern::Absolute(pattern) if pattern.segments.starts_with(from) => {
+                Pattern::Absolute(pattern) if is_under(&pattern.segments, from, full_fold) => {
                     let mut segments = to.to_vec();
                     segments.extend_from_slice(&pattern.segments[from.len()..]);
                     Some(Pattern::Absolute(PathPattern {
@@ -827,13 +833,14 @@ impl Permissions {
         let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
         let from = split(&key_of(from, backslash_separates, folds_case));
         let to = split(&key_of(to, backslash_separates, folds_case));
-        for rule in self
-            .deny
-            .iter_mut()
-            .chain(self.ask.iter_mut())
-            .chain(self.allow.iter_mut())
-        {
-            rule.copy_beneath(&from, &to);
+        // A rule that restricts is matched in the full fold where the volume folds case, as
+        // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
+        let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
+        for rule in restricting {
+            rule.copy_beneath(&from, &to, folds_case);
+        }
+        for rule in &mut self.allow {
+            rule.copy_beneath(&from, &to, false);
         }
     }
 
@@ -871,17 +878,30 @@ impl Permissions {
     pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
         let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
         let argv = places(&words);
-        // The stage as run is the only one an `allow` rule is matched against, and a list that
-        // restricts is also matched against what is left after each leading wrapper (PERM-20).
-        let under_wrappers: Vec<Vec<Place>> = wrapped_commands(&words)
-            .into_iter()
-            .map(|inner| places(&inner))
-            .collect();
+        // The stage as run is the only one an `allow` rule is matched against, as written. A list
+        // that restricts is also matched against what is left after each leading wrapper
+        // (PERM-20), and against each of those with the program word read as a host that ignores
+        // its dots, spaces, stream suffix and `.exe`, `.com`, `.cmd` or `.bat` reads it (PERM-5).
+        let mut stages = vec![words.clone()];
+        stages.extend(wrapped_commands(&words));
+        let mut read_as: Vec<Vec<Place>> = Vec::new();
+        for (at, stage) in stages.iter().enumerate() {
+            if at > 0 {
+                read_as.push(places(stage));
+            }
+            if let Some((program, rest)) = stage.split_first()
+                && let Some(bare) = without_suffixes(program)
+            {
+                let mut bare_stage = vec![bare];
+                bare_stage.extend_from_slice(rest);
+                read_as.push(places(&bare_stage));
+            }
+        }
         self.deciding(|rule, restricting| {
             rule.subject == Subject::Bash
                 && (rule.covers_command(&argv, restricting)
                     || (restricting
-                        && under_wrappers
+                        && read_as
                             .iter()
                             .any(|inner| rule.covers_command(inner, restricting))))
         })
@@ -1212,18 +1232,39 @@ fn segments_of(path: &str) -> Vec<&str> {
 ///
 /// There a planner's `.ENV` opens the same file as the `.env` a deny rule names, so both sides of
 /// a match are folded before they are compared, upper case first as
-/// [`fold_case`](crate::trust::fold_case) does. Folding segment-wise leaves the separators, and
+/// [`fold_simple`](crate::trust::fold_simple) does. Folding segment-wise leaves the separators, and
 /// with them the anchor and relative/absolute logic and the `*` and `**` semantics, exactly as
 /// they were. Nothing is folded where the volume keeps the spellings apart, since there it would
 /// make one rule cover another file.
+///
+/// A letter whose upper or lower case is more than one character, such as `ß`, is left as it is:
+/// NTFS holds `claß.md` and `class.md` apart and APFS opens one as the other, and the rules are not
+/// told which. The key is the one a grant is matched in, so a grant reaches only the spellings
+/// every volume that folds case joins. A rule that restricts is also matched in the full fold
+/// ([`Pattern::canonical`]), so it covers both spellings.
 fn fold(path: &str, folds: bool) -> String {
     if !folds {
         return path.to_string();
     }
     path.split('/')
-        .map(crate::trust::fold_case)
+        .map(crate::trust::fold_simple)
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// Whether `segments` start with `from`, comparing each segment in the full case fold where
+/// `full_fold` says so and byte for byte otherwise.
+///
+/// Both are keyed, so each segment is already in the fold a grant is matched in, and the full fold
+/// is taken from there as [`PathPattern::canonical`] takes it for a path.
+fn is_under(segments: &[String], from: &[String], full_fold: bool) -> bool {
+    if !full_fold {
+        return segments.starts_with(from);
+    }
+    segments.len() >= from.len()
+        && segments.iter().zip(from).all(|(segment, name)| {
+            segment == name || crate::trust::fold_case(segment) == crate::trust::fold_case(name)
+        })
 }
 
 /// Whether a pattern's segments cover a path's, with `**` crossing directories and `*` not.
@@ -1323,8 +1364,11 @@ fn command_pattern(specifier: &str) -> String {
 /// One place in a stage's argv as a command pattern reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Place {
-    /// A character of one word.
+    /// A character of a word after the program word.
     Char(char),
+    /// A character of the program word. A rule that restricts compares it without regard to case
+    /// (PERM-5).
+    Program(char),
     /// Where one word ends and the next begins.
     Gap,
 }
@@ -1335,10 +1379,105 @@ fn places<S: AsRef<str>>(argv: &[S]) -> Vec<Place> {
     for (at, word) in argv.iter().enumerate() {
         if at > 0 {
             places.push(Place::Gap);
+            places.extend(word.as_ref().chars().map(Place::Char));
+        } else {
+            places.extend(word.as_ref().chars().map(Place::Program));
         }
-        places.extend(word.as_ref().chars().map(Place::Char));
     }
     places
+}
+
+/// The extensions a Windows host starts a program by without being told them, each of which
+/// `git.exe` and `git.cmd` shares with `git`.
+const PROGRAM_EXTENSIONS: [&str; 4] = [".exe", ".com", ".cmd", ".bat"];
+
+/// `name` without `suffix` at its end, in either case, or `None`.
+fn strip_suffix_ignoring_case<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
+    let at = name.len().checked_sub(suffix.len())?;
+    let (stem, tail) = name.split_at_checked(at)?;
+    tail.eq_ignore_ascii_case(suffix).then_some(stem)
+}
+
+/// `program` without the trailing dots and spaces Win32 drops from a name and without a
+/// `::$DATA` stream suffix, each taken off for as long as one is left (`git.exe. ` and
+/// `git.exe::$DATA.` are both `git.exe`).
+fn without_ignored_tail(program: &str) -> &str {
+    let mut rest = program;
+    loop {
+        let trimmed = rest.trim_end_matches(['.', ' ']);
+        let trimmed = strip_suffix_ignoring_case(trimmed, "::$DATA").unwrap_or(trimmed);
+        if trimmed.len() == rest.len() {
+            return rest;
+        }
+        rest = trimmed;
+    }
+}
+
+/// `program` as a host that ignores a trailing dot or space, a `::$DATA` stream suffix and one of
+/// `.exe`, `.com`, `.cmd` and `.bat` reads it, or `None` where nothing of that kind is there or
+/// nothing else is left. Such a host runs `git.exe. ` and `git.exe::$DATA` as `git.exe`, and
+/// `git.exe` and `git.cmd` as `git` (PERM-5).
+///
+/// One extension is taken off, not several: `git.exe.exe` is not `git`, and `touch.exe.bak` is
+/// not `touch`.
+pub(crate) fn without_suffixes(program: &str) -> Option<&str> {
+    let named = without_ignored_tail(program);
+    let stem = PROGRAM_EXTENSIONS
+        .iter()
+        .filter_map(|extension| strip_suffix_ignoring_case(named, extension))
+        .find(|stem| !stem.is_empty())
+        .unwrap_or(named);
+    (stem != program && !stem.is_empty()).then_some(stem)
+}
+
+/// The name a wrapper is looked up under: without regard to case, and read as the program word is
+/// ([`without_suffixes`]).
+fn wrapper_name(program: &str) -> String {
+    without_suffixes(program).unwrap_or(program).to_lowercase()
+}
+
+impl Permissions {
+    /// Whether a `deny` or `ask` rule about a command is in force and one of `argv`'s programs, the
+    /// stage's own or one under a leading wrapper, is spelled as an 8.3 short name (`POWERS~1`).
+    ///
+    /// A short name is another file's second spelling, and which file it is cannot be read off the
+    /// word: that is a question for the file system, which this crate does not ask. A rule that
+    /// restricts therefore cannot be matched against it, and the caller refuses the stage rather
+    /// than leave a `Bash(powershell *)` rule silent about it (PERM-5). Without such a rule there is
+    /// nothing to be silent about, so a session that restricts no command refuses nothing here. The
+    /// shape is the one the file-name check refuses in a path on Windows
+    /// (`crates/ui-files/src/short_name.rs`), and a program given by a path is not read (PERM-5), so
+    /// a word with a separator is not asked about.
+    pub fn reads_a_short_name<S: AsRef<str>>(&self, argv: &[S]) -> bool {
+        self.short_name_depth(argv).is_some()
+    }
+
+    /// How many wrappers lead to the program that is an 8.3 short name, under the conditions of
+    /// [`Permissions::reads_a_short_name`]: `Some(0)` where the stage's own program is one,
+    /// `Some(1)` where it is the program after one wrapper, and `None` where none is.
+    ///
+    /// The one place the decision is made, so the refusal at the gates and the report of
+    /// `permissions check` (CLI-30) cannot disagree, and a refusal can say whether the short name
+    /// is the program word it was written as or a word further along the line.
+    pub fn short_name_depth<S: AsRef<str>>(&self, argv: &[S]) -> Option<usize> {
+        let restricts = self
+            .deny
+            .iter()
+            .chain(&self.ask)
+            .any(|rule| rule.subject == Subject::Bash);
+        if !restricts {
+            return None;
+        }
+        let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
+        let mut stages = vec![words.clone()];
+        stages.extend(wrapped_commands(&words));
+        stages.iter().position(|stage| {
+            stage.first().is_some_and(|program| {
+                !program.contains(['/', '\\'])
+                    && crate::short_name::short(without_ignored_tail(program))
+            })
+        })
+    }
 }
 
 /// How a wrapper program's leading options are read.
@@ -1355,84 +1494,209 @@ enum Wrapper {
         /// Words between the options and the program.
         positional: usize,
     },
-    /// `env`: options, `NAME=value` words and `--` are all read before the program.
+    /// `env`: its `-i` and `-u NAME` options, then an optional `--` that ends the options only,
+    /// then every word containing `=` as an assignment whatever its name (`A-B=1`, `1A=x`, `=1`,
+    /// `-X=1` after the `--`, and `-X=1` after another assignment). The next word is the program.
     Environment,
 }
 
-/// The fixed table of programs whose first word that is not an option is the program they run
-/// (PERM-20). A program that is not here is not looked through, and neither is a wrapper with an
-/// option this table does not list.
-fn wrapper(program: &str) -> Option<Wrapper> {
-    const NONE: &[&str] = &[];
-    let plain = |flags, valued, long_valued, numeric, positional| Wrapper::Options {
+/// A question asked of the table of wrappers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapperQuestion {
+    /// Whether the program's leading options are read to find the program it runs, which is what a
+    /// deny or ask rule is matched through (PERM-20) and what names the authority of the program
+    /// under it (CRED-5).
+    ReadsItsOptions,
+    /// Whether the program starts a file or a program that one of its operands names, so that a
+    /// file a plan could have written and then handed to it runs (RUN-5).
+    RunsItsOperand,
+}
+
+/// One program in the table of wrappers: how its options are read, if they are, and whether it runs
+/// an operand.
+struct Entry {
+    name: &'static str,
+    /// `None` for a program whose options this table does not read, so that a rule is matched
+    /// against it whole.
+    reading: Option<Wrapper>,
+    runs_operand: bool,
+}
+
+const fn options(
+    flags: &'static [&'static str],
+    valued: &'static [&'static str],
+    long_valued: &'static [&'static str],
+    numeric: bool,
+    positional: usize,
+) -> Option<Wrapper> {
+    Some(Wrapper::Options {
         flags,
         valued,
         long_valued,
         numeric,
         positional,
-    };
-    Some(match program {
-        "timeout" => plain(
+    })
+}
+
+const NO_WORDS: &[&str] = &[];
+
+/// The fixed table of wrappers, the one place a wrapper is listed. An entry says for each question
+/// asked of the table what the answer is, so adding a program here means answering every one.
+///
+/// A program whose `reading` is set is one whose first word that is not an option is the program it
+/// runs (PERM-20). A program that is not here is not looked through, and neither is a wrapper with
+/// an option its reading does not list. Names are compared as they are given: the caller folds the
+/// case and the extension where its question calls for it.
+static WRAPPERS: &[Entry] = &[
+    Entry {
+        name: "timeout",
+        reading: options(
             &["--foreground", "--preserve-status", "-v", "--verbose"],
             &["-s", "-k"],
             &["--signal", "--kill-after"],
             false,
             1,
         ),
-        "time" => plain(&["-p", "-v", "-a"], &["-f", "-o"], NONE, false, 0),
-        "nice" => plain(NONE, &["-n"], &["--adjustment"], true, 0),
-        "stdbuf" => plain(
-            NONE,
+        runs_operand: true,
+    },
+    Entry {
+        name: "time",
+        reading: options(&["-p", "-v", "-a"], &["-f", "-o"], NO_WORDS, false, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "nice",
+        reading: options(NO_WORDS, &["-n"], &["--adjustment"], true, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "stdbuf",
+        reading: options(
+            NO_WORDS,
             &["-i", "-o", "-e"],
             &["--input", "--output", "--error"],
             false,
             0,
         ),
-        "command" => plain(&["-p"], NONE, NONE, false, 0),
-        "nohup" | "builtin" | "noglob" => plain(NONE, NONE, NONE, false, 0),
-        "env" => Wrapper::Environment,
-        _ => return None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "command",
+        reading: options(&["-p"], NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "nohup",
+        reading: options(NO_WORDS, NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: true,
+    },
+    Entry {
+        name: "builtin",
+        reading: options(NO_WORDS, NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: false,
+    },
+    Entry {
+        name: "noglob",
+        reading: options(NO_WORDS, NO_WORDS, NO_WORDS, false, 0),
+        runs_operand: false,
+    },
+    Entry {
+        name: "env",
+        reading: Some(Wrapper::Environment),
+        runs_operand: true,
+    },
+    Entry {
+        name: "xargs",
+        reading: None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "exec",
+        reading: None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "setsid",
+        reading: None,
+        runs_operand: true,
+    },
+    Entry {
+        name: "busybox",
+        reading: None,
+        runs_operand: true,
+    },
+];
+
+/// Whether the table answers `question` yes for the program called `name`, as the caller spells
+/// it: `timeout` is in the table and `TIMEOUT` and `timeout.exe` are not.
+pub fn is_wrapper(name: &str, question: WrapperQuestion) -> bool {
+    WRAPPERS.iter().any(|entry| {
+        entry.name == name
+            && match question {
+                WrapperQuestion::ReadsItsOptions => entry.reading.is_some(),
+                WrapperQuestion::RunsItsOperand => entry.runs_operand,
+            }
     })
 }
 
-/// Whether a word is `NAME=value` with a name a shell could assign.
-fn is_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty()
-            && !name.starts_with(|c: char| c.is_ascii_digit())
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
+/// How the table reads the options of the program called `name`, if it does.
+fn wrapper(name: &str) -> Option<&'static Wrapper> {
+    WRAPPERS
+        .iter()
+        .find(|entry| entry.name == name)?
+        .reading
+        .as_ref()
 }
 
 /// What follows one leading wrapper, or `None` where the first word is not in the table, where an
 /// option is not one the table reads, or where nothing is left to run.
 fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
     let (program, mut rest) = argv.split_first()?;
-    let (flags, valued, long_valued, numeric, mut positional) = match wrapper(program)? {
-        Wrapper::Options {
-            flags,
-            valued,
-            long_valued,
-            numeric,
-            positional,
-        } => (flags, valued, long_valued, numeric, positional),
-        Wrapper::Environment => {
-            while let Some((word, tail)) = rest.split_first() {
-                match *word {
-                    "--" => {
-                        rest = tail;
-                        break;
+    let (flags, valued, long_valued, numeric, mut positional) =
+        match *wrapper(&wrapper_name(program))? {
+            Wrapper::Options {
+                flags,
+                valued,
+                long_valued,
+                numeric,
+                positional,
+            } => (flags, valued, long_valued, numeric, positional),
+            Wrapper::Environment => {
+                // `env` runs any word with an `=` as an assignment, whatever the name.
+                // Before `--`, a word starting with `-` is an option. `-i` and `-u NAME` are read
+                // and any other leaves `env` whole.
+                // After an assignment, an option is still read the same way. That reads more than
+                // `env` does and stays in the safe direction.
+                // After an assignment, a word starting with `-` that has an `=` is an assignment.
+                // After `--`, no word is an option. A word with an `=` is an assignment and one
+                // without is the program, even when it starts with `-`.
+                let mut options = true;
+                let mut assigned = false;
+                while let Some((word, tail)) = rest.split_first() {
+                    match *word {
+                        "--" if options => {
+                            options = false;
+                            rest = tail;
+                        }
+                        "-i" | "--ignore-environment" if options => rest = tail,
+                        "-u" | "--unset" if options => rest = tail.get(1..)?,
+                        _ if options && word.starts_with("--unset=") => rest = tail,
+                        _ if options
+                            && word.starts_with('-')
+                            && !(assigned && word.contains('=')) =>
+                        {
+                            return None;
+                        }
+                        _ if word.contains('=') => {
+                            assigned = true;
+                            rest = tail;
+                        }
+                        _ => break,
                     }
-                    "-i" | "--ignore-environment" => rest = tail,
-                    "-u" | "--unset" => rest = tail.get(1..)?,
-                    _ if word.starts_with("--unset=") || is_assignment(word) => rest = tail,
-                    _ if word.starts_with('-') => return None,
-                    _ => break,
                 }
+                return (!rest.is_empty()).then(|| rest.to_vec());
             }
-            return (!rest.is_empty()).then(|| rest.to_vec());
-        }
-    };
+        };
     let mut options = true;
     while let Some((word, tail)) = rest.split_first() {
         if options && *word == "--" {
@@ -1467,7 +1731,11 @@ fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
 
 /// The argv left after each leading wrapper in turn, outermost first. `timeout 5 nice git push`
 /// gives `nice git push` and then `git push`.
-fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
+///
+/// The one reader of the wrapper table's options: a deny or ask rule is matched through it
+/// (PERM-20), and [`crate::ambient::spent_by`] names the authority of the program it finds
+/// (CRED-5). [`is_wrapper`] is the same table asked whether a program runs its operand (RUN-5).
+pub fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
     let mut found = Vec::new();
     let mut current = argv.to_vec();
     while let Some(inner) = without_wrapper(&current) {
@@ -1486,7 +1754,8 @@ fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
 /// that restricts should cover more, and a rule that grants should cover what it names.
 fn covers_place(c: char, place: &Place, restricting: bool) -> bool {
     match *place {
-        Place::Char(found) => c == found && (c != ' ' || restricting),
+        Place::Program(found) if restricting => c.to_lowercase().eq(found.to_lowercase()),
+        Place::Char(found) | Place::Program(found) => c == found && (c != ' ' || restricting),
         Place::Gap => c == ' ',
     }
 }
@@ -1976,6 +2245,85 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "the bare command a deny rule names was not covered when it came as one word"
         );
+    }
+
+    /// The shapes of the documented table, read as a deny or an ask rule: wherever the pattern puts
+    /// the program word, the line's program word is compared without regard to case and with its
+    /// suffixes taken off (PERM-5), and every later word is compared as written. The same lines
+    /// are asked as the first stage and as a later stage, and an `allow` rule of the same shape
+    /// grants none of the respelled ones.
+    #[test]
+    fn a_deny_or_ask_rule_of_each_documented_shape_reads_only_the_program_word_without_case() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            (
+                "Bash(npm run build)",
+                &["NPM run build", "Npm.EXE run build", "npm.com run build"],
+                &["npm RUN build", "NPM run Build", "NPM run build --watch"],
+            ),
+            (
+                "Bash(npm run *)",
+                &["NPM run", "NPM run test --watch", "npm.exe run"],
+                &["NPM RUN build", "NPM install"],
+            ),
+            (
+                "Bash(git log * main)",
+                &["GIT log -5 main", "Git.exe log --oneline main"],
+                &["GIT log -5 MAIN", "GIT log main"],
+            ),
+            (
+                "Bash(* --version)",
+                &["NODE --version", "node.exe --version"],
+                &["NODE --VERSION", "NODE -v"],
+            ),
+            (
+                "Bash(ls*)",
+                &["LS -la", "LSOF", "Ls.exe -la"],
+                &["echo LS", "xls"],
+            ),
+            ("Bash(ls *)", &["LS", "Ls -la"], &["LSOF", "xls"]),
+        ];
+        for (rule, matching, not_matching) in cases {
+            for (permissions, expected) in [
+                (rules(&[rule], &[], &[]), Ruling::Deny),
+                (rules(&[], &[rule], &[]), Ruling::Ask),
+            ] {
+                for line in *matching {
+                    assert_eq!(
+                        permissions.for_command(&words(line)),
+                        Decision::Ruled(expected),
+                        "{rule} should match {line:?}"
+                    );
+                    assert_eq!(
+                        permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                        Decision::Ruled(expected),
+                        "{rule} should match {line:?} as a later stage"
+                    );
+                }
+                for line in *not_matching {
+                    assert_eq!(
+                        permissions.for_command(&words(line)),
+                        Decision::Unmatched,
+                        "{rule} should not match {line:?}"
+                    );
+                    assert_eq!(
+                        permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                        Decision::Unmatched,
+                        "{rule} should not match {line:?} as a later stage"
+                    );
+                }
+            }
+            // A rule that opens with a star names no program, so it grants every spelling.
+            if !rule.starts_with("Bash(*") {
+                let allowing = rules(&[], &[], &[rule]);
+                for line in *matching {
+                    assert_eq!(
+                        allowing.for_command(&words(line)),
+                        Decision::Unmatched,
+                        "an allow rule {rule} should not grant {line:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// PERM-7. A rule typed from a keyboard is usually precomposed and a file may be stored
@@ -2494,6 +2842,102 @@ mod tests {
         }
     }
 
+    /// NTFS holds `claß.md` and `class.md` apart and APFS opens one as the other, and the rules are
+    /// not told which. A grant covers the spellings every volume that folds case joins and not the
+    /// one only full case folding joins, so `Edit(claß.md)` never reaches a `class.md` that may be
+    /// another file.
+    #[test]
+    fn an_allow_rule_does_not_reach_a_spelling_only_full_case_folding_joins() {
+        for (written, same, other) in [
+            (
+                "Edit(cla\u{df}.md)",
+                ["cla\u{df}.md", "CLA\u{df}.md"],
+                "class.md",
+            ),
+            (
+                "Edit(cla\u{df}.md)",
+                ["cla\u{1e9e}.md", "Cla\u{df}.MD"],
+                "CLASS.md",
+            ),
+            ("Edit(class.md)", ["class.md", "CLASS.md"], "cla\u{df}.md"),
+            (
+                "Edit(cla\u{df}/**)",
+                ["cla\u{df}/a", "CLA\u{df}/a"],
+                "class/a",
+            ),
+            (
+                "Edit(a/cla\u{df}/**)",
+                ["a/cla\u{df}/b", "A/CLA\u{df}/b"],
+                "a/class/b",
+            ),
+        ] {
+            let permissions = rules_on_a_volume_that_folds_case(true, &[], &[], &[written]);
+            for path in same {
+                assert_eq!(
+                    permissions.for_path(Subject::Edit, path),
+                    Decision::Ruled(Ruling::Allow),
+                    "{written} should grant {path:?}"
+                );
+            }
+            assert_eq!(
+                permissions.for_path(Subject::Edit, other),
+                Decision::Unmatched,
+                "{written} granted {other:?}, which only full case folding joins to it"
+            );
+        }
+    }
+
+    /// The other polarities keep the full fold: a rule that restricts is read for the other
+    /// spelling, because on a volume that opens one as the other a rule that missed it would leave
+    /// the file open.
+    #[test]
+    fn a_deny_or_ask_rule_covers_a_spelling_only_full_case_folding_joins() {
+        for (written, path) in [
+            ("Read(cla\u{df}.md)", "class.md"),
+            ("Read(class.md)", "cla\u{df}.md"),
+            ("Read(class.md)", "CLA\u{df}.MD"),
+            ("Read(cla\u{df}/**)", "class/a"),
+            ("Read(class/**)", "cla\u{df}/a"),
+            ("Read(a/cla\u{df}.md)", "a/class.md"),
+        ] {
+            for (ruling, permissions) in [
+                (
+                    Ruling::Deny,
+                    rules_on_a_volume_that_folds_case(true, &[written], &[], &[]),
+                ),
+                (
+                    Ruling::Ask,
+                    rules_on_a_volume_that_folds_case(true, &[], &[written], &[]),
+                ),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(ruling),
+                    "{written} in the {ruling} list did not cover {path:?}"
+                );
+            }
+        }
+    }
+
+    /// An allow rule does not undo a restriction of the spelling it does not reach, and a
+    /// restriction of either spelling still decides both.
+    #[test]
+    fn a_deny_rule_decides_a_spelling_only_full_case_folding_joins_whatever_a_grant_says() {
+        let permissions = rules_on_a_volume_that_folds_case(
+            true,
+            &["Edit(class.md)"],
+            &[],
+            &["Edit(cla\u{df}.md)"],
+        );
+        for path in ["class.md", "cla\u{df}.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Ruled(Ruling::Deny),
+                "{path:?} was not refused"
+            );
+        }
+    }
+
     /// On a volume that keeps `Docs` and `docs` apart they are two files, so a rule about one
     /// decides nothing about the other, in both polarities. Folding here would widen a grant to a
     /// file the person never named.
@@ -2804,6 +3248,101 @@ mod tests {
             Decision::Unmatched,
             "a copy was made for a checkout nobody asked for"
         );
+    }
+
+    /// CHECKOUT-9, PERM-3. A rule that restricts is copied from every name the full case fold
+    /// joins with the working directory, as a refusal is read, and a rule that grants only from a
+    /// name every volume that folds case joins with it, as a grant is read. A deny or ask rule
+    /// written with `class` therefore reaches a checkout of `cla\u{df}`, which APFS opens as the same
+    /// directory, and an allow rule for `class` does not, which NTFS holds apart.
+    #[test]
+    fn a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold() {
+        let mut permissions = rules_on_a_volume_that_folds_case(
+            true,
+            &["Read(//work/class/secrets/**)"],
+            &["Read(//work/class/asked/**)"],
+            &[
+                "Read(//work/class/granted/**)",
+                "Read(//work/cla\u{df}/own/**)",
+            ],
+        );
+        permissions.copy_beneath("/work/cla\u{df}", "/state/c1");
+        for (path, decision) in [
+            ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+            ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+            ("/state/c1/own/file", Decision::Ruled(Ruling::Allow)),
+            ("/state/c1/granted/file", Decision::Unmatched),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                decision,
+                "{path} was ruled wrongly under a copy for a checkout of /work/cla\u{df}"
+            );
+        }
+    }
+
+    /// A deny or ask rule written with `\u{1e9e}` is a rule about `\u{df}` as well: the rules are
+    /// keyed in the one-letter fold, which joins the two, so the copy for a checkout of either
+    /// carries a rule recorded under the other, and an allow rule is copied across the pair for
+    /// the same reason (CHECKOUT-9, PERM-3).
+    #[test]
+    fn a_rule_is_copied_across_the_pair_the_simple_fold_joins() {
+        for (written, checked_out) in [("cla\u{1e9e}", "cla\u{df}"), ("cla\u{df}", "cla\u{1e9e}")] {
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                true,
+                &[&format!("Read(//work/{written}/secrets/**)")],
+                &[&format!("Read(//work/{written}/asked/**)")],
+                &[&format!("Read(//work/{written}/granted/**)")],
+            );
+            permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+            for (path, decision) in [
+                ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+                ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+                ("/state/c1/granted/file", Decision::Ruled(Ruling::Allow)),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    decision,
+                    "{path} was ruled wrongly under a copy for a checkout of /work/{checked_out} of rules written with {written}"
+                );
+            }
+        }
+    }
+
+    /// A deny or ask rule and an allow rule that land on one path in the checkout (`\u{df}` and
+    /// `\u{1e9e}` are one name to the one-letter fold) are both copied there, and the more
+    /// restrictive list decides as it does under the working directory (CHECKOUT-9, PERM-3).
+    #[test]
+    fn a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused() {
+        for (refused, granted) in [("cla\u{df}", "cla\u{1e9e}"), ("cla\u{1e9e}", "cla\u{df}")] {
+            for checked_out in ["cla\u{df}", "cla\u{1e9e}"] {
+                let mut permissions = rules_on_a_volume_that_folds_case(
+                    true,
+                    &[&format!("Read(//work/{refused}/x/**)")],
+                    &[&format!("Read(//work/{refused}/y/**)")],
+                    &[
+                        &format!("Read(//work/{granted}/x/**)"),
+                        &format!("Read(//work/{granted}/y/**)"),
+                    ],
+                );
+                assert_eq!(
+                    permissions.for_path(Subject::Read, &format!("/work/{checked_out}/x/a")),
+                    Decision::Ruled(Ruling::Deny),
+                    "the working directory does not refuse /work/{checked_out}/x/a"
+                );
+                permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+                for (path, decision) in [
+                    ("/state/c1/x/a", Decision::Ruled(Ruling::Deny)),
+                    ("/state/c1/y/a", Decision::Ruled(Ruling::Ask)),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        decision,
+                        "{path} was ruled wrongly under a copy for /work/{checked_out} of a refusal at {refused} and a grant at {granted}"
+                    );
+                }
+            }
+        }
     }
 
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a
@@ -3171,6 +3710,39 @@ mod tests {
         );
     }
 
+    /// The table of wrappers answers each question for the programs it lists and for no other, so
+    /// a program added for one question is a decision about the others (PERM-20, RUN-5).
+    #[test]
+    fn the_wrapper_table_answers_each_question_for_exactly_the_programs_it_lists() {
+        let asked = |question| {
+            let mut names: Vec<&str> = [
+                "timeout", "time", "nice", "stdbuf", "command", "nohup", "builtin", "noglob",
+                "env", "xargs", "exec", "setsid", "busybox", "sudo", "npx", "sh", "TIMEOUT",
+                "env.exe", "",
+            ]
+            .into_iter()
+            .filter(|name| is_wrapper(name, question))
+            .collect();
+            names.sort_unstable();
+            names
+        };
+        assert_eq!(
+            asked(WrapperQuestion::ReadsItsOptions),
+            [
+                "builtin", "command", "env", "nice", "noglob", "nohup", "stdbuf", "time", "timeout"
+            ],
+            "the programs whose options PERM-20 reads"
+        );
+        assert_eq!(
+            asked(WrapperQuestion::RunsItsOperand),
+            [
+                "busybox", "command", "env", "exec", "nice", "nohup", "setsid", "stdbuf", "time",
+                "timeout", "xargs"
+            ],
+            "the programs RUN-5 holds to run the file they are handed"
+        );
+    }
+
     /// A deny or ask rule covers a program run under a wrapper from the fixed table, so a rule
     /// about `git push` needs no second rule for each wrapper (PERM-20).
     #[test]
@@ -3200,7 +3772,31 @@ mod tests {
             "env -u HOME git push",
             "env FOO=bar git push",
             "env -- git push",
+            "env -- FOO=bar git push",
+            "env A-B=1 git push",
+            "env 1A=x git push",
+            "env a.b=1 git push",
+            "env =1 git push",
+            "env -i A=1 git push",
+            "env -- A=1 B-2=3 git push",
+            "env -i -- A=1 B-2=3 git push",
+            "env -u HOME A-B=1 git push",
+            "env -- -X=1 git push",
+            "env A=1 -X=1 git push",
+            "env A=1 --foo=bar git push",
+            "env A=1 -i git push",
+            "env A=1 -u HOME git push",
+            "timeout 5 env -- FOO=bar git push",
             "timeout 5 nice -n 3 nohup env A=1 git push",
+            "TIMEOUT 30 git push",
+            "Time -p git push",
+            "NICE -n 10 git push",
+            "NOHUP git push",
+            "ENV git push",
+            "Env -i FOO=bar git push",
+            "env.exe -- git push",
+            "Command.COM -p git push",
+            "TIMEOUT.exe 5 NICE.exe -n 3 Env.exe A=1 GIT.EXE push",
         ];
         for list in 0..2 {
             let permissions = if list == 0 {
@@ -3218,6 +3814,308 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A deny or ask rule covers the program word and the wrapper names however they are cased,
+    /// and with a `.exe` or `.com` after them (the names of the other suffixes are in the test
+    /// below), because a host that folds case or starts programs by
+    /// those names runs `TOUCH` as `touch` and `git.exe` as `git` (PERM-5, PERM-20). The answer
+    /// does not depend on the machine the test runs on.
+    #[test]
+    fn a_restricting_rule_covers_the_program_however_it_is_cased_or_suffixed() {
+        let spellings = [
+            "touch x",
+            "TOUCH x",
+            "Touch x",
+            "touch.exe x",
+            "TOUCH.EXE x",
+            "touch.com x",
+            "ENV touch x",
+            "Env FOO=bar touch x",
+            "env.exe touch x",
+            "ENV.EXE TOUCH.exe x",
+            "TIMEOUT 5 touch x",
+            "Timeout 5 Nice -n 3 TOUCH x",
+            "timeout.exe 5 touch x",
+            "Nohup Command -p TOUCH x",
+        ];
+        for list in 0..2 {
+            for rule in ["Bash(touch *)", "Bash(Touch *)", "Bash(TOUCH *)"] {
+                let permissions = if list == 0 {
+                    rules(&[rule], &[], &[])
+                } else {
+                    rules(&[], &[rule], &[])
+                };
+                let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+                for line in spellings {
+                    assert_eq!(
+                        permissions.for_command(&words(line)),
+                        expected,
+                        "{rule}: {line}"
+                    );
+                    assert_eq!(
+                        permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                        expected,
+                        "{rule}: {line} as a later stage"
+                    );
+                }
+            }
+            let permissions = if list == 0 {
+                rules(&["Bash(git push *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(git push *)"], &[])
+            };
+            let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+            for line in ["git.exe push", "GIT push origin", "Git.Com push"] {
+                assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
+            }
+        }
+    }
+
+    /// A host that drops trailing dots and spaces, opens `::$DATA` as the file itself, and starts a
+    /// program by a name without `.exe`, `.com`, `.cmd` or `.bat` runs each of these as `touch`
+    /// (PERM-5), and a wrapper spelled any of these ways as the wrapper (PERM-20). The fold is the
+    /// same on every host, so the test is too.
+    #[test]
+    fn a_restricting_rule_covers_the_program_under_the_names_windows_ignores() {
+        let spellings = [
+            "touch. x",
+            "touch.. x",
+            "touch.exe. x",
+            "touch::$DATA x",
+            "touch.exe::$DATA x",
+            "TOUCH.EXE::$data x",
+            "touch.exe::$DATA. x",
+            "touch.cmd x",
+            "TOUCH.BAT x",
+            "touch.bat. x",
+            "touch.cmd::$DATA x",
+            "timeout.exe. 5 touch x",
+            "timeout::$DATA 5 touch x",
+            "TIMEOUT.CMD 5 touch x",
+            "nice.bat touch x",
+            "env.cmd touch.bat x",
+            "timeout 5 touch.exe. x",
+            "timeout 5 touch.cmd x",
+            "env. FOO=bar touch::$DATA x",
+        ];
+        for list in 0..2 {
+            let permissions = if list == 0 {
+                rules(&["Bash(touch *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(touch *)"], &[])
+            };
+            let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+            for line in spellings {
+                assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
+                assert_eq!(
+                    permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                    expected,
+                    "{line} as a later stage"
+                );
+            }
+            // A program word that ends in a space is one word, which `words` cannot spell.
+            for argv in [
+                &["touch ", "x"][..],
+                &["touch.exe ", "x"],
+                &["touch.exe . ", "x"],
+                &["timeout. ", "5", "touch", "x"],
+            ] {
+                assert_eq!(permissions.for_command(argv), expected, "{argv:?}");
+            }
+        }
+    }
+
+    /// An `allow` rule is matched as written, so none of the spellings above is granted by a rule
+    /// for the plain name (PERM-4).
+    #[test]
+    fn an_allow_rule_grants_none_of_the_names_windows_ignores() {
+        let permissions = rules(&[], &[], &["Bash(touch *)"]);
+        for line in [
+            "touch. x",
+            "touch.exe. x",
+            "touch::$DATA x",
+            "touch.cmd x",
+            "touch.bat x",
+            "timeout.exe. 5 touch x",
+            "env.cmd touch x",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+            assert_eq!(
+                permissions.for_pipeline(&[words("touch y"), words(line)]),
+                Decision::Unmatched,
+                "{line} as a later stage"
+            );
+        }
+    }
+
+    /// The fold takes off the names the loader ignores and nothing else: a second extension, an
+    /// extension that is not one of the four, and a word that is only the suffix are other names.
+    #[test]
+    fn the_fold_leaves_a_name_that_is_not_the_program_alone() {
+        for program in [
+            "touch",
+            "touch.exe.bak",
+            "touch.ps1",
+            "touch.sh",
+            "toucher.cmd",
+            ".exe",
+            ".cmd",
+            ".bat",
+            "::$DATA",
+            ".",
+            "..",
+            " ",
+            "",
+        ] {
+            let found = without_suffixes(program);
+            let wants = matches!(program, "toucher.cmd").then_some("toucher");
+            assert_eq!(found, wants, "{program:?}");
+        }
+        assert_eq!(without_suffixes("touch.exe."), Some("touch"));
+        assert_eq!(without_suffixes("touch.exe::$DATA"), Some("touch"));
+        assert_eq!(without_suffixes("touch. "), Some("touch"));
+        assert_eq!(without_suffixes("TOUCH.BAT"), Some("TOUCH"));
+        // One extension, not several: `touch.exe.exe` is the file `touch.exe`, not `touch`.
+        assert_eq!(without_suffixes("touch.exe.exe"), Some("touch.exe"));
+        let permissions = rules(&["Bash(touch *)"], &["Bash(rm *)"], &[]);
+        for line in [
+            "touch.exe.exe x",
+            "rm.bat.cmd x",
+            "touch.ps1 x",
+            "touch.cmd.bak x",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+    }
+
+    /// An 8.3 short name is another file's second spelling and no rule can be matched against it,
+    /// so a stage naming one is reported while a `deny` or `ask` command rule is in force: as its
+    /// program, or as a wrapper's program. With no such rule, and for a path, nothing is reported.
+    #[test]
+    fn a_short_name_program_is_reported_only_where_a_command_rule_restricts() {
+        for list in 0..2 {
+            let permissions = if list == 0 {
+                rules(&["Bash(powershell *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(powershell *)"], &[])
+            };
+            for line in [
+                "POWERS~1 x",
+                "powers~1.exe x",
+                "POWERS~1. x",
+                "POWERS~1.exe::$DATA x",
+                "TIMEOU~1 5 powershell x",
+                "timeout 5 POWERS~1 x",
+                "env FOO=bar POWERS~1.CMD x",
+            ] {
+                assert!(permissions.reads_a_short_name(&words(line)), "{line}");
+            }
+            for line in [
+                "powershell x",
+                "echo POWERS~1",
+                "POWERS~1x x",
+                "a~b x",
+                "/usr/bin/POWERS~1 x",
+                "C:\\POWERS~1 x",
+                "TOOLONGNAME~1 x",
+            ] {
+                assert!(!permissions.reads_a_short_name(&words(line)), "{line}");
+            }
+        }
+        // A path rule or an allow rule restricts no command.
+        for permissions in [
+            rules(&["Read(secrets)"], &[], &[]),
+            rules(&[], &[], &["Bash(powershell *)"]),
+            rules(&[], &[], &[]),
+        ] {
+            assert!(!permissions.reads_a_short_name(&words("POWERS~1 x")));
+        }
+    }
+
+    /// Only the program word and the wrapper names are read this way. An argument keeps its case,
+    /// a program that merely starts with the rule's name is not the rule's program, and a suffix
+    /// is read only at the end of a name.
+    #[test]
+    fn a_restricting_rule_reads_only_the_program_word_without_regard_to_case() {
+        let permissions = rules(&["Bash(touch x)"], &["Bash(rm *)"], &[]);
+        for line in [
+            "touch X",
+            "echo TOUCH x",
+            "echo touch.exe x",
+            "toucher.exe x",
+            "touch.exe.bak x",
+            "touch .exe x",
+            "Rmdir x",
+            "RMDIR.exe x",
+            ".exe x",
+            "env.exe",
+            "ENV",
+            "env.exe FOO=bar",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        for line in ["TIMEOUT --unknown 30 git push", "Xargs git push"] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+    }
+
+    /// An `allow` rule is matched as written, so a rule for `touch` does not grant `TOUCH`,
+    /// `touch.exe` or `touch` under a wrapper, and a rule spelled `Touch` does not grant `touch`.
+    #[test]
+    fn an_allow_rule_matches_the_program_word_as_written() {
+        let permissions = rules(&[], &[], &["Bash(touch *)"]);
+        assert_eq!(
+            permissions.for_command(&words("touch x")),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for line in [
+            "TOUCH x",
+            "Touch x",
+            "touch.exe x",
+            "ENV touch x",
+            "env.exe touch x",
+            "TIMEOUT 5 touch x",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+            assert_eq!(
+                permissions.for_pipeline(&[words("touch y"), words(line)]),
+                Decision::Unmatched,
+                "{line} as a later stage"
+            );
+        }
+        let permissions = rules(&[], &[], &["Bash(Touch *)"]);
+        assert_eq!(
+            permissions.for_command(&words("touch x")),
+            Decision::Unmatched
+        );
+        // A deny rule still wins over an allow rule spelled the way the line is.
+        let permissions = rules(&["Bash(touch *)"], &[], &["Bash(TOUCH *)"]);
+        assert_eq!(
+            permissions.for_command(&words("TOUCH x")),
+            Decision::Ruled(Ruling::Deny)
+        );
     }
 
     /// Looking through a wrapper is for the lists that restrict. An `allow` rule for `git push`
@@ -3257,6 +4155,7 @@ mod tests {
             "nice -x git push",
             "command -v git push",
             "env -S git push",
+            "env -X=1 git push",
             "env -u",
             "time -o",
             "env FOO=bar",
@@ -3293,6 +4192,72 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "a space in a deny rule covers a space inside the program's word"
         );
+    }
+
+    /// After `--` no word is an option, so a word that looks like one is the program `env` runs.
+    /// A rule for what follows it is not matched, and a rule spelling that word is.
+    #[test]
+    fn env_reads_no_option_after_a_double_dash() {
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        for line in [
+            "env -- -u HOME git push",
+            "env -- -i git push",
+            "env -- --unset X git push",
+            "env -- --ignore-environment git push",
+            "env -- -- git push",
+            "env A=1 -- -u HOME git push",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+        let permissions = rules(&["Bash(-u HOME git push)", "Bash(-- git push)"], &[], &[]);
+        for line in ["env -- -u HOME git push", "env -- -- git push"] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Ruled(Ruling::Deny),
+                "{line}"
+            );
+        }
+    }
+
+    /// A word of the program's own arguments that holds an `=` stays where it was written, so a
+    /// rule spelling it matches, and the same rule does not match a different value.
+    #[test]
+    fn env_keeps_an_equals_word_after_the_program() {
+        for (rule, covered, unmatched) in [
+            (
+                "Bash(git push --foo=bar)",
+                &[
+                    "env git push --foo=bar",
+                    "env -- git push --foo=bar",
+                    "env A=1 git push --foo=bar",
+                    "env -i -- A=1 git push --foo=bar",
+                ][..],
+                "env A=1 git push --foo=baz",
+            ),
+            (
+                "Bash(git -c a=b push)",
+                &["env git -c a=b push", "env A=1 git -c a=b push"][..],
+                "env A=1 git -c a=c push",
+            ),
+        ] {
+            let permissions = rules(&[rule], &[], &[]);
+            for line in covered {
+                assert_eq!(
+                    permissions.for_command(&words(line)),
+                    Decision::Ruled(Ruling::Deny),
+                    "{rule} should match {line}"
+                );
+            }
+            assert_eq!(
+                permissions.for_command(&words(unmatched)),
+                Decision::Unmatched,
+                "{rule} should not match {unmatched}"
+            );
+        }
     }
 
     /// A pattern of nothing but wildcards must cost time in the length of what it is matched

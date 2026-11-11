@@ -27,6 +27,11 @@ governs:
   - crates/cli/src/sessions_list.rs
   - crates/cli/src/session_delete.rs
   - crates/cli/src/stats.rs
+  - crates/cli/src/schedule.rs
+  - crates/schedule/src/schedule.rs
+  - crates/schedule/src/calendar.rs
+  - crates/cli/src/skill_eval.rs
+  - crates/cli/src/trigger.rs
   - crates/session/src/stats.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
@@ -41,7 +46,7 @@ documented-by:
 ## Scope
 
 Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, `auth`,
-a session in lines, and what goes where on the way out. Also the command line that opens the
+`skill eval`, a session in lines, and what goes where on the way out. Also the command line that opens the
 interface that draws on a task (CLI-31). The interface itself is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
@@ -69,7 +74,9 @@ confines and the first question about a URL when a classifier says to allow it, 
 the classifier does not allow. The three are refused in pairs, and `--accept-edits` and `--auto` are
 refused where the line starts no one-shot run, since a session has the mode key for the same thing. The planner's questions are declined in both modes, because they are not
 permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
-which picks among the choices the planner offered and writes none of the words (CLI-36).
+which picks among the choices the planner offered, and on a channel the person vouched for may
+answer in words (CLI-36). With `--approve-input-lines` as well, that program is also put each
+write, run and fetch, and approves or declines that one call (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
@@ -132,6 +139,8 @@ pessimistic label is the only one that holds without knowing what fed it.
 `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private`
 `verified-by: bravebot_core::policy::piped_input_is_quarantined_when_presented`
 `verified-by: bravebot_agent::turn::piped_input_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::turn::piped_input_with_no_prompt_sends_no_empty_message`
+`verified-by: bravebot_agent::turn::piped_input_with_a_real_prompt_still_sends_both_messages`
 
 <a id="CLI-4"></a>
 ### CLI-4: input over the cap is refused, and says what to do instead
@@ -152,7 +161,7 @@ plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11))
 may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
 given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
-given `--input-format lines` writes a result object for each turn it runs, and the two events of
+given `--input-format lines` writes a result object for each turn it runs, and the three events of
 CLI-36 beside the others.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
@@ -241,18 +250,22 @@ with the file or flag that wrote it and each that is not in force with why
 ([SANDBOX-25](sandboxing.md#SANDBOX-25)), and the premium host with whether a premium key is stored,
 never its value ([PREM-14](premium-credentials.md#PREM-14)). A premium key file that cannot be read is
 named on a `premium key` line with its path, and the report ends on the failure status
-([PREM-16](premium-credentials.md#PREM-16)). Each AWS
-account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
-be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
-auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer
-that is not a credential are each said as such, naming no sign-in. That line does not change the
+([PREM-16](premium-credentials.md#PREM-16)). A Bedrock region that was refused for what it holds,
+which leaves no AWS account to report, is named with the value as written and where it was written
+([BACKEND-33](backends.md#BACKEND-33)). Each AWS account gets its profile and a line saying whether
+the AWS CLI gives it a credential a request can be signed with. Where it does not, the line says
+why: a session that is signed out names `bravebot auth login bedrock`, and a profile the CLI does
+not have, a CLI that is not installed and an answer that is not a credential are each said as such,
+naming no sign-in. That line does not change the
 exit status. Where the report names a Bravebot command that signs in, or one that forgets a
 sign-in, it is `bravebot auth login` or `bravebot auth logout` ([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning. Text it names from a settings file, such as a rule, a key
 or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
-because the project and local files belong to whoever made the checkout.
+because the project and local files belong to whoever made the checkout. So are the paths it prints
+for those files, the managed file, the state directory, the key files and the client certificate and
+key, wherever the path came from: the report does not decide by origin which path to draw.
 
 The state directory is reported with the variable that named it. A `BRAVEBOT_HOME` that is set to
 something that is not an absolute path names no directory and is passed over; the report says so, naming
@@ -292,6 +305,11 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
 `verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
 `verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it`
+`verified-by: bravebot_cli::doctor::a_refused_region_and_its_file_are_reported_with_control_characters_drawn_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_path_of_a_checkouts_settings_file_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_state_directory_and_key_files_the_environment_names_as_pictures`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -550,12 +568,19 @@ against one.
 ### CLI-11: `--add-dir` makes a directory reachable, and vouches for nothing
 
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
-given more than once. An absolute path that exists, is a directory, and is not already inside the
-working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map holds nothing for it, so a file read there is read on the same footing as the
-project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
-the working directory alone. A write there is refused as any other write in an unattended run is,
-and the flag in CLI-1 lifts that exactly as it does elsewhere.
+given more than once. The path may be relative, resolved against the working directory the same
+way `/add-dir` resolves one ([TRUST-9](trust-map.md#TRUST-9)): its leading `.` and `..` are taken
+out against the working directory's own canonical path and the remaining components are appended
+in order, so `--add-dir ../notes` opens the directory beside the working one. A `~` is not; it is
+left to the shell, which ordinarily expands it before this ever sees the path, and an unexpanded
+one is read as an ordinary directory component rather than as the home directory, since a second
+reading of it here is a second place for it to resolve apart from the shell's own. A path that is
+not absolute once resolved, does not exist, is not a directory, or is already inside the working
+one is refused by name and the run stops before the turn. The run's trust map holds nothing for
+it, so a file read there is read on the same footing as the project's own files without an answer
+about them: nothing vouched for it. `--trust-workspace` covers the working directory alone. A
+write there is refused as any other write in an unattended run is, and the flag in CLI-1 lifts
+that exactly as it does elsewhere, `--approve-input-lines` included.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
 outside the working directory is otherwise refused whatever else is true, so without this the task
@@ -576,8 +601,12 @@ in, over a file it was told it could open.
 `verified-by: bravebot_cli::main::the_directory_flag_is_repeatable`
 `verified-by: bravebot_cli::main::a_directory_flag_with_no_path_is_refused`
 `verified-by: bravebot_cli::main::a_directory_the_command_line_named_is_reachable`
+`verified-by: bravebot_cli::main::a_relative_directory_the_command_line_named_is_resolved_against_the_working_directory`
 `verified-by: bravebot_cli::main::a_directory_that_cannot_be_opened_stops_the_run`
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
+`verified-by: bravebot_agent::workspace::an_absolute_directory_name_is_not_joined_onto_a_root`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_refused_against_a_root_whose_name_is_not_text`
 
 <a id="CLI-12"></a>
 ### CLI-12: `--json` puts one result object on stdout, in the reply's place
@@ -810,6 +839,13 @@ since making the check is what sends them, and each promotion costs a model call
 critical path. Both are the price of the screening rather than side effects of it, and a run that
 wants neither leaves the flag off.
 
+A person is told what the screening does. Where the run also bypasses permissions and the flag
+turns auto-vetting on, the plain client and the other command-line path print one line after the
+notice that permissions are skipped, saying that a read a check does not pass is refused and not
+asked about ([CHECK-11](vetting.md#CHECK-11)). Without the bypass flag, or with auto-vetting off,
+that line is not printed. A refusal that screening makes is also told to the person as it happens
+([CHECK-9](vetting.md#CHECK-9)).
+
 The flag is taken out of the arguments before anything dispatches on them, so it composes with
 every way of starting and with the other flags taken out there, `--plain` included. Given
 twice it is given once, which is asking for something that is already on rather than an error to
@@ -835,6 +871,9 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
 `verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
 `verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
@@ -1072,6 +1111,22 @@ was typed or now names the id as something that configures no service, the key s
 command names the entry to add and the file, and exits with the failure status. A key is never
 repeated, in that message or any other.
 
+**The window's key window.** The desktop window's Accounts settings store a gateway key the same way,
+through the store and the entry this command uses, from a key window its main process owns. The
+rows are the gateways this command offers, with `openrouter` listed even where no block names it.
+The main process asks the bridge, before anything is typed, whether a key can be kept, and the
+refusals are this command's in the same order, with sentences of the window's own that name no
+file: an incognito session, a configuration that cannot be read, an id not offered, nowhere to keep
+a key, a file of keys that cannot be read, which is left as it is, and for a known service no block
+names, a settings file the entry cannot be added to. The key window names the host the key is sent
+to, a variable in the block's `env` that is set and is sent instead, that a known service gets the
+entry, and, where a key is stored, that saving replaces it and the one replaced still works at its
+host until it is revoked there. A stored key is replaced only where the key window said so before it
+was typed, and whether one is stored is learned from the bridge, never from the page. The key goes
+from the key window to the main process and from there to the bridge on its standard input, and is
+never sent to the page. Where the entry cannot be recorded once the key is stored, the key stays
+stored and the row says no session sends it until the settings name the service.
+
 In an incognito session the import way is refused by the check `import-providers` makes, with its
 words. The Brave way is refused before the key is asked for, with the failure status, because a
 premium key is kept on disk ([PREM-16](premium-credentials.md#PREM-16)). The Bedrock way is not
@@ -1240,6 +1295,15 @@ and was told of none.
 `verified-by: bravebot_cli::xai_sign_in::auth_login_xai_is_refused_before_a_code_is_asked_for_where_it_cannot_be_done`
 `verified-by: bravebot_cli::xai_sign_in::auth_logout_xai_forgets_the_sign_in_and_only_that_one`
 `verified-by: bravebot_cli::xai_sign_in::the_list_of_ways_names_xai_and_says_signed_in_only_where_a_sign_in_is_stored`
+`verified-by: bravebot_agent::key_entry::a_gateway_key_is_added_beside_the_others_and_an_unreadable_file_is_left`
+`verified-by: bravebot_agent::key_entry::a_block_is_recorded_once_and_not_over_an_entry_the_person_wrote`
+`verified-by: bravebot_agent::key_entry::only_a_variable_set_to_something_is_in_force`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_known_service_gets_its_block_recorded_with_its_key`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_block_that_cannot_be_recorded_is_refused_before_the_key`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_configured_gateway_says_its_host_and_the_variable_that_wins`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_request_names_brave_or_a_gateway_with_its_id`
+`verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
 
 <a id="CLI-19"></a>
 ### CLI-19: `--system-prompt` and `--append-system-prompt` put a person's own words in the planner's system prompt for one run
@@ -1444,7 +1508,7 @@ particular sign-in worked.
 
 `verified-by: bravebot_cli::running::auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero`
 `verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`
-`verified-by: bravebot_cli::brave::the_standing_follows_the_file`
+`verified-by: bravebot_agent::accounts::the_brave_key_stands_as_its_file_does`
 `verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
@@ -1455,7 +1519,7 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it`
 `verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable`
-`verified-by: bravebot_cli::running::auth_status_in_an_unconfigured_build_is_a_configuration_failure`
+`verified-by: bravebot_cli::running::auth_status_where_the_configuration_cannot_be_read_is_a_configuration_failure`
 `verified-by: bravebot_cli::running::auth_status_refuses_what_asks_about_no_sign_in`
 `verified-by: bravebot_cli::running::auth_status_bedrock_asks_the_aws_cli_without_signing_in`
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
@@ -1708,8 +1772,10 @@ a regular-expression `pattern` would need one the dependency policy bans.
 `bravebot update` prints the command for the way this copy was installed: the npm package's line
 for one the npm launcher started, the install script's own line for the binary that script
 recorded putting there, the PowerShell install script's own line for the binary that script
-recorded, and `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for one that
-Homebrew or WinGet unpacked. A copy none of those put here, a build from source above all, is told
+recorded, `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for one that
+Homebrew or WinGet unpacked, and `sudo apt update && sudo apt upgrade bravebot` or
+`sudo dnf upgrade bravebot` for the binary at `/usr/bin/bravebot` that apt or dnf owns
+([UPDATE-2](updates.md#UPDATE-2)). A copy none of those put here, a build from source above all, is told
 there is no update command for it and that a build is updated by building again; that is a success
 rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
 after it is refused with the status for an argument (CLI-6).
@@ -1719,8 +1785,8 @@ and the output never names a version. The command is a literal per installation 
 comes from a file, an environment variable or a response.
 
 **Why.** How to update is a question with an answer the program already holds and the person does
-not: which of the five installers put this binary here is not something somebody can read off their
-own machine, and the five commands are not interchangeable. The npm line installs a package
+not: which of the seven installers put this binary here is not something somebody can read off their
+own machine, and the seven commands are not interchangeable. The npm line installs a package
 manager's copy, so sent to a script install it leaves the running binary untouched and a second one
 elsewhere; the script's line writes over the path the script recorded, so sent to a build from
 source it would replace a binary this program did not install.
@@ -1734,6 +1800,8 @@ the startup notice already follows by saying nothing to such a copy
 `verified-by: bravebot_cli::running::update_says_the_command_for_the_way_this_copy_was_installed`
 `verified-by: bravebot_cli::running::update_says_there_is_no_command_for_a_build_from_source`
 `verified-by: bravebot_cli::running::update_takes_no_argument`
+`verified-by: bravebot_cli::update::a_copy_apt_or_dnf_installed_is_told_that_managers_upgrade_line`
+`verified-by: bravebot_cli::update::a_copy_nothing_recognised_is_told_there_is_no_command`
 `verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`
 
 <a id="CLI-30"></a>
@@ -1747,7 +1815,11 @@ decides it as its file spelled it, with each control character drawn as its pict
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
 URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
 [PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
-no rule matches, the line says so and no rule is named, since the ordinary gates decide. A further
+no rule matches, the line says so and no rule is named, since the ordinary gates decide. A `Bash`
+call whose program, or whose program under a leading wrapper, is an 8.3 short name while a `deny` or
+`ask` command rule is in force is reported as refused, since a session refuses it before any rule
+is read ([PERM-5](permissions.md#PERM-5)); the decision is the one the session's gates make, asked
+of core, and no rule is named. A further
 `reason:` line follows where the deciding rule carries one, which is only where the person's own
 home settings file wrote the rule as an object with a `reason` ([PERM-1](permissions.md#PERM-1)).
 
@@ -1775,6 +1847,8 @@ that is written down is still asking.
 `verified-by: bravebot_config::settings::a_rule_is_traced_to_the_file_and_list_that_wrote_it`
 `verified-by: bravebot_config::settings::a_checkouts_allow_rule_is_traced_to_no_file`
 `verified-by: bravebot_cli::running::permissions_check_names_the_rule_and_the_file_that_decide`
+`verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
+`verified-by: bravebot_cli::running::permissions_check_reports_an_8_3_short_name_as_a_session_refuses_it`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
@@ -2130,9 +2204,11 @@ reads it once. Each line is one JSON object with a `type`:
   line typed while a turn runs is ([INPUT-10](terminal-input.md#INPUT-10)). A steer sent while no
   turn runs, and one the turn ended without taking, starts a turn of its own, after the prompts
   already waiting.
-- `answer`, with the `id` of a `question` event and `choices`, answers that question. `choices` holds
-  one array for each question, of the positions of the choices picked in the order the event listed
-  them, and an empty array declines that question.
+- `answer`, with the `id` of a `question` or `permission` event and `choices`, answers that
+  question. `choices` holds one array for each question, of the positions of the choices picked in
+  the order the event listed them, and an empty array declines that question. An `answer` to a
+  `question` may hold `text` in the place of `choices`, which is taken only where the person typed
+  `--trust-input-lines` (below).
 - `stop` ends the turn that is running, as Ctrl-Enter does ([INPUT-36](terminal-input.md#INPUT-36)),
   and leaves the prompts waiting behind it to run. A `stop` sent while no turn runs does nothing.
 
@@ -2159,16 +2235,43 @@ of its turn, and a `steer` is an interjection that may not route, which the trai
 arriving on a channel the person vouched for and not as typed ([LABEL-8](labels.md#LABEL-8)). The
 flag is read from the command line and from nowhere else, as `--trust-workspace` is. It vouches for
 the words of the lines and for nothing else: it approves no effect (CLI-1), answers no trust
-question and vouches for no path.
+question and vouches for no path. An `answer` with `text` for the planner's own question is the
+person's own answer on such a channel, and the trail records it as arriving on a channel the
+person vouched for and not as typed ([LABEL-8](labels.md#LABEL-8)). The words are carried as the line spelt them and
+bounded by the cap of CLI-4, and the driver reads none of them. On a channel nobody vouched for the
+same line is refused as `not_vouched` and the question keeps waiting. A line with both `choices`
+and `text` is taken as its `choices`. A question that holds more than one prompt takes no `text`.
 
 A `steer` on a channel nobody vouched for is held as a `prompt` is. Handed to the running turn it
 would be a reference to words the planner cannot read, which steers nothing.
 
-**What a line cannot do.** The one question put to the program is the planner's own
-([ASK-1](tools/ask-user.md#ASK-1)). Every other question stays refused for want of anybody to ask
-(CLI-1): a write, a run, a fetch, a path, a server, a vouch, and the question the trust map asks about
-the directory. An `answer` names positions among choices the planner offered and carries no words, so
-it puts none into the planner's context. It is refused when no question with that `id` is waiting,
+**What a line cannot do.** The questions put to the program are the planner's own
+([ASK-1](tools/ask-user.md#ASK-1)) and, where the person typed `--approve-input-lines`, a write, a
+run and a fetch. Every other question stays refused for want of anybody to ask (CLI-1): a path, a
+server, a vouch, a host, a plan, and the question the trust map asks about the directory.
+`--approve-input-lines` is a flag of its own, because `--trust-input-lines` answers whose words
+these are and an approval answers whether an effect happens. A person who typed only the first has
+approved nothing. A permission is approved by its position with `--approve-input-lines` alone, and
+words are accepted as an `answer` to the planner's question only with `--trust-input-lines`, so a run
+that does both types both flags.
+
+A `permission` event is written when a write, a run or a fetch reaches the point where a person
+would be asked. It holds `id`, `kind` (`write`, `run` or `fetch`), `call` and `choices`. `call`
+holds the words that say what the call is, which are those the kernel released to put the question:
+`path` and `contents` for a write, `command` and `directory` for a run, `url` and `host` for a
+fetch. `choices` is always `reject` then `approve`. An `answer` to it names one position, `[[1]]` to
+approve and `[[0]]` to decline, and the driver compares that position with the number it fixed
+and reads none of the words of `call`. The approval is for that one call. The next write is a
+new `permission` event with an id of its own, nothing is remembered for the series, and nothing is
+recorded in the trust map or the permission rules. It is declined when stdin closes or the turn is
+stopped while it waits, and a decline ends the run on the status for a refusal as it does in any
+run nobody can ask. A write to a protected path or to which the credential scan found a value, and
+a run that asks for credential scopes or to run unconfined, are not put: the program's yes does not
+stand in for what accepting edits also leaves refused. An `answer` to a `permission` holds
+positions and no words.
+
+An `answer` to a `question` names positions among choices the planner offered, or holds `text` on a
+vouched channel (above). It is refused when no question with that `id` is waiting,
 when it holds other than one array for each question, a position the question does not have or the
 same position twice, and more than one position for a question that takes one. A question takes the
 first answer that fits, and a second naming it finds nothing waiting. A `choices` of more than 16
@@ -2176,7 +2279,13 @@ arrays, or with an array of more than 256 positions, is a field of another kind.
 waiting when stdin closes, or when the turn is stopped, is declined as it is in any run nobody can
 ask ([ASK-7](tools/ask-user.md#ASK-7)).
 
-**What the stream carries.** The events of CLI-24 for each turn, and two more. A `question` event,
+An answer is not remembered. A session in lines keeps no answer memo ([ASK-8](tools/ask-user.md#ASK-8)
+is kept by the terminal interface, `--plain` and the desktop application), so a planner that puts the
+same question again in a later turn is sent it again as a new `question` event, and the program's
+earlier `answer`, in words or by position, is not taken as the person's for it. `lines.rs` does not
+name `AnswerMemo`, which is what holds that by construction.
+
+**What the stream carries.** The events of CLI-24 for each turn, and three more. A `question` event,
 with `id` and `questions`, is written when the planner asks. Each question holds `header`,
 `question`, `choices`, each with a `label` and a `detail` that is `null` where there is none, and
 `multiple`. It is the one event that holds words the result object does not hold, which are those the
@@ -2184,7 +2293,8 @@ kernel released to put the question to somebody, the words a session draws. An `
 with `line`, the number of the line in stdin counted from 1, and `reason`, is written for a line that
 was not taken. `reason` is one of `unreadable`, for a line over the cap of CLI-4 or not UTF-8;
 `not_json`, where it is not one JSON object; `unknown_type`; `bad_field`, where a field its type needs
-is missing, repeated, empty or of another kind; `no_such_question`; and `too_much_waiting`, for
+is missing, repeated, empty or of another kind; `no_such_question`; `not_vouched`, for an `answer`
+with `text` on a channel nobody vouched for; and `too_much_waiting`, for
 words that would take the bytes waiting for a turn past the cap of CLI-4. It holds nothing the line
 said. A blank line is nothing and is not refused.
 
@@ -2195,7 +2305,9 @@ file piped in whole fills no more memory than one piped to `-p` does. A read of 
 ends the input as the end of it does.
 
 Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
-other than `lines`; `--trust-input-lines` without `--input-format lines`; and
+other than `lines`; `--trust-input-lines` or `--approve-input-lines` without `--input-format lines`;
+`--approve-input-lines` with `--accept-edits`, `--auto` or `--dangerously-skip-permissions`, each of
+which already answers the questions it would; and
 `--input-format lines` with `--mode manifest`, which has one task and no turns to add.
 
 **Under `--incognito`.** An incognito run writes no record ([INCOG-3](incognito.md#INCOG-3)), so
@@ -2214,11 +2326,13 @@ could ask about, so its words take the pessimistic label CLI-3 gives a pipe, and
 raises it is something a person typed on the command line, which is where every other instruction
 for a run nobody is watching is given (CLI-1). A flag that vouched for the lines and also answered
 the permission questions would turn one decision about whose words these are into a standing
-approval of effects, so it does not.
+approval of effects, so it does not. `--approve-input-lines` is that decision made separately, by a
+person who typed it, for one call at a time.
 
-An answer is a position and nothing else, so what a program can choose is among words the planner
-already wrote, and what it sends the driver to act on is ids and enumerated values. A free-text
-answer as well would let it write into the planner's context under the label of a person.
+A permission is answered by a position among two choices the driver fixed, and an `answer` to the
+planner's question is a position or, on a vouched channel, words the person has said are their own.
+What a program sends the driver to act on is ids and enumerated values, and on an unvouched channel
+it cannot write into the planner's context at all.
 
 Words past the cap are refused with an event and the read goes on. A read that paused until a turn
 had taken words would not see the `answer` or the `stop` that the turn in flight is waiting for.
@@ -2235,7 +2349,7 @@ them. The rule keeps untrusted content out of the driver ([LAYER-2](layering.md#
 `lines.rs` is in `bravebot-cli`, which [LAYER-1](layering.md#LAYER-1) lists as presentation: it holds
 no labelled value and mints no witness. It reads the fixed words and the numbers listed here, which
 the envelope spells, and hands the driver what any front end does: the token that stops a turn, a
-position as the answer to a question, and a steer that is the person's own words only where they
+position as the answer to a question, whether a permission was approved, and a steer or an answer in words that is the person's own words only where they
 vouched for the channel. The `text` of a line is unescaped and seen to be there, and nothing in it
 is read: it is carried as the line spelt it, under the channel's label. Those decisions settle no
 effect and put no word of the program's into the planner's context. The program is also what
@@ -2297,7 +2411,28 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::running::a_question_is_put_to_the_program_and_its_pick_reaches_the_planner`
 `verified-by: bravebot_cli::running::a_question_is_declined_when_the_input_ends_without_an_answer`
 `verified-by: bravebot_cli::running::a_line_does_not_approve_a_write`
+`verified-by: bravebot_cli::running::a_program_approves_a_write_it_was_shown_and_declines_another`
+`verified-by: bravebot_cli::running::an_approval_answers_one_call_and_the_next_is_asked_again`
+`verified-by: bravebot_cli::running::a_permission_is_declined_when_the_input_ends_without_an_answer`
+`verified-by: bravebot_cli::running::a_permission_is_not_answered_by_a_position_that_is_not_a_choice_or_by_words`
+`verified-by: bravebot_cli::running::a_program_approves_a_run_it_was_shown_and_declines_another`
+`verified-by: bravebot_cli::running::a_program_is_shown_a_fetch_with_its_url_and_host_and_can_decline_it`
+`verified-by: bravebot_cli::running::a_write_to_a_protected_path_is_not_put_to_the_program`
+`verified-by: bravebot_cli::running::a_write_holding_a_credential_is_not_put_to_the_program`
+`verified-by: bravebot_cli::one_shot::a_run_is_put_to_the_program_with_its_command_and_directory_and_runs_only_on_approval`
+`verified-by: bravebot_cli::one_shot::a_fetch_is_put_to_the_program_with_its_url_and_host_and_proceeds_only_on_approval`
+`verified-by: bravebot_cli::one_shot::a_write_to_a_protected_path_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::a_write_the_credential_scan_found_a_value_in_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::a_run_asking_for_scopes_or_to_run_unconfined_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::an_approving_program_cannot_answer_the_question_that_vouches_for_a_path`
+`verified-by: bravebot_cli::running::a_vouched_channel_without_the_approval_flag_is_not_asked_about_a_write`
+`verified-by: bravebot_cli::running::words_answer_a_question_on_a_vouched_channel`
+`verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for`
+`verified-by: bravebot_cli::lines::an_answer_in_words_is_read_as_words_and_a_pick_wins_over_them`
+`verified-by: bravebot_cli::lines::words_are_taken_only_on_a_vouched_channel_and_only_for_a_question_of_one_prompt`
+`verified-by: bravebot_agent::tools::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not`
 `verified-by: bravebot_cli::running::input_lines_is_refused_beside_what_it_cannot_go_with`
+`verified-by: bravebot_cli::running::an_incognito_run_reading_lines_still_puts_a_write_to_the_program_and_writes_no_record`
 `verified-by: bravebot_cli::running::a_run_reading_lines_streams_without_being_given_the_stream_flag`
 `verified-by: bravebot_cli::running::a_failed_command_line_for_a_lines_run_is_a_result_object`
 `verified-by: bravebot_cli::running::a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task`
@@ -2356,7 +2491,8 @@ reading the answer, so none of it goes to a planner.
 **Known costs.**
 
 - Nothing is printed in money. [sessions.md](sessions.md) gives the reason a price is not composed:
-  no model listing carries one, and the record keeps no cache split.
+  no model listing carries one, and the record keeps the cache figures as session totals and not
+  per turn.
 - Read is the tokens the model was sent, which is the total less what it wrote, so a prompt the
   service answered out of its own cache is counted as read. A record that holds tokens and no
   split counts all of those tokens in the unsplit column.
@@ -2534,7 +2670,7 @@ The `bravebot-acp` program stays, because the tests of the loop start it.
 `verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
 `verified-by: bravebot_cli::acp::acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits`
 `verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
-`verified-by: bravebot_cli::flags::exactly_the_fifteen_commands_that_start_no_session_are_named`
+`verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`
 
 <a id="CLI-40"></a>
 ### CLI-40: `--issue <url>` and `--pr <url>` give the session the command line opens its links
@@ -2553,3 +2689,145 @@ a value holding an escape cannot be a link.
 `verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
 `verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
 `verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`
+
+<a id="CLI-41"></a>
+### CLI-41: `skill eval <name>` runs a skill's saved cases with the skill and without it
+
+`bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>]
+[--trust-workspace]` runs each saved
+case of the skill several times as a one-shot run with nobody to ask (CLI-1), once with the skill in
+the catalogue and once with it taken out, and prints a score for each arm and their difference. What
+a case is, which skill may be named, how a run is graded and how the scores are made are in
+[skills evaluation](skill-evals.md).
+
+Every run carries the limits of CLI-38: the round limit, 12 where `--max-rounds` is not given, and
+the token limit where `--max-tokens` is. Each is read as CLI-38 reads it, so a value that is not a
+whole number of 1 or more, and a `--max-rounds` of 200 or more, are refused with the status for an
+argument. A run that reaches either is reported as stopped and has no score. The command ends on
+the status for an argument
+(CLI-6) where its words are not the ones above, where the name matches no skill the person could be
+offered, where the skill is kept from the planner, and where no case of it is accepted. It ends on 1
+after the report when a run ended on an error other than a limit. Status 8 is never used, since a
+stopped run does not end the evaluation. Flags that let a run write, `--dangerously-skip-permissions`
+among them, are refused with the status for an argument. Standard output holds the report and
+nothing else (CLI-5).
+
+**Why.** A run that stops at its cap is a datum of the evaluation and not a failure of the command,
+so a script reads the report and not the status for it. A write flag taken would let an evaluation
+of a skill change the tree it is graded in.
+
+`verified-by: bravebot_cli::skill_eval::the_name_and_the_four_flags_are_read_and_nothing_else`
+`verified-by: bravebot_cli::skill_eval::a_run_that_has_spent_max_tokens_is_stopped_and_has_no_score`
+
+<a id="CLI-42"></a>
+### CLI-42: `schedule` installs a recurring one-shot run in the person's crontab, launchd or systemd
+
+`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler <name>] [--deliver-to <path>]`
+writes an entry and has the scheduler it names run `bravebot schedule run-now <id>` at the times the
+expression gives: one line of the person's crontab for `crontab`, a plist in `~/Library/LaunchAgents`
+loaded with `launchctl load -w` for `launchd`, or a `.service` and a `.timer` in the systemd user
+directory enabled with `systemctl --user enable --now` for `systemd`. Without `--scheduler` the
+entry is a launchd job on macOS and a crontab line elsewhere, and it holds the choice, so an entry
+written before there was one is a crontab line. `list` prints each entry's id, expression, scheduler, directory, what its run may do and its
+prompt. `remove <id>` takes the entry's job out of its scheduler and deletes the entry. An id is never given to a second entry: a new entry takes
+the id after the highest one the store has a file for, since `remove` keeps the entry's history
+under its id. `run-now <id>` starts the entry's
+run at once, and `history [<id>]` lists the recorded runs, newest first, each with its status, the
+session it recorded and the tokens that session spent ([SESSION-11](sessions.md#SESSION-11)). Any
+other word, a number that names no entry, and a flag that `add` does not read are refused with the
+status for an argument (CLI-6). `pause <id>`, `resume <id>`, `pending [<id>]` and `clear <id>` pause
+an entry, resume it, show the question a firing stopped at and delete that question.
+[schedule.md](schedule.md) describes them, the stop at the first question, the skip of a firing that
+overlaps the previous one, and the ranges an expression is held to.
+
+An entry holds the expression, the prompt, the directory (this one where `--dir` is not given) and
+the mode. The prompt is the person's own text, fixed when the entry is written, as the line of a
+loop is ([LOOP-1](loop.md#LOOP-1)). A run is the one-shot run of CLI-1, started with `--json` in the
+entry's directory, with the prompt as its task. It writes only where the entry holds
+`--accept-edits` or `--dangerously-skip-permissions`, typed on the `add` line, which are the flags
+CLI-1 describes and which `add` reads in no other way; `--auto`, and the flag that also switches off
+the sandbox, are refused. With neither flag the run reads and reports, and `list` says so in words
+for each entry. No other command accepts either flag.
+
+`add` is refused with the status for an argument unless standard input and standard error are a
+terminal, so a program a turn runs cannot add an entry. A session's `/schedule` runs the same
+subcommands for a typed line and stores read mode only ([SCHEDULE-8](schedule.md#SCHEDULE-8)). An expression is five fields of digits and
+`*`, `/`, `,` and `-` only, so it is never an instruction to the shell, and a prompt is refused when
+it is empty, over 64 KiB or begins with `-`. The crontab is read and replaced through the `crontab`
+program, `launchctl` and `systemctl` are run for the other two, each found as
+[SANDBOX-30](sandboxing.md#SANDBOX-30) says, and only the line that ends with the
+entry's own marker is ever replaced or removed. An entry is kept only where its job was installed,
+and a job that was written but not loaded leaves no file. A launchd or systemd job is written from
+the same five fields: each field's values are listed, `7` is Sunday, and where the day of the month
+and the day of the week are both restricted the job has one time set for each, as cron runs on
+either. An expression that gives a launchd job more than 2048 times, and a program path that holds a control
+character, are refused for those two. The path is escaped for XML in a plist and quoted, with `%` and `$`
+doubled, on an `ExecStart=` line. `remove` of a launchd job or systemd timer the scheduler no
+longer knows still deletes its files and the entry. A host with no program for the entry's scheduler,
+and a platform that is not Unix, refuse `add`, and refuse `remove` of a crontab entry.
+
+The driver reads a run's result for one value, the id of the session it recorded, and accepts it
+only where it is a session name. Nothing a run reads or says reaches an entry or the crontab.
+`--deliver-to <path>` names the program a run's standard output is handed to when `run-now` has
+recorded it, and `list` shows it as `delivers to <path>` or `delivers nowhere`. The bytes are carried
+to that program and not read, so the one read above is the only one, and a destination that fails
+is said on standard error and changes nothing else ([SCHEDULE-7](schedule.md#SCHEDULE-7)).
+
+A run is a one-shot run, so a background job its turn started ends with that turn
+([RUN-15](tools/run.md#RUN-15)); nothing a job started is left running after the run exits.
+
+**Why.** A recurring job has nobody to ask, so what it may write has to be decided when a person
+writes it, in words they typed. The operating system's own scheduler needs no daemon of bravebot's.
+Cron runs a job with almost none of the person's environment, so a run that needs a credential
+reads it from the state directory, as any run does.
+
+**Known costs.** There is no Windows scheduler. A job that finds no sign-in in the state directory
+ends with the status of the one-shot run and records no session. A result goes only to the
+program named at `add`, and nothing is sent back to a run.
+
+`verified-by: bravebot_cli::scheduled_runs::an_entry_cannot_be_added_without_a_terminal`
+`verified-by: bravebot_cli::scheduled_runs::an_added_entry_is_one_crontab_line_and_listed_with_what_it_may_do`
+`verified-by: bravebot_cli::scheduled_runs::a_cron_expression_that_is_not_five_plain_fields_writes_nothing`
+`verified-by: bravebot_cli::scheduled_runs::no_command_but_add_accepts_a_write_flag`
+`verified-by: bravebot_cli::scheduled_runs::removing_an_entry_takes_its_line_and_its_files_and_no_other`
+`verified-by: bravebot_cli::scheduled_runs::a_run_is_recorded_and_listed_by_history`
+`verified-by: bravebot_cli::scheduled_runs::a_removed_entrys_id_is_not_given_to_the_next_entry`
+`verified-by: bravebot_cli::scheduled_runs::history_is_newest_first_and_shows_the_tokens_the_session_spent`
+`verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_the_crontab_would_not_take_the_line`
+`verified-by: bravebot_cli::scheduled_runs::a_host_with_no_crontab_refuses_add_and_remove`
+`verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`
+`verified-by: bravebot_schedule::schedule::a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike`
+`verified-by: bravebot_schedule::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
+`verified-by: bravebot_schedule::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
+`verified-by: bravebot_schedule::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
+`verified-by: bravebot_cli::scheduled_runs::a_systemd_entry_is_a_timer_and_a_service_and_not_a_crontab_line`
+`verified-by: bravebot_cli::scheduled_runs::a_launchd_entry_is_a_plist_loaded_and_unloaded_by_its_path`
+`verified-by: bravebot_cli::scheduled_runs::removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry`
+`verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job`
+`verified-by: bravebot_cli::scheduled_runs::an_unknown_scheduler_writes_nothing`
+`verified-by: bravebot_schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
+`verified-by: bravebot_schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
+`verified-by: bravebot_schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`
+`verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`
+
+<a id="CLI-43"></a>
+### CLI-43: `trigger` registers a prompt for an event and runs it when a signed delivery arrives
+
+`bravebot trigger add | list | remove | pending | clear | serve` stores a prompt under a name and an
+event, and `serve` listens on the loopback address and starts the one-shot run (`-p`, CLI-1) for a
+delivery signed with the trigger's secret, giving the run the delivery's body as piped input (CLI-3)
+and no byte of it in the prompt. It starts no session and is one of the commands that start none
+(CLI-39), so the flags that shape a session are refused beside it. Only `add` takes
+`--dangerously-skip-permissions`, and it is the one flag an entry stores. Everything else is
+[triggers.md](triggers.md): the signature, the answers, the caps and why the listener decides on
+nothing the sender wrote. A trigger is not a `schedule` (CLI-42), which the operating system starts
+at a time, and only this command creates one.
+
+**Why.** An event somebody else's service reports should be able to start a prompt without a
+terminal left open, and without that service being able to choose what the prompt is, what it may
+do or what it is told.
+
+`verified-by: bravebot_cli::trigger::add_takes_the_prompt_after_double_dash_and_no_payload_filter`
+`verified-by: bravebot_cli::running::trigger_add_prints_the_secret_once_and_list_and_remove_keep_to_it`
+`verified-by: bravebot_cli::running::a_signed_delivery_starts_the_prompt_and_the_planner_never_sees_the_body`
+`verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`

@@ -22,7 +22,7 @@
 // checkout as it was, and is a better shot than an approval nobody meant to give.
 
 import { join } from 'node:path'
-import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE } from '../../drive-support.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE, readTrust, trustQuestion } from '../../drive-support.mjs'
 
 /** How each of the five reads on screen, in the order somebody meets them. */
 const QUESTIONS = {
@@ -214,6 +214,7 @@ export default {
     if (await page.locator('.trust').isVisible().catch(() => false)) {
       await s.say('Trust the directory', 'Asked once, per checkout, before anything happens in it.', 2.2)
       await s.shot('02-trust')
+      await readTrust(trustQuestion(page))
       await s.click(TRUST_APPROVE)
       await page.waitForTimeout(600 * s.speed)
     }

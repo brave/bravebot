@@ -44,7 +44,9 @@ pub(crate) use self::transcript::{
     plan_item_row, reply_as_text, rows_of, top_of_view,
 };
 
-use self::beneath::{first_waiting_row, lines_beneath_the_box, offered_picks};
+use self::beneath::{
+    first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_words,
+};
 use self::hint::draw_hint;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
 use self::scroller::draw_scroller;
@@ -323,22 +325,11 @@ fn placeholder() -> &'static str {
 /// faithful record of the bytes without being able to act. A tab is replaced like the rest, since
 /// ratatui drops it without drawing anything. Callers that lay a tab out as width do so before
 /// this, and lines are already split, so no newline reaches it.
-pub(crate) fn printable(text: &str) -> String {
-    if !text.chars().any(|c| c.is_control()) {
-        return text.to_string();
-    }
-    text.chars()
-        .map(|c| {
-            if !c.is_control() {
-                c
-            } else {
-                // The Unicode pictures for C0, so an escape reads as ␛ rather than vanishing: a
-                // character silently dropped is one a user cannot tell was ever there.
-                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
-            }
-        })
-        .collect()
-}
+///
+/// This is `bravebot_agent::confirm::printable_with_tab_pictured`, the one implementation the
+/// approval text and the command line share, named `printable` here so the module's callers read
+/// as they did.
+pub(crate) use bravebot_agent::confirm::printable_with_tab_pictured as printable;
 
 /// Lay styled text out behind a margin, one drawn row at a time.
 ///
@@ -998,6 +989,8 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
     let beneath = lines_beneath_the_box(session, width, &offered);
+    let (beneath, offered_first) =
+        fit_to_room(session, width, &offered, beneath, usize::from(room));
     let offered_height = (beneath.len() as u16).min(room);
 
     // Thumbnails of the pictures the line carries, between the box and the rows that describe
@@ -1024,6 +1017,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .split(left);
 
     let mut laid = draw_transcript(frame, areas[0], session);
+    laid.offered_first = offered_first;
     laid.panes = [
         (
             crate::select::Pane::Transcript,
@@ -1050,8 +1044,13 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         area: hint_row,
         taken,
     });
-    laid.targets
-        .extend(offered_picks(session, width, &offered, areas[4]));
+    laid.targets.extend(offered_picks(
+        session,
+        width,
+        &offered,
+        offered_first,
+        areas[4],
+    ));
     if let Some(panel) = panel {
         laid.targets
             .extend(crate::panel::draw(frame.buffer_mut(), panel, session));
@@ -1065,7 +1064,8 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 }
 
 /// The rows a click on a waiting prompt answers on. Each waiting prompt is two rows, and a click on
-/// either takes it back (MOUSE-28). Only the rows drawn are recorded.
+/// either takes it back, with the words on the first that remove it (MOUSE-28). Only the rows drawn
+/// are recorded.
 fn queued_prompts(
     session: &Session,
     width: u16,
@@ -1084,15 +1084,30 @@ fn queued_prompts(
         else {
             break;
         };
+        let y = area.y + u16::try_from(top).unwrap_or(u16::MAX);
         recorded.push(crate::state::Target::on_screen(
             Rect::new(
                 area.x,
-                area.y + u16::try_from(top).unwrap_or(u16::MAX),
+                y,
                 area.width,
                 u16::try_from(rows.min(2)).unwrap_or(2),
             ),
             crate::state::Hit::Queued(place),
         ));
+        // Over the row's own target, since the last one recorded is the one found.
+        if let Some(words) = queue_words(width, place, session.queued.len()) {
+            for (cells, which) in [
+                (words.clear, crate::state::Discard::All),
+                (Some(words.remove), crate::state::Discard::One(place)),
+            ] {
+                if let Some(cells) = cells {
+                    recorded.push(crate::state::Target::on_screen(
+                        Rect::new(area.x + cells.start, y, cells.end - cells.start, 1),
+                        crate::state::Hit::Discard(which),
+                    ));
+                }
+            }
+        }
     }
     recorded
 }
@@ -2685,6 +2700,29 @@ mod tests {
                 "the block did not say how many calls it had made: {screen}"
             );
         }
+    }
+
+    /// A manifest run's call reports what it returned while it is still running and finishes
+    /// after, the other way round from a turn's. What it returned is still drawn under it.
+    #[test]
+    fn a_reply_shown_while_its_call_runs_is_still_drawn_once_the_call_finishes() {
+        let mut session = Session::new("kernel-enforced");
+        let call = Activity::running("SERVER_CALL", "call web-helper:page_title");
+        session.start_activity(call.clone());
+        session.show(Shown {
+            origin: "web-helper:page_title".to_string(),
+            reach: bravebot_agent::report::Reach::NoModel,
+            label: "(U,priv)".to_string(),
+            preview: vec!["https://example.com/: Example Domain".to_string()],
+            lines: 1,
+        });
+        session.finish_activity(call.done("web-helper:page_title replied"));
+
+        let screen = rendered(&session);
+        assert!(
+            screen.contains("Example Domain"),
+            "what the call returned was dropped when it finished: {screen}"
+        );
     }
 
     /// Render into a test backend and return the visible text.
@@ -4432,6 +4470,26 @@ mod tests {
             assert!(!output.contains(ITS_OWN_TURN), "{output}");
         }
 
+        /// INPUT-10, RUN-17. A `job_output` wait ends within a tick of a line the turn may take, and
+        /// the turn reads the line at the boundary after it, so the mark is the ordinary one while the
+        /// wait runs. A mark that treated a call in flight as a turn that will not read the line would
+        /// tell the person to stop a turn that is about to answer them.
+        #[test]
+        fn a_prompt_waiting_on_a_job_output_wait_is_said_to_go_into_the_turn() {
+            let mut session = working();
+            session.start_activity(
+                Activity::running("Wait", "job:1")
+                    .of_tool("job_output")
+                    .saying_why("waiting for the build"),
+            );
+            let session = queued_behind(session, "which step is done?");
+
+            let output = rendered(&session);
+            assert!(output.contains("which step is done?"), "{output}");
+            assert!(output.contains(INTO_THIS_TURN), "{output}");
+            assert!(!output.contains(ITS_OWN_TURN), "{output}");
+        }
+
         /// An aside such as `/compact` is handed a queue of its own and reads nothing sent behind
         /// it, so the prompt starts a turn when the aside ends. Said to go into what is running, it
         /// would be a promise that the thing drawing the spinner is about to read it.
@@ -4605,9 +4663,21 @@ mod tests {
 
         /// The row of the line that follows `line` in `rows`, which is its mark.
         fn mark_under<'a>(rows: &'a [String], line: &str) -> &'a str {
+            // Without the words at the right of the row that remove the line from the queue.
+            let own = |row: &str| {
+                let row = row.trim();
+                let row = row
+                    .strip_suffix(t!(queued_remove))
+                    .unwrap_or(row)
+                    .trim_end();
+                row.strip_suffix(t!(queued_clear_all))
+                    .unwrap_or(row)
+                    .trim_end()
+                    .to_string()
+            };
             let at = rows
                 .iter()
-                .position(|row| row.trim() == line)
+                .position(|row| own(row) == line)
                 .unwrap_or_else(|| panic!("{line:?} is not drawn: {rows:#?}"));
             &rows[at + 1]
         }
@@ -5187,6 +5257,88 @@ mod tests {
             assert!(
                 rows[first + 2].contains("10 more lines"),
                 "what the glimpse left out was not said: {rows:#?}"
+            );
+        }
+
+        /// ASK-13, VIEW-42: a scroll-back view of an `ask_user` call holds each question and what
+        /// became of it, drawn from the picker's own values with no reply from the planner given,
+        /// and the call's line still counts the questions (ASK-10). The regressions it rejects:
+        /// rows that are only drawn once the planner's result arrives, rows lost when the call
+        /// finishes, and the count line replaced by the rows.
+        #[test]
+        fn a_settled_ask_user_call_shows_each_question_and_its_answer_without_a_reply() {
+            use bravebot_core::ask::{Answer, Choice, Question, Series, asking};
+            let mut session = working();
+            session.start_activity(Activity::running("Ask", "which library"));
+            let series = asking(&Series::new(vec![
+                Question::new(
+                    "Library",
+                    "Which library?",
+                    vec![Choice::new("serde", None), Choice::new("miniserde", None)],
+                    false,
+                ),
+                Question::new("Name", "What to call it?", Vec::new(), false),
+            ]));
+            crate::ask::put(&mut session, &series, |_| {
+                vec![Answer::Chosen(vec![1]), Answer::Typed("own words".into())]
+            });
+            session.finish_activity(
+                Activity::running("Ask", "which library").done("2 questions asked"),
+            );
+
+            let rows: Vec<String> = transcript_lines(&session, 90, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            let at = |needle: &str| {
+                rows.iter()
+                    .position(|row| row.contains(needle))
+                    .unwrap_or_else(|| panic!("{needle:?} is not drawn: {rows:#?}"))
+            };
+            let call = at("Ask(which library)");
+            assert!(rows[call + 1].contains("2 questions asked"), "{rows:#?}");
+            assert!(at("Library: Which library?") > call, "{rows:#?}");
+            assert!(
+                at("chose: miniserde") > at("Library: Which library?"),
+                "{rows:#?}"
+            );
+            assert!(
+                at("Name: What to call it?") > at("chose: miniserde"),
+                "{rows:#?}"
+            );
+            assert!(
+                at("answered: own words") > at("Name: What to call it?"),
+                "{rows:#?}"
+            );
+        }
+
+        /// ASK-13: a series nobody could be asked draws no rows, since "skipped" under each
+        /// question would read as the person's choice. The regression it rejects: rows drawn for
+        /// a reply with no answers in it.
+        #[test]
+        fn a_series_nobody_could_be_asked_draws_no_rows() {
+            use bravebot_core::ask::{Choice, Question, Series, asking};
+            let mut session = working();
+            session.start_activity(Activity::running("Ask", "which library"));
+            let series = asking(&Series::new(vec![Question::new(
+                "Library",
+                "Which library?",
+                vec![Choice::new("serde", None)],
+                false,
+            )]));
+            crate::ask::put(&mut session, &series, |_| Vec::new());
+            session.finish_activity(
+                Activity::running("Ask", "which library").done("1 question asked"),
+            );
+
+            let rows: Vec<String> = transcript_lines(&session, 90, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            assert!(
+                rows.iter()
+                    .all(|row| !row.contains("Which library?") && !row.contains("skipped")),
+                "{rows:#?}"
             );
         }
 
@@ -9056,7 +9208,9 @@ mod tests {
     /// to the whole width, so the margin pushes a row past the edge; dropping or reordering
     /// words at a break; and one of a note's lines taking the margin of the others only when it
     /// fits. Every tone is covered, since the ink is the tone's and a wrapped row keeps it. A
-    /// note's words are drawn as they are, with no `printable` pass, like a refusal's.
+    /// note's words are laid out as they are here. `note_lines` in `render/transcript.rs` draws the
+    /// text of a note when the entry is rendered, so this test uses words with no control
+    /// character.
     #[test]
     fn a_note_that_wraps_continues_under_the_column_its_first_row_starts_in() {
         let _held = crate::theme::exclusive();

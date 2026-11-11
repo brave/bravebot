@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: Plan first, then execute
-description: Have the planner write the whole plan before anything is read, approve it once, and have a driver walk it with no model in the control path.
+description: Plan a whole run before reads, approve the manifest once, execute without model decisions, call MCP tools, inspect results and understand non-resumable manifest records.
 ---
 
 # Plan first, then execute
@@ -148,7 +148,7 @@ a plan with a write in it does not run at all, decided before the plan is put to
 ## A manifest run is recorded, but cannot be continued
 
 A plan-then-execute run cannot be resumed. Its conversation is empty, because a session is turns over
-one conversation and a manifest run has none. The picker marks the row and refuses Enter. Naming one
+one conversation and a manifest run has none. The Sessions screen marks the row and refuses Enter. Naming one
 on the command line prints what it produced, and still does not continue it. That print is a **report
 rather than a refusal**: it goes to stdout and exits successfully, because reading a run back is what
 naming one is for.

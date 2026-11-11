@@ -159,3 +159,43 @@ test('an answered series is a record of every question, with what each was answe
   assert.deepEqual(given, ['Per command', 'Declined', 'Unit, Integration'])
   assert.ok(!markup.includes('<fieldset'), 'an answered series still offers its choices')
 })
+
+// ASK-13: what became of each question is the kernel's words, drawn under the call once the series
+// is settled. The window folds the event with its own reducer and draws the rows as text.
+const SETTLED = {
+  rows: [
+    { question: 'Approach: Which approach should the flag take?', outcome: 'Per command' },
+    { question: 'Name: What should the flag be called?', outcome: 'skipped' },
+  ],
+}
+
+function settle(data) {
+  const { apply } = load('src/renderer/apply.ts')
+  let live = { entries: [] }
+  apply({ event: 'ask.settled', data }, (update) => { live = update(live) }, () => {}, () => {})
+  return live.entries
+}
+
+test('a settled series adds one entry after the call, holding the rows as the bridge sent them', () => {
+  const entries = settle(SETTLED)
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].kind, 'ask-settled')
+  assert.deepEqual(entries[0].rows, SETTLED.rows, 'the rows were reworded, reordered or dropped')
+})
+
+test('each question and its outcome are drawn in order, and one that looks like markup is drawn as typed', () => {
+  const rows = [{ question: 'Tag: <b>bold</b> or **plain**?', outcome: '<img src=x onerror=alert(1)>' }, ...SETTLED.rows]
+  const markup = draw(settle({ rows })[0])
+
+  assert.ok(!markup.includes('<b>bold'), `a question was drawn as markup: ${markup}`)
+  assert.ok(!markup.includes('<img'), `an answer was drawn as markup: ${markup}`)
+  assert.ok(markup.includes('&lt;b&gt;bold&lt;/b&gt;'), markup)
+  const shown = text(markup)
+  assert.ok(shown.indexOf('Tag:') < shown.indexOf('Approach:') && shown.indexOf('Approach:') < shown.indexOf('Name:'), `rows out of order: ${shown}`)
+  assert.equal(markup.match(/<li/g).length, rows.length, 'a row was merged or dropped')
+})
+
+test('the transcript search finds a question and what became of it', () => {
+  const found = t.searchableText(settle(SETTLED)[0])
+  assert.ok(found.includes('Which approach should the flag take?') && found.includes('Per command') && found.includes('skipped'), found)
+})
