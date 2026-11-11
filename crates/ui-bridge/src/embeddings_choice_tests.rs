@@ -853,6 +853,7 @@ fn the_custom_key_is_kept_privately_and_removed_by_null() {
     .expect("kept");
 
     let path = bravebot_config::embeddings_key::file(&scratch.home());
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&path)
