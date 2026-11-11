@@ -146,6 +146,11 @@ const RETENTION_KEY: &str = "retentionDays";
 /// reads both spell it here.
 const CRASH_REPORTS_KEY: &str = "crashReports";
 
+/// The key that turns the daily usage ping off, which only the person's own settings file is asked.
+///
+/// Named as a constant for the reason [`CRASH_REPORTS_KEY`] is.
+const USAGE_PING_KEY: &str = "usagePing";
+
 /// The block holding `commitMessage.instructions`, which only the person's own files may write.
 ///
 /// Named as a constant because the per-layer look that removes it from a checkout's file, the parse
@@ -317,6 +322,7 @@ const READ_KEYS: &[&str] = &[
     "terminalTitle",
     "tui",
     "updateCheck",
+    USAGE_PING_KEY,
     VETTING_BLOCK,
 ];
 
@@ -1035,6 +1041,21 @@ impl Settings {
     fn crash_reports_in(home: Option<PathBuf>) -> Option<bool> {
         let document = read(&user_settings_file(&home?))?;
         flag(&document.root, CRASH_REPORTS_KEY)
+    }
+
+    /// What the person's own settings file says about the daily usage ping, and nothing else the
+    /// files say.
+    ///
+    /// Read as `crashReports` is: a boolean or no answer, from the home layer alone, so a checkout's
+    /// file can neither turn the ping off for a person nor turn it back on after they did.
+    pub fn written_usage_ping() -> Option<bool> {
+        Self::usage_ping_in(home())
+    }
+
+    /// As [`Settings::written_usage_ping`], for a named home, so a test needs no ambient one.
+    fn usage_ping_in(home: Option<PathBuf>) -> Option<bool> {
+        let document = read(&user_settings_file(&home?))?;
+        flag(&document.root, USAGE_PING_KEY)
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
@@ -9581,6 +9602,57 @@ mod tests {
     fn the_crash_reports_key_is_not_reported_as_unread() {
         let settings = Layers::new("crash-reports-read")
             .global(r#"{"crashReports": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// Only the person's own file is asked, so a checkout can neither turn the ping off for them nor
+    /// turn it back on after they turned it off.
+    #[test]
+    fn only_the_persons_own_file_says_whether_the_usage_ping_goes() {
+        let layers = Layers::new("usage-ping-layers")
+            .global(r#"{"usagePing": false}"#)
+            .project(r#"{"usagePing": true}"#)
+            .local(r#"{"usagePing": true}"#);
+        assert_eq!(
+            Settings::usage_ping_in(Some(layers.home.clone())),
+            Some(false)
+        );
+
+        let only_project =
+            Layers::new("usage-ping-project-only").project(r#"{"usagePing": false}"#);
+        assert_eq!(
+            Settings::usage_ping_in(Some(only_project.home.clone())),
+            None
+        );
+        assert_eq!(Settings::usage_ping_in(None), None);
+    }
+
+    /// A value that is not a boolean is no answer, so the ping stays as it was.
+    #[test]
+    fn only_a_boolean_answers_for_the_usage_ping() {
+        for (text, wanted) in [
+            (r#"{"usagePing": false}"#, Some(false)),
+            (r#"{"usagePing": true}"#, Some(true)),
+            (r#"{"usagePing": "false"}"#, None),
+            (r#"{"usagePing": 0}"#, None),
+            (r#"{"usagePing": null}"#, None),
+            (r#"{"crashReports": false}"#, None),
+        ] {
+            let layers = Layers::new("usage-ping-values").global(text);
+            assert_eq!(
+                Settings::usage_ping_in(Some(layers.home.clone())),
+                wanted,
+                "{text}"
+            );
+        }
+    }
+
+    /// The key is one this build reads, so the person who wrote it is not told it does nothing.
+    #[test]
+    fn the_usage_ping_key_is_not_reported_as_unread() {
+        let settings = Layers::new("usage-ping-read")
+            .global(r#"{"usagePing": false}"#)
             .read();
         assert_eq!(settings.unread_keys().count(), 0);
     }

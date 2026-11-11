@@ -89,6 +89,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
 | [herdr.md](herdr.md) | `HERDR` | 12 | telling herdr, a terminal runtime, what a session is doing and how to resume it |
+| [usage-ping.md](usage-ping.md) | `PING` | 11 | the one request a day that counts a launch: the eleven fields it holds, when it is sent and from which launch, where it goes, and how a person or an administrator stops it |
 
 ## The tools
 

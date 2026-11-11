@@ -84,6 +84,10 @@ where it did.
 `~/.bravebot/settings.json` says. It can only turn them off: `true` is not read, and a value that is
 not a boolean is ignored. See [`crashReports`](configuration.md#crashreports).
 
+`"usagePing": false` turns the daily usage ping off on the machine, whatever the user's own settings or
+the switch in `/config` say, and the switch is shown as turned off by an administrator. It can only
+turn the ping off: `true` is not read. See [`usagePing`](configuration.md#usageping).
+
 `"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
 they are added to the rules every other file wrote. A deny rule here refuses on every session on the
 machine in every mode, and nothing in a checkout or in a person's own file removes it:

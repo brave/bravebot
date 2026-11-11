@@ -235,6 +235,33 @@ pub const CRASH_REPORT_URL: &str = "BACKTRACE_SUBMIT_URL";
 /// Absent from ALL: it describes one person's machine rather than the build.
 pub const CRASH_REPORTS: &str = "BRAVEBOT_CRASH_REPORTS";
 
+/// Set to `0` to stop the daily usage ping.
+///
+/// With it set, no record is read, no request is made and no record is written. The `usagePing`
+/// settings key, the managed file and the switch in `/config` and the desktop settings turn the
+/// same ping off, and any one of them does. Nothing set here can turn it back on against them. Any
+/// value other than `0`, or none, leaves the ping as the others say.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const USAGE_PING: &str = "BRAVEBOT_USAGE_PING";
+
+/// The cross-program convention for asking command-line tools not to report usage.
+///
+/// Any value other than an empty one, `0` or `false` stops the daily usage ping, as
+/// [`USAGE_PING`] set to `0` does. Read only for the ping: nothing else this program sends is
+/// usage reporting.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const DO_NOT_TRACK: &str = "DO_NOT_TRACK";
+
+/// A base URL to send the daily usage ping to in place of Brave's, such as a local server that
+/// records what it was sent.
+///
+/// The path is appended to it. It changes where the ping goes and nothing about whether it goes.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const USAGE_PING_URL: &str = "BRAVEBOT_USAGE_PING_URL";
+
 /// Where the directory this session has to itself is, set on every program the agent runs.
 ///
 /// Written by this process rather than read by it: a line that wants somewhere to put an

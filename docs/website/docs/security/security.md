@@ -678,6 +678,13 @@ See [`crashReports`](../customize/configuration.md#crashreports).
 Only a panic is reported. A process that dies without one leaves nothing, and a minidump to cover that
 case would hold the memory of a process that holds credentials.
 
+## The usage ping
+
+Once a UTC day bravebot sends Brave one request that counts a launch. Every field is a word from a
+fixed list, a boolean or a date, so nothing you typed and nothing a file holds can be in it. It goes
+through the same single call as every other request, carries no credential, and its reply's body is
+never read. See [The usage ping](usage-ping.md) for what it holds and every way to turn it off.
+
 ## Reporting a problem
 
 Brave Bot is experimental and developed in the open. Please report security issues through the

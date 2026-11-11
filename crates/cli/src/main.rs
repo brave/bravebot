@@ -853,6 +853,22 @@ fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
     stdin_is_terminal && stderr_is_terminal
 }
 
+/// Say on stderr what the usage ping sends, where it is due, before a run without a screen writes
+/// anything. Never on stdout, which is the reply a script reads and, for ACP, the protocol.
+///
+/// A scheduled or triggered firing says nothing: nobody is reading its stderr, and the first run a
+/// person starts says it instead.
+pub(crate) fn say_usage_ping_notice() {
+    if schedule::firing().is_some() || trigger::firing().is_some() {
+        return;
+    }
+    if let Some(notice) = bravebot_session::store::take_usage_ping_notice() {
+        use std::io::Write;
+        // Not `eprintln!`, which panics where whoever started the run closed stderr (CLI-35).
+        let _ = writeln!(std::io::stderr().lock(), "{notice}");
+    }
+}
+
 fn run_task(
     args: &[String],
     skip_permissions: bool,
@@ -860,7 +876,12 @@ fn run_task(
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> ExitCode {
-    match prepare_the_run(args, skip_permissions, starts_in, agent, prompts) {
+    let prepared = prepare_the_run(args, skip_permissions, starts_in, agent, prompts);
+    let pinging = prepared.as_ref().ok().and_then(|prepared| {
+        say_usage_ping_notice();
+        usage_ping(&prepared.config, Some(&prepared.model))
+    });
+    let code = match prepared {
         Ok(prepared) if prepared.input_lines => run_the_lines(prepared),
         Ok(mut prepared) => {
             let continued = prepared.continued.take();
@@ -876,7 +897,32 @@ fn run_task(
             code
         }
         Err(stopped) => stopped,
+    };
+    if let Some(pinging) = pinging {
+        pinging.settle(PING_SETTLES_WITHIN);
     }
+    code
+}
+
+/// How long a run that has finished waits for a ping still in flight before it exits, which would
+/// end the request. Only a run whose ping was due waits at all, and only one an hour can be.
+const PING_SETTLES_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Start the daily usage ping for a run without a screen, which reports itself as `cli`.
+///
+/// Not for a scheduled or triggered firing, which no person started.
+pub(crate) fn usage_ping(
+    config: &Config,
+    model: Option<&str>,
+) -> Option<bravebot_usage_ping::Sending> {
+    if schedule::firing().is_some() || trigger::firing().is_some() {
+        return None;
+    }
+    Some(bravebot_usage_ping::at_startup(
+        bravebot_usage_ping::Surface::Cli,
+        bravebot_usage_ping::backend(config, model),
+        bravebot_usage_ping::premium(config),
+    ))
 }
 
 /// What the second half of a one-shot run reads, and the two guards that only have to live as long

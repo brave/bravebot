@@ -67,6 +67,7 @@ pub fn session(
     agent: Option<String>,
     prompts: bravebot_agent::turn::SystemPrompts,
 ) -> ExitCode {
+    crate::say_usage_ping_notice();
     run(skip_permissions, agent, prompts, None)
 }
 
@@ -251,6 +252,10 @@ fn run(
         bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => None,
     };
     let model = pick.into_model();
+    // A hosted session is a background process, which no person started as a launch.
+    if hosting.is_none() {
+        crate::usage_ping(&config, model.as_deref());
+    }
     let (mut asking, mut reply, mut beside, beside_turns): Streams = match hosting {
         Some(hosting) => (
             Prompting::watched(

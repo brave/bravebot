@@ -2158,12 +2158,24 @@ effort-hint-medium = less thinking, where that holds up
 effort-hint-high = the usual amount, for work needing care
 effort-hint-xhigh = more thinking, for code and long runs
 effort-hint-max = the most thinking, cost aside
-# Choosing how the input box edits text. The style names are the words the setting is spelled with, so
-# they are not translated; only what each one is for is.
-config-picker-title = editor mode
+# The /config panel: how the input box edits text, and whether the daily usage ping is sent. The style
+# names are the words the setting is spelled with, so they are not translated; only what each one is for is.
+config-picker-title = settings
 config-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
 config-editing-hint-ordinary = arrows and the readline chords
 config-editing-hint-vi = modal editing, with hjkl and the operators
+config-usage-ping-on = usage ping on
+config-usage-ping-off = usage ping off
+# The one row shown when something stronger than the switch turned the ping off. The reason is one of the
+# config-usage-ping-reason messages.
+config-usage-ping-locked = usage ping off ({ $reason })
+config-usage-ping-reason-environment = set by { $variable }
+config-usage-ping-reason-setting = usagePing in ~/.bravebot/settings.json
+config-usage-ping-reason-admin = managed by your administrator
+config-usage-ping-reason-incognito = incognito
+config-usage-ping-hint-on = one count a day to Brave that identifies no one
+config-usage-ping-hint-off = nothing is sent
+config-usage-ping-hint-locked = turned off outside this panel, so it cannot be changed here
 picker-premium = premium
 # The heading over the models Brave's own endpoint serves. Named rather than left blank, because a
 # list whose other sections name a service reads as though the unlabelled rows came from nowhere.
@@ -3850,6 +3862,11 @@ session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type
 session-editing-ordinary = editing with the arrows and the readline chords
+session-usage-ping-on = usage ping on: one count a day to Brave that identifies no one
+session-usage-ping-off = usage ping off: nothing is sent
+# Said when the switch was picked but something stronger keeps the ping off. The reason is one of the
+# config-usage-ping-reason messages.
+session-usage-ping-locked = usage ping off ({ $reason }), so it cannot be changed here
 session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
@@ -3961,6 +3978,15 @@ crash-reports-notice =
     operating system and the line of bravebot's source that failed, and never your prompts, files
     or keys. To turn this off, set crashReports to false in your settings file, or set
     BRAVEBOT_CRASH_REPORTS=0.
+# Said once, before the first usage ping is sent: on the startup screen, or on standard error for a
+# run without one. The command, the key and the variable are the ways of turning it off, and are not a
+# translator's to reword.
+usage-ping-notice =
+    once a day, bravebot sends Brave an anonymous usage ping: the version, your operating system, how
+    bravebot was installed, which interface and kind of backend you use, whether you have premium,
+    and whether this is your first use today, this week and this month. It never holds your prompts,
+    files or keys. To turn it off, use /config, set usagePing to false in your settings file, or set
+    BRAVEBOT_USAGE_PING=0.
 session-started-server = running the { $language } language server for this session ({ $program })
 # Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
 # is offered again in later sessions until the server's list changes.
@@ -5636,6 +5662,15 @@ ui-settings-language-unsaved = Couldn't save the language.
 ui-settings-language-unread = Couldn't read the language setting.
 ui-settings-restart = Restart
 ui-settings-restart-running = A turn is still running. Restart once it has finished or been stopped.
+ui-settings-privacy = Privacy
+ui-settings-usage-ping = Send a daily usage ping to Brave
+ui-settings-usage-ping-explained = Once a day, a count that identifies no one. Nothing is sent while this is off.
+ui-settings-usage-ping-locked-environment = Turned off by { $variable } in the environment.
+ui-settings-usage-ping-locked-setting = Turned off by usagePing in ~/.bravebot/settings.json.
+ui-settings-usage-ping-locked-admin = Turned off by your administrator.
+ui-settings-usage-ping-locked-incognito = Off in an incognito session, which records nothing.
+ui-settings-usage-ping-unread = Couldn't read the usage ping setting.
+ui-settings-usage-ping-unsaved = Couldn't save the usage ping setting. Try again.
 ui-accounts-heading = Accounts
 ui-accounts-signed-in = Signed in
 ui-accounts-key-stored = Key stored
@@ -5726,6 +5761,13 @@ ui-recall-unavailable-failed = Unavailable · the service returned an error
 ui-recall-unavailable-out-of-time = Unavailable · the service did not answer in time
 ui-recall-fix-key = Check the embeddings key in Settings. Until then, this bot summarises long conversations as before.
 ui-recall-unconfigured = Not set up · choose an embeddings service in Settings
+# Shown once at the top of the sidebar, before the first usage ping is sent.
+ui-usage-ping-notice = Once a day, BraveBot sends Brave an anonymous usage ping with the version, your operating system, how it was installed, which interface and kind of backend you use, whether you have premium, and whether this is your first use today, this week and this month. It never holds your prompts, files or keys. You can turn it off in Settings, under General.
+ui-usage-ping-notice-short = Once a day, BraveBot sends Brave an anonymous usage ping. It never holds your prompts, files or keys.
+ui-usage-ping-notice-more = More…
+ui-usage-ping-notice-less = Less
+ui-usage-ping-notice-settings = Open settings
+ui-usage-ping-notice-dismiss = Dismiss usage ping notice
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

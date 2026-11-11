@@ -32,6 +32,8 @@ bravebot-skus = { path = "../skus" }
 bravebot-stamp = { path = "../stamp" }
 bravebot-tui = { path = "../tui" }
 bravebot-ui-bridge = { path = "../ui-bridge" }
+# The daily usage ping from `-p`, `--plain` and `acp`.
+bravebot-usage-ping = { path = "../usage-ping" }
 
 [dev-dependencies]
 # The seams that point the ChatGPT sign-in, its renewal and the account's requests at a stand-in, for

@@ -1,6 +1,7 @@
 ## Unreleased
 
  - Added reporting to [herdr](https://github.com/herdrdev/herdr). A session in a herdr pane tells herdr whether it is idle, working or waiting for an answer, gives it `bravebot --resume <id>` with only the flags that narrow the session so herdr can reopen it after a restart, and frees the pane when you quit. An incognito session sends no resume command, and nothing is sent outside herdr. macOS and Linux only for now.
+ - Added a daily usage ping, which tells Brave once a UTC day that a copy of bravebot ran: its platform, version, install method, front end, kind of model service, whether a premium key is held, four first-of-period flags and the week it was first counted. It holds no prompt, file, key, path or identifier, nothing is sent until bravebot has said so once, and the switch in `/config`, **Settings → General → Privacy**, `"usagePing": false`, `BRAVEBOT_USAGE_PING=0`, `DO_NOT_TRACK` or the managed file turns it off.
 
 ## [0.21.0](https://github.com/brave/bravebot/releases/tag/v0.21.0)
 

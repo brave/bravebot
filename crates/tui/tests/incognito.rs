@@ -456,6 +456,54 @@ fn the_standing_answer_about_vetting_is_not_read() {
     assert_eq!(scratch.contents(), expected);
 }
 
+/// An incognito session sends no usage ping, whatever the switch's file says, and a choice made
+/// there does not reach the file. The seeded model is read back so that `None` means the read was
+/// refused rather than that the directory under test was somewhere else.
+#[test]
+fn the_usage_ping_is_off_and_its_switch_is_neither_read_nor_written() {
+    let scratch = Scratch::incognito("usage-ping");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+    scratch.seed("usage-ping", "on\n");
+
+    assert_eq!(
+        store::load_model().as_deref(),
+        Some("claude-sonnet-4-5"),
+        "the seeded directory is not the one being read"
+    );
+    assert_eq!(store::load_usage_ping(), None, "the switch was read");
+    assert_eq!(
+        store::usage_ping(),
+        bravebot_config::usage_ping::UsagePing::Incognito
+    );
+
+    store::save_usage_ping(false);
+    assert_eq!(
+        std::fs::read_to_string(scratch.own_directory().join("usage-ping"))
+            .expect("the seeded file"),
+        "on\n",
+        "an incognito session overwrote the switch"
+    );
+    let mut expected = vec!["model".to_string(), "usage-ping".to_string()];
+    expected.sort();
+    assert_eq!(scratch.contents(), expected);
+}
+
+/// An incognito session sends no usage ping, so it says nothing about one and leaves no record that
+/// it did: a record written there would stop the next ordinary start telling the person before its
+/// first ping. A record already there is not read either.
+#[test]
+fn the_usage_ping_notice_is_neither_said_nor_recorded() {
+    let scratch = Scratch::incognito("usage-ping-notice");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+
+    assert_eq!(store::take_usage_ping_notice(), None, "said in incognito");
+    store::mark_usage_ping_notice_shown();
+    assert_eq!(scratch.contents(), vec!["model".to_string()]);
+
+    scratch.seed("usage-ping-notice", "shown\n");
+    assert!(!store::usage_ping_notice_shown(), "the record was read");
+}
+
 /// CMD-12: an incognito session neither reads the `/caffeinate` agreement nor writes it.
 ///
 /// The sessions persist, so the only thing between them and the file is the mode: a swapped

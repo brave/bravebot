@@ -134,6 +134,17 @@ const LANGUAGE_FILE: &str = "language";
 /// looking at the file and at `vetting.auto` in a settings file sees one name.
 const VETTING_FILE: &str = "vetting";
 
+/// What the person last chose with the usage-ping switch, one word, inside the global state
+/// directory.
+///
+/// Named for the setting rather than the type, as the vetting file is, so somebody looking at the
+/// file and at `usagePing` in a settings file sees one name.
+const USAGE_PING_FILE: &str = "usage-ping";
+
+/// Present once a front end has told the person what the usage ping sends, inside the global state
+/// directory.
+const USAGE_PING_NOTICE_FILE: &str = "usage-ping-notice";
+
 /// Whether the info panel was last left open, one word, inside the global state directory.
 const PANEL_FILE: &str = "panel";
 
@@ -722,6 +733,113 @@ pub fn save_vetting(auto: bool) {
     let _ = bravebot_agent::home::replace(&dir.join(VETTING_FILE), format!("{word}\n").as_bytes());
 }
 
+/// What the person last chose with the usage-ping switch, or `None` where they never used it.
+///
+/// Resolved through [`writable`], as [`load_vetting`] is. An incognito session pings nothing, so
+/// what the switch says there decides nothing either.
+pub fn load_usage_ping() -> Option<bool> {
+    let path = writable()?.join(USAGE_PING_FILE);
+    parse_usage_ping(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Read the choice out of the file's contents.
+///
+/// Exactly the two words, after trimming, as [`parse_vetting`] reads its own. A file holding
+/// anything else is no choice, which leaves the ping as the other switches say.
+pub fn parse_usage_ping(contents: &str) -> Option<bool> {
+    match contents.lines().next()?.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Record what the person chose with the usage-ping switch.
+///
+/// Off is written rather than the file removed, for the reason [`save_vetting`] gives. Written by
+/// rename, so an interrupted write leaves the previous choice. Nothing is written in an incognito
+/// session.
+pub fn save_usage_ping(on: bool) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+
+    let word = match on {
+        true => "on",
+        false => "off",
+    };
+    let _ =
+        bravebot_agent::home::replace(&dir.join(USAGE_PING_FILE), format!("{word}\n").as_bytes());
+}
+
+/// Whether the daily usage ping is on, and what turned it off if it is not.
+///
+/// The one place every caller gathers the switches: the managed file, the two variables, the
+/// person's own settings file and the switch's file, plus whether the session records anything.
+/// The rule over them is [`bravebot_config::usage_ping::resolve`]. Read fresh on every call, so a
+/// switch changed in one window is seen by the next ask in another.
+pub fn usage_ping() -> bravebot_config::usage_ping::UsagePing {
+    use bravebot_config::env_var;
+    let usage_ping_variable = std::env::var(env_var::USAGE_PING).ok();
+    let do_not_track = std::env::var(env_var::DO_NOT_TRACK).ok();
+    bravebot_config::usage_ping::resolve(bravebot_config::usage_ping::Inputs {
+        incognito: writable().is_none(),
+        managed_off: bravebot_config::Managed::load().usage_ping_off(),
+        usage_ping_variable: usage_ping_variable.as_deref(),
+        do_not_track: do_not_track.as_deref(),
+        setting: bravebot_config::Settings::written_usage_ping(),
+        switch: load_usage_ping(),
+    })
+}
+
+/// Whether a front end has told the person what the usage ping sends.
+///
+/// One marker for every front end, so somebody told in the terminal is not told again by the
+/// desktop. The ping is not sent before this is true. Resolved through [`writable`], so an
+/// incognito session reads it as not shown and writes nothing.
+pub fn usage_ping_notice_shown() -> bool {
+    writable().is_some_and(|dir| dir.join(USAGE_PING_NOTICE_FILE).exists())
+}
+
+/// Record that the person was told what the usage ping sends.
+///
+/// Nothing is written in an incognito session.
+pub fn mark_usage_ping_notice_shown() {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+    let _ = bravebot_agent::home::replace(&dir.join(USAGE_PING_NOTICE_FILE), b"shown\n");
+}
+
+/// Whether a front end should show the usage-ping notice now: the ping is on and nobody has
+/// shown the notice yet.
+///
+/// A person who turned the ping off is not told about a ping that will not be sent. If they
+/// turn it on later, the next start tells them before the first ping.
+pub fn usage_ping_notice_due() -> bool {
+    usage_ping().is_on() && !usage_ping_notice_shown()
+}
+
+/// The line that says what the usage ping sends, where it is due, recorded as shown before it is
+/// returned.
+///
+/// The terminal's startup screen and the runs without one (`-p`, `--plain`, ACP) all take the line
+/// here, so each says it once and the first to say it stops the others. Recorded first, so a
+/// front end that fails to show it does not say it on every launch.
+pub fn take_usage_ping_notice() -> Option<String> {
+    if !usage_ping_notice_due() {
+        return None;
+    }
+    mark_usage_ping_notice_shown();
+    Some(bravebot_i18n::t!(usage_ping_notice).to_string())
+}
+
 /// Whether the person last left the info panel open, or `None` where they never pressed its key.
 ///
 /// Global rather than per-directory, as the theme is: whether somebody wants the panel beside the
@@ -1295,6 +1413,19 @@ and this?
                 !parse_caffeinate(contents),
                 "{contents:?} became an agreement"
             );
+        }
+    }
+
+    /// Off has to read back as off rather than as no answer, or a person who turned the ping off
+    /// would have it turned back on by the default.
+    #[test]
+    fn the_usage_ping_switch_is_read_back_both_ways_and_nothing_else_is_a_choice() {
+        assert_eq!(parse_usage_ping("on\n"), Some(true));
+        assert_eq!(parse_usage_ping("off\n"), Some(false));
+        assert_eq!(parse_usage_ping("  off  \n"), Some(false));
+        assert_eq!(parse_usage_ping("off\non\n"), Some(false));
+        for contents in ["", "\n", "true\n", "0\n", "On\n", "of\n"] {
+            assert_eq!(parse_usage_ping(contents), None, "{contents:?}");
         }
     }
 

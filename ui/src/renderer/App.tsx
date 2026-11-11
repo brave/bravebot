@@ -31,6 +31,7 @@ import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { BugReport } from './components/BugReport'
 import { UpdateBanner } from './components/UpdateBanner'
+import { UsagePingNotice } from './components/UsagePingNotice'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { conversationModel, rememberModel } from './models'
 import { canSend } from './can-send'
@@ -132,6 +133,15 @@ export function App(): React.JSX.Element {
         onDismiss={() => setExperience('dismissedUpdate', running)} />
       : null
   }, [updateStatus, dismissedUpdate, download])
+  /** Whether to say what the usage ping sends. Recorded as shown by the bridge as soon as it is drawn. */
+  const [usagePingNoticeShown, setUsagePingNoticeShown] = useState(false)
+  useEffect(() => {
+    void call<{ due?: boolean }>('usage_ping.notice_due').then((answer) => {
+      if (answer.due !== true) return
+      setUsagePingNoticeShown(true)
+      void call('usage_ping.mark_notice_shown').catch(() => {})
+    }).catch(() => {})
+  }, [])
   // The composer's text lives here rather than in `Transcript` because the Send menu item
   // has to be grey when there is nothing to send, and only this component talks to the menu.
   const draftKey = live ? liveKey(live) : ''
@@ -864,6 +874,11 @@ export function App(): React.JSX.Element {
     if (page) setSettingsPage(page)
     setSettings(true)
   }, [])
+  // Memoised because the composer it docks on is, and redraws on a new element.
+  const usagePingNotice = useMemo(() => usagePingNoticeShown
+    ? <UsagePingNotice onSettings={() => { setUsagePingNoticeShown(false); openSettingsPage('general') }}
+      onDismiss={() => setUsagePingNoticeShown(false)} />
+    : null, [usagePingNoticeShown, openSettingsPage])
 
   useCommandRouter({
     create: (directory) => { void (directory ? create(directory) : newChat()) },
@@ -1021,6 +1036,7 @@ export function App(): React.JSX.Element {
           knowing. */}
       <div className="workspace">
       <Transcript
+        notice={usagePingNotice}
         onAudit={openAudit}
         onTurnDisclosure={discloseTurn}
         backendReady={backendReady}

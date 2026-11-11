@@ -1817,10 +1817,20 @@ model-picker-listing-lost = la liste des modèles n'a pas été reçue
 model-picker-unknown-name = le fichier d'invite nomme { $model }, que la liste des modèles ne contient pas
 picker-current = actuel
 
-config-picker-title = mode d'édition
+config-picker-title = réglages
 config-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
 config-editing-hint-ordinary = les flèches et les raccourcis readline
 config-editing-hint-vi = édition modale, avec hjkl et les opérateurs
+config-usage-ping-on = signal d'usage activé
+config-usage-ping-off = signal d'usage désactivé
+config-usage-ping-locked = signal d'usage désactivé ({ $reason })
+config-usage-ping-reason-environment = fixé par { $variable }
+config-usage-ping-reason-setting = usagePing dans ~/.bravebot/settings.json
+config-usage-ping-reason-admin = géré par votre administrateur
+config-usage-ping-reason-incognito = incognito
+config-usage-ping-hint-on = un décompte par jour envoyé à Brave, qui n'identifie personne
+config-usage-ping-hint-off = rien n'est envoyé
+config-usage-ping-hint-locked = désactivé hors de ce panneau, donc non modifiable ici
 
 effort-picker-title = effort
 effort-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
@@ -3097,6 +3107,9 @@ session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire
 session-editing-ordinary = édition avec les flèches et les raccourcis readline
+session-usage-ping-on = signal d'usage activé : un décompte par jour envoyé à Brave, qui n'identifie personne
+session-usage-ping-off = signal d'usage désactivé : rien n'est envoyé
+session-usage-ping-locked = signal d'usage désactivé ({ $reason }), donc non modifiable ici
 session-effort-set = réflexion à { $effort }
 session-effort-unset = réflexion laissée au service
 session-language-in-use = l'interface est en { $language } ; catalogues : { $available } ; /language <tag> enregistre un choix pour le prochain démarrage et /language auto l'abandonne
@@ -3173,6 +3186,13 @@ crash-reports-notice =
     votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
     invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre
     fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
+usage-ping-notice =
+    une fois par jour, bravebot envoie à Brave un signal d'utilisation anonyme : la version, votre
+    système d'exploitation, la façon dont bravebot a été installé, l'interface et le type de service
+    que vous utilisez, si vous avez premium, et s'il s'agit de votre première utilisation du jour, de
+    la semaine et du mois. Il ne contient jamais vos invites, vos fichiers ni vos clés. Pour le
+    désactiver, utilisez /config, mettez usagePing à false dans votre fichier de réglages, ou
+    définissez BRAVEBOT_USAGE_PING=0.
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-offered-tools =
     { $count ->
@@ -4612,6 +4632,12 @@ ui-unconfigured-body = Connectez-vous à un compte, ou configurez une passerelle
 ui-unconfigured-open-settings = Ouvrir les réglages de l'agent
 ui-unconfigured-continue = Continuer la navigation
 ui-unconfigured-details = Détails techniques
+ui-usage-ping-notice = Une fois par jour, BraveBot envoie à Brave un signal d'utilisation anonyme avec la version, votre système d'exploitation, la façon dont il a été installé, l'interface et le type de service que vous utilisez, si vous avez premium, et s'il s'agit de votre première utilisation du jour, de la semaine et du mois. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général.
+ui-usage-ping-notice-short = Une fois par jour, BraveBot envoie à Brave un signal d'utilisation anonyme. Il ne contient jamais vos invites, vos fichiers ni vos clés.
+ui-usage-ping-notice-more = Plus…
+ui-usage-ping-notice-less = Moins
+ui-usage-ping-notice-settings = Ouvrir les réglages
+ui-usage-ping-notice-dismiss = Fermer l'avis sur le signal d'utilisation
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton

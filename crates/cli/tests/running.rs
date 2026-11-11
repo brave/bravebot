@@ -189,6 +189,8 @@ fn prepared(
         .env("OLLAMA_HOST", NO_OLLAMA)
         .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
         .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
+        // Off unless a test turns it on, so no run pings or prints its notice.
+        .env("BRAVEBOT_USAGE_PING", "0")
         .envs(environment.iter().copied())
         .args(arguments)
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
@@ -24538,4 +24540,147 @@ fn a_link_that_asks_for_more_or_is_switched_off_starts_nothing() {
         gateway.asked.try_recv().is_err(),
         "a refused link sent a turn"
     );
+}
+
+/// The usage-ping notice in a run without a screen: the first `-p` run with the ping on says what
+/// the ping sends on stderr, once, and stdout carries the reply alone, so a script reading it is
+/// not handed the notice. The run after it says nothing, because the first left the record every
+/// front end reads. A run with the ping turned off says nothing and records nothing, so the person
+/// who turns it on later is told before the first ping.
+#[test]
+fn a_one_shot_run_says_what_the_usage_ping_sends_once_on_stderr_and_never_on_stdout() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-usage-ping-notice").with_settings(&settings_for(&gateway));
+    let marker = scratch.path.join(".bravebot").join("usage-ping-notice");
+    let notice = "BRAVEBOT_USAGE_PING=0";
+
+    let off = [AT_A_GATEWAY, &[("BRAVEBOT_USAGE_PING", "0")]].concat();
+    let on = [AT_A_GATEWAY, &[("BRAVEBOT_USAGE_PING", "1")]].concat();
+    let output = bravebot(&scratch.path, &off, &["-p", "say something"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        !stderr.contains(notice),
+        "a run with the ping off told of it: {stderr}"
+    );
+    assert!(
+        !marker.exists(),
+        "a run with the ping off recorded the notice as shown"
+    );
+
+    let output = bravebot(&scratch.path, &on, &["-p", "say something"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(stderr.matches(notice).count(), 1, "{stderr}");
+    assert!(stderr.contains("/config"), "{stderr}");
+    assert!(stderr.contains("usagePing"), "{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "all done",
+        "stdout carried more than the reply"
+    );
+    assert!(
+        marker.exists(),
+        "nothing was left to stop the next run saying it"
+    );
+
+    let output = bravebot(&scratch.path, &on, &["-p", "say something"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        !stderr.contains(notice),
+        "the notice was said twice: {stderr}"
+    );
+}
+
+/// A stand-in for the usage-ping service: keeps every request's target and answers it 200, half a
+/// second later, so a run that exits without waiting for the answer leaves it unrecorded.
+struct PingService {
+    url: String,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl PingService {
+    fn start() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
+        let url = format!("http://{}", listener.local_addr().expect("an address"));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut line = String::new();
+                if BufReader::new(&stream).read_line(&mut line).is_err() {
+                    continue;
+                }
+                let target = line.split(' ').nth(1).unwrap_or_default().to_string();
+                kept.lock().expect("the record").push(target);
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+        Self { url, seen }
+    }
+
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().expect("the record").clone()
+    }
+}
+
+/// A `-p` run with the ping on and its notice shown sends one ping, as `cli` and naming the
+/// gateway that answers its model, before it exits. The next run the same day sends none, and a
+/// scheduled firing, which no person started, sends none either.
+#[test]
+fn a_one_shot_run_sends_one_usage_ping_a_day_and_a_scheduled_firing_sends_none() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let service = PingService::start();
+    let pinging = [
+        ("BRAVEBOT_USAGE_PING", "1"),
+        ("BRAVEBOT_USAGE_PING_URL", service.url.as_str()),
+    ];
+    let on = [AT_A_GATEWAY, &pinging].concat();
+
+    let fired = Scratch::new("cli-running-usage-ping-fired").with_settings(&settings_for(&gateway));
+    let state = fired.path.join(".bravebot");
+    std::fs::create_dir_all(state.join("schedules")).expect("the schedules");
+    std::fs::write(state.join("usage-ping-notice"), "shown\n").expect("the notice marker");
+    std::fs::write(
+        state.join("schedules/1.entry"),
+        "cron=0 9 * * *\ndir=/tmp\nmode=read\n",
+    )
+    .expect("an entry");
+    std::fs::write(state.join("schedules/1.prompt"), "say something").expect("its prompt");
+    let as_fired = [on.as_slice(), &[("BRAVEBOT_SCHEDULE_ENTRY", "1")]].concat();
+    let output = bravebot(&fired.path, &as_fired, &["-p", "say something"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        service.seen(),
+        Vec::<String>::new(),
+        "a scheduled firing pinged"
+    );
+
+    let scratch =
+        Scratch::new("cli-running-usage-ping-sent").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    std::fs::create_dir_all(&state).expect("the state directory");
+    std::fs::write(state.join("usage-ping-notice"), "shown\n").expect("the notice marker");
+    for run in 0..2 {
+        let output = bravebot(&scratch.path, &on, &["-p", "say something"]);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+        let record = std::fs::read_to_string(state.join("usage-ping-state")).unwrap_or_default();
+        assert!(
+            record.contains("success "),
+            "run {run} exited before the ping was answered: {record:?}"
+        );
+    }
+    let seen = service.seen();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].starts_with("/1/usage/bravebot?"), "{seen:?}");
+    assert!(seen[0].contains("&surface=cli&"), "{seen:?}");
+    assert!(seen[0].contains("&backend=openrouter&"), "{seen:?}");
 }
