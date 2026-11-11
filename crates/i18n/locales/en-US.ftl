@@ -2334,6 +2334,8 @@ watching-output-live-more = { $count ->
     }
 run-line-sent = the model wrote:
 run-writes = it writes these files:
+run-write-lands-on = { $written } (lands on { $landing })
+run-write-protected = { $path } (protected path: something runs this file later)
 run-is-fed = it is fed the contents of:
 run-not-sandboxed = this is not sandboxed: it runs with the access your own shell has
 # Said instead of the line above where the turn confines what a run starts, and followed by the

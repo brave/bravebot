@@ -817,7 +817,13 @@ about a URL, and its allow word is the whole of what it can say. Anything else, 
 is the refusal above, so it removes a question and never refuses one. It reads no byte of a slot, so
 it is not the check this paragraph's first sentence rules out.
 
+A run whose line redirects into a protected path ([PERM-9](permissions.md#PERM-9)) is refused where
+nobody can be asked, and the planner is told so. A program sending lines is not offered it as a
+question it may answer, and a client that remembers answers is not offered a standing one.
+
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_run`
+`verified-by: bravebot_agent::confirm::an_unattended_run_into_a_protected_path_is_refused_and_not_remembered`
+`verified-by: bravebot_agent::turn::an_unattended_turn_refuses_a_run_into_a_protected_path_and_tells_the_planner`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_vetted_read`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_answers_no_question`
 `verified-by: bravebot_tui::remote_confirm::a_dropped_answer_channel_answers_no_question`

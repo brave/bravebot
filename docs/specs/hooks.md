@@ -243,7 +243,10 @@ same names taken off a program the planner asked for, a gateway's token variable
 
 A bare program name is the one exception to "the person's own shell would give it": it is looked up
 as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)), so a
-`.venv/bin/ruff` a confined stage wrote is not the `ruff` that runs. A hook whose bare name is found
+`.venv/bin/ruff` a confined stage wrote is not the `ruff` that runs. The directories that lookup
+leaves out include the checkout holding the directory the hook runs in, the nearest of it and its
+ancestors with a `.git`, so a hook run from a subdirectory of a checkout does not find a bare name
+in the checkout's `bin`. A hook whose bare name is found
 only there is reported as not started. A name with a separator in it is the person's path and is
 never looked up.
 

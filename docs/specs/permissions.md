@@ -698,6 +698,17 @@ that lands on a protected name is put back through the confirmer the same way
 question carries no body: the
 bytes are the backup's and the driver does not read them.
 
+A `run` whose line redirects output into such a path (`>` or `>>`) is a write to it and asks the same
+way: whatever a rule, the trust map, a remembered or vouched line or the trust of the directory says
+([RUN-5](tools/run.md#RUN-5)), and whatever the mode says short of bypassing. Every destination of
+the line is read as the write is, and the question draws where a link lands and marks the protected
+path. The path is read again when the redirection is opened, so a link an earlier part of the line
+made is caught there. The answer cannot be remembered, and a client that approves lines for a person
+(`--approve-input-lines`, an editor over the agent client protocol) is not offered the question as
+one it may answer for good. The decision reads the plan's destinations and the file system, never a
+byte a stage wrote or printed. A stage's own write into a protected name is not decided here
+([SANDBOX-14](sandboxing.md#SANDBOX-14)), and neither is a read of one.
+
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
 to hand one the user's data, exactly as vouching for a command is not, and a server is further from
@@ -719,6 +730,13 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_core::protected::a_git_component_anywhere_in_the_path_is_protected`
 `verified-by: bravebot_core::protected::an_ordinary_path_and_a_lookalike_are_not_protected`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_core::policy::no_standing_answer_covers_a_line_redirecting_into_a_protected_path`
+`verified-by: bravebot_agent::confirm::the_protected_mark_alone_removes_the_standing_answer_from_a_run`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_symbolic_link_to_a_hook_is_put_to_the_person_with_its_landing`
+`verified-by: bravebot_agent::turn::a_redirection_into_a_protected_name_in_another_case_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_to_a_protected_file_is_refused_when_opened`
+`verified-by: bravebot_agent::turn::a_redirection_into_an_ordinary_file_is_not_marked_protected_and_auto_still_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::tools::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`
@@ -869,9 +887,11 @@ train the habit of answering without reading, which is the whole of what asking 
 An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
 resolves outside the workspace, outside every directory the session has been in, and outside the
 checkout holding each of them. The checkout holding a directory is its nearest ancestor that has a
-`.git`, as [SANDBOX-30](sandboxing.md#SANDBOX-30) finds it for a directory a session opens. An `allow` rule in
-`.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a `--settings` file that resolves
-inside any of those takes
+`.git`, as [SANDBOX-30](sandboxing.md#SANDBOX-30) finds it for a directory a session opens, so that
+a submodule's outer repository does not make every file under it a checkout's. A directory with no
+`.git` above it, or one marked by `.hg` or `.jj`, has no checkout and only the directory itself is
+compared. An `allow` rule in `.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a
+`--settings` file that resolves inside any of those takes
 effect on being read by nothing: it answers no prompt and permits no fetch. Every one is reported,
 with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
 granted where the person granted it at the question [PERM-15](#PERM-15) puts.
@@ -906,6 +926,9 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::the_local_layer_allow_rule_is_not_granted_either`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_an_allow_rule`
 `verified-by: bravebot_config::settings::a_project_layer_does_not_add_to_the_home_layers_allow_rules`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_a_subdirectory_is_not_honoured`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_where_the_session_began_grants_nothing_after_it_moves`
+`verified-by: bravebot_config::settings::a_named_layer_outside_the_checkout_holding_the_working_directory_still_grants`
 `verified-by: bravebot_config::settings::a_project_layers_deny_and_ask_rules_still_apply`
 `verified-by: bravebot_config::settings::a_project_layer_may_still_name_a_directory_to_ask_about`
 `verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`

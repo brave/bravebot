@@ -4899,6 +4899,37 @@ pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
         })
 }
 
+/// Whether a file a `run` line redirects output into is one a write asks about whatever the mode
+/// or a rule says (MODE-2, PERM-9): the name as the line spelled it, the names it reaches once a
+/// `..` is taken out or every link is followed, and the other names of a file with several hard
+/// links. A file whose other names could not all be found is protected, as in
+/// [`write_is_protected`], and so is one reached under a name that is not UTF-8. Read off the
+/// routing path and the file system alone, never a byte of
+/// any file, and asked for `>` and `>>` alike since only the path is read.
+pub(crate) fn redirection_is_protected(workspace: &Workspace, path: &std::path::Path) -> bool {
+    let mut reached = workspace.paths_reached(path);
+    reached.push(path.to_path_buf());
+    // A name that is not UTF-8 has no spelling a rule can be written about, and its lossy
+    // rendering is the name of a different file, so the file it opens could be a hard link to a
+    // protected one. It is protected, as a file whose other names could not all be found is
+    // (PATH-001).
+    if reached.iter().any(|name| name.to_str().is_none()) {
+        return true;
+    }
+    let names: Vec<String> = reached
+        .iter()
+        .map(|name| workspace.relative_display(name))
+        .collect();
+    names.iter().any(|name| {
+        bravebot_core::protected::is_protected(name)
+            || workspace.hard_links(name).is_none_or(|others| {
+                others
+                    .iter()
+                    .any(|other| bravebot_core::protected::is_protected(other))
+            })
+    })
+}
+
 /// The reason the person wrote beside the rule that refuses `name`, where there is one (PERM-1).
 ///
 /// The rules are asked which rule decides, exactly as the gate just did, and the reason is read off
@@ -9983,7 +10014,7 @@ fn check_the_plan_before_asking<S: Sink>(
     plan: &bravebot_core::command::Plan,
     unconfined: bool,
     told_directory: Option<&str>,
-) -> Result<bool, Box<Produced>> {
+) -> Result<Checked, Box<Produced>> {
     let told = |path: &std::path::Path| {
         told_destination(tools.workspace, path, &plan.directory, told_directory)
     };
@@ -10084,7 +10115,54 @@ fn check_the_plan_before_asking<S: Sink>(
         }
     }
 
-    Ok(reaches_anywhere)
+    // The destinations that are protected paths (PERM-9), as the line spelled them and as they
+    // land. Taken from the file system and the names alone. A mode other than bypassing does not
+    // answer a line with one, and the classifier is not asked about it.
+    let protected = plan
+        .writes
+        .iter()
+        .filter(|path| redirection_is_protected(tools.workspace, path))
+        .cloned()
+        .collect();
+
+    // Where each destination lands, for the prompt to draw beside the name (CMDLINE-5). Read off
+    // the file system, never a byte of a file. A destination that lands where it is named is
+    // listed with no landing.
+    let destinations = plan
+        .writes
+        .iter()
+        .map(|path| crate::confirm::RunDestination {
+            written: path.clone(),
+            lands_on: landing_other_than_the_name(path),
+            protected: redirection_is_protected(tools.workspace, path),
+        })
+        .collect();
+
+    Ok(Checked {
+        reaches_anywhere,
+        protected,
+        destinations,
+    })
+}
+
+/// Where `path` lands once every link is followed, when that is not the path itself. The two are
+/// compared as paths and not as the text shown for them, because two names that differ only in
+/// bytes that are not UTF-8 show the same (PATH-001).
+fn landing_other_than_the_name(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::workspace::destination(path).filter(|lands| lands != path)
+}
+
+/// What [`check_the_plan_before_asking`] found out about a line that it did not refuse.
+struct Checked {
+    /// Whether the line's redirections may leave the workspace (see
+    /// [`redirections_may_leave_the_workspace`]).
+    reaches_anywhere: bool,
+    /// The redirection destinations that were protected paths when the line was checked. The open
+    /// of any other destination is held to the same test again.
+    protected: Vec<std::path::PathBuf>,
+    /// Each redirection destination with where it lands and whether it is protected, for the
+    /// question put to the person.
+    destinations: Vec<crate::confirm::RunDestination>,
 }
 
 /// Ask the rules written in advance about a redirection's file, as the plan names it and under the
@@ -10563,11 +10641,17 @@ fn consult_about_a_run<S: Sink>(
     stdin: bool,
     unconfined: bool,
     profile: Profile,
+    protected: bool,
 ) -> crate::confirm::Classified {
     if unconfined
         || profile != Profile::Holding
         || tools.permission_mode.get() != crate::PermissionMode::Auto
     {
+        return crate::confirm::Classified::NotAsked;
+    }
+    // A line that redirects into a protected path is the person's to answer: the file runs code
+    // later with their rights, so a model's word is not asked for (AUTO-3, PERM-9).
+    if protected {
         return crate::confirm::Classified::NotAsked;
     }
     // Only a line it can be shown whole: nothing fed to it from a reference, no name in `scopes`
@@ -10625,6 +10709,10 @@ fn consult_about_a_fetch<S: Sink>(
     clippy::too_many_arguments,
     reason = "the plan and its scopes are the driver's own structure and `policy` and `confirmer` are exclusive borrows, so none of them can share a bundle without the borrows aliasing"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "it builds the one request the person answers, field by field, and each field is a separate decision about what the prompt shows"
+)]
 fn ask_about_the_run<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -10635,6 +10723,8 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     requested: &[bravebot_sandbox::scope::Requested],
     unconfined: bool,
     stdin: Option<String>,
+    protected: bool,
+    destinations: Vec<crate::confirm::RunDestination>,
     confinement: &mut Option<crate::confine::Confinement>,
 ) -> Result<(), Box<Produced>> {
     // Whether this person has already read a prompt for this binary under other arguments,
@@ -10651,6 +10741,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         stdin.is_some(),
         unconfined,
         profile_of(confinement.as_ref(), plan),
+        protected,
     );
     let request = crate::confirm::RunRequest {
         plan: plan.clone(),
@@ -10707,6 +10798,8 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
             })
             .map(Box::new),
         classified,
+        protected,
+        destinations,
     };
     // Read before the question is put, for the reason a write's is.
     let mode = tools.permission_mode.get();
@@ -11057,11 +11150,14 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
 
     let told_in =
         (plan.directory.as_path() != tools.workspace.root()).then_some(told_directory.as_str());
-    let reaches_anywhere =
-        match check_the_plan_before_asking(policy, tools, &plan, unconfined, told_in) {
-            Ok(reaches_anywhere) => reaches_anywhere,
-            Err(produced) => return *produced,
-        };
+    let Checked {
+        reaches_anywhere,
+        protected: protected_writes,
+        destinations,
+    } = match check_the_plan_before_asking(policy, tools, &plan, unconfined, told_in) {
+        Ok(checked) => checked,
+        Err(produced) => return *produced,
+    };
 
     // What the planner named for standard input, turned into bytes and a label before anybody is
     // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
@@ -11175,6 +11271,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             &requested,
             unconfined,
             fed.as_ref().map(|(slot, _, _)| slot.to_string()),
+            !protected_writes.is_empty(),
+            destinations,
             &mut confinement,
         )
     {
@@ -11448,6 +11546,24 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
                         detail: refusal,
+                    });
+                }
+                // A destination that is a protected path now and was not when the line was
+                // checked: an earlier part of the line left a link or hard link at the name, and
+                // the person was never shown the file it reaches (PERM-9). At every open, and
+                // whether or not the line has a profile. After the rules above, so a deny rule
+                // or a delegate's limit still names itself as the reason. Not under bypassing,
+                // which approves a run redirecting into a protected path unasked (MODE-4), so the
+                // same write is not refused for having been reached through a link.
+                if tools.permission_mode.get() != crate::PermissionMode::Bypass
+                    && !protected_writes.iter().any(|checked| checked == path)
+                    && redirection_is_protected(tools.workspace, path)
+                {
+                    return Err(crate::exec::ExecError::Redirection {
+                        detail: format!(
+                            "refused: {target} now reaches a protected path, which the person was not shown when this line was approved. Nothing was written"
+                        ),
+                        path: target,
                     });
                 }
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
@@ -32352,6 +32468,70 @@ mod tests {
         // A session with no directory of its own counts every write.
         let bare = Workspace::new(&project.path).expect("workspace");
         assert!(changed_in(&bare, "plain.txt".to_string()));
+    }
+
+    /// A redirection destination is listed with the file it lands on when that file is not the
+    /// one named. The regression it rejects: comparing the text shown for the two, which is the
+    /// same for two names that differ only in bytes that are not UTF-8, so a link to such a name
+    /// was listed as landing where it is named (PATH-001). The first pair is the control: a link
+    /// whose target shows differently. The second pair is made on Linux only, since other hosts
+    /// refuse a name that is not text.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_name_that_differs_only_in_bytes_that_are_not_text_is_listed_with_its_landing() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let top = crate::testutil::scratch_dir("landing-not-text");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(&top).unwrap();
+        let top = top.canonicalize().unwrap();
+        let named = |bytes: &[u8]| top.join(std::ffi::OsStr::from_bytes(bytes));
+        let mut pairs = vec![(&b"out-plain"[..], &b"real-plain"[..])];
+        if cfg!(target_os = "linux") {
+            pairs.push((&b"out-\xff"[..], &b"out-\xfe"[..]));
+        }
+        for (link, target) in pairs {
+            std::fs::write(named(target), "x").unwrap();
+            std::os::unix::fs::symlink(named(target), named(link)).unwrap();
+            assert_eq!(
+                landing_other_than_the_name(&named(link)),
+                Some(named(target))
+            );
+        }
+        std::fs::write(named(b"plain-file"), "x").unwrap();
+        assert_eq!(landing_other_than_the_name(&named(b"plain-file")), None);
+    }
+
+    /// A redirection into a file that is a hard link to a protected one is protected, and so is
+    /// one whose own name is not UTF-8, since its lossy rendering is the name of a different file
+    /// and the walk for its other names would look for that one (PATH-001). The regression it
+    /// rejects: spelling the name lossily before the lookup, which found no file and judged
+    /// `out-\xff` unprotected. The plain-named link and the unlinked file are the controls and
+    /// run on every Unix host; the name that is not text is made on Linux only.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_into_a_hard_link_to_a_protected_file_is_protected_whatever_the_link_is_called()
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let top = crate::testutil::scratch_dir("redirect-hard-link-not-text");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(&top).unwrap();
+        let top = top.canonicalize().unwrap();
+        let workspace = Workspace::new(&top).expect("workspace");
+        std::fs::write(top.join(".gitconfig"), "[user]\n").unwrap();
+        std::fs::write(top.join("plain.txt"), "plain\n").unwrap();
+        let named = |bytes: &[u8]| top.join(std::ffi::OsStr::from_bytes(bytes));
+        std::fs::hard_link(top.join(".gitconfig"), named(b"out-plain")).unwrap();
+        assert!(redirection_is_protected(&workspace, &named(b"out-plain")));
+        assert!(!redirection_is_protected(
+            &workspace,
+            &top.join("plain.txt")
+        ));
+        if cfg!(target_os = "linux") {
+            std::fs::hard_link(top.join(".gitconfig"), named(b"out-\xff")).unwrap();
+            assert!(redirection_is_protected(&workspace, &named(b"out-\xff")));
+        }
     }
 
     /// The regression it rejects: a comparison of where a link lands with the skill's directory

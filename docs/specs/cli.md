@@ -2265,8 +2265,9 @@ and reads none of the words of `call`. The approval is for that one call. The ne
 new `permission` event with an id of its own, nothing is remembered for the series, and nothing is
 recorded in the trust map or the permission rules. It is declined when stdin closes or the turn is
 stopped while it waits, and a decline ends the run on the status for a refusal as it does in any
-run nobody can ask. A write to a protected path or to which the credential scan found a value, and
-a run that asks for credential scopes or to run unconfined, are not put: the program's yes does not
+run nobody can ask. A write to a protected path or to which the credential scan found a value, a run that redirects into
+a protected path, and a run that asks for credential scopes or to run unconfined, are not put: the
+program's yes does not
 stand in for what accepting edits also leaves refused. An `answer` to a `permission` holds
 positions and no words.
 
@@ -2422,6 +2423,7 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::one_shot::a_run_is_put_to_the_program_with_its_command_and_directory_and_runs_only_on_approval`
 `verified-by: bravebot_cli::one_shot::a_fetch_is_put_to_the_program_with_its_url_and_host_and_proceeds_only_on_approval`
 `verified-by: bravebot_cli::one_shot::a_write_to_a_protected_path_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::a_run_with_a_protected_destination_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::a_write_the_credential_scan_found_a_value_in_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::a_run_asking_for_scopes_or_to_run_unconfined_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::an_approving_program_cannot_answer_the_question_that_vouches_for_a_path`

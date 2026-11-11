@@ -116,6 +116,8 @@ fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use
 fr:run-allow-and-remember-explained
+fr:run-write-lands-on
+fr:run-write-protected
 fr:schedule-already-paused
 fr:schedule-cleared
 fr:schedule-not-paused

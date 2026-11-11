@@ -1001,7 +1001,11 @@ neither names another. It runs only when you ask, because a hardware key waits f
 gives each key 60 seconds. `ssh-keygen`, `ssh` and `git` are found only in `PATH` entries that
 lie outside the directory you ran it in and the checkout holding it, so a program planted there is
 reported as absent rather than run, and they start without Brave Bot's own credentials
-([Security](../security/security.md)). More than one argument, or one that is not `<host>/<owner>`, is refused
+([Security](../security/security.md)). Every `bravebot` command records the directory it was run
+in and its checkout, the nearest directory above it that holds a `.git`, before it looks up a
+program, so the same holds for `bravebot doctor`, `bravebot auth` and `bravebot schedule`. A
+directory with no `.git` above it, or one marked by `.hg` or `.jj`, has no checkout and only the
+directory itself is left out. More than one argument, or one that is not `<host>/<owner>`, is refused
 with exit status 2.
 
 **No value from a settings file is ever printed.** Where a credential decides whether a backend

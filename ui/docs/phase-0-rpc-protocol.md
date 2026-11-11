@@ -1567,7 +1567,10 @@ Still open:
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
   held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
-  that is not UTF-8 written `\xNN`, for a client to draw in place of them. `shownDirectory` spells
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them. A `shownWrites` entry for a
+  file that a link leads elsewhere also says where it lands, and one for a protected path says so, in
+  the words the terminal draws. `protected` is true where a file the line writes is a protected path;
+  `canBeRemembered` is then false, and a client does not answer such a request for the person. `shownDirectory` spells
   `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
   by ` -> ` where they differ.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and

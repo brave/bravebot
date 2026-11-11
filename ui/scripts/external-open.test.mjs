@@ -68,12 +68,21 @@ test('each of the three calls reaches electron with the names already deleted', 
 })
 
 test('a variable that does not choose a program is left alone', () => {
-  // The fault is clearing the environment, which would lose `HOME`, `DISPLAY` and the person's own.
+  // The fault is clearing the environment, which would lose `HOME`, `DISPLAY` and the person's own,
+  // or listing `HOME`, which SANDBOX-30 leaves set for the opener.
   planted()
-  assert.deepEqual(removeOpenerSelectors().sort(), [...NAMES].sort())
-  assert.equal(process.env.EDITOR, 'vim')
-  assert.ok(process.env.PATH)
-  assert.deepEqual(removeOpenerSelectors(), [], 'nothing left to take off')
+  const home = process.env.HOME
+  process.env.HOME = '/stage/home'
+  try {
+    assert.deepEqual(removeOpenerSelectors().sort(), [...NAMES].sort())
+    assert.equal(process.env.EDITOR, 'vim')
+    assert.equal(process.env.HOME, '/stage/home')
+    assert.ok(process.env.PATH)
+    assert.deepEqual(removeOpenerSelectors(), [], 'nothing left to take off')
+  } finally {
+    if (home === undefined) delete process.env.HOME
+    else process.env.HOME = home
+  }
 })
 
 test('the home, runtime directory and session bus address are left set for the application', () => {

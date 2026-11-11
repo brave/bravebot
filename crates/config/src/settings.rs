@@ -7784,6 +7784,105 @@ mod tests {
         assert!(settings.permissions().allow.is_empty());
     }
 
+    /// A session opened in a subdirectory of a checkout. `repo` holds the `.git`, `repo/sub` is the
+    /// working directory, and `elsewhere` is outside the checkout.
+    struct BelowACheckout {
+        home: PathBuf,
+        repo: PathBuf,
+        sub: PathBuf,
+        elsewhere: PathBuf,
+        outside: PathBuf,
+    }
+
+    impl BelowACheckout {
+        fn new(name: &str) -> Self {
+            let root = crate::testutil::scratch_dir(&format!("bravebot-below-{name}"));
+            let _ = std::fs::remove_dir_all(&root);
+            let repo = root.join("repo");
+            let sub = repo.join("sub");
+            let elsewhere = root.join("elsewhere");
+            let home = root.join("home");
+            // `elsewhere` is a checkout of its own, so the checkout above it is not this
+            // repository's, which holds the scratch root.
+            for directory in [&repo.join(".git"), &sub, &elsewhere.join(".git"), &home] {
+                std::fs::create_dir_all(directory).expect("scratch directory");
+            }
+            // The checkout is the nearest `.git` of `sub`, so a file here is outside it even
+            // though the scratch root itself sits under this repository's `target`.
+            let outside = root.join("named-outside.json");
+            Self {
+                home,
+                repo,
+                sub,
+                elsewhere,
+                outside,
+            }
+        }
+
+        /// Whether the allow rule in a file named on the command line is honoured.
+        fn honoured(&self, file: &Path, cwd: &Path, started: Option<&Path>) -> bool {
+            std::fs::write(
+                file,
+                r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+            )
+            .expect("named layer");
+            let started: Vec<PathBuf> = started.map(Path::to_path_buf).into_iter().collect();
+            let settings =
+                Settings::layered_since(Some(self.home.clone()), Some(cwd), Some(file), &started);
+            !settings.permissions().allow.is_empty()
+        }
+    }
+
+    /// A file in the checkout above the working directory is the checkout's file under another
+    /// name, including the checkout's own settings file named from below it. The mistake this
+    /// rejects is `inside` comparing with the working directory alone, which reads
+    /// `--settings <repo>/tooling.json` from `<repo>/sub` as the person's.
+    #[test]
+    fn a_named_layer_in_the_checkout_above_a_subdirectory_is_not_honoured() {
+        let below = BelowACheckout::new("cwd");
+        let in_the_checkout = below.repo.join("tooling.json");
+        assert!(
+            !below.honoured(&in_the_checkout, &below.sub, None),
+            "a file in the checkout above the working directory answered an approval prompt"
+        );
+        let as_a_found_layer_would_be = below.repo.join(".bravebot").join("settings.json");
+        std::fs::create_dir_all(below.repo.join(".bravebot")).expect("the directory");
+        assert!(
+            !below.honoured(&as_a_found_layer_would_be, &below.sub, None),
+            "the checkout's own settings file, named from below it, answered an approval prompt"
+        );
+    }
+
+    /// The same file after the session moved out of the checkout. The mistake this rejects is
+    /// checking the checkout of the working directory and not of the directory it began in.
+    #[test]
+    fn a_named_layer_in_the_checkout_above_where_the_session_began_grants_nothing_after_it_moves() {
+        let below = BelowACheckout::new("started");
+        let in_the_checkout = below.repo.join("tooling.json");
+        assert!(
+            !below.honoured(&in_the_checkout, &below.elsewhere, Some(&below.sub)),
+            "a file in the checkout the session left answered an approval prompt"
+        );
+    }
+
+    /// Controls: a file outside the checkout is still the person's, and a sibling directory whose
+    /// name starts with the checkout's is not inside it. The mistake this rejects is a `inside`
+    /// that answers true for everything, or compares the strings of the paths.
+    #[test]
+    fn a_named_layer_outside_the_checkout_holding_the_working_directory_still_grants() {
+        let below = BelowACheckout::new("outside");
+        assert!(
+            below.honoured(&below.outside, &below.sub, Some(&below.sub)),
+            "a file outside every checkout was withheld"
+        );
+        let sibling = below.repo.with_file_name("repo-sibling");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        assert!(
+            below.honoured(&sibling.join("tooling.json"), &below.sub, Some(&below.sub)),
+            "a directory sharing the checkout's name as a prefix was read as inside it"
+        );
+    }
+
     /// A blank entry is nobody's grant, so which layer wrote it decides nothing. It goes through
     /// to the rule language, which calls an empty rule empty and reports it under PERM-11.
     /// Reporting it here instead would say a rule was withheld one line above the report saying

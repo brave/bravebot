@@ -29188,6 +29188,62 @@ fn an_approved_run_executes_and_the_user_saw_what_it_was() {
     );
 }
 
+/// Where nobody can be asked, a line that redirects into a protected path does not run and the
+/// planner is told it was refused (PERM-9, MODE-2).
+///
+/// An unattended confirmer refuses every run, an ordinary one included
+/// (`an_unattended_turn_runs_no_program`), so this does not show the protected mark is read: it
+/// pins that the hook is left alone and the planner is told, end to end. What rejects a fault that
+/// answers a protected line unasked is `only_bypassing_answers_a_run_with_a_protected_destination`
+/// and `a_run_with_a_protected_destination_is_not_put_to_a_program_that_approves_everything`.
+#[cfg(unix)]
+#[test]
+fn an_unattended_turn_refuses_a_run_into_a_protected_path_and_tells_the_planner() {
+    let scratch = Scratch::new("run-unattended-protected");
+    std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+    std::fs::write(scratch.path.join(".git/hooks/pre-commit"), "kept\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"echo hooked > .git/hooks/pre-commit"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap(),
+        "kept\n",
+        "a line ran into a hook with nobody to approve it"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("did not approve"),
+        "the planner was not told the run was refused: {second}"
+    );
+}
+
 /// Where nobody can be asked, nothing runs. A one-shot invocation must not execute programs on a
 /// user's behalf because there was no interface to put the question to.
 #[test]
@@ -76678,6 +76734,83 @@ fn a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refu
     }
 }
 
+/// A destination that was no protected path when the line was checked is held to the protected
+/// names again when it is opened (PERM-9). A part of the line before it can leave a link or a hard
+/// link at the approved name that reaches `.husky/pre-commit`, a file the person's tooling runs
+/// later with their rights and that the question put to them never named.
+#[cfg(unix)]
+#[test]
+fn a_redirection_an_earlier_part_linked_to_a_protected_file_is_refused_when_opened() {
+    for (case, link) in [
+        ("symbolic", "ln -s .husky/pre-commit out"),
+        ("hard", "ln .husky/pre-commit out"),
+    ] {
+        let scratch = Scratch::new(&format!("redirect-relinked-protected-{case}"));
+        std::fs::create_dir_all(scratch.path.join(".husky")).unwrap();
+        std::fs::write(scratch.path.join(".husky/pre-commit"), "kept\n").unwrap();
+
+        let (_home, _reporter, answered) = a_run_turn_scanning(
+            &scratch,
+            &format!("{link} && echo hi > out"),
+            bravebot_core::programs::TrustedPrograms::new(),
+        );
+
+        assert!(
+            scratch.path.join("out").exists(),
+            "{case}: the first part did not leave a link, so nothing here asks which file the open \
+             reaches: {answered}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+            "kept\n",
+            "{case}: the driver opened a protected file through a name it was not asked about"
+        );
+        assert!(
+            answered.contains("reaches a protected path"),
+            "{case}: the planner was not told why the destination was not opened: {answered}"
+        );
+    }
+}
+
+/// Bypassing approves a run that redirects into a protected path unasked (MODE-4), so the check
+/// made again when the redirection is opened does not refuse one an earlier part of the line
+/// linked there. Rejects an open-time check that ignores the mode, which refuses through a link
+/// the write the mode lets through by its name.
+#[cfg(unix)]
+#[test]
+fn bypassing_writes_through_a_link_an_earlier_part_made_to_a_protected_file() {
+    for (case, link) in [
+        ("symbolic", "ln -s .husky/pre-commit out"),
+        ("hard", "ln .husky/pre-commit out"),
+    ] {
+        let scratch = Scratch::new(&format!("redirect-relinked-protected-bypass-{case}"));
+        std::fs::create_dir_all(scratch.path.join(".husky")).unwrap();
+        std::fs::write(scratch.path.join(".husky/pre-commit"), "kept\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request(
+                "run",
+                &format!(r#"{{"command":"{link} && echo hi > out"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+
+        let bodies = bodies_of_a_bypass_turn(&workspace, &endpoint, &received);
+
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+            "hi\n",
+            "{case}: bypassing refused a write it approves by name: {bodies:?}"
+        );
+        assert!(
+            !bodies
+                .iter()
+                .any(|body| body.contains("reaches a protected path")),
+            "{case}: the planner was told of a refusal under bypassing: {bodies:?}"
+        );
+    }
+}
+
 /// A destination the line has opened once is confined again when a later part opens it. The first
 /// open made it one of the line's effects, and a part run in between can have replaced the file
 /// with a link out of the tree, so a check skipped for a path already entered is a check skipped
@@ -79303,6 +79436,8 @@ struct AutoRun {
     classifier: Vec<String>,
     /// How many runs reached the confirmer behind the mode.
     asked: usize,
+    /// The runs that reached the confirmer behind the mode, as it was shown them.
+    requests: Vec<bravebot_agent::RunRequest>,
     /// Every `approval` and `auto_mode` entry, in order.
     trail: Vec<String>,
     /// Whether the line ran and made its file.
@@ -79433,10 +79568,12 @@ fn an_auto_run_served(
             _ => None,
         })
         .collect();
-    let asked = seen.lock().unwrap().len();
+    let requests = seen.lock().unwrap().clone();
+    let asked = requests.len();
     AutoRun {
         classifier,
         asked,
+        requests,
         trail,
         made_it: scratch.path.join("made.txt").exists(),
         git_config: std::fs::read_to_string(scratch.path.join(".git").join("config")).ok(),
@@ -90060,6 +90197,84 @@ fn a_carried_directory_that_is_gone_is_told_as_typed_and_not_where_a_link_led() 
     );
 }
 
+/// MODE-2, AUTO-3, PERM-9. A run whose redirection lands on a protected path, spelled as such,
+/// through an existing symbolic link, or through an existing hard link, reaches the person with
+/// `protected` set and the classifier is not asked about it, whatever the classifier would have
+/// said. The same line into an ordinary file is the control: the classifier is asked once.
+///
+/// The regressions it rejects: the flag read off the typed name alone, so a link or a hard link to
+/// a hook is answered by a model's word; and the classifier consulted before the destination is
+/// looked at, which spends a model call on a question it may not answer.
+#[cfg(unix)]
+#[test]
+fn a_run_into_a_protected_file_is_not_put_to_the_classifier_by_any_name_it_has() {
+    use bravebot_agent::PermissionMode;
+    let confinable = bravebot_sandbox::base::Prelude::current().is_some();
+    for (case, destination, protected) in [
+        ("ordinary file", "plain.txt", false),
+        ("hook as typed", ".git/hooks/pre-commit", true),
+        ("symbolic link", "via-symlink", true),
+        ("hard link", "via-hard-link", true),
+    ] {
+        let scratch = Scratch::new(&format!(
+            "protected-redirection-auto-{}",
+            case.replace(' ', "-")
+        ));
+        std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+        std::fs::write(scratch.path.join(".git/hooks/pre-commit"), "kept\n").unwrap();
+        std::os::unix::fs::symlink(".git/hooks/pre-commit", scratch.path.join("via-symlink"))
+            .unwrap();
+        std::fs::hard_link(
+            scratch.path.join(".git/hooks/pre-commit"),
+            scratch.path.join("via-hard-link"),
+        )
+        .unwrap();
+        let served = serve_sequence_answering_checks_with(
+            vec![reply_with("allow")],
+            vec![
+                tool_request_2(
+                    "run",
+                    &json!({ "command": format!("echo changed > {destination}") }).to_string(),
+                ),
+                reply_with("done"),
+            ],
+        );
+
+        let run = an_auto_run_served(PermissionMode::Auto, &scratch, served, false);
+
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap(),
+            "kept\n",
+            "{case}: the hook was written without the person's answer"
+        );
+        if !confinable {
+            assert!(
+                run.classifier.is_empty(),
+                "{case}: consulted with no sandbox"
+            );
+            continue;
+        }
+        // The classifier says allow, so the control is answered by it and never reaches the
+        // person, and a protected destination reaches the person once with the flag set.
+        assert_eq!(
+            run.requests.len(),
+            usize::from(protected),
+            "{case}: the person was asked a different number of times: {:?}",
+            run.trail
+        );
+        assert!(
+            run.requests.iter().all(|request| request.protected),
+            "{case}: a request reached the person without the flag"
+        );
+        assert_eq!(
+            run.classifier.len(),
+            usize::from(!protected),
+            "{case}: the classifier was asked {} times",
+            run.classifier.len()
+        );
+    }
+}
+
 /// AUTO-5. The auto mode's classifier is a model, and it is shown the directory a run was named in
 /// as the planner typed it. Where a link in a tree nobody vouched for led is a name the clone
 /// chose, so it is not put in the classifier's request.
@@ -94926,5 +95141,240 @@ fn a_downloads_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped()
             !scratch.path.join("blob.bin").exists(),
             "stopped: {stopped}: a cut download left a partial file"
         );
+    }
+}
+
+/// A turn in which the planner runs `echo changed > {target}` in a tree `prepare` has set up, with
+/// a classifier that says allow and a person who rejects every run.
+fn a_run_redirecting_into(
+    mode: bravebot_agent::PermissionMode,
+    target: &str,
+    prepare: impl FnOnce(&std::path::Path),
+) -> (AutoRun, Scratch) {
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let scratch = Scratch::new(&format!(
+        "protected-redirection-{}",
+        RUNS.fetch_add(1, Ordering::Relaxed)
+    ));
+    prepare(&scratch.path);
+    let served = serve_sequence_answering_checks_with(
+        vec![reply_with("allow"), reply_with("allow")],
+        vec![
+            tool_request_2(
+                "run",
+                &json!({ "command": format!("echo changed > {target}") }).to_string(),
+            ),
+            reply_with("done"),
+        ],
+    );
+    let run = an_auto_run_served(mode, &scratch, served, false);
+    (run, scratch)
+}
+
+/// The tree for a redirection into `target`, whose directory exists.
+fn a_tree_holding_the_directory_of(target: &str) -> impl FnOnce(&std::path::Path) {
+    let parent = std::path::Path::new(target)
+        .parent()
+        .map(|p| p.to_path_buf());
+    move |root: &std::path::Path| {
+        if let Some(parent) = parent {
+            std::fs::create_dir_all(root.join(parent)).unwrap();
+        }
+    }
+}
+
+/// PERM-9, MODE-2. Under auto, a redirection into `target` reaches the person, the classifier is
+/// not asked about it, and the file is not made when the person rejects.
+///
+/// The regression it rejects: auto answering the line on the classifier's word because the line is
+/// otherwise harmless.
+fn auto_asks_the_person_about_a_redirection_into(target: &str) {
+    let (run, scratch) = a_run_redirecting_into(
+        bravebot_agent::PermissionMode::Auto,
+        target,
+        a_tree_holding_the_directory_of(target),
+    );
+    assert!(run.asked >= 1, "{target}: the person was not asked");
+    assert!(
+        run.requests.iter().all(|request| request.protected),
+        "{target}: a request reached the person without the flag"
+    );
+    assert!(
+        run.classifier.is_empty(),
+        "{target}: the classifier was asked: {:?}",
+        run.classifier
+    );
+    assert!(
+        !scratch.path.join(target).exists(),
+        "{target}: the file was made after the person rejected"
+    );
+}
+
+#[test]
+fn auto_asks_the_person_about_a_redirection_into_git_config() {
+    auto_asks_the_person_about_a_redirection_into(".git/config");
+}
+
+#[test]
+fn auto_asks_the_person_about_a_redirection_into_a_git_hook() {
+    auto_asks_the_person_about_a_redirection_into(".git/hooks/pre-commit");
+}
+
+#[test]
+fn auto_asks_the_person_about_a_redirection_into_a_husky_hook() {
+    auto_asks_the_person_about_a_redirection_into(".husky/pre-commit");
+}
+
+#[test]
+fn auto_asks_the_person_about_a_redirection_into_the_bravebot_settings() {
+    auto_asks_the_person_about_a_redirection_into(".bravebot/settings.json");
+}
+
+#[test]
+fn auto_asks_the_person_about_a_redirection_into_the_pre_commit_config() {
+    auto_asks_the_person_about_a_redirection_into(".pre-commit-config.yaml");
+}
+
+/// MODE-2. Accepting edits and ask mode put a redirection into a hook to the person, and the hook
+/// is untouched after a rejection. The regression it rejects: accepting edits treating a run's
+/// redirection as an edit it may answer.
+#[test]
+fn accepting_edits_and_ask_put_a_redirection_into_a_hook_to_the_person() {
+    use bravebot_agent::PermissionMode;
+    for mode in [PermissionMode::AcceptEdits, PermissionMode::Ask] {
+        let (run, scratch) = a_run_redirecting_into(mode, ".git/hooks/pre-commit", |root| {
+            std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+            std::fs::write(root.join(".git/hooks/pre-commit"), "kept\n").unwrap();
+        });
+        assert_eq!(run.asked, 1, "{mode:?}: {:?}", run.trail);
+        assert!(run.requests[0].protected, "{mode:?}: no flag");
+        assert!(run.classifier.is_empty(), "{mode:?}: classifier asked");
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap(),
+            "kept\n",
+            "{mode:?}: the hook changed after a rejection"
+        );
+    }
+}
+
+/// A link in the workspace to a hook: the run reaches the person in each mode that asks, the
+/// request carries the landing next to the name, and nothing is written on a rejection.
+///
+/// The regression it rejects: the flag read off the typed name, so `notes.txt` is answered as an
+/// ordinary file; and a prompt that draws only the name.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_symbolic_link_to_a_hook_is_put_to_the_person_with_its_landing() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Auto,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Ask,
+    ] {
+        let (run, scratch) = a_run_redirecting_into(mode, "notes.txt", |root| {
+            std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+            std::fs::write(root.join(".git/hooks/pre-commit"), "kept\n").unwrap();
+            std::os::unix::fs::symlink(".git/hooks/pre-commit", root.join("notes.txt")).unwrap();
+        });
+        assert_eq!(run.asked, 1, "{mode:?}: {:?}", run.trail);
+        assert!(run.requests[0].protected, "{mode:?}: no flag");
+        let shown = run.requests[0].shown_writes();
+        assert!(
+            shown.iter().any(|line| line.contains("notes.txt")
+                && line.contains(".git/hooks/pre-commit")
+                && line.contains("lands on")),
+            "{mode:?}: the landing was not drawn beside the name: {shown:?}"
+        );
+        assert!(run.classifier.is_empty(), "{mode:?}: classifier asked");
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap(),
+            "kept\n",
+            "{mode:?}: the hook changed after a rejection"
+        );
+    }
+}
+
+/// The same for a hard link. Another name of a hook is the hook, so the run reaches the person flagged
+/// and nothing is written on a rejection.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_hard_link_to_a_hook_is_put_to_the_person() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Auto,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Ask,
+    ] {
+        let (run, scratch) = a_run_redirecting_into(mode, "notes.txt", |root| {
+            std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+            std::fs::write(root.join(".git/hooks/pre-commit"), "kept\n").unwrap();
+            std::fs::hard_link(root.join(".git/hooks/pre-commit"), root.join("notes.txt")).unwrap();
+        });
+        assert_eq!(run.asked, 1, "{mode:?}: {:?}", run.trail);
+        assert!(run.requests[0].protected, "{mode:?}: no flag");
+        assert!(run.classifier.is_empty(), "{mode:?}: classifier asked");
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap(),
+            "kept\n",
+            "{mode:?}: the hook changed after a rejection"
+        );
+    }
+}
+
+/// A case or Unicode spelling of a protected name is protected through the run path.
+///
+/// The regression it rejects: a literal comparison of the typed name against `.git` and `.husky`.
+#[test]
+fn a_redirection_into_a_protected_name_in_another_case_is_put_to_the_person() {
+    for target in [".GIT/hooks/x", ".hUsky/pre-commit", ".husky./pre-commit"] {
+        let (run, _scratch) = a_run_redirecting_into(
+            bravebot_agent::PermissionMode::Auto,
+            target,
+            a_tree_holding_the_directory_of(target),
+        );
+        assert!(run.asked >= 1, "{target}: the person was not asked");
+        assert!(
+            run.requests.iter().all(|request| request.protected),
+            "{target}: no flag"
+        );
+        assert!(run.classifier.is_empty(), "{target}: classifier asked");
+    }
+}
+
+/// MODE-4. Bypassing answers a run into a protected path itself: the person is not asked.
+#[test]
+fn bypassing_answers_a_redirection_into_a_hook_without_asking() {
+    let (run, _scratch) = a_run_redirecting_into(
+        bravebot_agent::PermissionMode::Bypass,
+        ".git/hooks/pre-commit",
+        a_tree_holding_the_directory_of(".git/hooks/pre-commit"),
+    );
+    assert_eq!(run.asked, 0, "bypass asked: {:?}", run.trail);
+    assert!(run.classifier.is_empty(), "bypass consulted the classifier");
+}
+
+/// The control for PERM-9. A redirection into an ordinary file is not marked protected, so
+/// the new gate does not widen: where the sandbox confines the line, auto still answers it on the
+/// classifier's word and the file is made; where it cannot, the person is asked, and the request
+/// still carries no mark. The regression it rejects: marking every redirection protected, which
+/// would send every redirecting line to the person.
+#[test]
+fn a_redirection_into_an_ordinary_file_is_not_marked_protected_and_auto_still_answers_it() {
+    let confinable = bravebot_sandbox::base::Prelude::current().is_some();
+    let (run, scratch) =
+        a_run_redirecting_into(bravebot_agent::PermissionMode::Auto, "plain.txt", |_| {});
+    assert!(
+        run.requests.iter().all(|request| !request.protected),
+        "an ordinary file was marked protected"
+    );
+    if confinable {
+        assert_eq!(run.asked, 0, "{:?}", run.trail);
+        assert!(
+            scratch.path.join("plain.txt").exists(),
+            "the line did not run: {:?}",
+            run.trail
+        );
+    } else {
+        assert_eq!(run.asked, 1);
     }
 }

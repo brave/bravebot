@@ -579,7 +579,11 @@ directory, the checkout holding it (a session begun in a subdirectory has the `b
 and, for a delegate working in a checkout, the working directory the checkout was made from
 (see [checkouts](../checkouts.md)). The checkout is the nearest of the directory and its ancestors
 that holds a `.git`, found as [SANDBOX-30](../sandboxing.md#SANDBOX-30) finds the one it leaves out
-of the search for programs. The agent computes the set from the directories the person opened and
+of the search for programs. Only the nearest is taken, because every ancestor with a `.git` would
+also take in an outer repository that merely contains the checkout, such as the repository a
+submodule is part of or a dotfiles repository at the home directory, and every program under it
+would then be outside the proof. A directory with no `.git` above it, or one marked by `.hg` or
+`.jj` only, has no checkout and only the directory itself is in the set. The agent computes the set from the directories the person opened and
 hands it to the policy as it hands the root. The test is made against the path the driver resolved
 and will execute rather than against the spelling that reached it: those are two values, and only
 the first says where the file is. An assignment decides what a program loads and
@@ -1251,7 +1255,15 @@ nothing until you have opened that file.
   checkout at `/` does the same for every program, and the system's `/usr/bin` is then under it.
   Only the nearest checkout is taken, so an outer repository that contains the checkout adds
   nothing. A checkout marked by something other than a `.git`, such as `.hg` or `.jj`, is not in
-  the set. The cost is a prompt for a call that would have been fine, which is the right direction.
+  the set, and neither is a checkout in a layout with no `.git` above the directory: there only the
+  directory itself is. A program kept in a checkout of that kind is judged as any other program is,
+  by the trust map and the system's directories. The cost is a prompt for a call that would have been fine, which is the right direction.
+- **A toolchain's install and cache directories are not in the set.** A `~/.cargo/bin` or
+  `~/.rustup` that lies outside every directory the set lists is a directory a person installed
+  into, so a program resolved there is honoured as a `$PATH` directory outside the set is. An install
+  is read and never written by a confined stage ([SANDBOX-15](../sandboxing.md#SANDBOX-15)), and a
+  cache is not searched for programs. Where such a directory lies under a checkout that holds a
+  `.git`, or is a directory a stage was granted to write, it is in the set for that reason.
 - **A proof is about paths, and the trust map answers about names.** A symlink inside a vouched-for
   directory pointing at a file outside it is a name the map covers and bytes it never saw, so a
   read-proven line reading through one comes back trusted. The table refuses the recursion flag that

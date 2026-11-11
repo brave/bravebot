@@ -120,6 +120,24 @@ fn bravebot(home: &Path, environment: &[(&str, &str)], arguments: &[&str]) -> Ou
     run(home, None, environment, arguments)
 }
 
+/// The directory a run with no directory of its own starts in: a sibling of `home` that holds a
+/// `.git`, so it is its own checkout and not part of the home a test inspects.
+///
+/// The binary leaves out of its lookups the checkout holding the directory it ran in (SANDBOX-30),
+/// and a named settings file inside that checkout is a checkout's file (PERM-14). The scratch
+/// directories are under this repository's `target`, so a run left in the directory the tests
+/// started in would have this whole repository as its checkout and lose the stand-ins and files
+/// the scratch holds.
+fn a_checkout_of_its_own_under(home: &Path) -> PathBuf {
+    let name = home
+        .file_name()
+        .expect("a home with a name")
+        .to_string_lossy();
+    let here = home.with_file_name(format!("{name}-run-here"));
+    std::fs::create_dir_all(here.join(".git")).expect("create a checkout to run in");
+    here
+}
+
 /// The same, started in a directory of the test's choosing.
 ///
 /// The working directory is where a checkout's `.bravebot` is found, and [`bravebot`] leaves it
@@ -176,9 +194,11 @@ fn prepared(
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
         // input rather than waiting on whatever started the tests.
         .stdin(Stdio::null());
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
+    let here = match cwd {
+        Some(cwd) => cwd.to_path_buf(),
+        None => a_checkout_of_its_own_under(home),
+    };
+    command.current_dir(here);
     command
 }
 
@@ -3455,6 +3475,126 @@ fn the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in() {
     );
 }
 
+/// A `PATH` whose first entry is a `bin` in the checkout `here` is in, holding an `aws` that
+/// records a start in a marker file and signs nothing, and whose second entry is the stand-in AWS
+/// CLI that answers. Returns the `PATH`, the directory to run in and the marker.
+#[cfg(unix)]
+fn planted_aws_before_the_stand_in(scratch: &Scratch) -> (String, PathBuf, PathBuf) {
+    let installed = aws_stand_in(scratch);
+    let work = checkout_in(scratch);
+    let here = work.join("sub");
+    std::fs::create_dir_all(&here).unwrap();
+    let marker = scratch.path.join("planted-aws");
+    let body = format!("printf x >> '{}' 2>/dev/null; exit 255", marker.display());
+    stand_in(&work.join("bin"), "aws", &body);
+    let path = std::env::join_paths([work.join("bin").as_path(), Path::new(&installed)]).unwrap();
+    (path.to_str().unwrap().to_string(), here, marker)
+}
+
+/// SANDBOX-30 over the process: `auth status` asks the `aws` on `PATH` outside the checkout it
+/// runs in, not one in a `bin` of that checkout that is first on `PATH`. The program in the
+/// checkout's root is planted and the command runs in a subdirectory, so leaving out only the
+/// directory the command ran in fails too. The stand-in behind it is signed in, so a status of
+/// signed in tells the installed program from one that answers for it.
+#[cfg(unix)]
+#[test]
+fn auth_status_starts_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-status-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    let (path, here, marker) = planted_aws_before_the_stand_in(&scratch);
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &here,
+        &environment,
+        &["auth", "status", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !marker.exists(),
+        "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.starts_with("bedrock work: signed in: "),
+        "the installed aws was not the one asked: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over the process: `auth login bedrock` signs in with the `aws` outside the checkout
+/// it runs in. Set up as for `auth status`, with the planted program in the checkout's root.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_signs_in_with_the_aws_outside_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-login-bedrock-planted")
+        .with_settings(r#"{"model": "opus"}"#);
+    let (path, here, marker) = planted_aws_before_the_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "work"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &here,
+        &environment,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !marker.exists(),
+        "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("profile work is signed in"),
+        "the installed aws did not sign in: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over the process: plain `doctor` asks the `aws` outside the checkout it runs in
+/// whether the configured profile is signed in, not one in a `bin` of that checkout first on
+/// `PATH`. Set up as for `auth status`, with the planted program in the checkout's root and the
+/// command run in a subdirectory. Rejects a record of the directory alone, and no record at all.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-doctor-aws-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#,
+    );
+    let (path, here, marker) = planted_aws_before_the_stand_in(&scratch);
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    let output = bravebot_started_in(&scratch.path, &here, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !marker.exists(),
+        "the aws in the checkout was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not the one asked: {stdout}{stderr}"
+    );
+}
+
 /// CRED-14 over the process: this agent's signing key and key id are not in the environment of
 /// `ssh-keygen`, `ssh` or `git`, which run unconfined with the person's access to `~/.ssh`. Each
 /// stand-in reports what it was handed in the part of its answer the report shows.
@@ -6430,7 +6570,7 @@ fn a_configured_git_identity_reaches_only_the_matching_run_stage() {
         )
         .expect("make fake git executable");
         let project = scratch.path.join("project");
-        std::fs::create_dir_all(&project).expect("a project");
+        std::fs::create_dir_all(project.join(".git")).expect("a project that is a checkout");
         let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
         let mut environment = AT_A_GATEWAY.to_vec();
         environment.push(("PATH", &path));
@@ -6512,7 +6652,7 @@ fn a_key_chosen_at_a_run_prompt_reaches_the_matching_run_stage() {
         )
         .expect("make fake git executable");
         let project = scratch.path.join("project");
-        std::fs::create_dir_all(&project).expect("a project");
+        std::fs::create_dir_all(project.join(".git")).expect("a project that is a checkout");
         let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
         let mut environment = AT_A_GATEWAY.to_vec();
         environment.push(("PATH", &path));
@@ -9435,6 +9575,7 @@ fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
     ]);
 
+    std::fs::create_dir_all(scratch.path.join("checkout/.git")).expect("a checkout");
     let output = bravebot_started_in(
         &scratch.path,
         &scratch.path.join("checkout"),
@@ -17746,6 +17887,7 @@ fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
         .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["--json", "-p", "summarise what was piped"])
+        .current_dir(a_checkout_of_its_own_under(&scratch.path))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

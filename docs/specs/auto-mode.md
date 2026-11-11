@@ -63,7 +63,8 @@ can.
 ### AUTO-2: auto answers a write as accepting edits does, and asks every question no other clause here gives to the classifier
 
 A write goes through unasked, except one that would create a credential and one to a protected path,
-which are put to the person ([MODE-2](permission-modes.md#MODE-2)). A deny rule still holds
+which are put to the person ([MODE-2](permission-modes.md#MODE-2)); so is a run whose line redirects
+into a protected path, which the classifier is not asked about (AUTO-3). A deny rule still holds
 ([MODE-6](permission-modes.md#MODE-6)). Every other question is put to the confirmer behind the mode,
 which is a person, or refuses where nobody can be asked ([MODE-7](permission-modes.md#MODE-7)).
 
@@ -80,10 +81,12 @@ question a person can review afterwards in a diff, so no model is needed for it.
 
 A run is put to it only where the sandbox confines the line, the line did not ask to start with no
 profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)), no standard input comes from a reference, no
-credential scope was asked for, nothing private is released, and no stage of the line is `git`, the
-program whose profile lifts the `.git` hold-back ([SANDBOX-18](sandboxing.md#SANDBOX-18)). A stage is
-recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and on
-every platform, and any stage of a pipeline counts. A fetch is put to it for
+credential scope was asked for, nothing private is released, no stage of the line is `git`, the
+program whose profile lifts the `.git` hold-back ([SANDBOX-18](sandboxing.md#SANDBOX-18)), and no
+destination of a redirection is a protected path ([PERM-9](permissions.md#PERM-9)), read as named,
+as it lands after links are followed and under each other name of a file with a hard link. A stage
+is recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and
+on every platform, and any stage of a pipeline counts. A fetch is put to it for
 `fetch_url`, for the first question about the URL, and not for `download_url`, which puts bytes into
 a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). It is consulted
 only in auto, only in a turn of a session the person has typed to, and not for a delegate, whose task
@@ -104,6 +107,12 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_run_only_on_the_classifiers_allow_word_for_a_confined_line`
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_fetch_only_on_the_classifiers_allow_word_and_not_a_redirect`
 `verified-by: bravebot_agent::turn::a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_git_config`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_git_hook`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_husky_hook`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_the_bravebot_settings`
+`verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_the_pre_commit_config`
+`verified-by: bravebot_agent::turn::a_run_into_a_protected_file_is_not_put_to_the_classifier_by_any_name_it_has`
 `verified-by: bravebot_agent::turn::no_mode_but_auto_consults_the_classifier`
 `verified-by: bravebot_agent::turn::a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier`
 `verified-by: bravebot_agent::turn::in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person`
@@ -118,7 +127,8 @@ These stay with the person in this mode: a question the planner posed and a line
 ([MODE-7](permission-modes.md#MODE-7)), the plan prompt ([MODE-14](permission-modes.md#MODE-14)), the
 limit and repeated-call questions ([TURN-8](turns.md#TURN-8), [TURN-9](turns.md#TURN-9)), a proposed
 rule ([RULE-3](tools/propose-rule.md#RULE-3)), a message to another session
-([MSG-3](session-messages.md#MSG-3)), a credential write and a write to a protected path, the exposing
+([MSG-3](session-messages.md#MSG-3)), a credential write, a write to a protected path and a run that
+redirects into one, the exposing
 read, the vouch, the list of a server's tools, a server's start and move, a path request, a host
 question, a language server's start, the startup trust question, and a plan. It also never answers
 reading output, a vetted read, or a case whose routing field is a reference (`path_ref`,
@@ -129,6 +139,7 @@ it or because the bytes it shows can be an attacker's. A model's word is not a p
 something ([PROMPT-9](prompting.md#PROMPT-9)).
 
 `verified-by: bravebot_agent::permission_mode::auto_puts_every_question_a_mode_may_not_answer_to_the_person`
+`verified-by: bravebot_agent::permission_mode::auto_does_not_answer_a_run_with_a_protected_destination_and_bypassing_does`
 
 <a id="AUTO-5"></a>
 ### AUTO-5: the classifier is given the person's typed lines and one rendering of the action

@@ -72,18 +72,25 @@ records that. The check reads the file's name and mode and no other metadata.
 `scripts/open-in-app.test.mjs` holds this.
 Every call to `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` in `src/main` goes
 through `src/main/external-open.ts`, which deletes the fifteen names of `OPENER_SELECTORS` (`BROWSER`, `GIO_LAUNCH_DESKTOP`, `XDG_DATA_HOME`,
-`XDG_CONFIG_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, the GIO, Qt and `KDESYCOCA` names) from the main process environment first, because the opener Electron
+`XDG_CONFIG_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, the GIO, Qt and `KDESYCOCA` names in the opener's table in
+[SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)) from the main process environment first, because the opener Electron
 starts reads them to choose the program it runs (`xdg-open` reads `BROWSER` only in its generic
 path, and not under GNOME with `gio` installed, where it runs `gio open`)
 ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30)). The names are removed whatever they hold,
 which is stricter than the terminal client's check of the value, and a bridge started after an open is
 started without them. It does not delete `HOME`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, which the application and the agent it starts
-read and Electron uses to reach the session bus, so on Linux under a GNOME session the opener Electron starts can still read a `HOME`, a runtime directory or a bus address the
-sandbox let a program write ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30);
-[#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME`, and
+read and Electron uses to reach the session bus. Without `HOME`, `gio` reads the account's passwd
+home, which is the same directory whenever the real home is a place the sandbox let a program write.
+So on Linux under a GNOME session the opener Electron starts can still read a `HOME`, a runtime directory or a bus address the
+sandbox let a program write, and for `HOME`, when a session was opened on the home directory, on
+`~/.config` or on `~/.local/share/applications`, a `mimeapps.list` or a `.desktop` file a program
+wrote there ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30) gives the reasons and what a
+person can do; [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME`, and
 [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other
 two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
 "What a checked start does not cover" in SANDBOX-30 records).
+`gio open` with `HOME` removed and the opener through Electron under a GNOME session have not been
+run.
 `scripts/external-open.test.mjs` holds this against a stub of `shell`, and
 `scripts/external-open-electron.test.mjs` holds it against Electron itself on Linux, where the
 launcher it starts is a script that records which of the fifteen names it was started with. The

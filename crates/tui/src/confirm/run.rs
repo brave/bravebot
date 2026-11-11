@@ -639,9 +639,9 @@ fn plan_rows(request: &RunRequest) -> Vec<Line<'static>> {
             format!("  {}", t!(run_writes)),
             Style::default().fg(theme::running()),
         )));
-        for path in &request.plan.writes {
+        for shown in request.shown_writes() {
             lines.push(Line::from(Span::styled(
-                format!("       {}", bravebot_agent::confirm::shown_path(path)),
+                format!("       {shown}"),
                 Style::default()
                     .fg(theme::text())
                     .add_modifier(Modifier::BOLD),
@@ -1215,6 +1215,8 @@ mod tests {
                 stdin: None,
             },
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -1439,6 +1441,46 @@ mod tests {
             "{drawn}"
         );
         assert!(!drawn.contains("hooks"), "{drawn}");
+    }
+
+    /// PERM-9: the run prompt draws the file a link leads a written name to beside the name, and
+    /// marks a protected destination, so `notes.txt` is not drawn alone when it is the hook.
+    /// Rejects a prompt that draws only the name, one that marks a plain write, and one that
+    /// marks a write the driver did not find protected.
+    #[test]
+    fn the_run_prompt_draws_where_a_written_link_lands_and_marks_a_protected_path() {
+        let screen = |destinations: Vec<bravebot_agent::confirm::RunDestination>| {
+            let mut request = a_run(false);
+            request.plan.writes = vec!["notes.txt".into()];
+            request.destinations = destinations;
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let plain = screen(Vec::new());
+        assert!(plain.contains("notes.txt"), "{plain}");
+        assert!(!plain.contains("lands on"), "{plain}");
+        assert!(!plain.contains("protected path"), "{plain}");
+
+        let linked = screen(vec![bravebot_agent::confirm::RunDestination {
+            written: "notes.txt".into(),
+            lands_on: Some(".git/hooks/pre-commit".into()),
+            protected: true,
+        }]);
+        assert!(linked.contains("notes.txt (lands on"), "{linked}");
+        assert!(linked.contains(".git/hooks/pre-commit"), "{linked}");
+        assert!(linked.contains("protected path"), "{linked}");
+
+        let unprotected_link = screen(vec![bravebot_agent::confirm::RunDestination {
+            written: "notes.txt".into(),
+            lands_on: Some("elsewhere.txt".into()),
+            protected: false,
+        }]);
+        assert!(unprotected_link.contains("lands on"), "{unprotected_link}");
+        assert!(
+            !unprotected_link.contains("protected path"),
+            "{unprotected_link}"
+        );
     }
 
     /// PROMPT-1: the run prompt draws a file the line writes, and a directory it is confined to,
@@ -1974,6 +2016,8 @@ mod tests {
                 stdin: None,
             },
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -2094,6 +2138,8 @@ mod tests {
             record: None,
             pattern: None,
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -2262,6 +2308,8 @@ mod tests {
             record: None,
             pattern: None,
             classified: Default::default(),
+            protected: false,
+            destinations: Vec::new(),
         }
     }
 

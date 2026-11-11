@@ -13255,6 +13255,53 @@ five
         );
     }
 
+    /// PERM-9, MODE-2: a line redirecting into a path where a write runs code later is asked about
+    /// whichever standing answer is held: a vouched entry, a line remembered past the session, an
+    /// allow rule, and the trust of the directory for lines held to a closed sandbox. The
+    /// directory-trust control is the same line with no destination, which that answer lets
+    /// through, so the asking is attributable to the destination. The regression it rejects: a
+    /// standing answer consulted before the line's destinations, which would let
+    /// `echo x > .git/hooks/pre-commit` run unasked.
+    #[test]
+    fn no_standing_answer_covers_a_line_redirecting_into_a_protected_path() {
+        let writing_to = |path: &str| {
+            let mut line = plan_of(vec![step_named("echo", &["x"])]);
+            line.writes = vec![std::path::PathBuf::from(path)];
+            line
+        };
+        let hook = writing_to("/work/.git/hooks/pre-commit");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(echo *)"]));
+        policy.remember_command(vouched("/usr/bin/echo", &["x"]));
+        policy.recall(recalling(&hook));
+        assert!(
+            !policy.plan_needs_approval(&plan_of(vec![step_named("echo", &["x"])])),
+            "the control: the same line with no destination was asked about"
+        );
+        assert!(
+            policy.plan_needs_approval(&hook),
+            "a standing answer covered a redirection into a hook"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+        assert!(
+            !policy.plan_needs_approval_held(
+                &plan_of(vec![step_named("echo", &["x"])]),
+                &[],
+                Containment::Held
+            ),
+            "the control: the same held line with no destination was asked about"
+        );
+        assert!(
+            policy.plan_needs_approval_held(&hook, &[], Containment::Held),
+            "the trust of the directory covered a redirection into a hook"
+        );
+    }
+
     /// Vouching for a command is not consenting to hand it the user's data, so a line that feeds
     /// a file to a program is asked about every time whatever is on the vouched list. What `a`
     /// records is a program and its exact argv and never the files a line redirects, so a gate

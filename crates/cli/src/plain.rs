@@ -1516,12 +1516,7 @@ fn program(request: &RunRequest) -> Vec<String> {
             binary: bravebot_agent::confirm::shown_binary(step),
         })
         .collect();
-    let writes: Vec<String> = request
-        .plan
-        .writes
-        .iter()
-        .map(|path| bravebot_agent::confirm::shown_path(path))
-        .collect();
+    let writes: Vec<String> = request.shown_writes();
     let confinement = request
         .confined
         .as_ref()

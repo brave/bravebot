@@ -901,6 +901,8 @@ export interface RunRequest {
   writes?: string[]
   /** `writes` with each path spelled as `ConfirmRequest.shownPath` is. Draw this and not `writes`. */
   shownWrites: string[]
+  /** Whether a file the line writes is a protected path. Nothing answers such a request but the person. */
+  protected?: boolean
   stdin?: string | null
   stages: Stage[]
   directory: string

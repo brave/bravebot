@@ -249,10 +249,19 @@ impl Workspace {
     /// everything is followed, as [`Workspace::confines`] tests it, which is the only name there is
     /// where a `..` leaves a link.
     pub(crate) fn names_reached(&self, path: &Path) -> Vec<String> {
+        self.paths_reached(path)
+            .iter()
+            .map(|reached| self.relative_display(reached))
+            .collect()
+    }
+
+    /// The paths [`Workspace::names_reached`] spells, before they are spelled. A caller that
+    /// decides on a name checks each with `to_str` first, since the spelling of one that is not
+    /// UTF-8 is the name of a different file (PATH-001).
+    pub(crate) fn paths_reached(&self, path: &Path) -> Vec<PathBuf> {
         self.climbed(path)
             .into_iter()
             .chain(destination(path))
-            .map(|reached| self.relative_display(&reached))
             .collect()
     }
 

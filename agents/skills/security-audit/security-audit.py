@@ -377,6 +377,33 @@ START_BARE = re.compile(r"(?<![\w:.])(?<!fn )start\(")
 START_IMPORT = re.compile(r"\buse\b[^;]*\bprograms::(?:start\b|\{[^}]*\bstart\b)")
 START_SELECTORS = re.compile(r"\bCodeSelectors::(Kept|Checked)\b")
 START_CALL_LINES = 12
+# Every lookup of a program by name outside the tests. A command that opens no session (`auth`,
+# `schedule`, `doctor`) records one directory, the one `main` was run in, before it chooses a command
+# (SANDBOX-30). A lookup is `programs::find`, `find_on` or `find_in` under any prefix, `Resolved::find`
+# or `Resolved::find_on`, or a bare `find_on(` or `find_in(` in a file that imports it.
+LOOKUP_QUALIFIED = re.compile(r"\b(?:programs|Resolved)::find(?:_on|_in)?\(")
+LOOKUP_BARE = re.compile(r"(?<![\w:.])(?<!fn )find_(?:on|in)\(")
+LOOKUP_IMPORT = re.compile(r"\buse\b[^;]*\bprograms::(?:find_(?:on|in)\b|\{[^}]*\bfind_(?:on|in)\b)")
+RECORD_IN = Path("crates/cli/src/main.rs")
+RECORD_CALL = re.compile(r"(?<!fn )(?<![\w:])keep_out_where_this_ran\(\)")
+RECORD_BEFORE = re.compile(r"\bmatch\s+args\.first\(\)")
+# The production files that look a program up by name, with how many lookups each holds and why.
+# A command with no session records the directory it ran in (`record_findings`), and a session
+# records the directories it opens, so each lookup here is read for which of the two it runs after.
+LOOKUPS_LISTED = {
+    "crates/agent/src/cmdline.rs": (1, "the program of a command-line stage, in a session"),
+    "crates/agent/src/gcloud.rs": (1, "`gcloud`, for a session and for `auth` and `doctor`"),
+    "crates/agent/src/hooks.rs": (1, "a hook's program, in a session"),
+    "crates/agent/src/lsp.rs": (1, "a language server, in a session"),
+    "crates/agent/src/usability.rs": (1, "the probe of whether a program is usable, in a session"),
+    "crates/bedrock/src/credentials.rs": (1, "`aws`, for a session and for `auth` and `doctor`"),
+    "crates/cli/src/push_identity.rs": (1, "`doctor --push-identity`, which has no session"),
+    "crates/sandbox/src/openshell.rs": (1, "`openshell`, for a session"),
+    "crates/schedule/src/schedule.rs": (1, "the programs `schedule` registers, which has no session"),
+    "crates/tui/src/caffeinate.rs": (1, "the sleep inhibitor, in a session"),
+    "crates/tui/src/editor.rs": (1, "the editor, in a session"),
+    "crates/tui/src/opener.rs": (1, "the browser opener, in a session"),
+}
 SELECTOR_CLAUSES = ("SANDBOX-30",)
 SELECTOR_DOCS = ("docs/specs/sandboxing.md", "docs/best-practices/paths.md")
 
@@ -1174,6 +1201,106 @@ def start_allowance_findings(sources, marked):
                 "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
                 gain="a start whose program and environment nobody had to choose",
             )
+
+
+def program_lookups(sources):
+    """Every lookup of a program by name outside the tests, with the function it is in.
+
+    A lookup is `programs::find`, `find_on` or `find_in` under any prefix, `Resolved::find` or
+    `Resolved::find_on`, or a bare `find_on(` or `find_in(` in a file that imports it from
+    `programs`. The definitions in `programs.rs` are not lookups.
+    """
+    found = []
+    for path, lines in sources.items():
+        if is_test_path(path) or path == PROGRAMS_FILE:
+            continue
+        stripped = mechanics.strip_comments(lines)
+        imports = bool(LOOKUP_IMPORT.search("\n".join(stripped)))
+        for number, raw in code_lines(lines):
+            if LOOKUP_QUALIFIED.search(raw) or (imports and LOOKUP_BARE.search(raw)):
+                found.append(site_at(path, lines, number, raw))
+    return found
+
+
+def lookup_findings(sources):
+    """A lookup in a file `LOOKUPS_LISTED` does not name, or beyond its count, is an error.
+
+    A lookup in a command that opens no session searches `PATH` with whatever directories the
+    process recorded, and `main` records the one it was run in before it chooses a command. A new
+    lookup is a new place that has to be read for which directory was recorded when it runs
+    (SANDBOX-30), so a file holds the number written here and a reviewer reads a change to it.
+    """
+    held = {}
+    for site in program_lookups(sources):
+        held[site["path"]] = held.get(site["path"], 0) + 1
+    for path, count in sorted(held.items()):
+        expected = LOOKUPS_LISTED.get(path)
+        if expected is None or count != expected[0]:
+            yield finding(
+                ERROR,
+                "program-lookup-unlisted",
+                "a lookup of a program by name that `LOOKUPS_LISTED` does not count is a place "
+                "nobody read for the directories recorded when it runs",
+                f"`{path}` holds {count} lookup{'s' if count != 1 else ''} and "
+                + ("is not in `LOOKUPS_LISTED`" if expected is None else f"`LOOKUPS_LISTED` counts {expected[0]}"),
+                "sandbox",
+                "high",
+                evidence=[path],
+                fix="read what is recorded before the lookup runs (`keep_out_with_checkout` for a "
+                "session, `main` for a command with none), then add the file or change its count "
+                "in `LOOKUPS_LISTED` in `agents/skills/security-audit/security-audit.py` and say "
+                "why in the pull request ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                gain="a program found in a checkout's `bin` by a command that recorded no directory",
+            )
+    for path in sorted(set(LOOKUPS_LISTED) - set(held)):
+        if Path(path) in sources:
+            yield finding(
+                ERROR,
+                "program-lookup-allowance-unused",
+                "a file listed as holding lookups holds none, so the list admits one nobody wrote",
+                f"`{path}` is in `LOOKUPS_LISTED` for {LOOKUPS_LISTED[path][1]} and holds none",
+                "sandbox",
+                "medium",
+                evidence=[path],
+                fix="remove the file from `LOOKUPS_LISTED` in "
+                "`agents/skills/security-audit/security-audit.py`",
+                gain="a lookup added to a file the list still admits, unread",
+            )
+
+
+def record_findings(sources):
+    """`main` records the directory it was run in before it chooses a command.
+
+    Every command that looks a program up and opens no session (`auth`, `schedule`, `doctor`)
+    relies on that one call.
+    """
+    lines = sources.get(RECORD_IN)
+    if lines is None:
+        return
+    code = [raw for _, raw in code_lines(lines)]
+    recorded = next((i for i, raw in enumerate(code) if RECORD_CALL.search(raw)), None)
+    choosing = next((i for i, raw in enumerate(code) if RECORD_BEFORE.search(raw)), None)
+    if recorded is None or choosing is None or recorded > choosing:
+        yield finding(
+            ERROR,
+            "program-lookup-record-missing",
+            "a command that opens no session looks a program up without the directory it was run "
+            "in having been recorded",
+            f"`{RECORD_IN}` does not call `keep_out_where_this_ran()` before it "
+            "matches the command",
+            "sandbox",
+            "high",
+            evidence=[str(RECORD_IN)],
+            fix="call `keep_out_where_this_ran()` before `match args.first()` in `main` "
+            "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+            gain="a program found in the checkout a command was run in",
+        )
+
+
+def check_program_lookups_follow_the_record(sources):
+    """A lookup of a program is in a file whose count is listed, and `main` records first."""
+    yield from record_findings(sources)
+    yield from lookup_findings(sources)
 
 
 def paragraphs(lines):
@@ -3959,6 +4086,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
     findings += list(check_process_starts_are_marked(sources))
+    findings += list(check_program_lookups_follow_the_record(sources))
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))

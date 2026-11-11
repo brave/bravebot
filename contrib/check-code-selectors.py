@@ -41,10 +41,12 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    ui/src/main/external-open.ts and `NAMES` in ui/scripts/external-open-electron.test.mjs. The
    application deletes those names from its own environment before it hands an address, a file
    or a folder to the system, so a name added to the Rust list and not there is passed on by the
-   application. One difference is written down: `HOME` is in the Rust list and is not in the
-   others, because the application and the agent it starts read `HOME`, so it is not deleted
-   there (the comment at the top of external-open.ts says so). The ten Windows names of the
-   rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
+   application. Three differences are written down: `HOME`, `XDG_RUNTIME_DIR` and
+   `DBUS_SESSION_BUS_ADDRESS` are in the Rust list and are not in the others. The application and
+   the agent it starts read them, and Electron reaches the session bus through the last two, so the
+   application leaves them set. Without `HOME`, `gio` also reads the account's passwd home (the
+   comment at the top of external-open.ts and SANDBOX-30 give the reasons). The ten Windows names
+   of the rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -65,9 +67,11 @@ APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
 
 # Names in the opener's list that the desktop application's lists leave out, and why. The
 # application and the agent it starts read `HOME`, so deleting it from the application's
-# environment would change both; the opener removes it from its own start instead. Electron finds
-# the session bus from `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager,
-# portal and notification calls, so deleting them would break those. The ten Windows
+# environment would change both, and without `HOME` `gio` reads the account's passwd home, so
+# deleting it protects nothing when the real home is the place a stage may write (SANDBOX-30).
+# The opener removes it from its own start instead. Electron finds the session bus from
+# `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager, portal and
+# notification calls, so deleting them would break those. The ten Windows
 # names (brave/bravebot#3860) are also left out of the application's list and removed by the
 # opener from its own start. Electron's own Windows start is not covered by that removal: it is
 # given those names as the application's process holds them.
@@ -76,7 +80,10 @@ WINDOWS_REASON = (
     "does not hold it"
 )
 APPLICATION_EXCEPTIONS = {
-    "HOME": "the desktop application and the agent it starts read HOME, so it is not deleted there",
+    "HOME": (
+        "without HOME, gio reads the account's passwd home, and the desktop application and the "
+        "agent it starts read HOME, so it is left set there (SANDBOX-30)"
+    ),
     "XDG_RUNTIME_DIR": "Electron and the agent it starts find the session bus and their runtime files here",
     "DBUS_SESSION_BUS_ADDRESS": "Electron connects to the session bus it names, so it is not deleted there",
     "PATHEXT": WINDOWS_REASON,

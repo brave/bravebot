@@ -305,6 +305,30 @@ pub struct RunRequest {
     /// A closed word that the driver reads and a mode other than auto ignores, so a word on a
     /// request cannot answer in a session that did not ask for a classifier.
     pub classified: Classified,
+    /// Whether a file this line redirects output into is a protected path (PERM-9), as typed, as
+    /// it lands after links are followed, or under another name of a file with several hard links.
+    ///
+    /// Derived by the driver from the plan's destinations and the file system, never from a byte
+    /// of any file. Auto does not answer such a line, whatever the classifier said, and the
+    /// classifier is not asked about it (MODE-2, AUTO-3).
+    pub protected: bool,
+    /// Where each file in `plan.writes` lands and whether it is a protected path, so the prompt
+    /// can draw a link next to the file it reaches and mark a protected destination.
+    ///
+    /// Derived by the driver from the destinations and the file system where the request is
+    /// built, never from a byte of any file. A write with no entry here is drawn as its name.
+    pub destinations: Vec<RunDestination>,
+}
+
+/// One file a `run` line redirects into, as the driver found it when the line was checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunDestination {
+    /// The path as `plan.writes` holds it.
+    pub written: std::path::PathBuf,
+    /// Where it lands once every link is followed, where that is not the path itself.
+    pub lands_on: Option<std::path::PathBuf>,
+    /// Whether the name, the place it lands or another name of the file is a protected path.
+    pub protected: bool,
 }
 
 /// What the auto mode's classifier said about one question (AUTO-6).
@@ -633,6 +657,8 @@ impl RunRequest {
             unconfined: false,
             key_choice: None,
             classified: Classified::NotAsked,
+            protected: false,
+            destinations: Vec::new(),
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -717,12 +743,52 @@ impl RunRequest {
         self.plan.stdin.is_some()
     }
 
+    /// The files the line writes, each spelled as [`shown_path`] spells a path, with the file a
+    /// link leads to beside its name and a protected destination marked.
+    ///
+    /// Every front end draws these strings and none works the marks out for itself, so a prompt
+    /// cannot show `out` for a line that writes `.git/hooks/pre-commit`.
+    pub fn shown_writes(&self) -> Vec<String> {
+        self.plan
+            .writes
+            .iter()
+            .map(|path| {
+                let written = shown_path(path);
+                let found = self
+                    .destinations
+                    .iter()
+                    .find(|found| found.written == *path);
+                let named = match found.and_then(|found| found.lands_on.as_deref()) {
+                    Some(landing) => t!(
+                        run_write_lands_on,
+                        written = written,
+                        landing = shown_path(landing)
+                    )
+                    .to_string(),
+                    None => written,
+                };
+                if found.is_some_and(|found| found.protected) {
+                    t!(run_write_protected, path = named).to_string()
+                } else {
+                    named
+                }
+            })
+            .collect()
+    }
+
     /// Whether an entry could record this line at all, which is what `a` would make.
     ///
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    ///
+    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
+    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
+    /// neither ([PERM-9]).
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered() && !self.asks_for_scopes() && !self.unconfined
+        self.plan.can_be_remembered()
+            && !self.asks_for_scopes()
+            && !self.unconfined
+            && !self.protected
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -3983,6 +4049,8 @@ mod tests {
             unconfined: false,
             key_choice: None,
             classified: Classified::NotAsked,
+            protected: false,
+            destinations: Vec::new(),
         };
         let offered = request(
             a_listed_line(),
@@ -4531,6 +4599,87 @@ mod tests {
         let answer = Unattended.confirm_run(&a_run());
         assert!(!answer.approved());
         assert!(!answer.remember, "a standing permission was inferred");
+    }
+
+    /// PERM-9, PROMPT-9: a run into a protected path is refused where nobody can be asked, like any
+    /// other run, and it offers nothing to remember. Rejects an unattended confirmer that answered
+    /// from the request's `protected` mark, which would be the one place a mark approved.
+    #[test]
+    fn an_unattended_run_into_a_protected_path_is_refused_and_not_remembered() {
+        let mut request = a_run();
+        request.plan.writes = vec!["/tmp/project/.git/hooks/pre-commit".into()];
+        request.protected = true;
+        request.destinations = vec![RunDestination {
+            written: "/tmp/project/.git/hooks/pre-commit".into(),
+            lands_on: None,
+            protected: true,
+        }];
+        let answer = Unattended.confirm_run(&request);
+        assert!(!answer.approved());
+        assert!(!answer.remember);
+        assert!(!request.can_be_remembered());
+    }
+
+    /// PERM-9: the `protected` mark removes the standing answer from a run by itself. The request
+    /// names no file to write, so the plan's own rule about writes does not apply, and the same
+    /// request without the mark can be remembered (control). Rejects a `can_be_remembered` that
+    /// leaves the mark out and relies on the plan's destinations alone.
+    #[test]
+    fn the_protected_mark_alone_removes_the_standing_answer_from_a_run() {
+        let mut request = a_run();
+        assert!(request.plan.writes.is_empty());
+        assert!(request.can_be_remembered(), "the control is rememberable");
+        request.protected = true;
+        assert!(!request.can_be_remembered());
+    }
+
+    /// PERM-9, PROMPT-1: the files a run writes are drawn as the name, with where a link leads
+    /// beside it and a protected destination marked. A name with no destination recorded is drawn
+    /// as `shown_path` spells it, so a request built without the driver's findings is unchanged.
+    /// Rejects a drawing that shows only the name (the hook hidden behind `notes.txt`), one that
+    /// marks every write, and one that marks the wrong entry.
+    #[test]
+    fn the_files_a_run_writes_are_drawn_with_their_landing_and_a_protected_mark() {
+        let mut request = a_run();
+        request.plan.writes = vec![
+            "/tmp/project/notes.txt".into(),
+            "/tmp/project/plain.txt".into(),
+            "/tmp/project/.git/config".into(),
+            "/tmp/project/unrecorded.txt".into(),
+        ];
+        request.destinations = vec![
+            RunDestination {
+                written: "/tmp/project/notes.txt".into(),
+                lands_on: Some("/tmp/project/.git/hooks/pre-commit".into()),
+                protected: true,
+            },
+            RunDestination {
+                written: "/tmp/project/plain.txt".into(),
+                lands_on: None,
+                protected: false,
+            },
+            RunDestination {
+                written: "/tmp/project/.git/config".into(),
+                lands_on: None,
+                protected: true,
+            },
+        ];
+        let shown = request.shown_writes();
+        assert_eq!(shown.len(), 4);
+        assert!(
+            shown[0].contains("/tmp/project/notes.txt")
+                && shown[0].contains("lands on /tmp/project/.git/hooks/pre-commit")
+                && shown[0].contains("protected path"),
+            "{shown:?}"
+        );
+        assert_eq!(shown[1], "/tmp/project/plain.txt");
+        assert!(
+            shown[2].starts_with("/tmp/project/.git/config")
+                && shown[2].contains("protected path")
+                && !shown[2].contains("lands on"),
+            "{shown:?}"
+        );
+        assert_eq!(shown[3], "/tmp/project/unrecorded.txt");
     }
 
     /// A refusal never remembers. Saying no to a run is not a reason to vouch for the program.

@@ -10685,6 +10685,143 @@ mod tests {
         assert_ne!(proxy("/usr/bin/git"), proxy("/usr/bin/make"));
     }
 
+    /// The checkout above the session directory is a place the plan could have written, as the
+    /// session directory is, wherever the answer is read from: `writable_by_the_plan` itself and
+    /// the held-line answer built on it. The regression it rejects: `writable_by_the_plan` asking
+    /// only the session directories, the scratch and temporary directories and the write rows,
+    /// which leaves out the checkout.
+    #[test]
+    fn the_checkout_above_the_session_directory_is_a_place_the_plan_could_have_written() {
+        let (top, confined) = session_below_a_checkout("confine-plan-checkout", Prelude::MacOs);
+        let confined = confined.with_network(Network::Closed);
+        assert!(confined.writable_by_the_plan(&top.join("repo/bin/make")));
+        assert!(confined.writable_by_the_plan(&top.join("repo/sub/make")));
+        assert!(
+            !confined.writable_by_the_plan(&top.join("other/bin/make")),
+            "the control: a file under no opened directory"
+        );
+        assert!(
+            !confined.writable_by_the_plan(&top.join("repo-elsewhere/bin/make")),
+            "a sibling that shares the checkout's name as a prefix"
+        );
+
+        let make = |directory: &str| step(top.join(directory).join("make").to_str().unwrap(), &[]);
+        assert_eq!(
+            confined.holds(&[&make("other/bin")], &top.join("repo/sub")),
+            Containment::Held,
+            "the control: the line is held"
+        );
+        assert_eq!(
+            confined.holds(&[&make("repo/bin")], &top.join("repo/sub")),
+            Containment::Unknown,
+            "a program in the checkout was taken for one the plan could not have written"
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A session opened in `repo/sub`, with `repo` holding a `.git`, and the same program names
+    /// in `repo/bin` (the checkout above the session directory) and in `other/bin` (under no
+    /// directory the session opened). Returns the fixture's directory and a confinement over `sub`
+    /// on `prelude`.
+    fn session_below_a_checkout(name: &str, prelude: Prelude) -> (PathBuf, Confinement) {
+        let top = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&top);
+        for directory in [".git", "sub", "bin"] {
+            std::fs::create_dir_all(top.join("repo").join(directory)).expect("directory");
+        }
+        std::fs::create_dir_all(top.join("other/bin")).expect("directory");
+        let top = top.canonicalize().expect("canonical");
+        let confined = reading_confinement(prelude, &[top.join("repo/sub").to_str().unwrap()]);
+        (top, confined)
+    }
+
+    /// SANDBOX-14, SANDBOX-18, CMDLINE-8: a `git` in the checkout above the session directory is
+    /// not git, so its stage does not write a `.git`. The control is the same name under no
+    /// directory the session opened. The regression it rejects: the rows `is_git` excludes built
+    /// from the policy's write rows alone, which holds the session directory and not the
+    /// checkout holding it.
+    #[test]
+    fn a_git_in_the_checkout_above_the_session_directory_does_not_write_a_git_directory() {
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let (top, confined) = session_below_a_checkout("confine-git-in-checkout", prelude);
+            let lifted = |program: &str| {
+                confined
+                    .policy(&step(program, &["commit"]), &top.join("repo/sub"), &[])
+                    .git_directories_writable
+            };
+            assert!(
+                lifted(top.join("other/bin/git").to_str().unwrap()),
+                "{prelude:?}: the control, a git under no opened directory, lost the lift"
+            );
+            assert!(
+                !lifted(top.join("repo/bin/git").to_str().unwrap()),
+                "{prelude:?}: a git in the checkout above the session wrote a .git"
+            );
+            assert!(
+                !lifted(top.join("repo/sub/git").to_str().unwrap()),
+                "{prelude:?}: a git in the session directory wrote a .git"
+            );
+            let _ = std::fs::remove_dir_all(&top);
+        }
+    }
+
+    /// A program in the checkout's `bin` named `aws` or `git` carries no credential scope, as one
+    /// in the session directory does not. The control is the same name under no opened directory,
+    /// which keeps its scope. The regression it rejects: `scope_of` reading the file name alone
+    /// once `writable_by_the_plan` stops at the session directory.
+    #[test]
+    fn a_program_in_the_checkout_above_the_session_carries_no_scope_by_its_name() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let (top, confined) = session_below_a_checkout("confine-scope-checkout", prelude);
+            for (name, args) in [("aws", vec!["s3", "ls"]), ("git", vec!["push"])] {
+                let at =
+                    |directory: &str| step(top.join(directory).join(name).to_str().unwrap(), &args);
+                assert!(
+                    confined.scope_of(&at("other/bin")).is_some(),
+                    "{prelude:?} {name}: the control lost its scope"
+                );
+                assert!(
+                    confined.scope_of(&at("repo/bin")).is_none(),
+                    "{prelude:?} {name}: a program in the checkout was given a scope"
+                );
+                assert!(
+                    confined.describe(&[&at("repo/bin")]).carried.is_empty(),
+                    "{prelude:?} {name}"
+                );
+            }
+            let _ = std::fs::remove_dir_all(&top);
+        }
+    }
+
+    /// A program in the checkout's `bin` named `curl` or `git` does not keep the network of a
+    /// closed session by its name, as one in the session directory does not. The control is the
+    /// same name under no opened directory, which does. The regression it rejects:
+    /// `egress_reason` reading the file name once `writable_by_the_plan` stops at the session
+    /// directory.
+    #[test]
+    fn a_program_in_the_checkout_above_the_session_does_not_keep_a_closed_network_by_its_name() {
+        let (top, confined) = session_below_a_checkout("confine-egress-checkout", Prelude::Linux);
+        let closed = confined.with_network(Network::Closed);
+        for (name, args) in [
+            ("curl", vec!["https://a.example"]),
+            ("git", vec!["push"]),
+            ("cargo", vec!["build"]),
+        ] {
+            let at =
+                |directory: &str| step(top.join(directory).join(name).to_str().unwrap(), &args);
+            assert!(
+                closed.egress(&at("other/bin")),
+                "{name}: the control lost its network"
+            );
+            assert!(
+                !closed.egress(&at("repo/bin")),
+                "{name}: a program in the checkout kept the network"
+            );
+            assert_eq!(closed.egress_reason(&at("repo/bin")), None, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
     /// A stage with an assignment in front of it carries no remote scope, so it has no network
     /// under a closed setting; an unrelated `NAME=value` cannot be used to ask for one either way.
     #[test]
@@ -11804,14 +11941,17 @@ mod tests {
     }
 
     /// A home with a directory beside it, made on disk with its links followed, since the rows are
-    /// judged where the paths lead.
+    /// judged where the paths lead. The session directory the callers name `beside/project` holds
+    /// a `.git`, so it is its own checkout: the fixture lies inside the repository that holds this
+    /// source tree, and without one that repository would be the checkout above the session and
+    /// would hold the home and the directory beside.
     fn unasked_places(name: &str) -> (PathBuf, PathBuf) {
         let top = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
             .join(format!("confine-unit-unasked-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("home/.ssh")).expect("home directory");
-        std::fs::create_dir_all(top.join("beside")).expect("a directory beside");
+        std::fs::create_dir_all(top.join("beside/project/.git")).expect("a directory beside");
         (
             top.join("home").canonicalize().expect("canonical home"),
             top.join("beside").canonicalize().expect("canonical beside"),
@@ -12347,6 +12487,9 @@ mod tests {
                 std::fs::create_dir_all(path.parent().expect("a parent")).expect("directory");
                 std::fs::write(path, "ssh-ed25519 AAAA\n").expect("key file");
             }
+            // The session is its own checkout, so the repository holding this source tree is not
+            // the checkout above it.
+            std::fs::create_dir_all(top.join("session/.git")).expect("a .git");
             Self {
                 home: canonical(&top.join("home")),
                 session: canonical(&top.join("session")),

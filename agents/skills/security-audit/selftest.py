@@ -5359,6 +5359,88 @@ def test_no_name_in_the_enumerator_is_bound_twice():
     )
 
 
+def audit_lookups(files):
+    where = in_tree(files)
+    return with_cwd(
+        where,
+        lambda: list(audit.check_program_lookups_follow_the_record(audit.mechanics.load_sources())),
+    )
+
+
+def test_a_new_program_lookup_is_not_unlisted():
+    """A lookup in a file `LOOKUPS_LISTED` does not count, and a `main` that records late, are errors.
+
+    The faults rejected: a check that lists nothing and so lets a new lookup in a command with no
+    session pass, one that counts files and not lookups, one that accepts a `main` which records the
+    directory after it has matched the command, and one that drops the check for a listed file that
+    holds no lookup, which leaves the list admitting a lookup nobody wrote.
+    """
+    recorded = (
+        "fn keep_out_where_this_ran() {}\nfn main() {\n    keep_out_where_this_ran();\n    match args.first() {}\n}\n"
+    )
+    listed = next(iter(audit.LOOKUPS_LISTED))
+    one = "fn a() {\n    let r = Resolved::find(\"aws\", &path);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one})
+    check("a listed file with its counted lookup is clean", found == [], str(kinds(found)))
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: "fn a() {}\n"})
+    check(
+        "a listed file that holds no lookup is an error",
+        kinds(found) == ["program-lookup-allowance-unused"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": one})
+    check(
+        "a lookup in a file the list does not name is an error",
+        "program-lookup-unlisted" in kinds(found) and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one + one})
+    check(
+        "a second lookup in a listed file is an error",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
+    bare = (
+        "use bravebot_sandbox::programs::find_in;\n"
+        "fn a() {\n    let r = find_in(\"aws\", &path);\n}\n"
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": bare})
+    check(
+        "a bare lookup in a file that imports it is found",
+        "program-lookup-unlisted" in kinds(found),
+        str(kinds(found)),
+    )
+
+    quiet = "fn a() {\n    // Resolved::find(\"aws\")\n}\n#[cfg(test)]\nmod t {\n    fn b() { Resolved::find(\"a\"); }\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": quiet})
+    check(
+        "a comment and test-only code are not lookups",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+
+    late = (
+        "fn keep_out_where_this_ran() {}\nfn main() {\n    match args.first() {}\n    keep_out_where_this_ran();\n}\n"
+    )
+    for name, text in {
+        "records after matching the command": late,
+        "never records": "fn main() {\n    match args.first() {}\n}\n",
+        "defines the helper and never calls it": (
+            "fn keep_out_where_this_ran() {}\nfn main() {\n    match args.first() {}\n}\n"
+        ),
+    }.items():
+        found = audit_lookups({"crates/cli/src/main.rs": text})
+        check(
+            f"a main that {name} is an error",
+            "program-lookup-record-missing" in kinds(found),
+            str(kinds(found)),
+        )
+
+
 def test_the_inherited_environment_lane_lists_each_start_with_its_selectors():
     """The lane starts from every `programs::start` and says which selectors argument each passes."""
     sources = {
@@ -6051,6 +6133,7 @@ TESTS = (
     test_no_name_in_the_enumerator_is_bound_twice,
     test_every_lane_has_its_file_and_its_row,
     test_the_inherited_environment_lane_lists_each_start_with_its_selectors,
+    test_a_new_program_lookup_is_not_unlisted,
     test_the_exemption_stops_at_the_person_s_own_configuration,
     test_candidates_that_make_one_claim_are_checked_together,
     test_a_group_is_one_verifier_and_the_others_are_in_its_prompt,

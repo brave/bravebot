@@ -31,6 +31,9 @@ governs:
   - crates/tui/src/powershell.rs
   - ui/scripts/host-card.test.mjs
   - ui/scripts/shown.test.mjs
+  - ui/src/main/external-open.ts
+  - ui/scripts/external-open.test.mjs
+  - ui/scripts/external-open-electron.test.mjs
 guards:
   - symbol: find_in
     sites:
@@ -40,7 +43,7 @@ guards:
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1
       - crates/sandbox/src/programs.rs: 19
-      - crates/sandbox/tests/checkout_in_search.rs: 7
+      - crates/sandbox/tests/checkout_in_search.rs: 8
       - crates/tui/src/clipboard.rs: 9
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
@@ -970,6 +973,11 @@ matches in any letter case, with `\u{17f}` read as `s`, `\u{131}` as `i` and the
 as `is_protected` reads it. A name spelled with a trailing dot or space, or with a `\` separator,
 is another name on macOS and is granted. One list in `bravebot_sandbox` supplies the names, and a test
 in `bravebot-agent` holds it equal to the list `is_protected` reads.
+
+The same list decides which redirections of a `run` line are put to the person, which the driver
+checks before the line starts ([PERM-9](permissions.md#PERM-9)). This clause holds a stage back from
+the names on macOS; a stage's own write on Linux and a `ln` or `cp` a stage runs are not decided by
+the driver's check, which reads the redirection destinations of the plan.
 
 Every other write a row grants is granted.
 A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
@@ -3975,12 +3983,16 @@ file. A new spawn that looks a name up through
   Only the nearest is taken. Taking every ancestor with a `.git` would also leave out an outer repository
   that merely contains the checkout, such as a dotfiles repository at the account's home or the
   repository a worktree is nested in, and with it every installed `bin` under it. A directory under
-  no checkout is recorded by itself. The confinement finds the checkout of a session directory with
+  no checkout is recorded by itself, and so is a directory whose nearest marker is a `.hg` or a
+  `.jj`, which are not recognised. The confinement finds the checkout of a session directory with
   the same function, `bravebot_sandbox::programs::with_checkout`, to decide which files count as the
   plan's ([SANDBOX-20](#SANDBOX-20)), and leaves out a checkout that is the account's home directory
   or holds it, which this lookup does not. A virtualenv or tool directory a stage was granted elsewhere
   is not known to a command that opens no session. A program either doctor command starts is also
   started without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
+  The same nearest checkout is the one `confine.rs` counts among the places a plan could have
+  written ([SANDBOX-14](#SANDBOX-14), [SANDBOX-18](#SANDBOX-18)), and the one `--settings` is
+  judged against ([PERM-14](permissions.md#PERM-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one. An entry that does not exist yet leads
   where the part of it that exists does, since a stage can make the rest.
@@ -4143,10 +4155,26 @@ file. A new spawn that looks a name up through
   application reads `HOME` itself, Electron reaches the session bus through the other two, the
   agent's allowed-hosts proxy makes its socket directory under `XDG_RUNTIME_DIR`
   ([SANDBOX-24](#SANDBOX-24)), `process.env` is shared with the agent it starts, and a value
-  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`. On Linux
-  under a GNOME session the application's opener therefore still reads a `HOME`, a runtime directory
-  or a bus address that a stage may write.
-  [#3904](https://github.com/brave/bravebot/issues/3904) tracks `HOME` and
+  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`.
+  For `HOME` there is a further reason. GLib takes the home directory from `HOME` and, when `HOME`
+  is unset, from the account's passwd entry (`g_get_home_dir`, `g_get_user_data_dir` and
+  `g_get_user_config_dir` of GLib 2.90.1 on macOS return the passwd home and its `.local/share` and
+  `.config` when `HOME` is unset), so `gio open` with `HOME` removed is expected to read the same
+  directories under the account's real home. The application's `HOME` comes from the person's login
+  session, which a stage cannot change, so the opener reads a directory a stage may write only when
+  the account's home is one, and removing `HOME` does not change that.
+  On Linux under a GNOME session the application's opener therefore still reads a `HOME`, a
+  runtime directory or a bus address that a stage may write. For `HOME` that happens when a session
+  was opened on the home directory, on `~/.config` or on `~/.local/share/applications`, or was
+  granted writes there: a program the person approved with `run` can write a `mimeapps.list` or a
+  `.desktop` file there, and the next open from the application runs that handler outside the
+  sandbox. Neither `~/.config/mimeapps.list` nor `~/.local/share/applications` is among the
+  persistence locations named in this clause as refused for writing. A person avoids it by opening
+  sessions on a project directory and not on the home directory, and by not adding `~/.config` or
+  `~/.local/share/applications` as a session directory. What `gio open` and `xdg-open` on Linux do
+  with `HOME` removed is taken from the GLib source and is not observed, and the opener's start
+  through Electron under a GNOME session is not observed either.
+  [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME` and
   [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
   in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
   "What a checked start does not cover". The names another program
@@ -4591,7 +4619,12 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 A program a person keeps in a `bin` of the nearest checkout holding a directory a session opens,
 adds or moves to reads as not installed to every lookup above for the rest of the process, whether
 the session was opened at the checkout's root or below it, and every command, whether or not it
-opens a session, leaves out the one holding the directory it ran in. Where the account's home directory holds a `.git`, such as a dotfiles
+opens a session, leaves out the one holding the directory it ran in. The record is made in the
+process that starts the program and lives for that process only. A program a stage wrote in an
+earlier `bravebot` process, in a directory that process was granted and this one was not, is not
+known to this one, so a lookup in a later process can find it. No record is kept between
+processes: one would hold a directory nobody can say is still granted, and a `bravebot` that never
+ran a stage has no use for it. Where the account's home directory holds a `.git`, such as a dotfiles
 repository, a session opened in a directory below the home that has no nearer `.git` leaves out the
 home as its checkout, so `~/bin` and every other directory under the home that is on `PATH` is not
 searched and a program kept in one reads as not installed. A session opened below a nearer checkout
@@ -5474,7 +5507,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH and EDITOR are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
 `verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the fifteen names where Electron's own shell starts it with all fifteen; its showItemInFolder case is a test case of its own and has never been run on Linux; the ui job of CI runs it through make check-ui-build on ubuntu-latest and it prints skipped elsewhere)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
@@ -5510,7 +5543,19 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::running::schedule_add_and_list_start_no_crontab_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::a_command_run_in_the_checkouts_root_starts_no_program_from_its_bin`
 `verified-by: bravebot_cli::running::the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_status_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_with_the_aws_outside_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::doctor_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::scheduled_runs::schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in`
+`verified-by: bravebot_tui::opener::a_browser_opener_in_the_bin_of_the_checkout_holding_the_directory_is_not_the_one_started`
 `verified-by: bravebot_sandbox::checkout_in_search::a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin`
+`verified-by: bravebot_sandbox::checkout_in_search::a_value_naming_a_file_in_the_bin_of_the_checkout_holding_a_recorded_directory_is_withheld`
+`verified-by: bravebot_sandbox::checkout_in_search::a_mercurial_or_jujutsu_checkout_is_not_recognised`
+`verified-by: bravebot_agent::confine::the_checkout_above_the_session_directory_is_a_place_the_plan_could_have_written`
+`verified-by: bravebot_agent::confine::a_git_in_the_checkout_above_the_session_directory_does_not_write_a_git_directory`
+`verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_carries_no_scope_by_its_name`
+`verified-by: bravebot_agent::confine::a_program_in_the_checkout_above_the_session_does_not_keep_a_closed_network_by_its_name`
+`verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_relative_path_entry_is_judged_under_the_directory_the_stage_runs_in`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_starts_the_program_behind_a_directory_a_stage_may_write`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_looks_up_the_programs_it_starts_only_behind_the_directory`

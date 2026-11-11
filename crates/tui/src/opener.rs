@@ -2532,6 +2532,7 @@ mod tests {
         name: &str,
         installed_opener: impl Fn(&str) -> String,
         expect: &str,
+        from_checkout: bool,
     ) {
         use std::os::unix::fs::PermissionsExt;
         const SESSION: &str = "BRAVEBOT_TEST_OPENER_SESSION";
@@ -2539,7 +2540,13 @@ mod tests {
         if let Some(session) = std::env::var_os(SESSION) {
             let session = std::path::PathBuf::from(session);
             std::fs::write(session.join("ran"), "").unwrap();
-            bravebot_sandbox::programs::keep_out(&session);
+            if from_checkout {
+                // The command ran in `<session>/sub`, below a checkout whose `bin` is first on
+                // `PATH`; only the directory it ran in is named.
+                bravebot_sandbox::programs::keep_out_with_checkout(&session.join("sub"));
+            } else {
+                bravebot_sandbox::programs::keep_out(&session);
+            }
 
             for refused in [
                 "-a Calculator",
@@ -2569,7 +2576,13 @@ mod tests {
         let installed = crate::testutil::scratch_dir(&format!("opener-{name}-installed"));
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&installed);
-        let planted = session.join(".venv/bin");
+        let planted = if from_checkout {
+            std::fs::create_dir_all(session.join(".git")).unwrap();
+            std::fs::create_dir_all(session.join("sub")).unwrap();
+            session.join("bin")
+        } else {
+            session.join(".venv/bin")
+        };
         std::fs::create_dir_all(&planted).unwrap();
         std::fs::create_dir_all(&installed).unwrap();
         let write = |directory: &std::path::Path, name: &str, body: String| {
@@ -2624,6 +2637,23 @@ mod tests {
             "kept-out",
             |session| format!("#!/bin/sh\n: > '{session}/installed-opener-ran'\n"),
             "installed-opener-ran",
+            false,
+        );
+    }
+
+    /// SANDBOX-30, the checkout: the command ran in a subdirectory of a checkout whose `bin` is first
+    /// on `PATH` (`PATH_add bin`), as `bravebot auth login chatgpt` can. A file named `open` or
+    /// `xdg-open` there is not the opener, though only the subdirectory was named. Rejects a record
+    /// of the directory alone, which finds the planted opener in the checkout's `bin`.
+    #[cfg(unix)]
+    #[test]
+    fn a_browser_opener_in_the_bin_of_the_checkout_holding_the_directory_is_not_the_one_started() {
+        through_open_address(
+            "opener::tests::a_browser_opener_in_the_bin_of_the_checkout_holding_the_directory_is_not_the_one_started",
+            "checkout",
+            |session| format!("#!/bin/sh\n: > '{session}/installed-opener-ran'\n"),
+            "installed-opener-ran",
+            true,
         );
     }
 
@@ -2638,6 +2668,7 @@ mod tests {
             "by-name",
             |_| "#!/usr/bin/env interp\n".to_string(),
             "installed-interp-ran",
+            false,
         );
     }
 }
