@@ -5866,6 +5866,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is kept too, in an [`crate::apply::Applying`] the driver makes them through. A grant is
     /// minted for each kept call, bound to the server, the tool and the call's place in the list,
     /// so an approval cannot be spent on another call or reused. Refused where no call is kept.
+    /// `ticked` is the person's answer to the list, or, for a step whose tools are all
+    /// plan-covered, every call, by their answer to the plan (MANIFEST-17).
     pub fn keep_applied(
         &mut self,
         alias: &str,
