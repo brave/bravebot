@@ -143,6 +143,8 @@ test('a startup that broke the protocol is refused even when a valid initial vie
   await assert.rejects(open([initial(99), initial(0)]), /sequence 99/)
   await assert.rejects(open([{ data: { nonsense: true } }, initial(0)]), ProtocolError)
   await assert.rejects(open([{ event: 'session.view.update', data: initial(1, 'running').data }, initial(0)]), /before the initial view/)
+  // A snapshot starts a view only for a session being taken over, not one being created.
+  await assert.rejects(open([{ event: 'session.view.snapshot', data: { sequence: 4, turn: 0, target: 0, status: 'idle', pending: null, rows: [], omitted: 0 } }, initial(0)]), /a view snapshot arrived before the initial view/)
   const session = await open([initial(0)])
   assert.equal(session.view.ended, null)
 })
@@ -413,4 +415,86 @@ test('a runtime from before snapshots ends the view at a gap without asking for 
   bridge.emit()
   assert.equal(session.view.ended?.reason, 'sequence_gap')
   assert.ok(!bridge.sent.includes('session.view.resync'))
+})
+
+/**
+ * A host holding session `s7`, left by its controller at sequence 4 with rows 1 to 3 dropped. It
+ * answers `session.attach` as `answer` says: with the snapshot first, the snapshot and the startup
+ * question, no snapshot, or a refusal.
+ */
+function aHostHoldingALeftSession(answer: 'snapshot' | 'trust' | 'nothing' | 'refused') {
+  const sent: { method: string; params: Record<string, unknown> }[] = []
+  const prompt = { id: 4, turn: 2, kind: 'prompt', event: null, data: { text: 'go' }, resolved: false }
+  const client: RpcAgentClient = new RpcAgentClient({
+    write(line) {
+      const request = JSON.parse(line) as { id: number; method: string; params: Record<string, unknown> }
+      sent.push({ method: request.method, params: request.params })
+      const reply = (body: Record<string, unknown>): void => client.receive(JSON.stringify({ id: request.id, ...body }) + '\n')
+      const event = (name: string, data: unknown): void => client.receive(JSON.stringify({ event: name, session: 's7', data }) + '\n')
+      if (request.method === 'agent.info') return reply({ ok: { capabilities: { sessionView: contract.capability } } })
+      if (request.method === 'instance.info') {
+        return reply({ ok: { instance: 'run-1', inspection: 'refused', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }] } })
+      }
+      if (request.method === 'turn.send') return reply({ ok: { turn: 3, target: 9 } })
+      if (request.method !== 'session.attach') return assert.fail(`unexpected method ${request.method}`)
+      if (answer === 'refused') return reply({ error: { code: 'not_allowed', message: 'another connection controls that session' } })
+      const status = answer === 'trust' ? 'awaiting_trust' : 'completed'
+      if (answer !== 'nothing') event('session.view.snapshot', { sequence: 4, turn: 2, target: 8, status, pending: null, rows: [prompt], omitted: 3 })
+      if (answer === 'trust') event('trust.request', { directory: '/work' })
+      reply({ ok: { version: 1, sequence: 4, omitted: 3 } })
+    },
+  })
+  return { client, sent }
+}
+
+test('a session taken over starts its view from the snapshot the host sends, and is driven from there', async () => {
+  const { client, sent } = aHostHoldingALeftSession('snapshot')
+  assert.deepEqual(await client.instance(), { instance: 'run-1', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }] })
+  const session = await client.attach('s7')
+  assert.equal(session.id, 's7')
+  assert.deepEqual(
+    { sequence: session.view.sequence, turn: session.view.turn, target: session.view.target, status: session.view.status, omitted: session.view.omitted, rows: session.view.rows.map((row) => row.id) },
+    { sequence: 4, turn: 2, target: 8, status: 'completed', omitted: 3, rows: [4] },
+  )
+  assert.equal(session.startupTrust, null)
+  client.receive(JSON.stringify({ event: 'session.view.update', session: 's7', data: { sequence: 5, turn: 3, target: 9, status: 'running', pending: null, rows: [], omitted: 3 } }) + '\n')
+  assert.equal(session.view.sequence, 5, 'the updates after the snapshot apply to it')
+  assert.deepEqual(await session.send('again'), { turn: 3, target: 9 })
+  assert.deepEqual(sent.find((request) => request.method === 'session.attach')?.params, { session: 's7' })
+})
+
+test('a session taken over with its startup question unanswered offers that question', async () => {
+  const { client } = aHostHoldingALeftSession('trust')
+  const session = await client.attach('s7')
+  assert.equal(session.view.status, 'awaiting_trust')
+  assert.deepEqual(session.startupTrust, { directory: '/work' })
+})
+
+test('a session the client holds is not taken over again, and nothing is sent for it', async () => {
+  const { client, sent } = aHostHoldingALeftSession('snapshot')
+  await client.attach('s7')
+  await assert.rejects(client.attach('s7'), (error: unknown) => error instanceof RpcError && error.code === 'bad_request' && error.outcome === 'rejected')
+  assert.equal(sent.filter((request) => request.method === 'session.attach').length, 1)
+})
+
+test('a take-over answered before its snapshot, or refused, leaves no session behind to route to', async () => {
+  for (const answer of ['nothing', 'refused'] as const) {
+    const { client, sent } = aHostHoldingALeftSession(answer)
+    await assert.rejects(client.attach('s7'), answer === 'nothing' ? ProtocolError : (error: unknown) => error instanceof RpcError && error.code === 'not_allowed')
+    // The session is not held, so a later attempt is sent rather than refused locally.
+    await assert.rejects(client.attach('s7'))
+    assert.equal(sent.filter((request) => request.method === 'session.attach').length, 2, answer)
+  }
+})
+
+test('an instance listing in a shape the host does not send is refused', async () => {
+  for (const ok of [{ sessions: [] }, { instance: 'run-1', sessions: [{ session: 's7', state: 'gone', working: false, controlled: false }] }]) {
+    const client: RpcAgentClient = new RpcAgentClient({
+      write(line) {
+        const request = JSON.parse(line) as { id: number }
+        client.receive(JSON.stringify({ id: request.id, ok }) + '\n')
+      },
+    })
+    await assert.rejects(client.instance(), ProtocolError)
+  }
 })

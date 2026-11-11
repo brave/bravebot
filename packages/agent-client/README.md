@@ -39,8 +39,10 @@ for a write, command or fetch, or `session.answer(request, answers)` for a user 
 request that is no longer on screen is refused before anything is sent. `session.cancel()` refuses the
 question and ends the turn.
 
-A view that has `ended` is the last state received. It is not recovered: version 1 has no
-reconnect, so start a new session.
+A view that has `ended` is the last state received. It is not recovered. Against `bravebot-host`, a
+new client can take the session over: `instance()` lists the sessions the host holds, and
+`attach(id)` takes over one whose controller's connection ended and starts its view from the host's
+snapshot. `bravebot-rpc` alone refuses both, so there start a new session.
 
 ## Listing and opening sessions
 

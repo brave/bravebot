@@ -232,6 +232,14 @@ export class FakeClient implements AgentClient {
     return session
   }
 
+  async instance(): Promise<never> {
+    throw new Error('not used')
+  }
+
+  async attach(): Promise<never> {
+    throw new Error('not used')
+  }
+
   async unsupported(): Promise<never> {
     throw new Error('not used')
   }

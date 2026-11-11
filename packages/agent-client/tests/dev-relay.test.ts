@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { connectDevRelay, RelayRefusedError, type DevRelay, type RelaySocket } from '../src/dev-relay/index.js'
-import type { AgentSession, Pending } from '../src/common/index.js'
+import type { AgentClient, AgentSession, InstanceInfo, Pending } from '../src/common/index.js'
 import { ModelStub, type PlannerStep } from './support/model-stub.js'
 import { hostBinary, isolatedEnvironment, until } from './support/rig.js'
 import { within } from './support/wait.js'
@@ -158,6 +158,56 @@ test('an app that gives the code drives the host through the relay: the workspac
   const reply = done.rows.at(-1)
   assert.equal(reply?.kind, 'reply')
   assert.equal((reply.data as { reply: string }).reply, 'written')
+})
+
+/** The text of each reply row the view holds, in order. */
+function replies(session: AgentSession): string[] {
+  return session.view.rows.filter((row) => row.kind === 'reply').map((row) => (row.data as { reply: string }).reply)
+}
+
+/** The host's listing once no session it holds is working. A turn's worker can still be returning after its view says completed. */
+async function settled(client: AgentClient, what: string): Promise<InstanceInfo> {
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    const info = await client.instance()
+    if (info.sessions.every((held) => !held.working)) return info
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+test('an app whose connection ended takes its session over through the next relay, holds what it had, and sends again', async () => {
+  const host = await startHost({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'second reply' }] })
+  const made = sockets()
+  const first = await connect(await host.launch(), made.open)
+  const session = await first.client.createSession({ workspace: host.project })
+  await session.answerTrust(false)
+  await until(session, 'trust to be recorded', (view) => view.status === 'idle')
+  await session.send('plan:first')
+  await until(session, 'the first turn to end', (view) => view.status === 'completed')
+  const before = await settled(first.client, 'the first turn\'s worker to return')
+  assert.deepEqual(before.sessions, [{ session: session.id, state: 'open', working: false, controlled: true }])
+
+  made.opened[0]!.close(1000, 'the phone lost its network')
+  await within(first.ended, 'the client to see its connection end')
+  assert.equal(session.view.ended?.reason, 'connection_lost')
+
+  host.child.stdin.write('launch\n')
+  const second = await connect(await host.launch(), made.open)
+  const after = await second.client.instance()
+  assert.equal(after.instance, before.instance, 'the host did not restart')
+  assert.deepEqual(after.sessions, [{ session: session.id, state: 'open', working: false, controlled: false }])
+
+  const taken = await second.client.attach(session.id)
+  assert.equal(taken.view.status, 'completed')
+  assert.equal(taken.view.ended, null)
+  assert.deepEqual(replies(taken), ['first reply'], 'the view starts from what the session holds')
+  assert.equal((await second.client.instance()).sessions[0]?.controlled, true)
+
+  await taken.send('plan:second')
+  await until(taken, 'the second reply', () => replies(taken).length === 2)
+  assert.deepEqual(replies(taken), ['first reply', 'second reply'])
+  assert.equal(session.view.ended?.reason, 'connection_lost', 'the old session object stays ended')
 })
 
 test('a wrong code ends that relay and leaves the host running, and the next launch has a port and code of its own', async () => {

@@ -90,7 +90,8 @@ released content.
 - create a fresh session in one of them with the view started (`createSession` never accepts a path);
 - answer startup trust when asked to, after which the question is no longer offered;
 - send, cancel, and close;
-- approve or reject a `confirm`, `run` or `fetch` question, and answer an `ask` question.
+- approve or reject a `confirm`, `run` or `fetch` question, and answer an `ask` question;
+- against `bravebot-host`, list the host's run and the sessions it holds, and take over one whose controller's connection ended, starting its view from the snapshot the host sends ([RPCVIEW-12](../../specs/session-view.md#RPCVIEW-12)).
 
 Raw dispatch of arbitrary bridge methods is not part of the package. The entry points export no `raw`, no connection class, and no way to reach the client's connection, because dispatch is not confined to configured workspaces and could answer a question the client never offered. Tests reach it through an internal module that the package's `exports` map does not expose.
 
@@ -103,7 +104,7 @@ duplicate or late one, which the client reports with its code. A decision other 
 `reject`, answers that are not typed text, chosen indexes or `null`, and a second reply to a request
 while the first is being sent are refused locally.
 
-`attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
+`instance` and `attach` need `bravebot-host`; `bravebot-rpc` alone refuses them. An `attach` of a session this client holds is refused without sending. `takeControl` and `messageStatus` fail locally: connected takeover is stage 5a, and settling a send is step 3.2 of stage 4b in the [implementation plan](implementation-plan.md#4b-prevent-duplicate-sends-and-recover-pending-messages). A question a turn asks appears in the
 view, and cancelling the turn refuses it.
 
 A runtime without version 1 of the capability is refused before any session is created. A close
@@ -169,9 +170,9 @@ a scratch project. They show:
 - close, EOF, a killed process and unreadable input.
 
 **Not established.** The local program cancelling a question of an unsupported kind (written, not
-exercised), native rendering, remote security, reconnect and recovery, send deduplication,
+exercised), native rendering, remote security, settling a send cut off by a lost connection,
 qualifying a session by target and runtime instance (a session object belongs to one connection and
-ends with it, but carries no identity a caller could store across restarts), controller ownership, a stale-action guarantee beyond the targets RPCVIEW-6 gives, a persistent host, and
+ends with it; `instance()` names the host's run, but nothing stores it across restarts), takeover from a controller that is still connected, controller ownership, a stale-action guarantee beyond the targets RPCVIEW-6 gives, a persistent host, and
 operating systems other than macOS.
 
 ## Common interface
