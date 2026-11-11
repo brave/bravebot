@@ -3855,8 +3855,9 @@ configuration that hides the refusal from a crate. Tests are allowed at the root
 file. A new spawn that looks a name up through
 `PATH` is added to the list above, in the same change, or resolved first.
 
-- **Those directories are the session's.** Each directory the session was opened on, added, or
-  moved to and the checkout holding it (next bullet), its scratch directory, the system temporary
+- **Those directories are the session's and the process's.** Each directory the session was opened on, added, or
+  moved to and the checkout holding it (next bullet), the directory the process ran in and the
+  checkout holding it (next bullet, recorded for every command), its scratch directory, the system temporary
   directory, every row a stage's policy
   grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it, and every row the policy a
   local MCP server is launched under grants writes in, its declared directory and its own home
@@ -3875,10 +3876,15 @@ file. A new spawn that looks a name up through
   `PATH` and hold a file a contributor added, which a session opened in a subdirectory of the
   checkout would start in place of the installed program, unconfined. The same function,
   `bravebot_sandbox::programs::keep_out_with_checkout`, records a directory and its checkout for a
-  directory a session opens, adds or moves to, and for a command that opens no session.
-  `doctor --push-identity` and `doctor --sandbox-check` are new processes, which know of no
-  directory a stage wrote in an earlier session, so each records the directory it ran in the same
-  way. The checkout is the nearest of the directory itself and its ancestors with a `.git`, a file
+  directory a session opens, adds or moves to, and for every command that opens no session.
+  Every command is a new process, which knows of no directory a stage wrote in an earlier session,
+  so `main` records the directory the process ran in, and the checkout holding it, once, before the
+  command line is read and before any command is dispatched. A command added later is covered
+  without a call of its own, and `bravebot schedule`, `bravebot auth login chatgpt`,
+  `bravebot auth login bedrock`, `bravebot auth status` and both `doctor` commands start the
+  programs they look up under that record. A deep link that moves the process to another directory
+  records that directory as well. Where the working directory cannot be read nothing is recorded.
+  The checkout is the nearest of the directory itself and its ancestors with a `.git`, a file
   as well as a directory, so a linked worktree or a submodule is the checkout holding the
   directory. A directory that holds a `.git` is its own checkout and nothing above it is added.
   Only the nearest is taken. Taking every ancestor with a `.git` would also leave out an outer repository
@@ -3907,8 +3913,8 @@ file. A new spawn that looks a name up through
   path is started as given. A hook's relative path is the person's own and runs from the directory
   the hook runs in ([HOOK-4](hooks.md#HOOK-4)).
 - **Nothing found is not installed.** A person whose only `aws` is in such a directory, an
-  activated virtualenv's `bin` among them, or in the `bin` of the checkout a session was opened in,
-  is told it is not installed
+  activated virtualenv's `bin` among them, or in the `bin` of the checkout a session was opened in
+  or a command ran in, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
 - **The editor's, a hook's, the credential authority's, the inhibitor's, a clipboard tool's, the
@@ -4411,8 +4417,8 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 
 A program a person keeps in a `bin` of the nearest checkout holding a directory a session opens,
 adds or moves to reads as not installed to every lookup above for the rest of the process, whether
-the session was opened at the checkout's root or below it, and a command that opens no session
-leaves out the same one. Where the account's home directory holds a `.git`, such as a dotfiles
+the session was opened at the checkout's root or below it, and every command, whether or not it
+opens a session, leaves out the one holding the directory it ran in. Where the account's home directory holds a `.git`, such as a dotfiles
 repository, a session opened in a directory below the home that has no nearer `.git` leaves out the
 home as its checkout, so `~/bin` and every other directory under the home that is on `PATH` is not
 searched and a program kept in one reads as not installed. A session opened below a nearer checkout
@@ -5158,6 +5164,14 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent`
 `verified-by: bravebot_cli::running::doctor_sandbox_check_starts_no_program_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_login_bedrock_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_status_bedrock_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::chatgpt_account::auth_login_chatgpt_opens_the_address_with_no_program_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::schedule_add_and_list_start_no_crontab_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::a_command_run_in_the_checkouts_root_starts_no_program_from_its_bin`
+`verified-by: bravebot_cli::running::the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_sandbox::checkout_in_search::a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_starts_the_program_behind_a_directory_a_stage_may_write`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_looks_up_the_programs_it_starts_only_behind_the_directory`
