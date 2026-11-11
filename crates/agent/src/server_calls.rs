@@ -372,20 +372,6 @@ impl Servers {
             .collect()
     }
 
-    /// The number of the first `apply` step of `plan` that would put its list to the person,
-    /// being none of `covered`, or nothing where every one runs on the plan's approval.
-    pub(crate) fn puts_a_list(
-        &self,
-        plan: &Manifest,
-        covered: &std::collections::BTreeSet<usize>,
-    ) -> Option<usize> {
-        plan.steps()
-            .iter()
-            .enumerate()
-            .find(|(index, step)| step.tool() == manifest::APPLY && !covered.contains(index))
-            .map(|(index, _)| index + 1)
-    }
-
     /// Whether the declaration of `alias` marks every tool of the step `shape` plan-covered
     /// (SERVERS-26).
     fn all_covered(&self, alias: &str, shape: &bravebot_core::apply::Shape) -> bool {
@@ -395,73 +381,6 @@ impl Servers {
                 .iter()
                 .all(|tool| offer.covered(alias, &tool.name))
         })
-    }
-
-    /// The words after each call on the line a person approves: its arguments, as the server will
-    /// receive them, in full. Compact JSON, so a line break or a control character in a value is
-    /// escaped and the line stays one line. Decides nothing.
-    pub(crate) fn notes(
-        &self,
-        plan: &Manifest,
-        covered: &std::collections::BTreeSet<usize>,
-    ) -> BTreeMap<usize, String> {
-        plan.steps()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, step)| match step.tool() {
-                manifest::APPLY => shape_of(step).ok().map(|shape| {
-                    let alias = step.text("server");
-                    let covered = covered.contains(&index);
-                    let tools: Vec<String> = shape
-                        .tools
-                        .iter()
-                        .map(|tool| {
-                            let arguments: Vec<String> = tool
-                                .arguments
-                                .iter()
-                                .map(|(name, kind)| {
-                                    format!("{name}: {}", kind_in_words(kind, &shape))
-                                })
-                                .collect();
-                            format!("{} ({})", tool.name, arguments.join(", "))
-                        })
-                        .collect();
-                    // A step that runs unasked says so, and says where its lists' private entries
-                    // were read from and go, since approving the plan is what releases them there.
-                    let asked = match covered {
-                        true => {
-                            let read: Vec<String> = shape
-                                .lists
-                                .iter()
-                                .map(|list| {
-                                    format!("{list} (read from {})", read_from(plan, index, list))
-                                })
-                                .collect();
-                            format!(
-                                "run without asking you, with {} going to {alias}",
-                                read.join(" and ")
-                            )
-                        }
-                        false => "all put to you as one list first".to_string(),
-                    };
-                    (
-                        index,
-                        format!(
-                            "{}; up to {} calls and {} new names, {asked}; the processor is told \
-                             \"{}\"",
-                            tools.join(", then "),
-                            shape.max_rows,
-                            shape.max_new,
-                            step.text("instruction")
-                        ),
-                    )
-                }),
-                tool if manifest::is_server_call(tool) => arguments_of(step)
-                    .ok()
-                    .map(|arguments| (index, format!("arguments {}", Value::Object(arguments)))),
-                _ => None,
-            })
-            .collect()
     }
 
     /// Make the call a step names, through the one function a turn's call goes through. The
@@ -1224,6 +1143,83 @@ fn kind_in_words(kind: &bravebot_core::apply::Kind, shape: &bravebot_core::apply
             .collect::<Vec<_>>()
             .join(" or "),
     }
+}
+
+/// The number of the first `apply` step of `plan` that would put its list to the person,
+/// being none of `covered`, or nothing where every one runs on the plan's approval.
+pub(crate) fn puts_a_list(
+    plan: &Manifest,
+    covered: &std::collections::BTreeSet<usize>,
+) -> Option<usize> {
+    plan.steps()
+        .iter()
+        .enumerate()
+        .find(|(index, step)| step.tool() == manifest::APPLY && !covered.contains(index))
+        .map(|(index, _)| index + 1)
+}
+
+/// The words after each call on the line a person approves: its arguments, as the server will
+/// receive them, in full. Compact JSON, so a line break or a control character in a value is
+/// escaped and the line stays one line. Decides nothing.
+pub(crate) fn notes(
+    plan: &Manifest,
+    covered: &std::collections::BTreeSet<usize>,
+) -> BTreeMap<usize, String> {
+    plan.steps()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| match step.tool() {
+            manifest::APPLY => shape_of(step).ok().map(|shape| {
+                let alias = step.text("server");
+                let covered = covered.contains(&index);
+                let tools: Vec<String> = shape
+                    .tools
+                    .iter()
+                    .map(|tool| {
+                        let arguments: Vec<String> = tool
+                            .arguments
+                            .iter()
+                            .map(|(name, kind)| format!("{name}: {}", kind_in_words(kind, &shape)))
+                            .collect();
+                        format!("{} ({})", tool.name, arguments.join(", "))
+                    })
+                    .collect();
+                // A step that runs unasked says so, and says where its lists' private entries
+                // were read from and go, since approving the plan is what releases them there.
+                let asked = match covered {
+                    true => {
+                        let read: Vec<String> = shape
+                            .lists
+                            .iter()
+                            .map(|list| {
+                                format!("{list} (read from {})", read_from(plan, index, list))
+                            })
+                            .collect();
+                        format!(
+                            "run without asking you, with {} going to {alias}",
+                            read.join(" and ")
+                        )
+                    }
+                    false => "all put to you as one list first".to_string(),
+                };
+                (
+                    index,
+                    format!(
+                        "{}; up to {} calls and {} new names, {asked}; the processor is told \
+                         \"{}\"",
+                        tools.join(", then "),
+                        shape.max_rows,
+                        shape.max_new,
+                        step.text("instruction")
+                    ),
+                )
+            }),
+            tool if manifest::is_server_call(tool) => arguments_of(step)
+                .ok()
+                .map(|arguments| (index, format!("arguments {}", Value::Object(arguments)))),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The arguments a call step carries: the JSON object its text holds, or an empty one where the

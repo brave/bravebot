@@ -1171,7 +1171,7 @@ fn plan<S: Sink, R: Reporter>(
         let mut notes = connectors.notes(&plan);
         // And the arguments of each server call, in full, since a person approves the call by them.
         let covered = servers.covered_steps(&plan, &task.permissions, task.permission_mode.get());
-        notes.extend(servers.notes(&plan, &covered));
+        notes.extend(crate::server_calls::notes(&plan, &covered));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
@@ -1184,7 +1184,7 @@ fn plan<S: Sink, R: Reporter>(
         // it is shown is its own plan and the check's words about it, so its context still holds
         // the task and the driver's words alone. A plan with no connector step passes the check,
         // so this never asks again in a run that uses no connector and calls no server.
-        let listed = servers.puts_a_list(&plan, &covered);
+        let listed = crate::server_calls::puts_a_list(&plan, &covered);
         let checked = connectors
             .check(&plan)
             .and_then(|()| servers.check(&plan))
