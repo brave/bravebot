@@ -2,7 +2,7 @@
 resolver = "3"
 members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/choice", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/herdr", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/schedule", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files", "crates/update"]
 
-exclude = ["third_party/crossterm"]
+exclude = ["third_party/crossterm", "third_party/ratatui-image"]
 
 [workspace.package]
 version = "0.21.0"
@@ -108,8 +108,11 @@ windows-sys = { version = "0.61", features = [
 # crossterm 0.29.0 as published, kept in the tree so that the programs it starts are ours to
 # remove (SANDBOX-30). ratatui and ratatui-image take their crossterm from here too.
 # third_party/README.md says what differs from the published crate.
+#
+# ratatui-image 11.1.0 as published, without the `tmux` it started by bare name (SANDBOX-30).
 [patch.crates-io]
 crossterm = { path = "third_party/crossterm" }
+ratatui-image = { path = "third_party/ratatui-image" }
 
 # Rust's built-in strip can corrupt some targets under cargo-zigbuild, so
 # release builds leave symbols in place and strip during packaging instead.
