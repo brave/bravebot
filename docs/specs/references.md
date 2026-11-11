@@ -52,8 +52,8 @@ silently does nothing is the one a person spends an afternoon looking for.
 ### REFER-2: only the person's own settings declare a reference
 
 `references` is read from `~/.bravebot/settings.json` and from a file `--settings` names that sits
-outside the workspace. A checkout's `.bravebot/settings.json` and `settings.local.json`, and a
-`--settings` file that resolves inside the workspace, are not read for it, and each file that wrote the block is reported by `doctor` and by the desktop
+outside the workspace and outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)). A checkout's `.bravebot/settings.json` and `settings.local.json`, and a
+`--settings` file that resolves inside either, are not read for it, and each file that wrote the block is reported by `doctor` and by the desktop
 bridge's list of ignored keys.
 
 **Why.** An entry makes a directory reachable and puts its description in front of the planner. A

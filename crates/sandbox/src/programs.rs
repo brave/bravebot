@@ -276,26 +276,32 @@ pub const CODE_SELECTORS: &[(&str, Names)] = &[
     ("LD_PRELOAD", Names::Directories),
     ("LD_LIBRARY_PATH", Names::Directories),
     ("LD_AUDIT", Names::Directories),
-    // The directory the loader reads `$ORIGIN` as when it is set. One directory. Named in the
-    // candidates of #3810; the loader documentation was read and no loader was run with it.
+    // The directory glibc's loader reads `$ORIGIN` as when it cannot read `/proc/self/exe`
+    // (glibc 2.40 `sysdeps/unix/sysv/linux/dl-origin.c`). A `RUNPATH` or `LD_LIBRARY_PATH` entry
+    // that holds `$ORIGIN` then names a library directory under it. One directory. musl reads no
+    // such variable (musl 1.2.5 `ldso/dynlink.c` reads only `LD_LIBRARY_PATH` and `LD_PRELOAD`).
     ("LD_ORIGIN_PATH", Names::Directory),
     ("GCONV_PATH", Names::Directories),
-    // glibc's `sysdeps/generic/unsecvars.h` lists these two with `GCONV_PATH`, among names glibc
-    // removes for a secure-execution program. The file shows that glibc distrusts the names. It
-    // does not say whether they select code, and no Linux run was made with them. `LOCPATH` is a
-    // list of directories `setlocale` reads locale data from. `NLSPATH` is a list of templates
-    // (`%N`, `%L` and the like) `catopen` reads message catalogs from, so it is an option and is
-    // removed whatever it holds. Both are named in the candidates of #3810 and both name data the C
-    // library parses. The other names in that file are left out, with the reason, in SANDBOX-30
-    // "What a checked start does not cover".
+    // Data the C library parses and the program then uses. `LOCPATH` is a list of directories
+    // glibc's `setlocale` reads locale data from (glibc 2.40 `locale/newlocale.c`). `NLSPATH` is a
+    // list of templates (`%N`, `%L` and the like) `catopen` reads message catalogs from (glibc
+    // 2.40 `catgets/catgets.c`, musl 1.2.5 `src/locale/catopen.c`), so it is an option and is
+    // removed whatever it holds. `MUSL_LOCPATH` is musl's list of locale directories (musl 1.2.5
+    // `src/locale/locale_map.c`, read unless the process is secure). The other names in glibc's
+    // `unsecvars.h` are left out, with the reason, in SANDBOX-30 "What a checked start does not
+    // cover".
     ("LOCPATH", Names::Directories),
     ("NLSPATH", Names::Options),
+    ("MUSL_LOCPATH", Names::Directories),
     ("DYLD_INSERT_LIBRARIES", Names::Directories),
     // Language runtimes and shells: modules, startup files and tools the program runs.
     selectors::PYTHONPATH,
     selectors::PYTHONUSERBASE,
     selectors::PYTHONPYCACHEPREFIX,
     selectors::PYTHONHOME,
+    // Python joins this to `sys.prefix`, so a real value is a relative name such as `lib64` and a
+    // relative path that climbs out of the prefix selects a standard library elsewhere.
+    ("PYTHONPLATLIBDIR", Names::Options),
     ("BASH_ENV", Names::File),
     // A program that is a bash script, which every shim and many wrappers are: `xtrace` with a
     // `PS4` that holds a command substitution runs that command, whatever the script does.
@@ -756,6 +762,10 @@ pub mod selectors {
     pub const BROWSER: (&str, Names) = ("BROWSER", Names::Commands);
     /// A configuration file of the OpenSSL a program loads, which can load a provider module.
     pub const OPENSSL_CONF: (&str, Names) = ("OPENSSL_CONF", Names::File);
+    /// The directory OpenSSL loads provider modules from.
+    pub const OPENSSL_MODULES: (&str, Names) = ("OPENSSL_MODULES", Names::Directory);
+    /// The directory OpenSSL loads dynamic engines from.
+    pub const OPENSSL_ENGINES: (&str, Names) = ("OPENSSL_ENGINES", Names::Directory);
     /// Directories Python imports from, including `sitecustomize.py`.
     pub const PYTHONPATH: (&str, Names) = ("PYTHONPATH", Names::Directories);
     /// The prefix Python finds its standard library under.
@@ -764,6 +774,12 @@ pub mod selectors {
     pub const PYTHONUSERBASE: (&str, Names) = ("PYTHONUSERBASE", Names::Directory);
     /// The tree Python reads compiled modules from, which can hold an unchecked `.pyc`.
     pub const PYTHONPYCACHEPREFIX: (&str, Names) = ("PYTHONPYCACHEPREFIX", Names::Directory);
+    /// Directories GLib scans for modules and loads each library of, in `gio open` and `gio info`.
+    pub const GIO_EXTRA_MODULES: (&str, Names) = ("GIO_EXTRA_MODULES", Names::Directories);
+    /// The one directory GLib scans for modules in addition to its compiled-in one.
+    pub const GIO_MODULE_DIR: (&str, Names) = ("GIO_MODULE_DIR", Names::Directory);
+    /// Directories Qt loads plug-ins from.
+    pub const QT_PLUGIN_PATH: (&str, Names) = ("QT_PLUGIN_PATH", Names::Directories);
 }
 
 /// Take each variable in `selectors` off the environment `command` is started with unless
@@ -2503,6 +2519,56 @@ mod tests {
         assert!(checked("GIT_CONFIG_COUNT", &planted, &session));
     }
 
+    /// The regression it rejects: `LD_ORIGIN_PATH` read as a list, so a value that joins a genuine
+    /// directory to one a stage may write is kept, or `MUSL_LOCPATH` read as one directory, so a
+    /// genuine list is removed, or either name kept when it names a place a stage may write.
+    #[cfg(unix)]
+    #[test]
+    fn ld_origin_path_is_one_directory_and_musl_locpath_is_a_list_of_them() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t1o");
+        let planted = planted.parent().unwrap().to_path_buf();
+        let genuine = genuine.parent().unwrap().to_path_buf();
+        let both = PathBuf::from(path_of(&[genuine.as_path(), planted.as_path()]));
+        let two_genuine = PathBuf::from(path_of(&[genuine.as_path(), safe.as_path()]));
+
+        assert!(checked("LD_ORIGIN_PATH", &planted, &session));
+        assert!(!checked("LD_ORIGIN_PATH", &genuine, &session));
+        assert!(checked("LD_ORIGIN_PATH", &two_genuine, &session));
+
+        assert!(checked("MUSL_LOCPATH", &planted, &session));
+        assert!(checked("MUSL_LOCPATH", &both, &session));
+        assert!(!checked("MUSL_LOCPATH", &genuine, &session));
+        assert!(!checked("MUSL_LOCPATH", &two_genuine, &session));
+    }
+
+    /// The regression it rejects: a list name judged only after a split on the path separator, so
+    /// a value the loader reads as two entries passes as one entry. glibc splits `LD_LIBRARY_PATH`
+    /// on `:` and `;` (2.40 `elf/dl-load.c` line 833), `LD_PRELOAD` on space and `:` (`elf/rtld.c`
+    /// line 879) and musl splits `LD_LIBRARY_PATH` on `:` and newline (1.2.5 `ldso/dynlink.c`
+    /// `path_open`) and `LD_PRELOAD` on whitespace and `:` (`load_preload`).
+    #[cfg(unix)]
+    #[test]
+    fn a_loader_list_that_joins_a_genuine_entry_to_a_planted_one_with_another_separator_is_removed()
+    {
+        let (session, _safe, planted, genuine) = planted_and_genuine("t1sep");
+        let planted_dir = planted.parent().unwrap().to_path_buf();
+        let genuine_dir = genuine.parent().unwrap().to_path_buf();
+        for separator in [";", "\n", " ", "\t"] {
+            let joined = PathBuf::from(format!(
+                "{}{separator}{}",
+                genuine_dir.display(),
+                planted_dir.display()
+            ));
+            for name in ["LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "MUSL_LOCPATH"] {
+                assert!(
+                    checked(name, &joined, &session),
+                    "{name} was kept with {separator:?} between a genuine entry and a planted one"
+                );
+            }
+        }
+        assert!(!checked("LD_LIBRARY_PATH", &genuine_dir, &session));
+    }
+
     /// The regression it rejects: a name dropped from the table, which the loop over the table
     /// cannot see. The names are the ones SANDBOX-30 lists, written out here.
     #[cfg(unix)]
@@ -2518,6 +2584,7 @@ mod tests {
             "GCONV_PATH",
             "LOCPATH",
             "NLSPATH",
+            "MUSL_LOCPATH",
             "DYLD_INSERT_LIBRARIES",
             "PYTHONPATH",
             "PYTHONUSERBASE",
@@ -2993,6 +3060,51 @@ mod tests {
         assert!(!checked("LD_PRELOAD", &genuine, &session));
         assert!(!checked("PYTHONHOME", &safe, &session));
         assert!(!checked("GIT_EXEC_PATH", &safe, &session));
+    }
+
+    /// The regression it rejects: `PYTHONPLATLIBDIR` judged as a directory, so the relative name
+    /// `lib64` a real setting holds is refused as an unprovable path, or kept when it is a relative
+    /// path that climbs out of `sys.prefix` to a standard library a stage wrote. It is an option
+    /// and is removed whatever it holds.
+    #[cfg(unix)]
+    #[test]
+    fn pythonplatlibdir_is_removed_whatever_it_holds() {
+        let (session, safe, planted, genuine) = planted_and_genuine("t5p");
+
+        assert!(checked("PYTHONPLATLIBDIR", Path::new("lib64"), &session));
+        assert!(checked(
+            "PYTHONPLATLIBDIR",
+            Path::new("../../x/lib"),
+            &session
+        ));
+        assert!(checked("PYTHONPLATLIBDIR", &planted, &session));
+        assert!(checked("PYTHONPLATLIBDIR", &genuine, &session));
+        assert!(checked("PYTHONPLATLIBDIR", &safe, &session));
+    }
+
+    /// The regression it rejects: the shared OpenSSL directory names kept when they name a place a
+    /// stage may write, which loads a provider module or an engine from it, or removed when they
+    /// name a directory outside every one.
+    #[cfg(unix)]
+    #[test]
+    fn the_openssl_module_and_engine_directories_are_judged_as_directories() {
+        let (session, safe, planted, _genuine) = planted_and_genuine("t5o");
+        let planted = planted.parent().unwrap().to_path_buf();
+        let one = |(name, kind): (&str, Names), value: &Path| {
+            removes(
+                CodeSelectors::Checked(&[(name, kind)]),
+                name,
+                value.as_os_str(),
+                &session,
+            )
+        };
+
+        assert!(one(selectors::OPENSSL_MODULES, &planted));
+        assert!(!one(selectors::OPENSSL_MODULES, &safe));
+        assert!(one(selectors::OPENSSL_MODULES, Path::new("modules")));
+        assert!(one(selectors::OPENSSL_ENGINES, &planted));
+        assert!(!one(selectors::OPENSSL_ENGINES, &safe));
+        assert!(one(selectors::OPENSSL_ENGINES, Path::new("engines")));
     }
 
     /// The regression it rejects: skipping a value that cannot be converted to text, which keeps a

@@ -1815,7 +1815,11 @@ decides it as its file spelled it, with each control character drawn as its pict
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
 URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
 [PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
-no rule matches, the line says so and no rule is named, since the ordinary gates decide. A further
+no rule matches, the line says so and no rule is named, since the ordinary gates decide. A `Bash`
+call whose program, or whose program under a leading wrapper, is an 8.3 short name while a `deny` or
+`ask` command rule is in force is reported as refused, since a session refuses it before any rule
+is read ([PERM-5](permissions.md#PERM-5)); the decision is the one the session's gates make, asked
+of core, and no rule is named. A further
 `reason:` line follows where the deciding rule carries one, which is only where the person's own
 home settings file wrote the rule as an object with a `reason` ([PERM-1](permissions.md#PERM-1)).
 
@@ -1844,6 +1848,7 @@ that is written down is still asking.
 `verified-by: bravebot_config::settings::a_checkouts_allow_rule_is_traced_to_no_file`
 `verified-by: bravebot_cli::running::permissions_check_names_the_rule_and_the_file_that_decide`
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
+`verified-by: bravebot_cli::running::permissions_check_reports_an_8_3_short_name_as_a_session_refuses_it`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`

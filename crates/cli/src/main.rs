@@ -477,6 +477,19 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     })
 }
 
+/// Leave out of the lookup for programs the directory this process ran in and the checkout
+/// holding it ([`bravebot_sandbox::programs::keep_out_with_checkout`]).
+///
+/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session until one records
+/// its directory. `main` calls this once for every command. Where the working directory cannot be
+/// read nothing is recorded: there is no directory to name, and a relative `PATH` entry is no more
+/// readable than the directory it is relative to.
+fn keep_out_where_this_ran() {
+    if let Ok(cwd) = std::env::current_dir() {
+        bravebot_sandbox::programs::keep_out_with_checkout(&cwd);
+    }
+}
+
 fn main() -> ExitCode {
     // First of all, before the command line is read: what this process was started with, its
     // environment included, is readable from `/proc/<pid>/environ` by any process of the same
@@ -494,6 +507,12 @@ fn main() -> ExitCode {
     // outside the program, and quitting over it would protect the credential by making the tool
     // unusable. See CRED-23.
     let _ = bravebot_sandbox::crash::disable_core_dumps();
+
+    // Before any program is looked up, and so before the language is loaded and the command line is
+    // read, and for every command: a command that opens no session has no `Workspace::new` to
+    // record its directory, and a `bin` of the directory it ran in or of the checkout holding it,
+    // first on `PATH`, would be searched for the programs it starts. See SANDBOX-30.
+    keep_out_where_this_ran();
 
     // Before anything is printed, and exactly once: every later lookup reads what this settled
     // on. Nothing else in the tree consults the environment about a language. What the person
@@ -762,6 +781,8 @@ fn open_link(
         // it and there is no control character to draw.
         return fail(Ending::Failed, t!(cli_workspace_problem, problem = problem));
     }
+    // The link moved the process to another directory, which `main` did not record.
+    keep_out_where_this_ran();
     interactive(
         bravebot_tui::app::Start::Prefilling(link.prompt.unwrap_or_default(), placement.note),
         None,

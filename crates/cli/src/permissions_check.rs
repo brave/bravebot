@@ -42,6 +42,15 @@ impl Call {
         }
     }
 
+    /// Whether a session would refuse this call as an 8.3 short name while a command rule
+    /// restricts (PERM-5). Only a command can be.
+    fn reads_a_short_name(&self, permissions: &Permissions) -> bool {
+        match self {
+            Self::Command(argv) => permissions.reads_a_short_name(argv),
+            _ => false,
+        }
+    }
+
     /// The rule of `permissions` that decides this call, and the list it is in.
     fn decided_by<'a>(&self, permissions: &'a Permissions) -> Option<(Ruling, &'a Rule)> {
         match self {
@@ -50,6 +59,46 @@ impl Call {
             Self::Host(host) => permissions.rule_for_host(host),
             Self::Tool(alias, tool) => permissions.rule_for_mcp(alias, tool),
         }
+    }
+}
+
+/// Print the decision `rule` makes, the rule as written, where it came from and why.
+fn print_decision(settings: &Settings, granted: &[Proposed], ruling: Ruling, rule: &Rule) {
+    println!(
+        "{}: {}",
+        t!(permissions_check_decision),
+        match ruling {
+            Ruling::Deny => t!(permissions_check_deny),
+            Ruling::Ask => t!(permissions_check_ask),
+            Ruling::Allow => t!(permissions_check_allow),
+        }
+    );
+    // The file's own spelling where a layer wrote the rule, and the grant's where the person
+    // granted a checkout's rule at the question (PERM-15).
+    match settings.rule_source(ruling.as_str(), rule.written()) {
+        Some((file, written)) => {
+            println!("{}: {}", t!(permissions_check_rule), printable(written));
+            println!("{}: {}", t!(permissions_check_file), printable_path(file));
+        }
+        None => {
+            println!(
+                "{}: {}",
+                t!(permissions_check_rule),
+                printable(rule.written())
+            );
+            if let Some(from) = granted.iter().find(|g| g.rule.trim() == rule.written()) {
+                println!(
+                    "{}: {}",
+                    t!(permissions_check_file),
+                    t!(permissions_check_granted, path = printable_path(&from.path))
+                );
+            }
+        }
+    }
+    // Only the person's own file carries a reason, and only where they wrote one, so this line is
+    // absent for every other rule (PERM-1). It is display text and decides nothing.
+    if let Some(reason) = settings.rule_reason(ruling.as_str(), rule.written()) {
+        println!("{}: {reason}", t!(permissions_check_reason));
     }
 }
 
@@ -90,51 +139,23 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
         &workspace,
     );
     let decided = call.decided_by(&permissions);
+    // A session refuses an 8.3 short name before any rule is read (PERM-5), so the report says
+    // that rather than "no rule matches". The decision is core's, not a second copy of it.
+    if call.reads_a_short_name(&permissions) {
+        println!(
+            "{}: {}",
+            t!(permissions_check_decision),
+            t!(permissions_check_short_name)
+        );
+        return ExitCode::SUCCESS;
+    }
     match decided {
         None => println!(
             "{}: {}",
             t!(permissions_check_decision),
             t!(permissions_check_none)
         ),
-        Some((ruling, rule)) => {
-            println!(
-                "{}: {}",
-                t!(permissions_check_decision),
-                match ruling {
-                    Ruling::Deny => t!(permissions_check_deny),
-                    Ruling::Ask => t!(permissions_check_ask),
-                    Ruling::Allow => t!(permissions_check_allow),
-                }
-            );
-            // The file's own spelling where a layer wrote the rule, and the grant's where the
-            // person granted a checkout's rule at the question (PERM-15).
-            match settings.rule_source(ruling.as_str(), rule.written()) {
-                Some((file, written)) => {
-                    println!("{}: {}", t!(permissions_check_rule), printable(written));
-                    println!("{}: {}", t!(permissions_check_file), printable_path(file));
-                }
-                None => {
-                    println!(
-                        "{}: {}",
-                        t!(permissions_check_rule),
-                        printable(rule.written())
-                    );
-                    if let Some(from) = granted.iter().find(|g| g.rule.trim() == rule.written()) {
-                        println!(
-                            "{}: {}",
-                            t!(permissions_check_file),
-                            t!(permissions_check_granted, path = printable_path(&from.path))
-                        );
-                    }
-                }
-            }
-            // Only the person's own file carries a reason, and only where they wrote one, so this
-            // line is absent for every other rule (PERM-1). It is display text and decides
-            // nothing.
-            if let Some(reason) = settings.rule_reason(ruling.as_str(), rule.written()) {
-                println!("{}: {reason}", t!(permissions_check_reason));
-            }
-        }
+        Some((ruling, rule)) => print_decision(&settings, &granted, ruling, rule),
     }
     // A rule that restricts decides before any grant, so one that could not grant yet is only
     // worth naming where nothing restricted the call.

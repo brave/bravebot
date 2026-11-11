@@ -313,7 +313,7 @@ one thing leaves everything else in force:
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
-| `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
+| `references` | your own file and a `--settings` file outside the project and its checkout; a project or local file's block, and a `--settings` file that resolves inside either, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
 | `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and a `--settings` file outside the project; a project or local file's are ignored and reported |
@@ -342,8 +342,8 @@ in the project lists them in one box with the file each came from, and only your
 force. The answer is kept per project in `~/.bravebot/granted/`, so you are asked once rather than at
 every launch, and a rule the project edits afterwards is asked about again. `bravebot doctor` names
 every such entry and says whether it is granted. A file `--settings` names is yours, since you typed
-the path, unless it resolves inside the project you are working in, which makes it the checkout's file
-under another name.
+the path, unless it resolves inside the project you are working in, or inside the git checkout holding it or a
+directory you moved out of, which makes it the checkout's file under another name.
 
 **The project files are read from the directory you started bravebot in, and from no directory above
 it.** Searching upward would make what configures a session depend on which directory you happened to

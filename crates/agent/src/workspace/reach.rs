@@ -503,6 +503,15 @@ impl Workspace {
             .collect()
     }
 
+    /// The working directories and closed added directories the session has left, oldest first.
+    ///
+    /// A stage wrote in each while it was open and closing one does not remove what was written,
+    /// so a file in one, or in the checkout that held it, is as much the plan's as one in a
+    /// directory still open (SANDBOX-20). Not a row of any stage.
+    pub fn left_directories(&self) -> Vec<PathBuf> {
+        self.left.clone()
+    }
+
     /// The working directory and every directory added by name, each as the directory it was when
     /// the session opened or added it, which is what a stage is given a row for only while its
     /// name still leads there (SANDBOX-18). The working directory comes first.

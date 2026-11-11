@@ -73,7 +73,7 @@ const HOST_VARIABLES: &[&str] = &[
 /// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable the suite's programs
 /// read that is in neither list reaches them as the person set it, so one added to a program a
 /// workflow starts belongs in this list.
-const CODE_SELECTORS: [(&str, Names); 57] = [
+const CODE_SELECTORS: [(&str, Names); 77] = [
     // git: programs it starts for the transport, a diff, and a rebase's editor.
     ("GIT_SSH", Names::Program),
     ("GIT_SSH_COMMAND", Names::Options),
@@ -107,6 +107,29 @@ const CODE_SELECTORS: [(&str, Names); 57] = [
     ("LDFLAGS", Names::Options),
     ("LDLIBS", Names::Options),
     ("TARGET_ARCH", Names::Options),
+    // make: the program or flags of the rules for Objective-C, TeX and literate programs, and the
+    // option that places a compiler's output. `MAKE_COMMAND` is the name `$(MAKE)` expands from in
+    // a recipe line marked `+`. Flag variables of the languages a built-in rule compiles.
+    ("MAKE_COMMAND", Names::Options),
+    ("OBJC", Names::Options),
+    ("TEX", Names::Options),
+    ("TANGLE", Names::Options),
+    ("CTANGLE", Names::Options),
+    ("WEAVE", Names::Options),
+    ("CWEAVE", Names::Options),
+    ("OUTPUT_OPTION", Names::Options),
+    ("FFLAGS", Names::Options),
+    ("ASFLAGS", Names::Options),
+    ("OBJCFLAGS", Names::Options),
+    // The compiler driver (gcc and clang) finds its sub-programs in these: a list of directories
+    // searched first, and a prefix directory.
+    ("COMPILER_PATH", Names::Directories),
+    ("GCC_EXEC_PREFIX", Names::Options),
+    // OpenSSL, which python3 and node load a provider module, an engine or a configuration file
+    // through. The directories are shared with the other starts that list them.
+    selectors::OPENSSL_CONF,
+    selectors::OPENSSL_MODULES,
+    selectors::OPENSSL_ENGINES,
     // cargo and rustc: a compiler or wrapper to run first, and flags that load a plugin.
     ("RUSTC", Names::Program),
     ("RUSTC_WRAPPER", Names::Program),
@@ -131,8 +154,9 @@ const CODE_SELECTORS: [(&str, Names); 57] = [
     // name or by path, and the directory it finds toolchains and its default in.
     ("RUSTUP_TOOLCHAIN", Names::Program),
     ("RUSTUP_HOME", Names::Directory),
-    // cargo: the commands `cargo doc --open` opens the documentation with. The browser opener's
-    // start lists the same variable.
+    // cargo: the commands `cargo doc --open` opens the documentation with, and the browser it
+    // prefers. The browser opener's start lists `BROWSER` as well.
+    ("CARGO_DOC_BROWSER", Names::Options),
     selectors::BROWSER,
     // node and npm: directories searched for a module the project does not hold.
     ("NODE_PATH", Names::Directories),
@@ -144,6 +168,9 @@ const CODE_SELECTORS: [(&str, Names); 57] = [
     // a cargo build script, which is why they are here and not in the generic table: no other
     // checked start compiles. They may carry arguments, so they are judged as options.
     ("GOFLAGS", Names::Options),
+    ("GOAUTH", Names::Options),
+    ("CGO_CXXFLAGS", Names::Options),
+    ("CGO_FFLAGS", Names::Options),
     ("GOCACHEPROG", Names::Options),
     ("CC", Names::Options),
     ("CXX", Names::Options),
@@ -155,8 +182,11 @@ const CODE_SELECTORS: [(&str, Names); 57] = [
 
 /// Whether the variable `name` gives cargo a program to run for a target or a registry, or flags
 /// that name one: `CARGO_TARGET_<triple>_LINKER`, `_RUNNER`, `_RUSTFLAGS` and `_RUSTDOCFLAGS`, and
-/// `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`. The triple or the registry is part of the name,
-/// so these are matched as a family and not listed.
+/// `CARGO_REGISTRIES_<name>_CREDENTIAL_PROVIDER`, `CARGO_CREDENTIAL_ALIAS_<name>`, which cargo
+/// reads as a credential provider command, and make's rule variables with a dot in the name:
+/// `COMPILE.<suffix>`, `LINK.<suffix>`, `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and
+/// `LINT.<suffix>`. The triple, the registry, the alias or the suffix is part of the name, so
+/// these are matched as a family and not listed.
 fn names_a_target_program(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
         (name.starts_with("CARGO_TARGET_")
@@ -164,6 +194,10 @@ fn names_a_target_program(name: &OsStr) -> bool {
                 .iter()
                 .any(|end| name.ends_with(end)))
             || (name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_CREDENTIAL_PROVIDER"))
+            || name.starts_with("CARGO_CREDENTIAL_ALIAS_")
+            || ["COMPILE.", "LINK.", "PREPROCESS.", "LEX.", "YACC.", "LINT."]
+                .iter()
+                .any(|start| name.starts_with(start) && name.len() > start.len())
     })
 }
 
@@ -1597,8 +1631,45 @@ mod tests {
             "CC",
             "CXX",
             "CGO_LDFLAGS",
+            "GOAUTH",
+            "CGO_CXXFLAGS",
+            "CGO_FFLAGS",
+            "CARGO_DOC_BROWSER",
+            "MAKE_COMMAND",
+            "OBJC",
+            "TEX",
+            "TANGLE",
+            "CTANGLE",
+            "WEAVE",
+            "CWEAVE",
+            "OUTPUT_OPTION",
+            "FFLAGS",
+            "ASFLAGS",
+            "OBJCFLAGS",
+            "GCC_EXEC_PREFIX",
+            "CARGO_CREDENTIAL_ALIAS_PROBE",
+            "COMPILE.c",
+            "COMPILE.cc",
+            "LINK.c",
+            "PREPROCESS.S",
+            "LEX.l",
+            "YACC.y",
+            "LINT.c",
         ] {
             assert!(withheld(name, &genuine, &session), "{name}");
+        }
+        // A directory list and a directory outside every row are kept; a planted one is removed.
+        for name in [
+            "COMPILER_PATH",
+            "OPENSSL_MODULES",
+            "OPENSSL_ENGINES",
+            "OPENSSL_CONF",
+        ] {
+            assert!(withheld(name, &planted, &session), "{name} was kept");
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
+        }
+        for name in ["COMPILE", "COMPILE.", "LINKER", "CARGO_CREDENTIAL_ALIA"] {
+            assert!(!withheld(name, &genuine, &session), "{name} was removed");
         }
         for name in [
             "RUSTUP_TOOLCHAIN",

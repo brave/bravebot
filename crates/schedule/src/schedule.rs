@@ -19,6 +19,8 @@
 use crate::{calendar, firing};
 use bravebot_core::ask::Asking;
 use bravebot_i18n::t;
+#[cfg(unix)]
+use bravebot_sandbox::programs::Names;
 use bravebot_session::{search, sessions};
 use firing::FIRING_VARIABLE;
 use std::fmt::Display;
@@ -649,24 +651,82 @@ fn with_line(table: &str, id: &str, line: Option<&str>) -> String {
     text
 }
 
+/// What `systemctl --user` reads to choose code to run, judged on top of the generic names.
+///
+/// - `DBUS_SESSION_BUS_ADDRESS` is read by `sd_bus_default_user`, which `systemctl --user` calls
+///   when `XDG_RUNTIME_DIR` is unset or its private socket cannot be reached (systemd v255
+///   `src/shared/bus-util.c` lines 242 to 258, `src/libsystemd/sd-bus/sd-bus.c` lines 1343 to
+///   1362). sd-bus accepts a `unixexec:` address and runs the program its `path=` names
+///   (`sd-bus.c` line 1058, `src/libsystemd/sd-bus/bus-socket.c` lines 1066 to 1069). The value is
+///   an address and not a path, which no [`Names`] kind judges, so it is removed whatever it holds
+///   ([`Names::Options`]) and sd-bus uses `unix:path=$XDG_RUNTIME_DIR/bus`, the address a systemd
+///   user session has. A person whose session bus is elsewhere gets `systemctl` calls that fail,
+///   and `succeeds` reports them as failed.
+/// - `SYSTEMD_UNIT_PATH` is a list of directories `lookup_paths_init` puts first when `systemctl`
+///   works on unit files itself (systemd v255 `src/basic/path-lookup.c` line 588,
+///   `src/systemctl/systemctl-util.c` lines 873 to 894).
+///
+/// `DBUS_SYSTEM_BUS_ADDRESS` is read only for system scope. `DBUS_STARTER_ADDRESS` and
+/// `DBUS_STARTER_BUS_TYPE` are read only by `sd_bus_default` and `sd_bus_open`, which `systemctl`
+/// does not call. `SYSTEMD_PAGER` and `PAGER` are read by `pager_open`, which none of
+/// `daemon-reload`, `enable` and `disable` calls. `SYSTEMD_LIB_DIR` is not in v255. No Linux run
+/// was made (SANDBOX-30, empty-list starts).
+#[cfg(unix)]
+const SYSTEMCTL_CODE_SELECTORS: [(&str, Names); 2] = [
+    ("DBUS_SESSION_BUS_ADDRESS", Names::Options),
+    ("SYSTEMD_UNIT_PATH", Names::Directories),
+];
+
 /// A scheduler's own program (`crontab`, `launchctl`, `systemctl`), started without this agent's
 /// credentials.
 #[cfg(unix)]
 fn tool(name: &str) -> Option<std::process::Command> {
     let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(name))?;
-    Some(bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(&found),
-        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
-        bravebot_sandbox::programs::SearchPath::Reduced,
-        // `crontab -l` and `crontab -`, `launchctl` and `systemctl --user`: no variable of its own
-        // is listed. The basis for `systemctl` is its manual page, which was read. The variables
-        // that run a program are `SYSTEMD_PAGER` and `PAGER`, which the manual describes as used to
-        // disable the pager unless `SYSTEMD_PAGERSECURE` is set, and `SYSTEMD_EDITOR`, `EDITOR` and
-        // `VISUAL`, which run only for `systemctl edit`, which is never called here. The starts
-        // send stdout and stderr to null. No run was made on Linux. The row for this file in
-        // SANDBOX-30 (empty-list starts) says which names stay out.
-        bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
+    Some(started(
+        &found,
+        std::env::vars_os(),
+        &bravebot_sandbox::programs::outside_stage_writable,
     ))
+}
+
+/// The command that starts the scheduler program found at `program`, against a given environment
+/// and a given judgment of which files are outside the directories a stage may write.
+///
+/// `systemctl` has [`SYSTEMCTL_CODE_SELECTORS`] removed as well as the generic names. `crontab` and
+/// `launchctl` have the generic names alone.
+#[cfg(unix)]
+fn started(
+    program: &Path,
+    held: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> std::process::Command {
+    let resolved = bravebot_sandbox::programs::Resolved::found_earlier(program);
+    let credentials = bravebot_config::scrub::own_credentials();
+    if bravebot_sandbox::programs::program_name(program).is_some_and(|name| name == "systemctl") {
+        bravebot_sandbox::programs::start_against(
+            &resolved,
+            bravebot_sandbox::programs::Inherits::Without(&credentials),
+            bravebot_sandbox::programs::SearchPath::Reduced,
+            bravebot_sandbox::programs::CodeSelectors::Checked(&SYSTEMCTL_CODE_SELECTORS),
+            held,
+            outside_stage_writable,
+        )
+    } else {
+        bravebot_sandbox::programs::start_against(
+            &resolved,
+            bravebot_sandbox::programs::Inherits::Without(&credentials),
+            bravebot_sandbox::programs::SearchPath::Reduced,
+            // `crontab -l` and `crontab -`, and `launchctl load` and `unload`: no variable of their
+            // own is listed. `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start
+            // runs. `launchctl` names `DYLD_INSERT_LIBRARIES`, which the generic table has, and
+            // `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. The starts send stdout and stderr to
+            // null. Neither was run. The row for this file in SANDBOX-30 (empty-list starts) says
+            // which names stay out.
+            bravebot_sandbox::programs::CodeSelectors::Checked(&[]),
+            held,
+            outside_stage_writable,
+        )
+    }
 }
 
 /// The person's crontab as it is, or `None` where it could not be read. A person with no crontab
@@ -2761,5 +2821,102 @@ mod tests {
             "the child did not run the test: {report}"
         );
         assert!(child.status.success(), "{report}");
+    }
+
+    /// Whether the start of `program` takes `name` off the environment when the person's
+    /// environment holds `value` for it, and the directory `stage` is one a stage may write.
+    #[cfg(unix)]
+    fn removed_by(program: &str, name: &str, value: &std::ffi::OsStr, stage: &Path) -> bool {
+        let writable = vec![stage.to_path_buf()];
+        started(
+            Path::new(program),
+            [(std::ffi::OsString::from(name), value.to_os_string())],
+            &|file: &Path| {
+                bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
+            },
+        )
+        .get_envs()
+        .any(|(set, now)| set == std::ffi::OsStr::new(name) && now.is_none())
+    }
+
+    /// SANDBOX-30. `systemctl --user` reads `DBUS_SESSION_BUS_ADDRESS`, which sd-bus lets name a
+    /// program to run (a `unixexec:` address), and `SYSTEMD_UNIT_PATH`, directories unit files are
+    /// read from. The list is from systemd v255 source and no Linux run was made. The address is
+    /// removed whatever it holds, because it is not a path. The unit path is removed whole when an
+    /// entry is where a stage may write, and kept when every entry is not. The regression it
+    /// rejects: `systemctl` started with the generic names alone; the unit path judged by its first
+    /// entry or as one path; the address kept when it names an installed file; or the two names
+    /// given to `crontab` and `launchctl`, which do not read them.
+    #[cfg(unix)]
+    #[test]
+    fn systemctl_has_its_session_bus_address_and_unit_path_checked() {
+        // The system temporary directory is one a stage is granted, so the safe directory is
+        // under the checkout's `target`.
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+        std::fs::create_dir_all(&target).expect("target");
+        let root = tempfile::tempdir_in(&target).expect("a directory");
+        let stage = root.path().join("stage");
+        let safe = root.path().join("safe");
+        let planted = stage.join("units");
+        let genuine = safe.join("units");
+        for directory in [&planted, &genuine] {
+            std::fs::create_dir_all(directory).expect("a directory");
+        }
+        let (stage, safe) = (
+            stage.canonicalize().expect("a path"),
+            safe.canonicalize().expect("a path"),
+        );
+        let (planted, genuine) = (stage.join("units"), safe.join("units"));
+        let mixed = std::env::join_paths([genuine.clone(), planted.clone()]).expect("a path");
+        let safe_list = std::env::join_paths([genuine.clone(), safe.clone()]).expect("a path");
+        let systemctl = "/usr/bin/systemctl";
+        let withheld =
+            |name: &str, value: &std::ffi::OsStr| removed_by(systemctl, name, value, &stage);
+
+        for address in [
+            format!("unixexec:path={}", planted.join("bus").display()),
+            format!("unixexec:path={}", genuine.join("bus").display()),
+            "unixexec:path=bravebot-bus-helper".to_string(),
+            "unix:path=/run/user/1000/bus".to_string(),
+            // A value that is an absolute path outside every stage-writable directory is still
+            // removed, because the variable holds an address and not a path.
+            genuine.display().to_string(),
+            String::new(),
+        ] {
+            assert!(
+                withheld("DBUS_SESSION_BUS_ADDRESS", std::ffi::OsStr::new(&address)),
+                "{address:?}"
+            );
+        }
+
+        assert!(withheld("SYSTEMD_UNIT_PATH", planted.as_os_str()));
+        assert!(withheld("SYSTEMD_UNIT_PATH", &mixed), "kept {mixed:?}");
+        assert!(withheld("SYSTEMD_UNIT_PATH", std::ffi::OsStr::new("units")));
+        assert!(!withheld("SYSTEMD_UNIT_PATH", genuine.as_os_str()));
+        assert!(!withheld("SYSTEMD_UNIT_PATH", &safe_list));
+
+        // Names it does not read, and programs that do not read these names.
+        assert!(!withheld("DBUS_SYSTEM_BUS_ADDRESS", planted.as_os_str()));
+        assert!(!withheld("XDG_RUNTIME_DIR", planted.as_os_str()));
+        assert!(withheld("LD_PRELOAD", planted.as_os_str()));
+        for program in [
+            "/usr/bin/crontab",
+            "/bin/launchctl",
+            "/usr/bin/systemctl-helper",
+        ] {
+            assert!(
+                !removed_by(program, "SYSTEMD_UNIT_PATH", planted.as_os_str(), &stage),
+                "{program}"
+            );
+            assert!(
+                !removed_by(
+                    program,
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    std::ffi::OsStr::new("unixexec:path=x"),
+                    &stage
+                ),
+                "{program}"
+            );
+        }
     }
 }

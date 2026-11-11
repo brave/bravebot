@@ -121,10 +121,9 @@ impl Drop for Held {
 
 /// Start `program` with `arguments`, its standard input a pipe this process holds open.
 ///
-/// The names the program looks up itself, such as the program a `unixexec:` bus address names to
-/// `systemd-inhibit`, are looked up on a `PATH` reduced to the entries `find` searches (SANDBOX-30).
-/// `powershell`, the inhibitor on Windows, is also given the variables it reads to choose code
-/// (`CODE_SELECTORS` in `powershell.rs`).
+/// The start is made by `powershell::start`, which removes the variables the program reads to
+/// choose code, such as `DBUS_SYSTEM_BUS_ADDRESS` for `systemd-inhibit` and the profiler variables
+/// for `powershell`, and which reduces `PATH` to the entries `find` searches (SANDBOX-30).
 pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> {
     let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
@@ -502,13 +501,15 @@ mod tests {
         assert!(passed, "{report}");
     }
 
-    /// SANDBOX-30: a name `systemd-inhibit` starts itself, as it does for the program a
-    /// `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names, is looked up on the `PATH` it was
-    /// given. The test binary runs again with `PATH` holding a directory the session keeps out, with
-    /// a `bravebot-bus-helper` in it ahead of an installed one, and a `systemd-inhibit` that starts
-    /// the name the address gives and then its command. The planted helper runs the installed one
-    /// after recording itself, so the inhibitor still reaches its end when the lookup is made wrongly.
-    /// A `PATH` left whole starts the planted file, and a `PATH` taken away finds no helper at all.
+    /// SANDBOX-30: a name `systemd-inhibit` starts itself is looked up on the `PATH` it was given.
+    /// The test binary runs again with `PATH` holding a directory the session keeps out, with a
+    /// `bravebot-bus-helper` in it ahead of an installed one, and a `systemd-inhibit` that records
+    /// the `DBUS_SYSTEM_BUS_ADDRESS` it was given, starts that name, and then its command. The
+    /// person's environment holds a `unixexec:` address naming the helper, which is the way the real
+    /// program is made to start a name. The planted helper runs the installed one after recording
+    /// itself, so the inhibitor still reaches its end when the lookup is made wrongly. A `PATH` left
+    /// whole starts the planted file, and an address that reaches the program is recorded. The
+    /// address is removed by the checked start (`SYSTEMD_INHIBIT_CODE_SELECTORS` in `powershell.rs`).
     #[cfg(unix)]
     #[test]
     fn a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written() {
@@ -531,6 +532,11 @@ mod tests {
             assert!(
                 session.join("installed-ran").exists(),
                 "the inhibitor did not start the installed program it looked up by name"
+            );
+            assert_eq!(
+                std::fs::read_to_string(session.join("address")).unwrap(),
+                "unset",
+                "the inhibitor was given the person's DBUS_SYSTEM_BUS_ADDRESS"
             );
             return;
         }
@@ -560,11 +566,13 @@ mod tests {
         script(
             &system,
             "systemd-inhibit",
-            "case \"$DBUS_SYSTEM_BUS_ADDRESS\" in\n\
-             unixexec:path=*) \"${DBUS_SYSTEM_BUS_ADDRESS#unixexec:path=}\";;\n\
-             esac\n\
-             while [ $# -gt 0 ]; do case \"$1\" in --*) shift;; *) break;; esac; done\n\
-             exec \"$@\" </dev/null",
+            &format!(
+                "printf '%s' \"${{DBUS_SYSTEM_BUS_ADDRESS-unset}}\" > '{}'\n\
+                 bravebot-bus-helper\n\
+                 while [ $# -gt 0 ]; do case \"$1\" in --*) shift;; *) break;; esac; done\n\
+                 exec \"$@\" </dev/null",
+                session.join("address").display()
+            ),
         );
         let path = std::env::join_paths([planted, system.clone()]).unwrap();
 

@@ -155,6 +155,11 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
             plan_mode_told,
             // Carried verbatim, like the integrity and for the same reason on the other axis.
             holds: snapshot.holds.clone(),
+            // Dropped, as the measurement is: the child sends its whole history until a turn of
+            // its own is over budget.
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
         },
         prompt: wanted,
     })
@@ -184,6 +189,9 @@ mod tests {
             asked_to_write: true,
             plan_mode_told: false,
             holds: "public".into(),
+            retrieval_cut: 0,
+            left_out: 0,
+            pinned: Vec::new(),
         }
     }
 

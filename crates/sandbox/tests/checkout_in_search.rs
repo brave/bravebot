@@ -5,7 +5,9 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
-use bravebot_sandbox::programs::{find_in, keep_out_with_checkout, registered, with_checkout};
+use bravebot_sandbox::programs::{
+    find_in, find_on, keep_out_with_checkout, registered, with_checkout,
+};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -187,6 +189,40 @@ fn the_checkout_root_and_a_directory_below_it_leave_out_the_same_bin() {
             None
         );
     }
+}
+
+/// The issue's reproduction through the lookup every start uses ([`find_on`], which reads what was
+/// recorded) and a fixture outside the system temporary directory, which the lookup always leaves
+/// out. With nothing recorded for the directory a command ran in, a program in the `bin` of the
+/// checkout above it is found, which is the defect. After the command's own record is made, it is
+/// not. Rejects a record that holds the directory and not the checkout (the program is still
+/// found), and a lookup that leaves out more than the recorded set (the control program elsewhere
+/// is no longer found).
+#[test]
+fn a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin() {
+    let repo = fresh("find-on-reproduction");
+    let here = repo.join("crates").join("cli");
+    std::fs::create_dir_all(&here).unwrap();
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let planted = executable(&repo.join("bin"), "bravebot-planted-program");
+    let elsewhere = fresh("find-on-reproduction-elsewhere");
+    let installed = executable(&elsewhere.join("bin"), "bravebot-planted-program");
+    let program = OsStr::new("bravebot-planted-program");
+    let path = path_of(&[&repo.join("bin"), &elsewhere.join("bin")]);
+
+    assert_eq!(
+        find_on(program, &path),
+        Some(planted),
+        "nothing recorded: the checkout's bin is searched first"
+    );
+
+    keep_out_with_checkout(&here);
+
+    assert_eq!(
+        find_on(program, &path),
+        Some(installed),
+        "recorded: the checkout's bin is skipped and the one after it is found"
+    );
 }
 
 /// Recording a directory records the checkout holding it, which is what the lookups of a running

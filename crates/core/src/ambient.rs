@@ -518,14 +518,15 @@ pub fn at_host(host: &str) -> Option<Spent> {
     })
 }
 
-/// The last component of a program as a line spelled it, without the `.exe` or `.com` Windows
-/// writes ([`crate::permissions::without_extension`], which the wrapper table is read through).
+/// The last component of a program as a line spelled it, read as a rule reads the program word:
+/// without the trailing dots, `::$DATA` suffix and `.exe`, `.com`, `.cmd` or `.bat` Windows ignores
+/// ([`crate::permissions::without_suffixes`], which the wrapper table is read through).
 ///
 /// A path and a bare name are the same claim about which authority a program reaches, so
 /// `/usr/bin/docker`, `./docker` and `docker` are one answer.
 fn program_name(spelled: &str) -> &str {
     let named = spelled.rsplit(['/', '\\']).next().unwrap_or(spelled);
-    crate::permissions::without_extension(named).unwrap_or(named)
+    crate::permissions::without_suffixes(named).unwrap_or(named)
 }
 
 #[cfg(test)]
@@ -681,7 +682,8 @@ mod tests {
         assert!(names("timeout", &["30", "ls"]).is_empty());
     }
 
-    /// The wrapper is spelled as PERM-20 reads it: in any case and with `.exe` or `.com`.
+    /// The wrapper is spelled as PERM-20 reads it: in any case and with `.exe` or `.com` (the other
+    /// spellings are in the test below).
     #[test]
     fn a_wrapper_is_read_in_any_case_and_with_an_extension() {
         let daemon = names("docker", &["ps"]);
@@ -692,6 +694,40 @@ mod tests {
         assert_eq!(names("timeout", &["30", "docker.com", "ps"]), daemon);
         assert_eq!(names("timeout", &["30", "DOCKER.EXE", "ps"]), daemon);
         assert_eq!(names("docker.com", &["ps"]), daemon);
+    }
+
+    /// The program word is read as the permission rules read it (PERM-5): without trailing dots,
+    /// a `::$DATA` suffix, and `.cmd` or `.bat` as well as `.exe` and `.com`. One fold serves both,
+    /// so a spelling the rules cover is a spelling that names the authority too (CRED-5).
+    #[test]
+    fn a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them() {
+        let daemon = names("docker", &["ps"]);
+        assert_ne!(daemon, names("ls", &[]));
+        for program in [
+            "docker.",
+            "docker.exe.",
+            "docker::$DATA",
+            "docker.exe::$DATA",
+            "DOCKER.CMD",
+            "docker.bat",
+            "C:\\bin\\docker.bat",
+        ] {
+            assert_eq!(names(program, &["ps"]), daemon, "{program}");
+            assert_eq!(
+                names("timeout", &["30", program, "ps"]),
+                daemon,
+                "{program}"
+            );
+        }
+        for wrapper in [
+            "timeout.",
+            "timeout.exe.",
+            "timeout::$DATA",
+            "TIMEOUT.CMD",
+            "timeout.bat",
+        ] {
+            assert_eq!(names(wrapper, &["30", "docker", "ps"]), daemon, "{wrapper}");
+        }
     }
 
     /// The metadata service is reached by address rather than by a program, so the address is

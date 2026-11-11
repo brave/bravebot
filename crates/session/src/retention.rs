@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime};
 /// What a sweep removed, by kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Removed {
-    /// Session records, each with the trail and the search index beside it.
+    /// Session records, each with the trail, the search index and the vectors beside it.
     pub sessions: usize,
     /// Language server indexes.
     pub indexes: usize,
@@ -160,11 +160,11 @@ mod tests {
             path
         }
 
-        /// A session record with a trail, a search index and a temporary file beside it, all last
+        /// A session record with a trail, a search index, vectors and a temporary file beside it, all last
         /// written `seconds` ago. Returns the record's path.
         fn record(&self, project: &str, id: &str, seconds: u64) -> PathBuf {
             let directory = format!("sessions/{project}");
-            for extension in ["audit.jsonl", "search", "tmp"] {
+            for extension in ["audit.jsonl", "search", "vectors", "tmp"] {
                 self.put(&format!("{directory}/{id}.{extension}"), "words", seconds);
             }
             self.put(&format!("{directory}/{id}.json"), "{}", seconds)
@@ -192,8 +192,9 @@ mod tests {
         NonZeroU32::new(count).expect("a period above zero")
     }
 
-    fn ids(id: &str) -> [String; 4] {
-        ["json", "audit.jsonl", "search", "tmp"].map(|extension| format!("{id}.{extension}"))
+    fn ids(id: &str) -> [String; 5] {
+        ["json", "audit.jsonl", "search", "vectors", "tmp"]
+            .map(|extension| format!("{id}.{extension}"))
     }
 
     fn files_of(state: &State, project: &str, id: &str) -> Vec<bool> {
@@ -211,7 +212,7 @@ mod tests {
     }
 
     /// STATE-4: a record not written for longer than the period goes with the trail, the search
-    /// index and the temporary file beside it, in every project, and one written inside the period
+    /// index, the vectors and the temporary file beside it, in every project, and one written inside the period
     /// stays whole. The newer record is what tells this from a sweep that empties the directory.
     #[test]
     fn a_record_older_than_the_period_is_removed_with_what_is_beside_it_and_a_newer_one_is_kept() {
@@ -223,9 +224,9 @@ mod tests {
         let removed = sweep(&state.path, days(30), SystemTime::now(), InUse::default());
 
         assert_eq!(removed.sessions, 2);
-        assert_eq!(files_of(&state, "one", "aaaa-old"), [false; 4]);
-        assert_eq!(files_of(&state, "two", "cccc-old"), [false; 4]);
-        assert_eq!(files_of(&state, "one", "bbbb-new"), [true; 4]);
+        assert_eq!(files_of(&state, "one", "aaaa-old"), [false; 5]);
+        assert_eq!(files_of(&state, "two", "cccc-old"), [false; 5]);
+        assert_eq!(files_of(&state, "one", "bbbb-new"), [true; 5]);
     }
 
     /// STATE-4, SESSION-19: the record of the session this process is in is kept at any age, because
@@ -248,11 +249,11 @@ mod tests {
         );
 
         assert_eq!(removed.sessions, 1);
-        assert_eq!(files_of(&state, "one", "running-session"), [true; 4]);
-        assert_eq!(files_of(&state, "one", "another-session"), [false; 4]);
+        assert_eq!(files_of(&state, "one", "running-session"), [true; 5]);
+        assert_eq!(files_of(&state, "one", "another-session"), [false; 5]);
 
         sweep(&state.path, days(30), SystemTime::now(), InUse::default());
-        assert_eq!(files_of(&state, "one", "running-session"), [false; 4]);
+        assert_eq!(files_of(&state, "one", "running-session"), [false; 5]);
     }
 
     /// STATE-4: a record's age is the time its file was written and nothing it says. A record whose
@@ -295,8 +296,8 @@ mod tests {
         let removed = sweep(&state.path, days(1), SystemTime::now(), InUse::default());
 
         assert_eq!(removed.sessions, 1);
-        assert_eq!(files_of(&state, "one", "today"), [true; 4]);
-        assert_eq!(files_of(&state, "one", "earlier"), [false; 4]);
+        assert_eq!(files_of(&state, "one", "today"), [true; 5]);
+        assert_eq!(files_of(&state, "one", "earlier"), [false; 5]);
     }
 
     /// STATE-4: a file stamped later than now, by a clock that was wrong when it was written, is not
@@ -324,13 +325,14 @@ mod tests {
     }
 
     /// STATE-4: a trail or a temporary file with no record is what an interrupted first save leaves,
-    /// and it holds the conversation as the record would, so it goes by its own age. One beside a
-    /// record that is itself recent stays with it.
+    /// and it holds the conversation as the record would, so it goes by its own age. Vectors with no
+    /// record go the same way. One beside a record that is itself recent stays with it.
     #[test]
     fn a_trail_or_temporary_file_with_no_record_goes_by_its_own_age() {
         let state = State::new("retention-orphans");
         let old_trail = state.put("sessions/one/lost.audit.jsonl", "words", 40 * DAY);
         let old_temporary = state.put("sessions/one/lost.tmp", "words", 40 * DAY);
+        let old_vectors = state.put("sessions/one/lost.vectors", "numbers", 40 * DAY);
         let new_trail = state.put("sessions/one/begun.audit.jsonl", "words", 60);
         let paired = state.put("sessions/one/paired.audit.jsonl", "words", 40 * DAY);
         state.put("sessions/one/paired.json", "{}", 60);
@@ -340,6 +342,7 @@ mod tests {
         assert_eq!(removed.sessions, 0, "an orphan is not a record");
         assert!(!old_trail.exists());
         assert!(!old_temporary.exists());
+        assert!(!old_vectors.exists());
         assert!(
             new_trail.exists(),
             "a trail written a minute ago was removed"
@@ -540,8 +543,8 @@ mod tests {
         .expect("the sweep finished");
 
         assert_eq!(removed.sessions, 1);
-        assert_eq!(files_of(&state, "one", "old-session"), [false; 4]);
-        assert_eq!(files_of(&state, "one", "running-session"), [true; 4]);
+        assert_eq!(files_of(&state, "one", "old-session"), [false; 5]);
+        assert_eq!(files_of(&state, "one", "running-session"), [true; 5]);
     }
     /// STATE-4: the index of the workspace the session starting is in is kept at any age, and the
     /// workspace reaches the sweep from the caller: another workspace's index of the same age goes.
@@ -616,8 +619,8 @@ mod tests {
         let removed = sweep(&state.path, days(30), SystemTime::now(), InUse::default());
 
         assert_eq!(removed.sessions, 1);
-        assert_eq!(files_of(&state, "one", "0b0b0b0b-1111"), [true; 4]);
-        assert_eq!(files_of(&state, "one", "another-session"), [false; 4]);
+        assert_eq!(files_of(&state, "one", "0b0b0b0b-1111"), [true; 5]);
+        assert_eq!(files_of(&state, "one", "another-session"), [false; 5]);
 
         // A lock is released when the last copy of its file closes, and a process another test is
         // starting holds a copy until it execs, so the release is waited for rather than assumed.
@@ -625,13 +628,13 @@ mod tests {
         let until = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             sweep(&state.path, days(30), SystemTime::now(), InUse::default());
-            let gone = files_of(&state, "one", "0b0b0b0b-1111") == [false; 4];
+            let gone = files_of(&state, "one", "0b0b0b0b-1111") == [false; 5];
             if gone || std::time::Instant::now() >= until {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(files_of(&state, "one", "0b0b0b0b-1111"), [false; 4]);
+        assert_eq!(files_of(&state, "one", "0b0b0b0b-1111"), [false; 5]);
     }
 
     /// STATE-4: the directory of the project the session starting is in is not removed, because that
@@ -654,6 +657,6 @@ mod tests {
         assert_eq!(removed.sessions, 2);
         assert!(state.path.join("sessions").join(&key).is_dir());
         assert!(!state.path.join("sessions/elsewhere").exists());
-        assert_eq!(files_of(&state, &key, "old-session"), [false; 4]);
+        assert_eq!(files_of(&state, &key, "old-session"), [false; 5]);
     }
 }

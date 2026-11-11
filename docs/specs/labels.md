@@ -232,6 +232,7 @@ guards:
     sites:
       - crates/agent/src/images.rs: 1
       - crates/aichat/src/anthropic.rs: 2
+      - crates/aichat/src/embeddings.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1
       - crates/aichat/src/lib.rs: 3

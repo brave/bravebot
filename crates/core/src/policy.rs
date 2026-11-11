@@ -3599,6 +3599,63 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record what one retrieval sent in place of the messages its cut stopped sending.
+    ///
+    /// Counts and nothing else, as [`Policy::record_compaction`] writes: the excerpts themselves
+    /// are already in the record, and the trail carries no content.
+    pub fn record_retrieval(
+        &mut self,
+        round: usize,
+        sent: usize,
+        considered: usize,
+        tokens: u64,
+        passed: usize,
+        latency_ms: u64,
+    ) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: {sent} excerpt(s) of {considered} chunk(s) sent, about {tokens} \
+                 tokens, {passed} message(s) no longer sent, the query took {latency_ms} ms"
+            ),
+        );
+    }
+
+    /// Record that a round could not retrieve, and so compacts instead.
+    ///
+    /// `why` is one of the driver's own fixed words for the failure, never anything a service
+    /// replied, so the trail carries no content.
+    pub fn record_retrieval_fallback(&mut self, round: usize, why: &'static str) {
+        self.allow(
+            "retrieve",
+            format!("round {round}: could not retrieve ({why}), so the conversation is summarised"),
+        );
+    }
+
+    /// Record that a round within its budget could not find excerpts for its prompt, and goes on
+    /// without them. Nothing is summarised: the request fits.
+    pub fn record_retrieval_skipped(&mut self, round: usize, why: &'static str) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: could not retrieve ({why}), so the prompt goes without excerpts"
+            ),
+        );
+    }
+
+    /// Record that a round over its budget moved the retrieval cut without excerpts because the
+    /// vectors are still being built, rather than summarising. `passed` is how many messages the
+    /// cut moved past. A later round finds the excerpts once the vectors are ready.
+    pub fn record_retrieval_deferred(&mut self, round: usize, passed: usize) {
+        self.allow(
+            "retrieve",
+            format!(
+                "round {round}: the index is still being built, so {passed} earlier message(s) \
+                 are left out without excerpts until it is"
+            ),
+        );
+    }
+
     /// Record a reply the output ceiling stopped: what it was part way through, and what the
     /// turn did about it.
     ///
@@ -7373,8 +7430,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// built in one place and a caller cannot arrive with a different spelling of the same step.
     pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
         let words = rule_words(program, args);
+        self.refuse_a_short_name(&words)?;
         let decision = self.permissions.for_command(&words);
         self.refuse_if_denied("run", decision, &named_in_a_refusal(program))
+    }
+
+    /// Refuse a stage whose program is an 8.3 short name while a `deny` or `ask` command rule is
+    /// in force (PERM-5).
+    ///
+    /// A short name is a second spelling of a file, and which file cannot be read off the word, so
+    /// no rule can be matched against it. The refusal is on the word as it was written and the
+    /// rules in force; the same word with no such rule runs as it did.
+    ///
+    /// The refusal says the line is the short name only where the program word is. Under a
+    /// wrapper the short name is a later word, which may be an operand the compiler took from a
+    /// glob, so the line is said to run one and the word is not repeated ([`named_in_a_refusal`]).
+    fn refuse_a_short_name(&mut self, words: &[&str]) -> Gated<()> {
+        if let Some(depth) = self.permissions.short_name_depth(words) {
+            let line = named_in_a_refusal(words[0]);
+            let what = if depth == 0 { "is" } else { "runs" };
+            return Err(self.deny(
+                "run",
+                Principle::Capability,
+                format!(
+                    "{line} {what} an 8.3 short name, which a command rule cannot be matched against"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -7393,6 +7476,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// line and nothing between the two calls can change it.
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         for words in Self::plan_words(plan) {
+            self.refuse_a_short_name(&words)?;
             let decision = self.permissions.for_command(&words);
             self.refuse_if_denied("run", decision, &named_in_a_refusal(words[0]))?;
         }
@@ -15373,9 +15457,15 @@ five
             ("TOUCH", &["x"]),
             ("Touch", &["x"]),
             ("touch.exe", &["x"]),
+            ("touch.exe.", &["x"]),
+            ("touch.exe::$DATA", &["x"]),
+            ("touch.cmd", &["x"]),
+            ("TOUCH.BAT", &["x"]),
             ("ENV", &["touch", "x"]),
             ("env.exe", &["FOO=bar", "TOUCH.exe", "x"]),
             ("TIMEOUT", &["5", "touch", "x"]),
+            ("timeout.exe.", &["5", "touch", "x"]),
+            ("nice.cmd", &["touch.bat", "x"]),
         ] {
             let args_owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
             assert!(
@@ -15400,6 +15490,112 @@ five
             policy.before_command_rules("toucher", &[]).is_ok(),
             "a program that only starts with the rule's name was refused"
         );
+    }
+
+    /// A program written as an 8.3 short name is refused at both gates while a `deny` or `ask`
+    /// command rule is in force, since no rule can be matched against a name whose file is not
+    /// readable off the word (PERM-5). The same word is not refused when no rule restricts a
+    /// command, and a program given by a path is left to the rules as before.
+    #[test]
+    fn a_short_name_program_is_refused_at_both_gates_only_under_a_restricting_rule() {
+        for permissions in [
+            permissions(&["Bash(powershell *)"], &[], &[]),
+            permissions(&[], &["Bash(powershell *)"], &[]),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink).with_permissions(permissions);
+            for (program, args) in [
+                ("POWERS~1", &["x"][..]),
+                ("powers~1.exe", &["x"]),
+                ("POWERS~1.", &["x"]),
+                ("TIMEOU~1", &["5", "echo"]),
+                ("env", &["POWERS~1", "x"]),
+            ] {
+                let args_owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+                assert!(
+                    policy.before_command_rules(program, &args_owned).is_err(),
+                    "{program} {args:?} was not refused before the program was looked for"
+                );
+                assert!(
+                    policy
+                        .before_plan_rules(&plan_of(vec![step_named(program, args)]))
+                        .is_err(),
+                    "{program} {args:?} was not refused on the compiled plan"
+                );
+            }
+            assert!(policy.before_command_rules("echo", &[]).is_ok());
+            assert!(
+                policy
+                    .before_command_rules("/usr/bin/POWERS~1", &[])
+                    .is_ok()
+            );
+        }
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["Bash(echo *)"]));
+        assert!(policy.before_command_rules("POWERS~1", &[]).is_ok());
+        assert!(
+            policy
+                .before_plan_rules(&plan_of(vec![step_named("POWERS~1", &["x"])]))
+                .is_ok()
+        );
+    }
+
+    /// The refusal of a short name says which word is the short name. A program that is one is
+    /// named. A short name under a wrapper is not: the word may be an operand the compiler took
+    /// from a glob, which a refusal does not carry to the planner ([CMDLINE-4]), so the wrapper is
+    /// named as running one. Reading `env POWERS~1 x` as "`env` is an 8.3 short name" is what an
+    /// implementation that names the first word, whatever the short name is, would say.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    #[test]
+    fn a_short_name_refusal_names_the_short_name_and_not_the_wrapper_over_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["Bash(powershell *)"], &[], &[]));
+        let wrapped =
+            |args: &[&str]| -> Vec<String> { args.iter().map(|arg| (*arg).to_string()).collect() };
+
+        let direct = policy
+            .before_command_rules("POWERS~1", &wrapped(&["x"]))
+            .expect_err("a short name program was run");
+        assert!(
+            direct
+                .message
+                .contains("`POWERS~1` command line is an 8.3 short name"),
+            "{}",
+            direct.message
+        );
+
+        for (program, args) in [
+            ("env", &["POWERS~1", "x"][..]),
+            ("timeout", &["5", "POWERS~1", "x"]),
+            ("env", &["FOO=bar", "env", "POWERS~1"]),
+        ] {
+            let argv = wrapped(args);
+            let at_the_command = policy
+                .before_command_rules(program, &argv)
+                .expect_err("a short name under a wrapper was run")
+                .message;
+            let at_the_plan = policy
+                .before_plan_rules(&plan_of(vec![step_named(program, args)]))
+                .expect_err("a short name under a wrapper was run on the plan")
+                .message;
+            for message in [at_the_command, at_the_plan] {
+                assert!(
+                    !message.contains("is an 8.3 short name"),
+                    "{program} {args:?} said the wrapper is the short name: {message}"
+                );
+                assert!(
+                    message.contains(&format!("`{program}` command line runs an 8.3 short name")),
+                    "{program} {args:?}: {message}"
+                );
+                assert!(
+                    !message.contains("POWERS~1"),
+                    "{program} {args:?} carried an operand into the refusal: {message}"
+                );
+            }
+        }
     }
 
     /// The line an allow rule must not cross. A pattern covers commands nobody has read, so it

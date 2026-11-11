@@ -23,6 +23,12 @@ pub const PREMIUM_ENDPOINT: &str = "BRAVE_AI_CHAT_PREMIUM_ENDPOINT";
 /// with whatever else wanted the name.
 pub const DEFAULT_MODEL: &str = "BRAVEBOT_DEFAULT_MODEL";
 
+/// Set to `1` to offer Brave's embeddings service to retrieval, which is otherwise left out until
+/// its endpoint is public.
+///
+/// Absent from ALL, so no build bakes it in: it is for whoever is working on that service.
+pub const BRAVE_EMBEDDINGS: &str = "BRAVEBOT_BRAVE_EMBEDDINGS";
+
 /// How many prompt tokens a conversation may reach before it is compacted.
 ///
 /// Deliberately absent from ALL, so it is never baked into a binary. The others are credentials
