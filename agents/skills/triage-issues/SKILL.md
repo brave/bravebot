@@ -140,7 +140,8 @@ or because the issue mentions the platform. A defect in shared code that only ap
 developed on any host, since `make check-linux` and the other Docker checks cover the other
 platforms. An issue that needs two platforms gets both labels. A label a person set stays, and one
 that the verdict made wrong (a STALE issue whose surviving ask is shared code) is removed, with the
-reason in the comment.
+reason in the comment. A label an earlier triage run applied is not a person's: one the evidence no
+longer supports is removed the same way.
 
 The labels must exist. If `gh label list --repo brave/bravebot --search develop-on` lacks one, skip
 that label, say so in the report and give the creation command from
@@ -260,8 +261,17 @@ gh issue list --state open --limit 200 --json number,labels \
       | select($d | length > 0) | "#\(.number) \($d | join(","))"'
 ```
 
-An issue on this list that the run judged `any`, or an issue judged platform-only that is not on
-it, is an edit Step 5 missed.
+An issue judged platform-only that is not on this list is an `--add-label` Step 5 missed. An issue
+on it that the run judged `any` is a missed `--remove-label` only where the label came from an
+earlier triage run (the issue's `labeled` event names the account the run used) or the verdict made
+it wrong. Where a person set it, the label stays, and the issue is listed in the report for a human
+decision with the evidence for `any`:
+
+```bash
+gh api repos/brave/bravebot/issues/N/events \
+  -q '.[] | select(.event == "labeled" and (.label.name | startswith("develop-on/")))
+      | "\(.actor.login) \(.label.name)"'
+```
 
 ---
 
