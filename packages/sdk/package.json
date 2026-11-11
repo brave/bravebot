@@ -1,6 +1,6 @@
 {
   "name": "@brave/bravebot-sdk",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "A thin typed wrapper that runs the bravebot command line and reads its event stream",
   "license": "MPL-2.0",
   "private": true,
