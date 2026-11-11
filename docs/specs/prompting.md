@@ -149,8 +149,14 @@ Pictures character reads back as the quoting or the picture this paragraph just 
 name holding one as ordinary text would draw the same as a different name whose marking produced
 that spelling. A literal `\` is spelled `\\` once a name is quoted for one of these reasons, for
 the same cause, but is not by itself one of them: left alone in a name that is otherwise plain, such
-as a Windows path, it is not confusable with anything, so such a name is drawn as it is. The
-terminal and the desktop window also
+as a Windows path, it is not confusable with anything, so such a name is drawn as it is. Inside
+those quotes a control character below U+0020 is drawn as its Control Picture, DEL as `␡` and a C1
+control (U+0080 to U+009F) as `\u{..}`, its code point in hex. Free text drawn by
+`bravebot_agent::confirm::printable` writes a C1 control as `‹U+XXXX›` instead
+([LAYER-3](layering.md#LAYER-3)); the two differ because a quoted name already escapes with a
+backslash and `printable` text has no quotes to mark. Neither form draws as one of the enclosed
+alphanumerics U+2480 to U+249F.
+The terminal and the desktop window also
 spell a byte of a path that is not part of a UTF-8 character as `\xNN`, so two paths that differ
 only in such bytes are not drawn alike. Any other name is drawn as it is. The one-line description a
 front end draws in place of the prompt, such as the question in lines and an editor's title, names

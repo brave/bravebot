@@ -150,6 +150,7 @@ test('electron on linux starts any xdg-open for showItemInFolder without the fif
   inElectronRoot(context, (root) => {
     const control = started(root, 'direct', 'folder')
     assert.notEqual(control.length, 0, 'showItemInFolder started no xdg-open on Electron\'s own shell, so the run says nothing about the deletion')
+    console.log(`showItemInFolder control started xdg-open with: ${JSON.stringify(control.map((record) => record.call))}`)
     for (const record of control) assert.deepEqual(record.names.sort(), [...NAMES].sort(), `${record.call} was started with ${record.names}`)
 
     const through = started(root, 'through', 'folder')

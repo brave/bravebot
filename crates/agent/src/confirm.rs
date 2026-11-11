@@ -1156,20 +1156,32 @@ pub fn shown_text(text: &str) -> String {
 ///
 /// The one implementation behind every `printable` a front end draws through. The margin in front
 /// of a row is written by the caller, and an escape sequence in the content would let the content
-/// write one instead, so each control character becomes its Unicode picture (an escape reads as
-/// `␛`) and is not dropped: a character silently removed is one nobody can tell was ever there.
-/// A tab is kept, for a surface that lays it out as indentation (a diff body in `--plain` or in an
-/// editor). [`printable_with_tab_pictured`] pictures it as well, for the terminal interface, whose
-/// drawing library drops a tab without drawing anything.
+/// write one instead, so each control character is replaced and none is dropped: a character
+/// silently removed is one nobody can tell was ever there. What each range becomes:
 ///
-/// A map from characters to characters: no branch is taken on what the text says.
+/// - U+0000 to U+001F become their Control Pictures (U+2400 to U+241F), so an escape reads as `␛`.
+///   A tab is the exception: it is kept, for a surface that lays it out as indentation (a diff body
+///   in `--plain` or in an editor). [`printable_with_tab_pictured`] pictures it as `␉`, for the
+///   terminal interface, whose drawing library drops a tab without drawing anything.
+/// - U+007F (DEL) becomes `␡` (U+2421), the picture the block has for it.
+/// - U+0080 to U+009F (the C1 controls) have no picture, and 0x2400 plus their value lands on the
+///   enclosed alphanumerics (U+0085 on `⒅`), which are ordinary text. Each is written as
+///   `‹U+XXXX›` as [`bravebot_core::invisible::spelled`] writes a character that draws as nothing,
+///   so two different controls draw differently and neither draws as one of the enclosed
+///   alphanumerics. A name that holds the characters `‹U+0085›` or `␡` itself still draws the same
+///   as the control it spells. U+FFFD was the other candidate; it is also what an invalid byte and a
+///   literal U+FFFD draw as.
+///
+/// A map from characters to characters, chosen by the character's code point alone: no branch is
+/// taken on what the text says.
 pub fn printable(text: &str) -> String {
     pictured(text, true)
 }
 
-/// [`printable`] with a tab pictured (`␉`) like every other control character.
+/// [`printable`] with a tab pictured (`␉`) like every other C0 control character.
 ///
-/// For the terminal interface. A caller that lays a tab out as width does so before this.
+/// For the terminal interface. A caller that lays a tab out as width does so before this. DEL and
+/// the C1 controls are drawn as [`printable`] draws them.
 pub fn printable_with_tab_pictured(text: &str) -> String {
     pictured(text, false)
 }
@@ -1178,15 +1190,19 @@ fn pictured(text: &str, keep_tab: bool) -> String {
     if !text.chars().any(char::is_control) {
         return text.to_string();
     }
-    text.chars()
-        .map(|c| {
-            if !c.is_control() || (keep_tab && c == '\t') {
-                c
-            } else {
-                char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')
+    let mut out = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        match c {
+            '\t' if keep_tab => out.push(c),
+            '\u{7f}' => out.push('\u{2421}'),
+            '\u{0}'..='\u{1f}' => {
+                out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
             }
-        })
-        .collect()
+            _ if c.is_control() => out.push_str(&bravebot_core::invisible::written_out(c)),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// One argument of a call to a server's tool, as the rows a person reads it in (SERVERS-7).
@@ -3475,15 +3491,16 @@ mod tests {
         }
     }
 
-    /// LAYER-3: every control character is drawn as its picture and none is dropped. A string with
+    /// LAYER-3: every control character is drawn as a mark for it and none is dropped. A string with
     /// none comes back as it was, so text that needs no change is not altered.
     #[test]
-    fn a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged() {
+    fn a_control_character_is_drawn_as_a_mark_for_it_and_other_text_is_unchanged() {
         for plain in [
             "",
             "note.md",
             "two words.md",
             "caf\u{e9} \u{1f600} \u{202e}",
+            "\u{2421}\u{2485}\u{249f}\u{fffd}",
         ] {
             assert_eq!(printable(plain), plain, "{plain:?}");
             assert_eq!(printable_with_tab_pictured(plain), plain, "{plain:?}");
@@ -3494,10 +3511,50 @@ mod tests {
             ("a\u{0}b", "a\u{2400}b"),
             ("a\u{1f}b", "a\u{241f}b"),
             ("a\u{1b}[31mred", "a\u{241b}[31mred"),
+            ("a\u{7f}b", "a\u{2421}b"),
+            ("a\u{85}b", "a\u{2039}U+0085\u{203a}b"),
         ] {
             assert_eq!(printable(text), drawn, "{text:?}");
             assert_eq!(printable_with_tab_pictured(text), drawn, "{text:?}");
         }
+    }
+
+    /// LAYER-3: DEL and each C1 control draw as a mark that differs from the old one and from each
+    /// other. The old mapping added 0x2400 to the code point, which put DEL on U+247F and the C1
+    /// controls on the enclosed alphanumerics U+2480 to U+249F, so `a<U+0085>b` drew as `a⒅b`, the
+    /// same as a literal U+2485. A name that holds a literal `‹U+0085›` or U+2421 still draws the
+    /// same as the control it spells.
+    #[test]
+    fn del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as() {
+        assert_eq!(printable("\u{7f}"), "\u{2421}");
+        assert_eq!(printable_with_tab_pictured("\u{7f}"), "\u{2421}");
+        let mut seen = std::collections::HashSet::new();
+        for code in 0x80..=0x9f_u32 {
+            let c = char::from_u32(code).unwrap();
+            let text = format!("a{c}b");
+            let drawn = printable(&text);
+            assert_eq!(drawn, printable_with_tab_pictured(&text), "{code:#x}");
+            assert_eq!(
+                drawn,
+                format!("a\u{2039}U+{code:04X}\u{203a}b"),
+                "{code:#x}"
+            );
+            assert!(!drawn.chars().any(char::is_control), "{code:#x}");
+            let old = char::from_u32(0x2400 + code).unwrap();
+            assert_ne!(drawn, format!("a{old}b"), "{code:#x}");
+            assert!(seen.insert(drawn), "{code:#x} draws as another control");
+        }
+        assert_ne!(printable("a\u{85}b"), printable("a\u{2485}b"));
+        assert_ne!(printable("\u{85}"), "\u{2485}");
+        assert_ne!(printable("\u{7f}"), "\u{247f}");
+        assert_eq!(
+            printable("\t\u{7f}\u{85}"),
+            "\t\u{2421}\u{2039}U+0085\u{203a}"
+        );
+        assert_eq!(
+            printable_with_tab_pictured("\t\u{7f}\u{85}"),
+            "\u{2409}\u{2421}\u{2039}U+0085\u{203a}"
+        );
     }
 
     /// LAYER-3: the terminal interface pictures a tab, because its drawing library drops one, and

@@ -228,8 +228,11 @@ this machine, and this clause says nothing of whether it can listen, since no te
 stage with no network, or held to a proxy's port, is in the network namespace described above,
 which holds no listener of the host's loopback, and a request for loopback does not take a stage
 with no network out of it. On Windows a policy that names loopback asks for the same capabilities,
-makes the same grants and is refused or applied as the same policy without it. No test connects to
-or listens on a port from a container, so this clause says nothing of either on Windows.
+makes the same grants and is refused or applied as the same policy without it. One test connects
+to a listener of this machine's loopback from a container granted the network
+(`a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`). The connect does not
+reach the listener: it ends `refused: connection timed out`, by timing out and not by an immediate
+refusal. No test listens on a port from a container, so this clause says nothing of listening.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
@@ -291,6 +294,7 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::windows::no_grant_lets_a_confined_process_rewrite_an_access_list`
 `verified-by: bravebot_sandbox::windows::a_container_connects_out_only_when_its_policy_asks_for_the_network`
 `verified-by: bravebot_sandbox::windows::a_container_without_the_network_cannot_look_up_a_name`
+`verified-by: bravebot_sandbox::windows::a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`
 
 <a id="SANDBOX-4"></a>
 ### SANDBOX-4: content cannot inject into the syntax a backend writes it into
@@ -395,6 +399,7 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
 `verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_applied`
 `verified-by: bravebot_sandbox::windows::the_job_bounds_processes_only_where_the_policy_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses`
 `verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
 `verified-by: bravebot_sandbox::windows::a_reused_process_identifier_and_sequence_still_get_a_profile_of_their_own`
 `verified-by: bravebot_sandbox::windows::a_profile_name_fits_what_the_platform_accepts`
@@ -429,7 +434,8 @@ On Windows a grant is an entry that what is beneath the directory inherits, and 
 not what a junction beneath the directory leads to. That is shown for a junction made from outside a
 stage. The backend makes no reparse-point check when it writes an entry, and whether a grant crosses
 a junction a stage made inside a directory it was granted for writing has not been observed on
-Windows; it is listed with the known costs.
+Windows: no stage could make one, by `mklink /J` or by a program calling `FSCTL_SET_REPARSE_POINT`
+(access is denied). It is listed with the known costs.
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -787,7 +793,10 @@ and, where the platform has one as a file, the null device. Egress and children 
 the filesystem; a session may take egress from a stage afterwards ([SANDBOX-20](#SANDBOX-20)). A platform whose prelude is not written down has no base, and so nothing to
 assemble a profile from. The Windows prelude is empty: an AppContainer reads `C:\Windows` and the
 Program Files directories without an entry of its own, and a row there would be an entry only an
-account holding the right to change those directories could write.
+account holding the right to change those directories could write. A Windows session with a
+directory of its own is granted a `temp` directory inside it in place of the temporary-directory
+row, and a stage is handed `TEMP` and `TMP` naming it ([trust-map.md](trust-map.md#TRUST-14)). A
+container's own `TEMP` is its `AC\Temp`, not the handed-over directory (Known costs).
 
 **Why.** A profile denies everything and then names what may be reached, so something has to
 carry what every program needs before any plan is read: a dynamic executable without its loader
@@ -1533,11 +1542,17 @@ the policy. Where the policy denies subprocesses the job holds a limit of one ac
 is the stage itself, so the program it started is the only one in it and a second is refused by the
 platform; where the policy allows subprocesses there is no such limit. Killing the stage
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
-process is let go of and the platform does when this process ends, a crash included. The executor
+process is let go of and the platform does when this process ends, a crash included. A process
+killed while it holds a stage ends the programs in the job and leaves the container profile
+registered ([SANDBOX-12](#SANDBOX-12) says what bounds that). The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
 ends then too, which is when the grants it ran under are taken off. A stage the platform will not put in a job carrying those limits is not started, and the refusal
 names what the platform reported, including when this process is itself in a job the platform will
-not nest them under. The stage is created under the gate every start of a program takes
+not nest them under. When this process is itself in a job, as it is under a terminal or a CI
+runner that puts its children in one, the stage is created in a job of its own that holds every
+limit above, or it is not started. `a_stage_is_limited_whether_or_not_this_process_is_in_a_job`
+checks both: it reads the job of a stage started from the test process as it is, and again from a
+copy of the test binary that has put itself in a job. The stage is created under the gate every start of a program takes
 ([RPCVIEW-8](session-view.md#RPCVIEW-8)), so a program started at the same moment holds none of its
 streams, and it inherits the three standard streams it is given and no other handle this process
 holds. The stage is given a console of its own with no
@@ -1559,8 +1574,9 @@ session was opened on is refused by the kernel, since only redirections are open
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
 ([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
 that asks its question on the console rather than on its input waits until the line is cancelled
-or runs out of time, the console host the platform adds may count against the process limit of a
-stage whose policy denies subprocesses (not shown on a Windows run yet), and the console's code
+or runs out of time, and the console host the platform adds does not stop a stage whose policy denies
+subprocesses from starting under a limit of one active process: a `cmd.exe` built-in runs to exit 0
+there. The console's code
 page is the system's rather than one a person set with
 `chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
@@ -1587,6 +1603,7 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_sandbox::windows::a_stage_cannot_start_a_child_where_its_policy_denies_subprocesses`
 `verified-by: bravebot_sandbox::windows::a_stage_starts_a_child_where_its_policy_allows_subprocesses`
 `verified-by: bravebot_sandbox::windows::a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses`
+`verified-by: bravebot_sandbox::windows::a_stage_is_limited_whether_or_not_this_process_is_in_a_job`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
@@ -1596,6 +1613,7 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_sandbox::windows::killing_a_stage_ends_the_programs_it_started`
 `verified-by: bravebot_sandbox::windows::a_stage_let_go_of_while_running_leaves_no_program_behind`
 `verified-by: bravebot_sandbox::windows::killing_the_process_holding_a_stage_ends_every_program_in_it`
+`verified-by: bravebot_sandbox::windows::a_holder_killed_while_it_holds_a_stage_leaves_its_container_profile_registered`
 `verified-by: bravebot_sandbox::windows::a_stage_inherits_no_handle_but_the_streams_it_is_given`
 `verified-by: bravebot_sandbox::windows::a_stage_start_waits_for_a_channel_being_created`
 `verified-by: bravebot_sandbox::windows::a_stage_is_not_attached_to_the_console_this_process_runs_in`
@@ -4751,8 +4769,21 @@ shown by running the program, or not entirely:
     bus is reached through `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, which the opener
     judges by where the socket is, because what a bus a stage runs answers to a handler lookup was
     not run or read.
-  - **`kde-open`** was not run: it cannot run on macOS and was not run on Linux. Its names are
-    from source only, read at these commits, none of which is a release tag: kde-cli-tools
+  - **`kde-open`** cannot run to the point of a handler on macOS. On Linux (ubuntu-latest, under
+    `dbus-run-session`, the `ci.yml` step `Run kde-open with each name set to a marker handler`)
+    the installed `kde-open` started with the baseline environment of the test and exited with
+    status 1 while both configuration directories were empty:
+    `/usr/bin/kde-open ended with exit status: 1; stdout: ""; stderr: "\"applications.menu\"  not
+    found in  QList()\nCould not read file bravebot-test://example.invalid/.\n"`, and neither
+    marker handler ran, `(genuine, planted) = (false, false)`. KService reads a
+    `menus/applications.menu` from a configuration directory when it builds the service cache, and
+    without one `kde-open` does not open the address. The test therefore writes a minimal
+    `menus/applications.menu` into the empty configuration directory, which is `XDG_CONFIG_HOME`
+    and `XDG_CONFIG_DIRS` in every run but the two where one of them is the name under test, so the
+    other names it and every run reads the same menu. The test added with #3884 runs `kde-open` once
+    per name with a marker handler, and the CI step runs it under `dbus-run-session` and prints the
+    names it observed as `kde-open observed:` lines. The lines below on why each name matters are
+    from source only. They were read at these commits, none of which is a release tag: kde-cli-tools
     aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
     `KIOCLIENT_AS_KDEOPEN`), KIO a80751d2, KService 2bd4461c and KCoreAddons e96958b2, and Qt 6.10.0
     (tag v6.10.0, commit 5a8637e4516b). `QT_PLUGIN_PATH` (`qcoreapplication.cpp`) and
@@ -4773,18 +4804,45 @@ shown by running the program, or not entirely:
     and the name `<desktop>-mimeapps.list`. These reads are from source and none was observed in a
     run. Which release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
     `KDEDIRS`, `KDE_FULL_SESSION`, `KDE_SESSION_VERSION`, `KDE_FORK_SLAVES` and the `QML*_IMPORT_PATH`
-    names have no read in the files searched, which does not show they are never read. A run of
-    `kde-open` on Linux is tracked by #3822.
+    names have no read in the files searched, which does not show they are never read. Handler
+    selection was read at the default-branch commits kio ad78db8a, KService 2bd4461c and KConfig
+    eb4dec9c, and qtbase `dev` 7d402fc0: `KIO::OpenUrlJob` (`openurljob.cpp`) asks
+    `KApplicationTrader::preferredService` for the scheme or the MIME type, which reads
+    `mimeapps.list` and the service cache. `QStandardPaths` (`qstandardpaths_unix.cpp`) reads
+    `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` and falls back on
+    `HOME`. `KMimeAssociations` (`kmimeassociations.cpp`) searches the config directories, then the
+    `applications` directories, for `mimeapps.list` and for `<desktop>-mimeapps.list`, where
+    `<desktop>` comes from `XDG_CURRENT_DESKTOP`. `KBuildSycoca` (`kbuildsycoca.cpp`) reads the
+    `.desktop` files from the `applications` directories, and the cache file name is built from
+    the cache location and a hash of the data directories unless `KDESYCOCA` names it
+    (`ksycoca.cpp`, `KSycoca::absoluteFilePath`). `XDG_CURRENT_DESKTOP` also filters entries by
+    `OnlyShowIn` and `NotShowIn` (`kservice.cpp`, `showInCurrentDesktop`) where the caller asks for
+    that. So the four `XDG_` directory names select the program `kde-open` runs, and
+    `XDG_CURRENT_DESKTOP` selects among `mimeapps.list` files. `kprocessrunner.cpp` starts the
+    program through systemd on the session bus when the bus reports systemd, and otherwise forks it;
+    read so, a session bus may not be required, and the child gets the process environment. This is
+    from source and was not run, and whether `kde-open` needs a session bus is not established. The
+    `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there, and
+    whether a bus is required is not established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
   cells marked run below. Every test added after that run is not run: the host here is macOS,
-  the opener tests are Linux-only and print `skipped` elsewhere, and CI has not yet run them. In the
+  the opener tests are Linux-only and print `skipped` elsewhere, and CI has run only some of them. In the
   `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
   the installed handler does not start. The KDE test skips a name whose installed handler does not
-  start, since `kde-open` needs a session bus that a headless runner lacks and ran no installed
-  handler on the CI runner. The test that puts a stand-in `kde-open` first on `PATH` and reads what
+  start, because `kde-open` run through `xdg-open` on the CI runner, which has no session bus,
+  starts no installed handler. `kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
+  runs `kde-open` itself under a bus with `HOME` and the `XDG_` names pointing at scratch
+  directories, once without a planted name and once per name in `KDE_OPEN_MARKER_NAMES`, and the
+  `ci.yml` step that runs it under `dbus-run-session` sets `BRAVEBOT_OBSERVE_KDE_OPEN`, which makes
+  a missing `kde-open`, a baseline that starts no handler, or a name that runs the planted handler
+  and is not removed by the opener fail the test. The failure message carries `kde-open`'s path,
+  how it ended and its stdout and stderr, and the test supplies a menu file as described in the
+  `kde-open` entry above. Names with no marker form (the plug-in
+  directories and names, `QT_STYLE_OVERRIDE`) are printed as not exercised. Without the variable
+  it prints `skipped`, as it did on this macOS host. The test that puts a stand-in `kde-open` first on `PATH` and reads what
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
   stand-in, so the opener's names are checked there against a started `kde-open`. The
   generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
@@ -4825,8 +4883,15 @@ shown by running the program, or not entirely:
   external-open.ts and with them without it` asserts no start count, since how many times Electron
   starts `xdg-open` is Electron's choice, and fails when either run starts none. Each start through
   `external-open.ts` must carry none of the names and each control start all fifteen. It sets
-  `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`, which
-  rests on a recollection of Electron's source. Both cases print `skipped` where
+  `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`. In
+  Electron v44.9.3 (`shell/common/platform_util_linux.cc`) `showItemInFolder` first checks the
+  portal and `org.freedesktop.FileManager1` over the session bus, which libdbus finds through
+  `DBUS_SESSION_BUS_ADDRESS`; where neither is running, or a call fails, it runs `xdg-open .` in
+  the folder that holds the file, and `openPath` and `openExternal` start `xdg-open` through the
+  same helper. That helper sets only the working directory, `MM_NOTTTY`, and the activation token,
+  so the child gets Electron's environment. This was read, not run, and the source read does not
+  show what a missing socket does to the bus connection itself: a null connection returns without
+  starting `xdg-open`, which the case reports as a run that started none. Both cases print `skipped` where
   there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
   or Electron fails them. Neither has been run on Linux since the test was changed. The
   `showItemInFolder` case has never been run on Linux.
@@ -4895,11 +4960,12 @@ shown by running the program, or not entirely:
   `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
   `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
   mirror of the KDE repositories. Those files read `PATH` directly (`desktopexecparser.cpp`
-  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable themselves.
+  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable by name.
   `kprocessrunner.cpp` sets `XDG_ACTIVATION_TOKEN` in the environment of the process it starts and
-  does not read it. The libraries they call do read `XDG_*` names, which are listed in the
-  `kde-open` entry above (KService 2bd4461c and Qt 6.10.0). The terminal emulator comes from the
-  KDE configuration file and not from the environment.
+  does not read it. The libraries they call do read `XDG_*` names, as the `kde-open` entry above
+  records (`QStandardPaths`, `KMimeAssociations`, `KSycoca`; KService 2bd4461c and Qt 6.10.0), so
+  reading nothing by name in those files does not mean `kde-open` ignores the `XDG_` names. The
+  terminal emulator comes from the KDE configuration file and not from the environment.
   `HOME` is in the opener's list and is removed when it names a directory a stage may write. With
   `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
   `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
@@ -4913,16 +4979,15 @@ shown by running the program, or not entirely:
   system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
-  unobserved; a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
+  unobserved (the marker test and CI step are meant to observe it); a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
   with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
-  stand-in for `xdg-open` instead; KDE's `KConfig`, which was not read, and the platform
-  implementation of Qt's `QDesktopServices`, which was not located (`qdesktopservices.cpp` reads
-  no variable), so that what `kde-open` reads is complete only for the files named in the `kde-open`
-  entry above; that `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`,
-  `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and `XDG_CURRENT_DESKTOP` is read from
-  that source and was not run, so it is unverified by a run; the parts of GLib not
+  stand-in for `xdg-open` instead; a run showing that `kde-open` chooses its handler through
+  `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and
+  `XDG_CURRENT_DESKTOP`, which is supported by source and unobserved (Qt's `QDesktopServices` and
+  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig` are read, see the `kde-open` entry
+  above); the parts of GLib not
   read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
   the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
   set, which is shown only by a test of the opener's judgment of the value. The list of variables
@@ -5258,6 +5323,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
+`verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_library_a_stage_may_write_is_removed_and_a_safe_file_is_kept`
 `verified-by: bravebot_tui::powershell::a_profiler_switch_or_class_id_is_removed_whatever_it_holds`
@@ -5529,7 +5595,7 @@ whose plan never named them.
 | on macOS, the developer directory `xcode-select -p` names as the session opens, where it is `/Library/Developer/CommandLineTools` or an application bundle's directly in `/Applications`, which is then the bundle whole | read |
 | the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
 
-On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own. A Windows session that has a directory of its own is also granted a `temp` directory inside it, read and written, in place of the temporary-directory row, and a stage's `TEMP` and `TMP` name it ([trust-map.md](trust-map.md#TRUST-17)). The account's temporary directory is then granted to no stage. Without a directory of its own the row is the account's temporary directory.
+On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own. A Windows session that has a directory of its own is also granted a `temp` directory inside it, read and written, in place of the temporary-directory row, and `TEMP` and `TMP` are handed to a stage naming it ([trust-map.md](trust-map.md#TRUST-17)). A container's `TEMP` showed its own `AC\Temp` on the CI runner instead ([trust-map.md](trust-map.md#TRUST-14)). The account's temporary directory is then granted to no stage. Without a directory of its own the row is the account's temporary directory.
 
 Four rows is the whole of what stays invisible, and each one is here because every program needs it
 and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
@@ -5780,7 +5846,13 @@ without reaching that leaves them.
 What bounds that is a container profile per run rather than per installation. The profile name
 carries a value chosen when the backend is created, so a process identifier reused after a crash
 does not give a later run the name of the earlier one, and a profile that already exists is
-refused rather than adopted. The entry left behind
+refused rather than adopted.
+`a_holder_killed_while_it_holds_a_stage_leaves_its_container_profile_registered` kills a process
+holding a stage and looks for a folder `bravebot-<pid>-` under `%LOCALAPPDATA%\Packages`, then
+deletes the profile it finds so the runner is left clean. The killed holder leaves one profile and
+the delete removes it. The test ties a
+folder to the holder by process identifier alone, so an earlier leftover of a reused
+identifier would be found as well. The entry left behind
 names a security identifier no other run holds, so the residue is an entry for a container that no
 longer exists rather than a standing grant to something still running, and the next run's grants are
 its own. Removal is not atomic either way, which is why the cost is written here rather than treated
@@ -5820,12 +5892,43 @@ reported as what it is.
   inherited by what the junction leads to. The test
   `bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_a_stage_made` reads the
   target's access list while a second stage runs, prints `junction grant crossed` or `junction
-  grant did not cross`, and fails if the second stage can read the target. The stage of that test
-  cannot create the junction on the Windows runner, so the test ends before the observation and
-  no clause is claimed from it. Where the grant crosses, `set_entry`
-  has to skip reparse points. The session's own `temp` directory, which a stage can replace by a
+  grant did not cross`, and fails if the second stage can read the target. The first stage tries
+  `mklink /J`, which the Windows runner refuses ("Access is denied"), and then a copy of the test
+  binary run in the stage that sets the mount point reparse point itself with
+  `FSCTL_SET_REPARSE_POINT` and prints `junction-probe junction made` or `junction-probe junction not
+  made: <error>`. A stage cannot make a junction by either route: the probe reports `Access is
+  denied. (os error 5)`, and the test prints `junction not made by a stage by either route` and
+  returns before the observation. Neither `junction grant crossed` nor `junction grant did not
+  cross` is printed, so whether a grant crosses a junction a stage made is unobserved, and no clause
+  is claimed from it. The probe's output does not say which of its calls is refused. Where the grant
+  crosses, `set_entry` has to skip reparse points; it is not changed, because the grant has not been
+  seen to cross. The session's own `temp` directory, which a stage can replace by a
   link, is checked by name as the scratch directory is, and the junction case of that check is
   reasoned and not run on Windows.
+- A stage started with a named environment of `SystemRoot` and one more variable fails to start
+  with `SpawnFailed` and OS error 203 ("The system could not find the environment option that was
+  entered") on the Windows runner. The platform does not say which variable it looked for, and
+  whether the cause is the block the backend writes or a variable `cmd.exe` needs is not
+  established. The agent's own start of a stage names its environment (`Environment::Only`), and the
+  stage tests of `bravebot-agent --test confine` that start through it pass, so a named environment
+  is not refused as such. `a_stage_that_starts_with_a_named_environment_prints_the_variable_it_was_given`
+  starts `cmd.exe /c set BRAVEBOT_NAMED` with five environments, each naming more than the one
+  before (`SystemRoot` and `BRAVEBOT_NAMED` alone, then adding `windir`, then `TEMP` and `TMP`, then
+  `PATH` and `ComSpec`, then the profile and machine variables), and prints the outcome of each. It
+  asserts only that a start which succeeds prints `BRAVEBOT_NAMED=named`, so it is not listed as
+  verifying [SANDBOX-8](#SANDBOX-8). The job-probe tests start their probe with the inherited
+  environment for the same reason.
+- The output of a `cmd.exe` line that starts a second `cmd.exe` ended with a closing quote on the
+  Windows runner (`child-ran"`). The tests that start a child compare the output with that quote
+  removed. Whether the quote comes from `cmd.exe` reading its `/c` line or from the line the backend
+  writes ([`command_line`](../../crates/sandbox/src/windows.rs)) is not established.
+- A container's `TEMP` and `TMP` on the Windows runner name its own `AC\Temp` under
+  `%LOCALAPPDATA%\Packages\<profile>`, and not the `temp` directory the session handed over. So a
+  program that writes to `%TEMP%` writes to a directory that is not the session's, and the
+  session's `temp` directory is written only by a program that is told its path. Why the
+  handed-over value is not followed is not known.
+  `a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts` asserts that
+  the variables are set and are not the account's ([TRUST-14](trust-map.md#TRUST-14)).
 - Subprocess denial has no mechanism on Linux. A container bounds what a process reaches rather
   than whether it creates children, so a policy asking for that denial is refused there rather
   than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that Linux confines nothing
@@ -5878,10 +5981,19 @@ reported as what it is.
   and `crates/agent/tests/confine.rs`, which start real processes in a container. The rest of the
   sandbox crate's tests are written against Unix paths and are not run on Windows, and neither are
   the agent's other tests that start a confined process. The two tests that watch a loopback
-  listener run on Unix only, so whether a container reaches a loopback listener, and with it the
-  denial of egress on Windows, is shown by the capability the token is built with and not by a
-  connection. No test connects from a container granted the network to a private-network address
-  either, so that a granted container reaches neither loopback nor a private network is not shown.
+  listener run on Unix only. The Windows test that does connect to a loopback listener from a
+  container, described below, ends `refused: connection timed out` for a connect from a container
+  granted the network to a listener on `127.0.0.1`. That is one connection to one loopback
+  listener, so the denial of egress on Windows is still shown by the capability the token is built
+  with and not by a connection to an outside address. No test connects from a container granted the
+  network to a private-network address either, so that a granted container reaches no private
+  network is not shown.
+  `a_container_granted_the_network_cannot_connect_to_this_hosts_loopback` binds a listener on
+  `127.0.0.1`, connects to it from a probe in a stage granted the network and asserts the connect
+  was refused. It prints `connect-probe connected` or `connect-probe refused: <error>`, where
+  `<error>` is the connect's own error, and `connect-probe not run: <reason>` when it never tried to
+  connect, which the assertion does not accept. The assumption that a container's default network isolation refuses
+  loopback is the one it tests, and a runner that connects fails it.
   The Windows tests that connect out (`a_container_connects_out_only_when_its_policy_asks_for_the_network`
   and `a_container_without_the_network_cannot_look_up_a_name`) need `github.com` reachable from the
   machine directly, without a proxy, and fail where it is not, as a machine that cannot make a

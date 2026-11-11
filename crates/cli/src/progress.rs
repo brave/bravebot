@@ -510,6 +510,20 @@ mod tests {
         assert!(!written.contains("a second line"), "got: {written}");
     }
 
+    /// A C1 control is written once as `‹U+XXXX›`: the command line spells what `confirm::printable`
+    /// returns, and `spelled` leaves the `‹` and `›` of that spelling alone, so nothing is written
+    /// twice. It is not drawn as the enclosed alphanumeric U+0085 used to be.
+    #[test]
+    fn a_c1_control_is_drawn_once_as_its_code_point_by_the_command_line() {
+        assert_eq!(printable("a\u{85}b"), "a\u{2039}U+0085\u{203a}b");
+        assert_eq!(printable("a\u{7f}b"), "a\u{2421}b");
+        assert_ne!(printable("a\u{85}b"), printable("a\u{2485}b"));
+        assert_eq!(
+            printable("\u{9f}\u{200b}"),
+            "\u{2039}U+009F\u{203a}\u{2039}U+200B\u{203a}"
+        );
+    }
+
     /// A quarantined listing entry's real file name reaches the call line in place of its
     /// reference (LAYER-3), the way it did for [`the_lines_of_a_call_draw_a_checkouts_names_as_pictures`]
     /// below, but through the `ref:N(flags):name` form `target_of` builds rather than a bare

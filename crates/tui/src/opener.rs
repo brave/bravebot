@@ -835,7 +835,8 @@ mod tests {
     /// with `CI` set, where it fails, because a runner that lacks them runs nothing. A variable whose
     /// installed handler does not start is skipped, since the planted handler then not running says
     /// nothing. The stand-in test below is the one that fails on CI when the opener's names reach
-    /// a started `kde-open`, since this one needs a KDE session bus a headless runner lacks.
+    /// a started `kde-open`. Whether `kde-open` needs a session bus is not established, and a
+    /// headless runner has none.
     #[cfg(unix)]
     #[test]
     fn a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde()
@@ -891,8 +892,9 @@ mod tests {
             }
             match ran {
                 (_, false) => {
-                    // `kde-open` may need a session bus that a headless runner lacks, and the
-                    // planted handler then not running says nothing.
+                    // Whether `kde-open` needs a session bus is not established, and a headless
+                    // runner has none; either way the planted handler then not running says
+                    // nothing.
                     println!(
                         "skipped {variable}: kde-open here does not run a handler chosen by it"
                     );
@@ -1209,6 +1211,276 @@ mod tests {
                 "{variable} reached kde-open: {planted}"
             );
         }
+    }
+
+    /// The names [`kde_open_marker_outcome`] sets to a program or to a directory that holds a marker
+    /// handler, with what each is set to: `true` for a directory tree and `false` for the path of
+    /// the marker program. A name that holds a plug-in directory, a plug-in name or a flag has no
+    /// marker form (a marker program is not a plug-in), so it is not in the list and the test says
+    /// which names it did not exercise.
+    #[cfg(unix)]
+    const KDE_OPEN_MARKER_NAMES: &[(&str, bool)] = &[
+        ("BROWSER", false),
+        ("GIO_LAUNCH_DESKTOP", false),
+        ("KDESYCOCA", false),
+        ("XDG_DATA_HOME", true),
+        ("XDG_DATA_DIRS", true),
+        ("XDG_CONFIG_HOME", true),
+        ("XDG_CONFIG_DIRS", true),
+        ("KDEHOME", true),
+        ("KDEDIRS", true),
+    ];
+
+    /// Runs the installed `kde-open` on an address that only a marker handler opens, with the
+    /// variable `variable` set to a marker (`None` runs the baseline, which sets none), and says
+    /// which handler ran: the one the baseline selects (`genuine`), the one the variable names
+    /// (`planted`), both, or neither. The third value is what `kde-open` ended with and printed on
+    /// its two streams, for a failure message to carry.
+    ///
+    /// The environment is cleared and rebuilt, so that the host's desktop and the person's files
+    /// select nothing: `HOME` and `XDG_CACHE_HOME` are scratch directories (the service cache is
+    /// built there), `XDG_DATA_HOME` and `XDG_CONFIG_HOME` are empty directories, `XDG_DATA_DIRS`
+    /// is a directory holding both handlers' entries and an `applications/mimeapps.list` that makes
+    /// `genuine` the default for the address, and `XDG_CONFIG_DIRS` is the same directory as
+    /// `XDG_CONFIG_HOME`, which holds only a minimal `menus/applications.menu` (see below). The
+    /// session bus and runtime directory are passed on, in case `kde-open` needs a bus (not
+    /// established), and
+    /// `QT_QPA_PLATFORM=offscreen` lets it start without a display. A name that replaces one of
+    /// those four is the variable under test, so the baseline's value for it is dropped.
+    ///
+    /// A marker tree holds the same files under every spelling the directory names read
+    /// (`applications/`, the top directory, and `share/applications/`), and every `mimeapps.list`
+    /// in it makes `planted` the default, so a name that makes `kde-open` read the tree runs
+    /// `planted`.
+    #[cfg(unix)]
+    fn kde_open_marker_outcome(
+        kde_open: &Path,
+        variable: Option<(&str, bool)>,
+    ) -> (bool, bool, String) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let label = variable.map_or("baseline".to_string(), |(name, _)| {
+            name.to_ascii_lowercase()
+        });
+        let root = crate::testutil::scratch_dir(&format!("opener-kde-marker-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let session = root.join("session");
+        let home = root.join("home");
+        let cache = root.join("cache");
+        let empty_data = root.join("empty-data");
+        let empty_config = root.join("empty-config");
+        for directory in [&session, &home, &cache, &empty_data, &empty_config] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        // KService reads a menu file `menus/applications.menu` from a configuration directory when
+        // it builds the service cache. With both configuration directories empty, `kde-open` exits
+        // with status 1 and stderr `"applications.menu"  not found in  QList()`. The menu below names
+        // the standard application directories only,
+        // so which handler runs is still chosen by the data directories and `mimeapps.list`. It
+        // is in `empty_config`, which is `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` in every run except
+        // the two where one of them is the variable under test, and the other still names it, so
+        // every run reads the same menu.
+        std::fs::create_dir_all(empty_config.join("menus")).unwrap();
+        std::fs::write(
+            empty_config.join("menus/applications.menu"),
+            concat!(
+                "<!DOCTYPE Menu PUBLIC \"-//freedesktop//DTD Menu 1.0//EN\"\n",
+                " \"http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd\">\n",
+                "<Menu>\n<Name>Applications</Name>\n<DefaultAppDirs/>\n",
+                "<DefaultDirectoryDirs/>\n<DefaultMergeDirs/>\n",
+                "<Include><All/></Include>\n</Menu>\n"
+            ),
+        )
+        .unwrap();
+        let scheme = "bravebot-test";
+        let script = |marker: &str| {
+            let path = root.join(format!("{marker}.sh"));
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let entry = |directory: &Path, marker: &str| {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(
+                directory.join(format!("{marker}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={marker}\nExec={} %u\nMimeType=x-scheme-handler/{scheme};\nTerminal=false\n",
+                    script(marker).display()
+                ),
+            )
+            .unwrap();
+        };
+        let default = |directory: &Path, marker: &str| {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(
+                directory.join("mimeapps.list"),
+                format!("[Default Applications]\nx-scheme-handler/{scheme}={marker}.desktop\n"),
+            )
+            .unwrap();
+        };
+        let baseline_data = root.join("baseline-data");
+        for marker in ["genuine-ran", "planted-ran"] {
+            entry(&baseline_data.join("applications"), marker);
+        }
+        default(&baseline_data.join("applications"), "genuine-ran");
+        let tree = root.join("tree");
+        for directory in [
+            tree.clone(),
+            tree.join("applications"),
+            tree.join("share/applications"),
+        ] {
+            entry(&directory, "planted-ran");
+            default(&directory, "planted-ran");
+        }
+
+        let mut command = std::process::Command::new(kde_open);
+        command
+            .env_clear()
+            .arg(format!("{scheme}://example.invalid/"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::fs::File::create(root.join("kde-open.stdout")).unwrap())
+            .stderr(std::fs::File::create(root.join("kde-open.stderr")).unwrap())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", &home)
+            .env("XDG_CACHE_HOME", &cache)
+            .env("XDG_DATA_HOME", &empty_data)
+            .env("XDG_DATA_DIRS", &baseline_data)
+            .env("XDG_CONFIG_HOME", &empty_config)
+            .env("XDG_CONFIG_DIRS", &empty_config)
+            .env("QT_QPA_PLATFORM", "offscreen")
+            .env("XDG_CURRENT_DESKTOP", "KDE")
+            .env("KDE_FULL_SESSION", "true")
+            .env("KDE_SESSION_VERSION", "6")
+            .env("LANG", "C.UTF-8");
+        for name in ["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        if let Some((name, is_tree)) = variable {
+            let value = if is_tree {
+                tree.clone()
+            } else if name == "BROWSER" {
+                std::path::PathBuf::from(format!("{} %s", script("planted-ran").display()))
+            } else {
+                script("planted-ran")
+            };
+            command.env(name, value);
+        }
+        let mut child = command.spawn().unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut status = child.try_wait().unwrap();
+        while status.is_none() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            status = child.try_wait().unwrap();
+        }
+        let ended = status.map_or_else(
+            || "still running after 30 seconds, then killed".to_string(),
+            |status| format!("ended with {status}"),
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !session.join("genuine-ran").exists()
+            && !session.join("planted-ran").exists()
+            && std::time::Instant::now() < until
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let printed = |stream: &str| {
+            std::fs::read_to_string(root.join(format!("kde-open.{stream}")))
+                .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+        };
+        let outcome = (
+            session.join("genuine-ran").exists(),
+            session.join("planted-ran").exists(),
+            format!(
+                "{} {ended}; stdout: {:?}; stderr: {:?}",
+                kde_open.display(),
+                printed("stdout"),
+                printed("stderr")
+            ),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        outcome
+    }
+
+    /// SANDBOX-30, `kde-open` run for real once per name: each name in
+    /// [`KDE_OPEN_MARKER_NAMES`] is set, alone, to a marker handler, and the test prints `kde-open
+    /// observed: <name> <outcome>` for each. A baseline run with no name set must run the `genuine`
+    /// handler first, so a `planted` marker that did not run is not a run that could not start.
+    ///
+    /// Without `BRAVEBOT_OBSERVE_KDE_OPEN` the test prints `skipped` and passes where `kde-open`
+    /// is absent or the baseline runs no handler, as can happen on a host without a session
+    /// bus (whether `kde-open` needs one is not established). With it set, which the CI step that
+    /// runs the test under `dbus-run-session` does, either
+    /// of those fails the test, and so does a name that ran the `planted` handler but is not in
+    /// [`CODE_SELECTORS`], since the opener would then pass on a name `kde-open` follows.
+    ///
+    /// The regression it rejects: a `kde-open` that selects a program through a variable the
+    /// opener leaves in the environment. It does not show that the names it did not exercise
+    /// (plug-in directories, plug-in names, `QT_STYLE_OVERRIDE`) select nothing.
+    ///
+    /// The baseline failure carries the path of the `kde-open` run, how it ended, and what it
+    /// printed on stdout and stderr. With both configuration directories empty, `kde-open` ran
+    /// neither handler, `(false, false)`, and ended with `/usr/bin/kde-open ended with exit status:
+    /// 1`, stdout empty and stderr `"applications.menu"  not found in  QList()` followed by `Could
+    /// not read file bravebot-test://example.invalid/.`. The harness writes `menus/applications.menu`
+    /// into the empty configuration directory so that the baseline runs the genuine handler.
+    #[cfg(unix)]
+    #[test]
+    fn kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes()
+     {
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let observing = std::env::var_os("BRAVEBOT_OBSERVE_KDE_OPEN").is_some();
+        let Some(kde_open) = ["kde-open", "kde-open5"]
+            .into_iter()
+            .find_map(|name| bravebot_sandbox::programs::find(OsStr::new(name)))
+        else {
+            assert!(
+                !observing,
+                "BRAVEBOT_OBSERVE_KDE_OPEN is set and kde-open is not installed"
+            );
+            println!("skipped: no kde-open on this host");
+            return;
+        };
+        let (genuine, planted, seen) = kde_open_marker_outcome(&kde_open, None);
+        if (genuine, planted) != (true, false) {
+            assert!(
+                !observing,
+                "BRAVEBOT_OBSERVE_KDE_OPEN is set and the baseline kde-open ran (genuine, planted) = ({genuine}, {planted}): {seen}"
+            );
+            println!(
+                "skipped: the kde-open here did not run the baseline handler: ({genuine}, {planted}): {seen}"
+            );
+            return;
+        }
+        for &(name, is_tree) in KDE_OPEN_MARKER_NAMES {
+            let (genuine, planted, _) = kde_open_marker_outcome(&kde_open, Some((name, is_tree)));
+            println!("kde-open observed: {name} genuine={genuine} planted={planted}");
+            if planted && observing {
+                assert!(
+                    CODE_SELECTORS.iter().any(|(listed, _)| *listed == name),
+                    "{name} made kde-open run a program and the opener does not remove it"
+                );
+            }
+        }
+        let tried: Vec<&str> = KDE_OPEN_MARKER_NAMES
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        let untried: Vec<&str> = CODE_SELECTORS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !tried.contains(name))
+            .collect();
+        println!("kde-open not exercised (no marker form): {untried:?}");
     }
 
     /// CHATGPT-13, the Windows start, checked on every host. The command built for it is
