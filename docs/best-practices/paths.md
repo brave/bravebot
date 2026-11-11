@@ -219,8 +219,9 @@ entry does not say that a start the diff does not touch complies. The generic ta
 (`CODE_SELECTORS` in `crates/sandbox/src/programs.rs`) is applied to every checked start, and a
 program's own names are the `CODE_SELECTORS` list in `crates/agent/src/gcloud.rs`,
 `crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
-`crates/tui/src/opener.rs` or `crates/tui/src/powershell.rs` (which also holds `osascript`'s
-`OSASCRIPT_CODE_SELECTORS`), so a diff that adds a start lists only the names its program reads that
+`crates/tui/src/opener.rs`, `crates/tui/src/powershell.rs` (which also holds `osascript`'s
+`OSASCRIPT_CODE_SELECTORS`, `systemd-inhibit`'s `SYSTEMD_INHIBIT_CODE_SELECTORS` and `wl-copy`'s
+`WL_COPY_CODE_SELECTORS`) or `crates/schedule/src/schedule.rs` (`SYSTEMCTL_CODE_SELECTORS`), so a diff that adds a start lists only the names its program reads that
 the table does not hold, or passes `Checked(&[])` and records the gap as
 [GAP-001](gaps.md#GAP-001) asks. A launcher that takes its handler from a list of commands, such as
 `BROWSER`, is listed as `Names::Commands`: every entry must be one program, alone or followed by
@@ -242,7 +243,7 @@ program's names are passed to `start` and the check stays in shared code ([PATH-
 SANDBOX-30, and that every name in a
 `CODE_SELECTORS` list (in `crates/sandbox/src/programs.rs`, `crates/agent/src/gcloud.rs`,
 `crates/agent/src/usability.rs`, `crates/bedrock/src/credentials.rs`, `crates/cli/src/push_identity.rs`,
-`crates/tui/src/opener.rs` and `crates/tui/src/powershell.rs`) has one test that removes
+`crates/tui/src/opener.rs`, `crates/tui/src/powershell.rs` and `crates/schedule/src/schedule.rs`) has one test that removes
 a value and one that keeps a value (an options variable needs only the first). It also reads
 `LOADER_PREFIXES` and `HOST_VARIABLES` ([checks.md](../development/checks.md)) and applies the
 loader prefixes to no other start. A reviewer confirms
