@@ -971,6 +971,11 @@ as `is_protected` reads it. A name spelled with a trailing dot or space, or with
 is another name on macOS and is granted. One list in `bravebot_sandbox` supplies the names, and a test
 in `bravebot-agent` holds it equal to the list `is_protected` reads.
 
+The same list decides which redirections of a `run` line are put to the person, which the driver
+checks before the line starts ([PERM-9](permissions.md#PERM-9)). This clause holds a stage back from
+the names on macOS; a stage's own write on Linux and a `ln` or `cp` a stage runs are not decided by
+the driver's check, which reads the redirection destinations of the plan.
+
 Every other write a row grants is granted.
 A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row

@@ -119,10 +119,15 @@ impl PermissionMode {
             // confines, that did not ask to start without a profile and that has no git stage
             // (AUTO-3). The classifier judges the words of the line and cannot see what its
             // program name resolves to, so the profile is what holds the line to them.
+            //
+            // Not a line that redirects into a protected path either: the file runs code later
+            // with the person's rights, so no word of a classifier stands in for the person
+            // (MODE-2, PERM-9).
             Self::Auto => {
                 request.classified == Classified::Allowed
                     && request.confined.is_some()
                     && !request.unconfined
+                    && !request.protected
             }
             _ => self.answers_a_run_unasked() && !request.unconfined,
         }
@@ -2265,6 +2270,74 @@ mod tests {
             carried: Vec::new(),
             writes_git_directories: false,
         }
+    }
+
+    /// AUTO-3, AUTO-4, PERM-9: auto does not answer a run whose redirection lands on a protected
+    /// path, even on the classifier's allow word for a line the sandbox confines, and it goes to
+    /// the confirmer behind the mode. Bypassing still answers it (MODE-4). The regression it
+    /// rejects: `answers_this_run_unasked` reading only the classifier's word and the confinement,
+    /// which lets a model's word write `.git/hooks/pre-commit`.
+    #[test]
+    fn auto_does_not_answer_a_run_with_a_protected_destination_and_bypassing_does() {
+        let allowed = |protected: bool| RunRequest {
+            classified: Classified::Allowed,
+            confined: Some(a_confined_line()),
+            protected,
+            ..a_run()
+        };
+        let answered = |mode: PermissionMode, request: RunRequest| {
+            let mut refusing = Unattended;
+            Confining::new(&mut refusing, mode, false).confirm_run(&request)
+        };
+        assert!(answered(PermissionMode::Auto, allowed(false)).approved());
+        assert!(!answered(PermissionMode::Auto, allowed(true)).approved());
+        assert!(!PermissionMode::Auto.answers_this_run_unasked(&allowed(true)));
+        assert!(answered(PermissionMode::Bypass, allowed(true)).approved());
+    }
+
+    /// MODE-2, MODE-4, PERM-9: of the modes, only bypassing answers a run whose redirection lands
+    /// on a protected path. Accepting edits, planning and asking leave the question to the
+    /// confirmer behind the mode, so a refusing one declines it and an approving one is reached.
+    /// The request is the same line with and without the flag, so the flag is what the mode
+    /// reads. The regressions it rejects: accepting edits or plan treating a redirected write as
+    /// the edit they answer, and bypassing no longer answering.
+    #[test]
+    fn only_bypassing_answers_a_run_with_a_protected_destination() {
+        let protected = || RunRequest {
+            protected: true,
+            ..a_run()
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            let mut refusing = Unattended;
+            assert!(
+                !Confining::new(&mut refusing, mode, false)
+                    .confirm_run(&protected())
+                    .approved(),
+                "{} answered a run into a protected path",
+                mode.name()
+            );
+            assert!(!mode.answers_this_run_unasked(&protected()));
+
+            let mut approving = ApproveRuns;
+            assert!(
+                Confining::new(&mut approving, mode, false)
+                    .confirm_run(&protected())
+                    .approved(),
+                "{} did not put the question to the confirmer behind it",
+                mode.name()
+            );
+        }
+        let mut refusing = Unattended;
+        assert!(
+            Confining::new(&mut refusing, PermissionMode::Bypass, false)
+                .confirm_run(&protected())
+                .approved()
+        );
+        assert!(PermissionMode::Bypass.answers_this_run_unasked(&protected()));
     }
 
     /// AUTO-3, AUTO-6: the classifier's allow word answers a run the sandbox confines, and nothing

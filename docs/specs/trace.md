@@ -330,7 +330,12 @@ policy decides a command or a write is to be put to the person, a second entry u
 says what answered: the mode that answered in their place and so drew nothing, or no mode, which
 leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
 in "asking" say what the policy decided, and they read as a person having been asked. A write that
-is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
+is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)). A run that redirects into a
+protected path ([PERM-9](permissions.md#PERM-9)) is never answered by a mode short of bypassing, so its
+entry names no mode and the trail has no "answered by auto mode, nobody was asked" for it, and no
+`auto_mode` entry, since the classifier is not asked.
+
+`verified-by: bravebot_agent::turn::a_run_into_a_protected_file_is_not_put_to_the_classifier_by_any_name_it_has`
 
 A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
 `approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was

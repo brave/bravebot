@@ -1465,12 +1465,7 @@ mod tests {
                     binary: bravebot_agent::confirm::shown_binary(stage),
                 })
                 .collect();
-            let writes: Vec<String> = run
-                .plan
-                .writes
-                .iter()
-                .map(|path| bravebot_agent::confirm::shown_path(path))
-                .collect();
+            let writes: Vec<String> = run.shown_writes();
             let confinement =
                 run.confined
                     .as_ref()
@@ -2443,6 +2438,66 @@ mod tests {
             .map(|option| option["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["Allow for this session", "Reject"]);
+    }
+
+    /// PERM-9, MODE-2: a run into a protected path reaches the editor with the single choices
+    /// only and with nothing to remember, so a client's "allow always" cannot stand for it.
+    /// Rejects a bridge that builds the options from the run being a run and not from
+    /// `canBeRemembered`.
+    #[test]
+    fn a_run_into_a_protected_path_offers_the_editor_no_standing_answer() {
+        use bravebot_agent::confirm::{RunDestination, RunRequest};
+        use bravebot_core::command::{Pipeline, Stage};
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        run.plan.writes = vec!["notes.txt".into()];
+        run.protected = true;
+        run.destinations = vec![RunDestination {
+            written: "notes.txt".into(),
+            lands_on: Some(".git/hooks/pre-commit".into()),
+            protected: true,
+        }];
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let mut shared = Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::new(),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        };
+        question(
+            &mut shared,
+            "s",
+            "run.request",
+            &crate::wire::run_request(4, &run),
+        );
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 1);
+        let ids: Vec<&str> = written[0]["params"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option["optionId"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, [ALLOW_ONCE, REJECT_ONCE]);
+        let text = written[0]["params"]["toolCall"]["content"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("lands on .git/hooks/pre-commit"), "{text}");
+        assert!(text.contains("protected path"), "{text}");
+        assert!(
+            matches!(
+                shared.asked.get(&1),
+                Some(Asked::Bridge {
+                    remember: false,
+                    ..
+                })
+            ),
+            "the question kept a standing answer open"
+        );
     }
 
     #[test]

@@ -698,6 +698,17 @@ that lands on a protected name is put back through the confirmer the same way
 question carries no body: the
 bytes are the backup's and the driver does not read them.
 
+A `run` whose line redirects output into such a path (`>` or `>>`) is a write to it and asks the same
+way: whatever a rule, the trust map, a remembered or vouched line or the trust of the directory says
+([RUN-5](tools/run.md#RUN-5)), and whatever the mode says short of bypassing. Every destination of
+the line is read as the write is, and the question draws where a link lands and marks the protected
+path. The path is read again when the redirection is opened, so a link an earlier part of the line
+made is caught there. The answer cannot be remembered, and a client that approves lines for a person
+(`--approve-input-lines`, an editor over the agent client protocol) is not offered the question as
+one it may answer for good. The decision reads the plan's destinations and the file system, never a
+byte a stage wrote or printed. A stage's own write into a protected name is not decided here
+([SANDBOX-14](sandboxing.md#SANDBOX-14)), and neither is a read of one.
+
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
 to hand one the user's data, exactly as vouching for a command is not, and a server is further from
@@ -719,6 +730,12 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_core::protected::a_git_component_anywhere_in_the_path_is_protected`
 `verified-by: bravebot_core::protected::an_ordinary_path_and_a_lookalike_are_not_protected`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_core::policy::no_standing_answer_covers_a_line_redirecting_into_a_protected_path`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_symbolic_link_to_a_hook_is_put_to_the_person_with_its_landing`
+`verified-by: bravebot_agent::turn::a_redirection_into_a_protected_name_in_another_case_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_to_a_protected_file_is_refused_when_opened`
+`verified-by: bravebot_agent::turn::a_redirection_into_an_ordinary_file_is_not_marked_protected_and_auto_still_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::tools::a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up`

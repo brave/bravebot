@@ -96,6 +96,14 @@ with a hard link is matched on each of its other names. The decision reads no by
 Putting old bytes back with a rewind or `/hunks` is such a write, and this mode does not answer it
 either; only bypassing does ([SESSION-19](sessions.md#SESSION-19)).
 
+A run whose line redirects into a protected path is put to the person in the same way, in accepting
+edits, auto and plan mode alike, and refused where nobody can be asked. The question cannot be
+remembered. It reads the destinations of the plan and the file system, never what a stage wrote.
+
+`verified-by: bravebot_agent::permission_mode::only_bypassing_answers_a_run_with_a_protected_destination`
+`verified-by: bravebot_agent::turn::accepting_edits_and_ask_put_a_redirection_into_a_hook_to_the_person`
+`verified-by: bravebot_agent::turn::an_unattended_turn_refuses_a_run_into_a_protected_path_and_tells_the_planner`
+
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
 leaves no diff, and its output is what the next stage reads. A mode named for edits that also
@@ -190,7 +198,8 @@ made from less than the person can see themselves.
 ### MODE-4: bypassing answers every permission question, including the ones that decide trust
 
 A write, a run, a command's output and vouching for a file nobody vouched for are all approved
-without being put to anybody, and the question a session opens with about trusting the working
+without being put to anybody, a write to a protected path and a run redirecting into one included, and
+the question a session opens with about trusting the working
 directory is not put either: the workspace is trusted, which is what answering it yes would have
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
 asked for is opened and vouched for without being put either, and so is a directory a
