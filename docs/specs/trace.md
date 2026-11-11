@@ -572,7 +572,7 @@ That does not make its text safe for a terminal: a file name in a clone can hold
 that sets the terminal's title or colour. The replacement is a change of characters and the sink
 still branches on none of them ([TRACE-5](#TRACE-5)).
 
-`verified-by: bravebot_agent::confirm::a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged`
+`verified-by: bravebot_agent::confirm::a_control_character_is_drawn_as_a_mark_for_it_and_other_text_is_unchanged`
 `verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
 `verified-by: bravebot_core::invisible::a_single_character_is_written_out_as_its_code_point`
 `verified-by: bravebot_cli::progress::a_c1_control_is_drawn_once_as_its_code_point_by_the_command_line`

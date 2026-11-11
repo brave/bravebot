@@ -3494,7 +3494,7 @@ mod tests {
     /// LAYER-3: every control character is drawn as a mark for it and none is dropped. A string with
     /// none comes back as it was, so text that needs no change is not altered.
     #[test]
-    fn a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged() {
+    fn a_control_character_is_drawn_as_a_mark_for_it_and_other_text_is_unchanged() {
         for plain in [
             "",
             "note.md",
@@ -3544,11 +3544,9 @@ mod tests {
             assert_ne!(drawn, format!("a{old}b"), "{code:#x}");
             assert!(seen.insert(drawn), "{code:#x} draws as another control");
         }
-        // The text for a literal U+2485 differs from the text for U+0085.
         assert_ne!(printable("a\u{85}b"), printable("a\u{2485}b"));
         assert_ne!(printable("\u{85}"), "\u{2485}");
         assert_ne!(printable("\u{7f}"), "\u{247f}");
-        // The kept tab is still kept beside them.
         assert_eq!(
             printable("\t\u{7f}\u{85}"),
             "\t\u{2421}\u{2039}U+0085\u{203a}"
