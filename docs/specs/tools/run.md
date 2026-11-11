@@ -297,10 +297,13 @@ settings and the person's answer and never from what a stage wrote or printed:
 A `>` or `>>` redirection into a protected path ([PERM-9](../permissions.md#PERM-9)), as named or as it
 lands after links are followed, is asked about whatever any of the five answers says, and no answer to
 it is kept. The path is read from the plan and the file system when the question is put and again when
-the redirection is opened.
+the redirection is opened. Under bypassing, which approves such a line unasked
+([MODE-4](../permission-modes.md#MODE-4)), the check at the open refuses nothing, so a link an earlier
+part of the line made is written through as the name itself would be.
 
 `verified-by: bravebot_core::policy::no_standing_answer_covers_a_line_redirecting_into_a_protected_path`
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_to_a_protected_file_is_refused_when_opened`
+`verified-by: bravebot_agent::turn::bypassing_writes_through_a_link_an_earlier_part_made_to_a_protected_file`
 
 A line this answer lets through starts with the network closed for that line, whatever the session's
 setting: the answer was given about a line the sandbox holds, and a stage with the network open is not held

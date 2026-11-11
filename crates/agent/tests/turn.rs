@@ -76770,6 +76770,45 @@ fn a_redirection_an_earlier_part_linked_to_a_protected_file_is_refused_when_open
     }
 }
 
+/// Bypassing approves a run that redirects into a protected path unasked (MODE-4), so the check
+/// made again when the redirection is opened does not refuse one an earlier part of the line
+/// linked there. Rejects an open-time check that ignores the mode, which refuses through a link
+/// the write the mode lets through by its name.
+#[cfg(unix)]
+#[test]
+fn bypassing_writes_through_a_link_an_earlier_part_made_to_a_protected_file() {
+    for (case, link) in [
+        ("symbolic", "ln -s .husky/pre-commit out"),
+        ("hard", "ln .husky/pre-commit out"),
+    ] {
+        let scratch = Scratch::new(&format!("redirect-relinked-protected-bypass-{case}"));
+        std::fs::create_dir_all(scratch.path.join(".husky")).unwrap();
+        std::fs::write(scratch.path.join(".husky/pre-commit"), "kept\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request(
+                "run",
+                &format!(r#"{{"command":"{link} && echo hi > out"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+
+        let bodies = bodies_of_a_bypass_turn(&workspace, &endpoint, &received);
+
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+            "hi\n",
+            "{case}: bypassing refused a write it approves by name: {bodies:?}"
+        );
+        assert!(
+            !bodies
+                .iter()
+                .any(|body| body.contains("reaches a protected path")),
+            "{case}: the planner was told of a refusal under bypassing: {bodies:?}"
+        );
+    }
+}
+
 /// A destination the line has opened once is confined again when a later part opens it. The first
 /// open made it one of the line's effects, and a part run in between can have replaced the file
 /// with a link out of the tree, so a check skipped for a path already entered is a check skipped

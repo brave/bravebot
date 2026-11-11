@@ -11552,8 +11552,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 // checked: an earlier part of the line left a link or hard link at the name, and
                 // the person was never shown the file it reaches (PERM-9). At every open, and
                 // whether or not the line has a profile. After the rules above, so a deny rule
-                // or a delegate's limit still names itself as the reason.
-                if !protected_writes.iter().any(|checked| checked == path)
+                // or a delegate's limit still names itself as the reason. Not under bypassing,
+                // which approves a run redirecting into a protected path unasked (MODE-4), so the
+                // same write is not refused for having been reached through a link.
+                if tools.permission_mode.get() != crate::PermissionMode::Bypass
+                    && !protected_writes.iter().any(|checked| checked == path)
                     && redirection_is_protected(tools.workspace, path)
                 {
                     return Err(crate::exec::ExecError::Redirection {

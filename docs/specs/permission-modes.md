@@ -198,7 +198,9 @@ made from less than the person can see themselves.
 ### MODE-4: bypassing answers every permission question, including the ones that decide trust
 
 A write, a run, a command's output and vouching for a file nobody vouched for are all approved
-without being put to anybody, a write to a protected path and a run redirecting into one included, and
+without being put to anybody, a write to a protected path and a run redirecting into one included,
+the latter also where an earlier part of the line linked the destination to a protected path
+([RUN-5](tools/run.md#RUN-5)), and
 the question a session opens with about trusting the working
 directory is not put either: the workspace is trusted, which is what answering it yes would have
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
@@ -363,6 +365,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_the_offer_to_vouch_and_no_other_mode_does`
+`verified-by: bravebot_agent::turn::bypassing_writes_through_a_link_an_earlier_part_made_to_a_protected_file`
 
 ## Choosing one
 
