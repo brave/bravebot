@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Added a daily usage ping, which tells Brave once a UTC day that a copy of bravebot ran: its platform, version, install method, front end, kind of model service, whether a premium key is held, four first-of-period flags and the week it was first counted. It holds no prompt, file, key, path or identifier, nothing is sent until bravebot has said so once, and the switch in `/config`, **Settings → General → Privacy**, `"usagePing": false`, `BRAVEBOT_USAGE_PING=0`, `DO_NOT_TRACK` or the managed file turns it off.
+
 ## [0.23.0](https://github.com/brave/bravebot/releases/tag/v0.23.0)
 
  - Added `/issues` and `/prs`, and Pull requests and Issues sections in the info panel, which list the issues and pull requests the session has met in text you typed, in the agent's own fetches and in trusted tool results. They cost no tokens and answer at once while a turn runs. ([#4223](https://github.com/brave/bravebot/issues/4223))

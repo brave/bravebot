@@ -110,6 +110,8 @@ interface Props {
   onCheckBackend: () => void
   onDiagnostics: () => void
   onSetup: () => void
+  /** A one-time note for this window, under the welcome's actions or docked on the composer. */
+  notice?: React.ReactNode
   /** Show or stop showing the model's thinking in this session (VIEW-34). */
   onThinking: (shown: boolean) => void
   storageKey: string
@@ -307,6 +309,7 @@ export function Transcript({
   onCheckBackend,
   onDiagnostics,
   onSetup,
+  notice,
   onThinking,
   storageKey,
   onNew,
@@ -752,6 +755,7 @@ export function Transcript({
               </Button>
               <kbd className="welcome-shortcut">⌘N</kbd>
             </div>
+            {notice}
             {backendReady === false && <BackendTray onSetup={setup} onCheckBackend={checkBackend} onDiagnostics={diagnostics} />}
             {!!recents.length && (
               <section className="welcome-recents" aria-labelledby="welcome-recents-title">
@@ -930,6 +934,7 @@ export function Transcript({
           onSetup={setup}
           onCheckBackend={checkBackend}
           onDiagnostics={diagnostics}
+          notice={notice}
           footer={footer}
         />
       </div>

@@ -284,6 +284,7 @@ dependencies = [
  "bravebot-stamp",
  "bravebot-tui",
  "bravebot-ui-bridge",
+ "bravebot-usage-ping",
  "rustix 1.1.6",
  "ruzstd",
  "serde_json",
@@ -478,6 +479,7 @@ dependencies = [
  "bravebot-stamp",
  "bravebot-ui-bridge",
  "bravebot-update",
+ "bravebot-usage-ping",
  "image",
  "ratatui",
  "ratatui-image",
@@ -511,6 +513,7 @@ dependencies = [
  "bravebot-skus",
  "bravebot-stamp",
  "bravebot-update",
+ "bravebot-usage-ping",
  "libc",
  "rustix 1.1.6",
  "serde",
@@ -542,6 +545,18 @@ dependencies = [
  "bravebot-net",
  "bravebot-session",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "bravebot-usage-ping"
+version = "0.21.0"
+dependencies = [
+ "bravebot-agent",
+ "bravebot-config",
+ "bravebot-core",
+ "bravebot-net",
+ "bravebot-session",
  "tempfile",
 ]
 

@@ -82,6 +82,9 @@ fn main() {
     bravebot_update::desktop_refresh(bravebot_ui_bridge::settings::update_check(
         settings.as_deref(),
     ));
+    // Sends nothing until the window has shown its notice; the mark that records it starts the
+    // ping again.
+    bravebot_ui_bridge::usage_ping::start(settings.as_deref());
 
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/choice", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/herdr", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/schedule", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files", "crates/update"]
+members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/choice", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/herdr", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/schedule", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files", "crates/update", "crates/usage-ping"]
 
 exclude = ["third_party/crossterm", "third_party/ratatui-image"]
 

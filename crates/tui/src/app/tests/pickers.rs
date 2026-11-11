@@ -359,6 +359,7 @@ fn the_preferences_picker_opened_mid_turn_takes_a_press_and_the_wheel_too() {
     let (mut session, _) = a_session_beside_the_panel();
     session.open_picking(Picking::Editing(crate::config_prompt::Picker::new(
         crate::vim::Editing::Ordinary,
+        bravebot_config::usage_ping::UsagePing::On,
     )));
     drawn(&mut session);
     handle_mouse(&mut session, drag(MouseEventKind::ScrollDown, 1, 1));
