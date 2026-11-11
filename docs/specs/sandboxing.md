@@ -4653,8 +4653,19 @@ shown by running the program, or not entirely:
     `QT_QPA_PLATFORM_PLUGIN_PATH` (`qguiapplication.cpp`) name directories plug-ins load from,
     `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS` and `QT_QPA_PLATFORM` (`qguiapplication.cpp`)
     and `QT_STYLE_OVERRIDE` (`qapplication.cpp`) name the plug-in loaded from them, and
-    `KDESYCOCA` (`ksycoca.cpp`) names the cache the `Exec` line of a handler is read from. Which
-    release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
+    `KDESYCOCA` (`ksycoca.cpp` line 698) names the cache the `Exec` line of a handler is read from.
+    The directories the handler is looked for in come from Qt's `QStandardPaths`, which reads
+    `XDG_DATA_HOME` (`qstandardpaths_unix.cpp` line 227), `XDG_CONFIG_HOME` (line 247),
+    `XDG_DATA_DIRS` (line 394) and `XDG_CONFIG_DIRS` (line 406), and KService's `KMimeAssociations`
+    (`kmimeassociations.cpp` line 71) and `KSycoca` (`ksycoca.cpp` lines 695 and 707) take their
+    `mimeapps.list` and `.desktop` directories and the cache from it.
+    `KSycoca` puts the cache file under the generic cache directory, which is `XDG_CACHE_HOME`
+    (`qstandardpaths_unix.cpp` line 189) or `HOME/.cache`, when `KDESYCOCA` is not set.
+    `XDG_CACHE_HOME` is not in the opener's list, and whether it should be is not decided here.
+    `XDG_CURRENT_DESKTOP` is read by `KService::showInCurrentDesktop` (`kservice.cpp` line 445)
+    and by `KMimeAssociations` (`kmimeassociations.cpp` line 47), to choose which entries are shown
+    and the name `<desktop>-mimeapps.list`. These reads are from source and none was observed in a
+    run. Which release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
     `KDEDIRS`, `KDE_FULL_SESSION`, `KDE_SESSION_VERSION`, `KDE_FORK_SLAVES` and the `QML*_IMPORT_PATH`
     names have no read in the files searched, which does not show they are never read. A run of
     `kde-open` on Linux is tracked by #3822.
@@ -4747,9 +4758,12 @@ shown by running the program, or not entirely:
   `XDG_RUNTIME_DIR` (used only in a test build of GLib).
   `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
   `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
-  mirror of the KDE repositories. Those files read `PATH` directly, reference no `BROWSER`, and
-  read no `XDG_*` or `KDE_*` variable. The terminal emulator comes from the KDE configuration file
-  and not from the environment.
+  mirror of the KDE repositories. Those files read `PATH` directly (`desktopexecparser.cpp`
+  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable themselves.
+  `kprocessrunner.cpp` sets `XDG_ACTIVATION_TOKEN` in the environment of the process it starts and
+  does not read it. The libraries they call do read `XDG_*` names, which are listed in the
+  `kde-open` entry above (KService 2bd4461c and Qt 6.10.0). The terminal emulator comes from the
+  KDE configuration file and not from the environment.
   `HOME` is in the opener's list and is removed when it names a directory a stage may write. With
   `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
   `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
@@ -4766,10 +4780,12 @@ shown by running the program, or not entirely:
   with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
-  stand-in for `xdg-open` instead; Qt's `QDesktopServices` and
-  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig`, which were not read, so that
-  `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`,
-  `XDG_CONFIG_DIRS` and `XDG_CURRENT_DESKTOP` is expected and unverified; the parts of GLib not
+  stand-in for `xdg-open` instead; KDE's `KConfig`, which was not read, and the platform
+  implementation of Qt's `QDesktopServices`, which was not located (`qdesktopservices.cpp` reads
+  no variable), so that what `kde-open` reads is complete only for the files named in the `kde-open`
+  entry above; that `kde-open` chooses its handler through `XDG_DATA_HOME`, `XDG_DATA_DIRS`,
+  `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and `XDG_CURRENT_DESKTOP` is read from
+  that source and was not run, so it is unverified by a run; the parts of GLib not
   read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
   the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
   set, which is shown only by a test of the opener's judgment of the value. The list of variables
