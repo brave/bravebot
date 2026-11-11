@@ -787,8 +787,12 @@ pub fn save_usage_ping(on: bool) {
 /// switch changed in one window is seen by the next ask in another.
 pub fn usage_ping() -> bravebot_config::usage_ping::UsagePing {
     use bravebot_config::env_var;
-    let usage_ping_variable = std::env::var(env_var::USAGE_PING).ok();
-    let do_not_track = std::env::var(env_var::DO_NOT_TRACK).ok();
+    // Lossy rather than dropped, so a value that is not text is still set: for `DO_NOT_TRACK` that
+    // is off, and for the other it is not `0`, which is all PING-2 reads it for.
+    let usage_ping_variable =
+        std::env::var_os(env_var::USAGE_PING).map(|value| value.to_string_lossy().into_owned());
+    let do_not_track =
+        std::env::var_os(env_var::DO_NOT_TRACK).map(|value| value.to_string_lossy().into_owned());
     bravebot_config::usage_ping::resolve(bravebot_config::usage_ping::Inputs {
         incognito: writable().is_none(),
         managed_off: bravebot_config::Managed::load().usage_ping_off(),

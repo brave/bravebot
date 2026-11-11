@@ -375,10 +375,14 @@ fn request(url: &str) -> bool {
 /// A development build has none unless the variable names one, so neither `cargo run` nor a test
 /// that starts the program is counted as a person's launch.
 fn base_url() -> Option<String> {
-    let named = std::env::var(bravebot_config::env_var::USAGE_PING_URL)
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty());
+    // An address named in something other than text is refused rather than read as unset, which
+    // in a released build would send to the default the person meant to replace.
+    let named = match std::env::var_os(bravebot_config::env_var::USAGE_PING_URL) {
+        None => None,
+        Some(value) => Some(value.into_string().ok()?),
+    }
+    .map(|value| value.trim().trim_end_matches('/').to_string())
+    .filter(|value| !value.is_empty());
     match named {
         Some(named) => Some(named),
         None if cfg!(debug_assertions) => None,

@@ -241,6 +241,32 @@ fn nothing_goes_when_the_ping_is_off() {
     });
 }
 
+/// A switch or an address set to something other than text is set, not absent: `DO_NOT_TRACK`
+/// turns the ping off, and the address refuses it rather than falling back to the default.
+#[cfg(unix)]
+#[test]
+fn a_variable_that_is_not_text_sends_nothing() {
+    use std::os::unix::ffi::OsStrExt;
+    let not_text = std::ffi::OsStr::from_bytes(b"\xff\xfe");
+    let server = ok_server();
+    with_home(&server, true, |state| {
+        // SAFETY: ENV_LOCK is held by `with_home`.
+        unsafe { std::env::set_var("DO_NOT_TRACK", not_text) };
+        assert_eq!(send(Surface::Tui, Backend::Brave, false), Outcome::Off);
+        // SAFETY: as above.
+        unsafe {
+            std::env::remove_var("DO_NOT_TRACK");
+            std::env::set_var("BRAVEBOT_USAGE_PING_URL", not_text);
+        }
+        assert_eq!(
+            send(Surface::Tui, Backend::Brave, false),
+            Outcome::Unsupported
+        );
+        assert!(server.seen().is_empty());
+        assert!(!state.join("usage-ping-state").exists());
+    });
+}
+
 /// A development build with no destination named sends nothing and records nothing, so a test that
 /// starts the program or a `cargo run` is never counted.
 #[cfg(debug_assertions)]
