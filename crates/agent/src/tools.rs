@@ -4903,12 +4903,23 @@ pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
 /// or a rule says (MODE-2, PERM-9): the name as the line spelled it, the names it reaches once a
 /// `..` is taken out or every link is followed, and the other names of a file with several hard
 /// links. A file whose other names could not all be found is protected, as in
-/// [`write_is_protected`]. Read off the routing path and the file system alone, never a byte of
+/// [`write_is_protected`], and so is one reached under a name that is not UTF-8. Read off the
+/// routing path and the file system alone, never a byte of
 /// any file, and asked for `>` and `>>` alike since only the path is read.
 pub(crate) fn redirection_is_protected(workspace: &Workspace, path: &std::path::Path) -> bool {
-    let spelled = workspace.relative_display(path);
-    let mut names = vec![spelled];
-    names.extend(workspace.names_reached(path));
+    let mut reached = workspace.paths_reached(path);
+    reached.push(path.to_path_buf());
+    // A name that is not UTF-8 has no spelling a rule can be written about, and its lossy
+    // rendering is the name of a different file, so the file it opens could be a hard link to a
+    // protected one. It is protected, as a file whose other names could not all be found is
+    // (PATH-001).
+    if reached.iter().any(|name| name.to_str().is_none()) {
+        return true;
+    }
+    let names: Vec<String> = reached
+        .iter()
+        .map(|name| workspace.relative_display(name))
+        .collect();
     names.iter().any(|name| {
         bravebot_core::protected::is_protected(name)
             || workspace.hard_links(name).is_none_or(|others| {
@@ -32486,6 +32497,38 @@ mod tests {
         }
         std::fs::write(named(b"plain-file"), "x").unwrap();
         assert_eq!(landing_other_than_the_name(&named(b"plain-file")), None);
+    }
+
+    /// A redirection into a file that is a hard link to a protected one is protected, and so is
+    /// one whose own name is not UTF-8, since its lossy rendering is the name of a different file
+    /// and the walk for its other names would look for that one (PATH-001). The regression it
+    /// rejects: spelling the name lossily before the lookup, which found no file and judged
+    /// `out-\xff` unprotected. The plain-named link and the unlinked file are the controls and
+    /// run on every Unix host; the name that is not text is made on Linux only.
+    #[cfg(unix)]
+    #[test]
+    fn a_redirection_into_a_hard_link_to_a_protected_file_is_protected_whatever_the_link_is_called()
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let top = crate::testutil::scratch_dir("redirect-hard-link-not-text");
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(&top).unwrap();
+        let top = top.canonicalize().unwrap();
+        let workspace = Workspace::new(&top).expect("workspace");
+        std::fs::write(top.join(".gitconfig"), "[user]\n").unwrap();
+        std::fs::write(top.join("plain.txt"), "plain\n").unwrap();
+        let named = |bytes: &[u8]| top.join(std::ffi::OsStr::from_bytes(bytes));
+        std::fs::hard_link(top.join(".gitconfig"), named(b"out-plain")).unwrap();
+        assert!(redirection_is_protected(&workspace, &named(b"out-plain")));
+        assert!(!redirection_is_protected(
+            &workspace,
+            &top.join("plain.txt")
+        ));
+        if cfg!(target_os = "linux") {
+            std::fs::hard_link(top.join(".gitconfig"), named(b"out-\xff")).unwrap();
+            assert!(redirection_is_protected(&workspace, &named(b"out-\xff")));
+        }
     }
 
     /// The regression it rejects: a comparison of where a link lands with the skill's directory
