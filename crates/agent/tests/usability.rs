@@ -1205,7 +1205,10 @@ fn a_setup_go_does_not_read_an_environment_file_in_the_home() {
         ],
         &marker,
     ) {
-        None => return skipped("go is not installed"),
+        None => {
+            eprintln!("skipped go-env-file: go is not installed");
+            return;
+        }
         Some(false) => return skipped("go here does not run -toolexec from a GOENV file"),
         Some(true) => {}
     }
@@ -1662,7 +1665,10 @@ fn a_setup_go_does_not_switch_toolchain_from_an_environment_file_in_the_home() {
         ],
         &marker,
     ) {
-        None => return skipped("go is not installed"),
+        None => {
+            eprintln!("skipped go-toolchain-file: go is not installed");
+            return;
+        }
         Some(false) => return skipped("go here does not switch toolchain from a GOENV file"),
         Some(true) => {}
     }
