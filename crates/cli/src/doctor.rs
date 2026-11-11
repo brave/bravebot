@@ -8,6 +8,7 @@ use crate::workspace::{confinement_name, current_workspace, unattended_trust_wit
 use crate::{auth, import, mcp, progress};
 use bravebot_agent::Workspace;
 use bravebot_agent::chatgpt::AccountFile;
+use bravebot_config::embeddings::Service;
 use bravebot_config::{Config, Managed, env_var};
 use bravebot_i18n::t;
 use bravebot_net::Transport;
@@ -1188,6 +1189,22 @@ pub(crate) fn doctor() -> ExitCode {
     }
 
     println!();
+    // After the network, which a test call goes out through and which says why one cannot.
+    let named = bravebot_config::named_settings_file();
+    let endpoint = bravebot_ui_bridge::retrieval::described(named).map_err(|why| why.to_string());
+    for line in retrieval(&settings, &endpoint, || {
+        unless_unreachable(
+            transport,
+            || match bravebot_ui_bridge::retrieval::test_call(named) {
+                Ok(took) => TestCall::Answered(took),
+                Err(why) => TestCall::Failed(why),
+            },
+        )
+    }) {
+        println!("{line}");
+    }
+
+    println!();
     // Not a warning: without confinement, untrusted work will be refused rather than run, so
     // this is a hard problem for the user to solve. Not a configuration error either: nothing the
     // reader can write down would give this platform a sandbox, so it is CLI-6's catch-all.
@@ -1935,6 +1952,97 @@ fn report_aichat(config: &Config) {
     );
 }
 
+/// What one test call to the embeddings endpoint found.
+#[derive(Debug)]
+pub(crate) enum TestCall {
+    Answered(std::time::Duration),
+    Failed(String),
+    /// Not made, because the network section already says no request can leave.
+    Skipped,
+}
+
+/// `call`, unless the network section already says no request can leave: nothing is trusted, or
+/// the proxy named is one this build cannot connect through.
+pub(crate) fn unless_unreachable(
+    transport: &Transport,
+    call: impl FnOnce() -> TestCall,
+) -> TestCall {
+    if transport.trusts_nothing() || transport.unusable_proxy().is_some() {
+        return TestCall::Skipped;
+    }
+    call()
+}
+
+/// The retrieval lines of `doctor` (RETRIEVE-26): whether recall is on and the file that decided
+/// it, then, where it is on, the service it sends to and what `call` found. One line where it is
+/// off, and `call` is not made.
+///
+/// None of it is a failure: retrieval falling back to a summary is what a turn does without it.
+pub(crate) fn retrieval(
+    settings: &bravebot_config::Settings,
+    endpoint: &Result<bravebot_ui_bridge::retrieval::Endpoint, String>,
+    call: impl FnOnce() -> TestCall,
+) -> Vec<String> {
+    let from = settings
+        .retrieval_from()
+        .map(|path| path.display().to_string());
+    let state = match (settings.retrieval(), from) {
+        (true, Some(path)) => t!(doctor_retrieval_on, path = path),
+        (false, Some(path)) => t!(doctor_retrieval_off_from, path = path),
+        (_, None) => t!(doctor_retrieval_off).to_string(),
+    };
+    let mut lines = vec![aligned(t!(doctor_retrieval), state, DETAIL)];
+    if !settings.retrieval() {
+        return lines;
+    }
+    let endpoint = match endpoint {
+        Ok(endpoint) => endpoint,
+        Err(why) => {
+            let why = crate::progress::printable_lines(why);
+            lines.push(aligned(
+                t!(doctor_embeddings),
+                t!(doctor_embeddings_unconfigured, why = why),
+                DETAIL,
+            ));
+            return lines;
+        }
+    };
+    let host = endpoint.host.as_str();
+    let service = match endpoint.service {
+        Service::Brave if endpoint.development => {
+            t!(doctor_embeddings_brave_development, host = host)
+        }
+        Service::Brave => t!(doctor_embeddings_brave, host = host),
+        Service::OpenAi => t!(doctor_embeddings_openai, host = host),
+        Service::OpenRouter => t!(doctor_embeddings_openrouter, host = host),
+        Service::Custom => t!(doctor_embeddings_custom, host = host),
+    };
+    lines.push(aligned(t!(doctor_embeddings), service, DETAIL));
+    let model = endpoint.model.as_str();
+    let dimensions = endpoint.dimensions.to_string();
+    let found = match call() {
+        TestCall::Answered(took) => t!(
+            doctor_embeddings_answered,
+            model = model,
+            dimensions = dimensions,
+            ms = took.as_millis().to_string()
+        ),
+        TestCall::Failed(why) => t!(
+            doctor_embeddings_failed,
+            model = model,
+            dimensions = dimensions,
+            why = crate::progress::printable_lines(&why)
+        ),
+        TestCall::Skipped => t!(
+            doctor_embeddings_skipped,
+            model = model,
+            dimensions = dimensions
+        ),
+    };
+    lines.push(aligned(t!(doctor_embeddings_model), found, DETAIL));
+    lines
+}
+
 /// Where the values line up in what `doctor` reports, and in its confinement section.
 pub(crate) const FACT: usize = 10;
 pub(crate) const DETAIL: usize = 17;
@@ -2401,6 +2509,167 @@ mod tests {
     /// STATE-4: a sweep that is waiting is the one thing about retention a person cannot see from the
     /// directory, because nothing is removed and nothing says why. A file that named a period it was
     /// not allowed to is named as well, and a machine where the sweep runs says nothing.
+    /// RETRIEVE-26: off is one line naming the file that turned it off and makes no call; on
+    /// names the file, the service and its host, and what the call found, whether it answered,
+    /// failed or was not made.
+    #[test]
+    fn the_retrieval_lines_name_the_file_the_service_and_what_the_test_call_found() {
+        let root = scratch("retrieval-lines");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        let own = bravebot_config::user_settings_file(&home);
+        let endpoint = Ok(bravebot_ui_bridge::retrieval::Endpoint {
+            service: Service::Brave,
+            url: "https://ai-chat-backend-dev.bsg.brave.software/v1/embeddings".to_string(),
+            host: "ai-chat-backend-dev.bsg.brave.software".to_string(),
+            model: "embedding_gemma".to_string(),
+            dimensions: 768,
+            development: true,
+        });
+        let layered = || bravebot_config::Settings::layered(Some(home.clone()), None, None);
+        let never = || -> TestCall { panic!("a test call was made with retrieval off") };
+
+        assert_eq!(
+            retrieval(&layered(), &endpoint, never),
+            vec![aligned("retrieval", "off", DETAIL)]
+        );
+        std::fs::write(&own, r#"{"retrieval": {"enabled": false}}"#).expect("user file");
+        assert_eq!(
+            retrieval(&layered(), &endpoint, never),
+            vec![aligned(
+                "retrieval",
+                format!("off, from {}", own.display()),
+                DETAIL
+            )]
+        );
+        let managed_path = root.join("managed.json");
+        std::fs::write(&managed_path, r#"{"retrieval": {"enabled": false}}"#).expect("managed");
+        std::fs::write(&own, r#"{"retrieval": {"enabled": true}}"#).expect("user file");
+        let pinned = layered().under(&Managed::at(&managed_path));
+        assert_eq!(
+            retrieval(&pinned, &endpoint, never),
+            vec![aligned(
+                "retrieval",
+                format!("off, from {}", managed_path.display()),
+                DETAIL
+            )]
+        );
+
+        let answered = retrieval(&layered(), &endpoint, || {
+            TestCall::Answered(std::time::Duration::from_millis(190))
+        });
+        assert_eq!(
+            answered,
+            vec![
+                aligned("retrieval", format!("on, from {}", own.display()), DETAIL),
+                aligned(
+                    "embeddings",
+                    "Brave (development), ai-chat-backend-dev.bsg.brave.software",
+                    DETAIL
+                ),
+                aligned(
+                    "embeddings model",
+                    "embedding_gemma, 768 dimensions, answered in 190 ms",
+                    DETAIL
+                ),
+            ]
+        );
+        let failed = retrieval(&layered(), &endpoint, || {
+            TestCall::Failed("the request timed out\u{1b}[2J".to_string())
+        });
+        assert!(
+            failed[2].contains("the test call failed: the request timed out"),
+            "{}",
+            failed[2]
+        );
+        assert!(
+            !failed[2].contains('\u{1b}'),
+            "an escape from the error reached the terminal"
+        );
+        let skipped = retrieval(&layered(), &endpoint, || TestCall::Skipped);
+        assert!(
+            skipped[2].contains("not called: the network section says why"),
+            "{}",
+            skipped[2]
+        );
+    }
+
+    /// RETRIEVE-26: where the network section says no request can leave, the test call is not
+    /// made, and it is made where one can.
+    #[test]
+    fn the_test_call_is_not_made_where_the_network_says_no_request_can_leave() {
+        let never = || -> TestCall { panic!("a test call was made with no way out") };
+        let untrusting = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/absent.pem")),
+                directory: None,
+            },
+            None,
+            None,
+        );
+        assert!(matches!(
+            unless_unreachable(&untrusting, never),
+            TestCall::Skipped
+        ));
+        let socks = Transport::stated(TrustRoots::Bundled, Some("socks5://proxy.corp:1080"), None);
+        assert!(matches!(
+            unless_unreachable(&socks, never),
+            TestCall::Skipped
+        ));
+        let open = Transport::stated(TrustRoots::Bundled, None, None);
+        assert!(matches!(
+            unless_unreachable(&open, || TestCall::Answered(std::time::Duration::ZERO)),
+            TestCall::Answered(_)
+        ));
+    }
+
+    /// RETRIEVE-34: the line names the service the settings choose, and where they choose none it
+    /// says why and makes no call.
+    #[test]
+    fn the_retrieval_lines_name_the_chosen_service_or_why_there_is_none() {
+        let root = scratch("retrieval-chosen");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::write(
+            bravebot_config::user_settings_file(&home),
+            r#"{"retrieval": {"enabled": true}}"#,
+        )
+        .expect("user file");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        let answered = || TestCall::Answered(std::time::Duration::from_millis(5));
+        for (service, named) in [
+            (Service::Brave, "Brave, api.openai.com"),
+            (Service::OpenAi, "OpenAI, api.openai.com"),
+            (Service::OpenRouter, "OpenRouter, api.openai.com"),
+            (Service::Custom, "an endpoint of your own, api.openai.com"),
+        ] {
+            let endpoint = Ok(bravebot_ui_bridge::retrieval::Endpoint {
+                service,
+                url: "https://api.openai.com/v1/embeddings".to_string(),
+                host: "api.openai.com".to_string(),
+                model: "m".to_string(),
+                dimensions: 8,
+                development: false,
+            });
+            assert_eq!(
+                retrieval(&settings, &endpoint, answered)[1],
+                aligned("embeddings", named, DETAIL)
+            );
+        }
+        let lines = retrieval(
+            &settings,
+            &Err("OpenRouter has no key\u{1b}[2J".to_string()),
+            || panic!("a test call was made with no endpoint"),
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[1].contains("not set up: OpenRouter has no key"),
+            "{}",
+            lines[1]
+        );
+        assert!(!lines[1].contains('\u{1b}'));
+    }
+
     #[test]
     fn the_retention_section_names_a_paused_sweep_and_a_file_that_was_not_obeyed() {
         let root = scratch("retention-facts");

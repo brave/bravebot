@@ -50,6 +50,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The network-free embedder, so a bot turn's vectors are kept without asking the endpoint.
+bravebot-aichat = { path = "../aichat", features = ["fake-embeddings"] }
 # The test of what the bridge sends and keeps for a failed ChatGPT turn signs in to a stand-in and
 # runs the turns against it. The seams are on for a build of this crate's tests alone, and a release
 # build refuses them (CHATGPT-2).

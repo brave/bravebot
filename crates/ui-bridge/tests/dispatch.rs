@@ -899,3 +899,54 @@ fn schedule_command_is_dispatched_to_the_shared_function() {
     .expect("answered");
     assert_eq!(unclosed["refused"], true, "{unclosed}");
 }
+
+/// RETRIEVE-32: `retrieval.excerpts` is answered by the dispatcher, from the saved record, and a
+/// record that is not there is no such session.
+#[test]
+fn retrieval_excerpts_is_dispatched_and_names_a_missing_record() {
+    let (mut bridge, events) = harness();
+    let scratch = tempfile::tempdir().unwrap();
+    assert_eq!(
+        call(
+            &mut bridge,
+            "retrieval.excerpts",
+            json!({ "directory": scratch.path(), "id": "nobody-here", "prompt": 0 }),
+        ),
+        Err(ErrorCode::NoSuchSession)
+    );
+    assert_eq!(
+        call(
+            &mut bridge,
+            "retrieval.excerpts",
+            json!({ "directory": scratch.path(), "id": "nobody-here" }),
+        ),
+        Err(ErrorCode::BadRequest)
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "the answer is never an event"
+    );
+}
+
+/// RETRIEVE-35: `retrieval.embeddings.set` is answered by the dispatcher, which refuses a request
+/// naming nothing to change before anything is read.
+#[test]
+fn retrieval_embeddings_set_is_dispatched_and_refuses_an_empty_request() {
+    let (mut bridge, events) = harness();
+    assert_eq!(
+        call(&mut bridge, "retrieval.embeddings.set", json!({})),
+        Err(ErrorCode::BadRequest)
+    );
+    assert_eq!(
+        call(
+            &mut bridge,
+            "retrieval.embeddings.set",
+            json!({ "select": "nothing-known" }),
+        ),
+        Err(ErrorCode::BadRequest)
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "the answer is never an event"
+    );
+}

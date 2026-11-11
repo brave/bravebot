@@ -481,14 +481,14 @@ fn requested_here(directory: &Path) -> Vec<String> {
     }
 }
 
-fn user_settings(directory: &Path) -> Result<Destination, Failure> {
+pub(crate) fn user_settings(directory: &Path) -> Result<Destination, Failure> {
     let file = bravebot_config::user_settings_file(directory);
     Destination::open(&file).map_err(|why| unwritable(why, &file))
 }
 
 /// Write the home settings file whole, through a link where it is one, as `bravebot mcp enable`
 /// writes it.
-fn write_settings(settings: &Destination) -> Result<(), Failure> {
+pub(crate) fn write_settings(settings: &Destination) -> Result<(), Failure> {
     let path = settings.path();
     if settings.changed() {
         return Err(unwritable(Unwritable::Changed, path));

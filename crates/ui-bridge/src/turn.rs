@@ -206,6 +206,13 @@ pub struct BridgeReporter {
     /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
     /// so the list lasts across turns (VIEW-35).
     roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
+    /// The turn these reports are about, for the events a window files by turn.
+    turn: Option<usize>,
+    /// What the turn's retrievals have drawn on so far, once each, and what they came to.
+    recalled: Vec<report::Place>,
+    recalled_tokens: u64,
+    /// Whether `turn.retrieved` has been sent for this turn.
+    retrieval_told: bool,
 }
 
 impl BridgeReporter {
@@ -220,7 +227,17 @@ impl BridgeReporter {
             prompt_at: None,
             task_list: Vec::new(),
             roster: Arc::default(),
+            turn: None,
+            recalled: Vec::new(),
+            recalled_tokens: 0,
+            retrieval_told: false,
         }
+    }
+
+    /// Report for turn `turn`.
+    pub fn numbered(mut self, turn: usize) -> Self {
+        self.turn = Some(turn);
+        self
     }
 
     /// Report into the session's own list of agents and not a fresh one.
@@ -381,6 +398,46 @@ impl Reporter for BridgeReporter {
             return;
         }
         self.say("narration", json!({ "text": text }));
+    }
+
+    /// What the turn's retrievals drew on, as positions the window draws rows for from its own
+    /// transcript (RETRIEVE-27).
+    ///
+    /// The union of every round's, sent after the first round that retrieved and again only where a
+    /// later round added to it, so a turn that retrieved twice from the same messages says so once.
+    /// A round that fell back is told where nothing was yet, so the window knows the turn tried.
+    fn retrieved(&mut self, retrieved: report::Retrieved) {
+        if self.reporting_for.is_some() {
+            return;
+        }
+        let before = self.recalled.len();
+        for place in retrieved.used {
+            if !self
+                .recalled
+                .iter()
+                .any(|kept| kept.ordinal == place.ordinal)
+            {
+                self.recalled.push(place);
+            }
+        }
+        let added = self.recalled.len() > before;
+        if added {
+            self.recalled_tokens += retrieved.tokens;
+            self.recalled.sort_by_key(|place| place.ordinal);
+        }
+        if !added && (self.retrieval_told || retrieved.fell_back.is_none()) {
+            return;
+        }
+        self.retrieval_told = true;
+        self.say(
+            "turn.retrieved",
+            json!({
+                "turn": self.turn,
+                "used": self.recalled.iter().map(wire::place).collect::<Vec<_>>(),
+                "tokens": self.recalled_tokens,
+                "fellBack": retrieved.fell_back.map(bravebot_agent::retrieval::Unavailable::word),
+            }),
+        );
     }
 
     /// A summary could not be made and the turn goes on without it. Where it was the ChatGPT
@@ -1122,3 +1179,7 @@ mod answering_tests;
 #[cfg(test)]
 #[path = "notice_tests.rs"]
 mod notice_tests;
+
+#[cfg(test)]
+#[path = "recalled_tests.rs"]
+mod recalled_tests;

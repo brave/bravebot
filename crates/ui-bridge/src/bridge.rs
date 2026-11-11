@@ -170,6 +170,49 @@ pub struct Bridge {
     refuse_until_set: bool,
     /// The ChatGPT or xAI sign-in the window started, while it runs.
     sign_ins: crate::accounts::SignIns,
+    /// What keeps a bot's vectors caught up with its record (RETRIEVE-4), started by the first
+    /// turn that needs it.
+    indexer: Option<bravebot_session::indexer::Indexer>,
+    /// What a bot's turn with retrieval on finds its earlier excerpts with (RETRIEVE-17), where
+    /// not the endpoint the settings choose.
+    retrievers: Option<Retrievers>,
+}
+
+/// Builds the retriever of a bot's turn from the vectors file beside its record, writing what its
+/// query's gates decided to the trail it is given.
+pub type Retrievers = Arc<
+    dyn Fn(
+            PathBuf,
+            bravebot_aichat::embeddings::SharedSink,
+        ) -> Arc<dyn bravebot_agent::retrieval::Retriever>
+        + Send
+        + Sync,
+>;
+
+/// A retriever that embeds its query at the endpoint the settings choose when the turn asks, or
+/// one that finds nothing where they choose none (RETRIEVE-34).
+fn sidecar_retrievers(settings: Option<PathBuf>) -> Retrievers {
+    Arc::new(move |path, trail| {
+        let Ok(config) = crate::retrieval::resolved(settings.as_deref()) else {
+            return Arc::new(bravebot_session::retriever::Unconfigured);
+        };
+        Arc::new(bravebot_session::retriever::Sidecar::new(
+            path,
+            Box::new(bravebot_aichat::embeddings::EmbeddingsClient::new(config).with_trail(trail)),
+        ))
+    })
+}
+
+/// An embedder for the endpoint the settings choose as a pass starts, or none where they choose
+/// none (RETRIEVE-34).
+fn chosen_embedders(settings: Option<PathBuf>) -> bravebot_session::indexer::Embedders {
+    Box::new(move |trail| {
+        let config = crate::retrieval::resolved(settings.as_deref()).ok()?;
+        Some(
+            Box::new(bravebot_aichat::embeddings::EmbeddingsClient::new(config).with_trail(trail))
+                as Box<dyn bravebot_aichat::embeddings::Embedder>,
+        )
+    })
 }
 
 impl Bridge {
@@ -185,7 +228,43 @@ impl Bridge {
             answerers: HashMap::new(),
             refuse_until_set: false,
             sign_ins: crate::accounts::SignIns::default(),
+            indexer: None,
+            retrievers: None,
         }
+    }
+
+    /// Keep bots' vectors with `indexer` rather than one asking the embeddings endpoint.
+    pub fn with_indexer(mut self, indexer: bravebot_session::indexer::Indexer) -> Self {
+        self.indexer = Some(indexer);
+        self
+    }
+
+    /// Find a bot turn's excerpts with retrievers from `retrievers` rather than ones asking the
+    /// embeddings endpoint.
+    pub fn with_retrievers(mut self, retrievers: Retrievers) -> Self {
+        self.retrievers = Some(retrievers);
+        self
+    }
+
+    /// Each pass embeds at the endpoint the settings choose as it starts, and a pass where they
+    /// choose none is skipped, keeping the vectors there are. A pass sends nothing once the
+    /// settings turn retrieval off, read again before each batch (RETRIEVE-4).
+    fn indexer(&mut self) -> bravebot_session::indexer::Indexer {
+        let settings = self.settings.clone();
+        self.indexer
+            .get_or_insert_with(|| {
+                bravebot_session::indexer::Indexer::start_while(
+                    chosen_embedders(settings.clone()),
+                    Box::new(move || crate::retrieval::on(settings.as_deref())),
+                )
+            })
+            .clone()
+    }
+
+    fn retrievers(&self) -> Retrievers {
+        self.retrievers
+            .clone()
+            .unwrap_or_else(|| sidecar_retrievers(self.settings.clone()))
     }
 
     /// Refuse every question of a session until [`Bridge::set_answerable`] or
@@ -359,6 +438,17 @@ impl Bridge {
                 Ok(crate::effort::get(&settings))
             }
             "effort.set" => crate::effort::set(request),
+            "retrieval.set" => crate::retrieval::set(request, self.settings.as_deref()),
+            "retrieval.status" => {
+                crate::retrieval::status(request, self.settings.as_deref(), self.indexer.as_ref())
+            }
+            "retrieval.excerpts" => crate::retrieval::excerpts(request),
+            "retrieval.embeddings.set" => {
+                crate::embeddings_choice::set(request, self.settings.as_deref())
+            }
+            "retrieval.embeddings.models" => {
+                crate::embeddings_choice::models(request, self.settings.as_deref())
+            }
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
             "changelog.read" => Ok(crate::help::changelog()),
@@ -706,6 +796,12 @@ impl Bridge {
             // conversation: it is written down, so a session resumed in a new process knows what
             // compaction had already taken without having to watch it happen.
             "archived": record.conversation.archive.len(),
+            // The messages its request leaves out, compaction's and the retrieval cut's together,
+            // which only ever rises (RETRIEVE-28).
+            "outOfRequest": record.conversation.out_of_request(),
+            // What each exchange's retrievals drew on, so the line a live turn drew is drawn again
+            // from the record (RETRIEVE-27).
+            "recalled": wire::recalled(&conversation.retrieved_by_prompt()),
             "todos": todos,
             // SESSION-36: shown beside the conversation, never sent to the model.
             "notes": notes_json(&record.notes),
@@ -1514,6 +1610,9 @@ impl Bridge {
             return Err(Failure::bad_request(refused));
         }
         let attribution = settings.attribution().clone();
+        // A bot's record is embedded as it is saved while the setting is on (RETRIEVE-1), read
+        // per turn so turning it on catches the vectors up at the next turn.
+        let indexes = standing.is_some() && settings.retrieval();
         // The level the terminal's `/effort` and this window's picker record, ranked against the
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
         // between turns applies to the next one.
@@ -1587,8 +1686,12 @@ impl Bridge {
             open.definition = standing;
         }
         self.begun.insert(handle.clone());
+        let indexer = indexes.then(|| self.indexer());
+        let retrievers = indexes.then(|| self.retrievers());
         self.workers_of(&handle).spawn(move || {
             work(Work {
+                indexer,
+                retrievers,
                 model: worker_model,
                 addressing,
                 addressing_standing,
@@ -1967,6 +2070,7 @@ impl Bridge {
             state.rewind.record_gap(CoverageGap::BackupUnavailable);
         }
 
+        let record_length = bravebot_session::vectors::record_length(&snapshot.conversation);
         state.conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
         state.turns = snapshot.turns;
         state.tokens = snapshot.tokens;
@@ -1998,6 +2102,7 @@ impl Bridge {
             && state.answers.trust == snapshot.trust;
         if let Some(stored) = state.handle.as_mut() {
             stored.truncate_audit(snapshot.turns + 1);
+            stored.truncate_vectors(record_length);
             if discard {
                 stored.discard_unwritten(&snapshot.title);
             }
@@ -2030,6 +2135,8 @@ impl Bridge {
             "context": standing.context,
             "contextTokens": standing.measured,
             "archived": standing.archive.len(),
+            "outOfRequest": standing.out_of_request(),
+            "recalled": wire::recalled(&state.conversation.retrieved_by_prompt()),
             "todos": todos_json(&state.todos),
             "trust": { "rules": rules_json(&state.answers.trust) },
             "rewind": rewind_json(state, &project),
@@ -3074,6 +3181,10 @@ struct Work {
     /// for this turn alone.
     addressing_standing: bool,
     workspace: Workspace,
+    /// What the saved record is offered to for embedding, on a bot's turn with retrieval on.
+    indexer: Option<bravebot_session::indexer::Indexer>,
+    /// What finds the earlier excerpts, on a bot's turn with retrieval on.
+    retrievers: Option<Retrievers>,
     prompt: String,
     /// What this prompt was composed for, where nobody typed it.
     composed: Option<bravebot_agent::conversation::Composed>,
@@ -3187,6 +3298,8 @@ fn work(work: Work) {
         addressing,
         addressing_standing,
         workspace,
+        indexer,
+        retrievers,
         prompt,
         composed,
         files,
@@ -3223,8 +3336,9 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut reporter =
-        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
+    let mut reporter = BridgeReporter::new(emitter.clone(), &session)
+        .sharing(Arc::clone(&state.roster))
+        .numbered(turn);
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that
@@ -3310,6 +3424,17 @@ fn work(work: Work) {
     if let Some(stored) = state.handle.as_ref() {
         task = task.with_injected_facts(stored.injected_facts().clone());
     }
+    // Read from the vectors beside the record, so a session with none yet has nothing to recall
+    // and compacts as any other would.
+    let queried = Arc::new(std::sync::Mutex::new(bravebot_session::audit::Trail::new()));
+    if let Some(retrievers) = &retrievers
+        && let Some(path) = state
+            .handle
+            .as_ref()
+            .and_then(|stored| bravebot_session::vectors::path_in(&project, stored.id()))
+    {
+        task = task.with_retriever(Some(retrievers(path, queried.clone())));
+    }
     for file in &files {
         task = task.with_file(file);
     }
@@ -3378,6 +3503,11 @@ fn work(work: Work) {
     // Put the set back even if the turn failed or was cancelled. Otherwise its servers would
     // stop here, and the next turn would ask about the same language again.
     state.answers.servers = Some(servers);
+    if let (Some(stored), Ok(queried)) = (state.handle.as_ref(), queried.lock())
+        && !queried.events().is_empty()
+    {
+        stored.append_audit(turn, queried.events());
+    }
     // Kept whatever the outcome: a failed or cancelled turn may still have written.
     state.rewind.keep_backups(workspace.take_backups());
 
@@ -3462,7 +3592,9 @@ fn work(work: Work) {
             }
 
             state.answered_by_mode |= permission_mode.has_bypassed();
-            let archived = save(&project, &mut state, turn, sink.trail());
+            let archived =
+                save_and_index(&project, &mut state, turn, sink.trail(), indexer.as_ref());
+            let out_of_request = state.conversation.out_of_request();
 
             let rules = rules_json(&state.answers.trust);
             // What the turn said, then each question it did not put because the person had
@@ -3521,6 +3653,9 @@ fn work(work: Work) {
                     // inferred from the `compacting` phase, which is emitted before compaction is
                     // attempted and so also fires when there was nothing worth compacting.
                     "archived": archived,
+                    // Beside it, and rising whenever it does or the retrieval cut moves: either
+                    // way the request stopped carrying what it carried (RETRIEVE-28).
+                    "outOfRequest": out_of_request,
                     // Where this turn's prompt landed among the things the user said, which is
                     // the coordinate `session.fork` cuts on. `null` where the conversation does
                     // not hold it, which is a prompt that cannot be forked rather than one to
@@ -3543,7 +3678,7 @@ fn work(work: Work) {
                 began_at.elapsed(),
             );
             state.answered_by_mode |= permission_mode.has_bypassed();
-            let _ = save(&project, &mut state, turn, sink.trail());
+            let _ = save_and_index(&project, &mut state, turn, sink.trail(), indexer.as_ref());
 
             let notices = [
                 session_began.as_slice(),
@@ -3833,6 +3968,18 @@ pub(crate) fn save(
     turn: usize,
     trail: &bravebot_session::audit::Trail,
 ) -> usize {
+    save_and_index(project, state, turn, trail, None)
+}
+
+/// [`save`], then offer what was written to `indexer`, which never waits (RETRIEVE-4). Nothing
+/// is offered where nothing was written, as in an incognito session.
+fn save_and_index(
+    project: &std::path::Path,
+    state: &mut State,
+    turn: usize,
+    trail: &bravebot_session::audit::Trail,
+    indexer: Option<&bravebot_session::indexer::Indexer>,
+) -> usize {
     let handle = state
         .handle
         .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
@@ -3879,6 +4026,11 @@ pub(crate) fn save(
         },
     );
     handle.append_audit(turn, trail.events());
+    if let Some(indexer) = indexer
+        && let Some(job) = handle.index_job(snapshot, turn)
+    {
+        indexer.offer(job);
+    }
     archived
 }
 
@@ -5431,3 +5583,7 @@ mod link_tests;
 #[cfg(test)]
 #[path = "account_session_tests.rs"]
 mod account_session_tests;
+
+#[cfg(test)]
+#[path = "indexing_tests.rs"]
+mod indexing_tests;

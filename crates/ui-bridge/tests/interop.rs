@@ -944,6 +944,97 @@ fn a_resumed_session_reports_what_compaction_took_out_of_it() {
         opened["archived"], 0,
         "a conversation nothing has been taken out of has archived nothing"
     );
+    assert_eq!(
+        opened["outOfRequest"], 0,
+        "nor has its request left anything out"
+    );
+    assert_eq!(
+        opened["recalled"],
+        serde_json::json!([]),
+        "nor recalled anything"
+    );
+}
+
+/// RETRIEVE-14. A resumed session says what each turn retrieved, as places in the record and
+/// nothing of the excerpts' text, and how many messages the retrieval cut leaves out of its
+/// request.
+#[test]
+fn a_resumed_session_reports_where_its_excerpts_were_said_and_not_what() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let project = scratch("recalled-places");
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(Message::user("remember the word haddock"));
+    conversation.push(Message::assistant("haddock it is"));
+    conversation.push(Message::user("now talk about the weather"));
+    conversation.push(Message::assistant("it is raining"));
+    conversation.push(Message::user("what was the word?"));
+    conversation.prompt_given();
+    conversation.cut_for_retrieval(4);
+    conversation.insert_retrieved(
+        "excerpt-text-never-sent-to-a-window".into(),
+        vec![(0, 0), (1, 0)],
+        "m".into(),
+    );
+    conversation.push(Message::assistant("haddock"));
+
+    let trust = TrustStore::new(&project);
+    let mut handle = Handle::begin(
+        &project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
+    handle.save(
+        "remember the word haddock",
+        Standing {
+            history: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+            asides: &[],
+            conversation: &conversation.snapshot(),
+            turns: 3,
+            tokens: 30,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            trust: &trust,
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+        },
+    );
+    let id = handle.id().to_string();
+    drop(handle);
+
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.open",
+        serde_json::json!({ "directory": project.display().to_string(), "id": &id }),
+    );
+
+    assert_eq!(
+        opened["outOfRequest"], 4,
+        "the cut leaves four messages out"
+    );
+    assert_eq!(
+        opened["recalled"],
+        serde_json::json!([{ "prompt": 2, "used": [
+            { "ordinal": 0, "prompt": 0, "said": "prompt", "nth": null },
+            { "ordinal": 1, "prompt": 0, "said": "reply", "nth": 0 },
+        ]}]),
+    );
+    assert!(
+        !opened
+            .to_string()
+            .contains("excerpt-text-never-sent-to-a-window"),
+        "the excerpts' text reached the window: {opened}"
+    );
 }
 
 /// One list across every project is ordered by when each session was written.

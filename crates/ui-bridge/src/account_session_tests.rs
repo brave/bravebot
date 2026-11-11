@@ -56,6 +56,8 @@ fn take_a_turn_at(
         state: Arc::clone(state),
         config: config(),
         workspace: workspace.clone(),
+        indexer: None,
+        retrievers: None,
         attribution: Default::default(),
         effort,
         output_cap: None,
