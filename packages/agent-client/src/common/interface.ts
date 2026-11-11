@@ -99,6 +99,28 @@ export interface AgentClient {
   listSessions(): Promise<readonly SessionSummary[]>
   /** The listed session with this id. Rejects with `UnsupportedError` unless `describe()` reports `sessionList`. */
   openSession(id: string): Promise<AgentSession>
+  /** The host's run and the sessions it holds. A runtime that is not a host refuses it. */
+  instance(): Promise<InstanceInfo>
+  /**
+   * Take over a session the host holds whose controller's connection has ended, and start its view
+   * from the snapshot the host sends. A session this client holds is refused without sending.
+   */
+  attach(session: string): Promise<AgentSession>
   /** Operations a later stage adds. They fail locally and send nothing. */
-  unsupported(operation: 'attach' | 'takeControl' | 'messageStatus'): Promise<never>
+  unsupported(operation: 'takeControl' | 'messageStatus'): Promise<never>
+}
+
+/** One session a host holds, as `instance.info` lists it. */
+export interface HeldSession {
+  session: string
+  state: 'open' | 'closing' | 'closed'
+  working: boolean
+  /** Whether this connection controls it. */
+  controlled: boolean
+}
+
+export interface InstanceInfo {
+  /** Names this run of the host. A different value means the host restarted and its sessions are gone. */
+  instance: string
+  sessions: readonly HeldSession[]
 }
