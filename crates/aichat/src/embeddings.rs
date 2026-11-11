@@ -1740,6 +1740,8 @@ mod tests {
         ));
     }
 
+    /// RETRIEVE-37: a body cut off at the read limit is not the whole listing, and what parses of
+    /// it would be shown as the models there are, with some silently missing.
     #[test]
     fn a_listing_cut_off_at_the_reply_limit_is_no_listing() {
         let (url, _) = serve(Box::new(|_, _| {
