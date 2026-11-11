@@ -4979,16 +4979,15 @@ shown by running the program, or not entirely:
   system can stand in for and which is tracked by #3860; `kde-open` and a KDE session
   (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
   ran the rest and installing it there with apt would add 152 packages, so what it reads is
-  unobserved (the marker test and CI step added with #3884 are meant to observe it); a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
+  unobserved (the marker test and CI step are meant to observe it); a logged-in GNOME session, since the GNOME runs set `XDG_CURRENT_DESKTOP` on a host
   with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
-  stand-in for `xdg-open` instead; Qt's `QDesktopServices` and
-  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig`, which were read later (see the
-  `kde-open` entry above), so that `kde-open` chooses its handler through `XDG_DATA_HOME`,
-  `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and
-  `XDG_CURRENT_DESKTOP` is supported by source and unobserved, so it is unverified by a run; the
-  parts of GLib not
+  stand-in for `xdg-open` instead; a run showing that `kde-open` chooses its handler through
+  `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and
+  `XDG_CURRENT_DESKTOP`, which is supported by source and unobserved (Qt's `QDesktopServices` and
+  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig` are read, see the `kde-open` entry
+  above); the parts of GLib not
   read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
   the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
   set, which is shown only by a test of the opener's judgment of the value. The list of variables
@@ -6003,7 +6002,9 @@ reported as what it is.
   network is not shown.
   `a_container_granted_the_network_cannot_connect_to_this_hosts_loopback` binds a listener on
   `127.0.0.1`, connects to it from a probe in a stage granted the network and asserts the connect
-  was refused. It prints `connect-probe connected` or `connect-probe refused: <error>`. The assumption that a container's default network isolation refuses
+  was refused. It prints `connect-probe connected` or `connect-probe refused: <error>`, where
+  `<error>` is the connect's own error, and `connect-probe not run: <reason>` when it never tried to
+  connect, which the assertion does not accept. The assumption that a container's default network isolation refuses
   loopback is the one it tests, and a runner that connects fails it.
   The Windows tests that connect out (`a_container_connects_out_only_when_its_policy_asks_for_the_network`
   and `a_container_without_the_network_cannot_look_up_a_name`) need `github.com` reachable from the

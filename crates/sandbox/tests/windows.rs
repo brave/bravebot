@@ -1384,7 +1384,8 @@ fn probe_make_a_junction_in_this_stage() {
 
 /// Run only inside a stage that `a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`
 /// started, where it connects to the address in the last argument and prints `connect-probe connected` or
-/// `connect-probe refused: <os error>`. Started any other way it does nothing.
+/// `connect-probe refused: <error>`, or `connect-probe not run: <reason>` when it has no address to
+/// connect to. Started any other way it does nothing.
 #[test]
 fn probe_connect_from_this_stage() {
     if !this_is_a_probe_copy() {
@@ -1394,7 +1395,7 @@ fn probe_connect_from_this_stage() {
         .next_back()
         .and_then(|text| text.parse::<SocketAddr>().ok())
     else {
-        println!("{CONNECT_PROBED} refused: the probe was given no address");
+        println!("{CONNECT_PROBED} not run: the probe was given no address");
         return;
     };
     match std::net::TcpStream::connect_timeout(&address, Duration::from_secs(10)) {
@@ -2122,9 +2123,10 @@ fn a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing() {
 /// the network capability was read as covering the loopback interface.
 ///
 /// This process listens on an ephemeral loopback port and a probe in a stage granted the network
-/// connects to it, printing `connect-probe connected` or `connect-probe refused: <os error>`. The
+/// connects to it, printing `connect-probe connected` or `connect-probe refused: <error>`. The
 /// listener does not accept, since a connection completes against its backlog. The test
-/// asserts the connection did not complete. The reachability of the same listener from this
+/// asserts the connect itself failed, with an OS error or the timeout, and that the probe did not
+/// stop before it tried. The reachability of the same listener from this
 /// process is asserted first, so a listener nothing can reach is not mistaken for a refusal.
 #[test]
 fn a_container_granted_the_network_cannot_connect_to_this_hosts_loopback() {
@@ -2146,8 +2148,11 @@ fn a_container_granted_the_network_cannot_connect_to_this_hosts_loopback() {
     let found = what_the_probe_printed(&printed, CONNECT_PROBED);
     eprintln!("loopback {address} from a container granted the network: {found}");
 
+    let connect_failed = found
+        .strip_prefix("refused: ")
+        .is_some_and(|error| error == "connection timed out" || error.contains("(os error "));
     assert!(
-        found.starts_with("refused"),
-        "a container granted the network connected to {address} on this host's loopback: {found}"
+        connect_failed,
+        "a container granted the network was expected to be refused {address} on this host's loopback by the connect itself: {found}"
     );
 }
