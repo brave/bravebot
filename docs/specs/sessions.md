@@ -764,6 +764,22 @@ coverage.
 `verified-by: bravebot_agent::rewind::coverage_survives_rebinding_and_repeated_effects`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 
+A path a rewind or `/hunks` would put back that is a protected name, or lands on one, is put to the
+person as a write to it is ([PERM-9](permissions.md#PERM-9)) before any byte goes back, and is
+reported as not put back where it is not approved. The terminal asks at the keyboard. The desktop
+client's rewind asks nobody, so it refuses such a path. That is a known cost
+([Known costs](#known-costs)): undoing a write into
+`.bravebot` or another protected landing needs the terminal. The desktop's questions are put and
+answered only while a turn runs, and its rewind is refused while one does, so it has no way to put
+this question to a person without a new kind of question and a new card in the window.
+
+`verified-by: bravebot_agent::workspace::a_rewind_onto_a_protected_name_is_put_to_the_person`
+`verified-by: bravebot_agent::workspace::a_rewind_with_one_protected_landing_still_puts_the_others_back`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_into_a_hook_through_a_hard_link`
+`verified-by: bravebot_agent::hunks::a_hunk_through_a_link_to_a_hook_is_put_to_the_confirmer_and_refused_where_nobody_can_answer`
+`verified-by: bravebot_tui::undo_tests::undo_and_hunks_ask_the_confirmer_before_restoring_a_protected_name`
+`verified-by: bravebot_ui_bridge::bridge::the_desktop_rewind_does_not_put_back_a_protected_name`
+
 Anything that changes the session outside a turn gives up every point at once: `/clear`,
 `/compact`, `/btw`, `/rename`, `/add-dir`, and `/cd`. Shell-mode commands retain the points and
 record incomplete command coverage. For changes that give up points, `/undo` then says there is
@@ -1006,7 +1022,10 @@ line ranges and its lines, terminators included, are the same, so a hunk that ha
 shrunk or gone is not the one that was listed.
 
 The text is written through the confined path `/undo` writes through, after the session's language
-servers have been stopped as before a restoration. The file is opened without waiting for a writer
+servers have been stopped as before a restoration. A path that is a protected name, or lands on one
+once links are followed, is put to the person as a write to it is ([PERM-9](permissions.md#PERM-9))
+before the write, and the hunk is not put back unless the answer is yes; the line says it was not
+put back because the path is protected. The file is opened without waiting for a writer
 and read only if it is a file within what a rewind keeps. It is read once more just before the
 write, through the same gate, and written only if it still holds the bytes the text was worked out
 from; a file that cannot be read then is not that file, and nothing has been written when that is
@@ -1090,6 +1109,7 @@ compares nothing.
 `verified-by: bravebot_tui::undo_tests::a_file_edited_since_the_list_is_not_written_over`
 `verified-by: bravebot_tui::undo_tests::a_file_the_map_does_not_vouch_for_is_named_and_its_lines_are_not_drawn`
 `verified-by: bravebot_tui::undo_tests::a_session_with_no_turn_has_no_hunks`
+`verified-by: bravebot_tui::undo_tests::undo_and_hunks_ask_the_confirmer_before_restoring_a_protected_name`
 
 <a id="SESSION-23"></a>
 ### SESSION-23: the record says where each turn began and ended, and what came of it
@@ -1242,6 +1262,9 @@ The desktop rewinds as the terminal does, with what it puts back and what it rep
 One difference follows from what the desktop can do that the terminal cannot: a command approval
 can be revoked between turns, so a desktop rewind returns to the snapshot's approvals that are
 still held rather than to all of them. A rewind never hands back an approval the person withdrew.
+A second difference is the other way: the terminal asks about a path that is a protected name or
+lands on one, and the desktop rewind asks nobody and so does not put such a path back
+([SESSION-19](#SESSION-19)).
 
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather
@@ -1585,6 +1608,16 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`
 
 ## Known costs
+
+- **The desktop rewind does not put back a protected name, and the terminal's question does not
+  show the bytes.** A path a rewind or `/hunks` would put back that is a protected name, or lands on
+  one, is put to the person in the terminal ([SESSION-19](#SESSION-19)). The desktop rewind passes
+  no one to ask and refuses it, since its questions are put and answered only while a turn runs and
+  its rewind is refused then, so undoing a write into `.bravebot` or another protected landing
+  needs the terminal. The question the terminal puts is the write question: it reads
+  `Overwrite <path> +0 -0` and is not marked as a restore, so a person approves a write to a
+  protected path without seeing the bytes that go back. A path refused for being protected is
+  recorded as the "unavailable backups" gap, the same as any path a rewind could not put back.
 
 - **A record holding a plan-mode notice is not read by an earlier build.** The driver tags the
   notice that says plan mode is on or has ended with `{"kind":"mode_notice","plan":true}`, or

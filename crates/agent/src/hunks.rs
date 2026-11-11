@@ -89,6 +89,9 @@ pub enum Left {
     /// The path now resolves where a rewind may not write, as a directory on its way does once it
     /// has become a link out of the project.
     Outside,
+    /// It is, or lands on, a protected name, and the person did not approve writing to it or
+    /// nobody could be asked (PERM-9).
+    Protected,
     /// It holds what it held before the turn.
     AsItWas,
 }
@@ -251,10 +254,16 @@ pub fn list<S: Sink>(
 ///
 /// The session's language servers are stopped just before the write, as they are before a
 /// restoration: a server's copy of the file is the one this changes, and what a rewind leaves them
-/// to start afresh from is what they start afresh from here. A hunk refused leaves them running.
+/// to start afresh from is what they start afresh from here. A hunk refused for any reason before
+/// that, a protected path that was not approved included, leaves them running.
+///
+/// A path that is a protected name, or lands on one once links are followed, is put to `confirmer`
+/// as a write to it is, and the hunk is not put back unless the answer is yes (PERM-9). The
+/// question is put before the file is read again, so the time a person takes to answer is not
+/// between that read and the write (SESSION-21).
 #[expect(
     clippy::too_many_arguments,
-    reason = "the one caller, the tui hunks command, holds the workspace, backup, trust maps and servers separately"
+    reason = "the callers, the front ends' hunks commands, hold the workspace, backup, trust maps, servers and confirmer separately"
 )]
 pub fn reject<S: Sink>(
     workspace: &Workspace,
@@ -264,9 +273,10 @@ pub fn reject<S: Sink>(
     trust: &mut TrustStore,
     servers: &mut Option<crate::lsp::LanguageServers>,
     home: Option<&Path>,
+    confirmer: &mut dyn crate::confirm::Confirmer,
     sink: &mut S,
 ) -> Result<(), Refused> {
-    reject_with(
+    reject_asking(
         workspace,
         backup,
         hunk,
@@ -274,14 +284,17 @@ pub fn reject<S: Sink>(
         trust,
         home,
         sink,
+        |path| workspace.ask_before_put_back(path, &Before::Bytes(Vec::new()), confirmer),
         |path| workspace.read_back(path),
         |path, text| {
             drop(servers.take());
-            workspace.put_back(path, &Before::Bytes(text))
+            workspace.put_back_asked(path, &Before::Bytes(text))
         },
     )
 }
 
+/// [`reject_asking`] with nothing to ask, for the tests that replace the re-read and the write.
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
     reason = "tests replace the re-read and the write with closures to simulate a changed file and a failed write"
@@ -294,6 +307,38 @@ fn reject_with<S: Sink>(
     trust: &mut TrustStore,
     home: Option<&Path>,
     sink: &mut S,
+    read_again: impl FnOnce(&Path) -> Result<Vec<u8>, WorkspaceError>,
+    write: impl FnOnce(&Path, Vec<u8>) -> Result<(), WorkspaceError>,
+) -> Result<(), Refused> {
+    reject_asking(
+        workspace,
+        backup,
+        hunk,
+        snapshot,
+        trust,
+        home,
+        sink,
+        |_| Ok(()),
+        read_again,
+        write,
+    )
+}
+
+/// `ask` is the question about a protected path, put after the hunk is worked out and before the
+/// file is read again; `read_again` and `write` are replaced by the tests.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "tests replace the question, the re-read and the write with closures to simulate an answer, a changed file and a failed write"
+)]
+fn reject_asking<S: Sink>(
+    workspace: &Workspace,
+    backup: &Backup,
+    hunk: &Hunk,
+    snapshot: &TrustStore,
+    trust: &mut TrustStore,
+    home: Option<&Path>,
+    sink: &mut S,
+    ask: impl FnOnce(&Path) -> Result<(), WorkspaceError>,
     read_again: impl FnOnce(&Path) -> Result<Vec<u8>, WorkspaceError>,
     write: impl FnOnce(&Path, Vec<u8>) -> Result<(), WorkspaceError>,
 ) -> Result<(), Refused> {
@@ -310,6 +355,13 @@ fn reject_with<S: Sink>(
     };
 
     let key = key_of(&backup.path);
+    // Before the re-read, which has to be the last look at the file before the write: a person can
+    // take as long as they like to answer. Nothing has been written, so the map is as it was.
+    ask(&backup.path).map_err(|error| match error {
+        WorkspaceError::Escapes { .. } => Refused::Left(Left::Outside),
+        WorkspaceError::Protected { .. } => Refused::Left(Left::Protected),
+        other => Refused::Io(other.to_string()),
+    })?;
     let again = read_again(&backup.path).map_err(|error| match error {
         WorkspaceError::Escapes { .. } => Refused::Left(Left::Outside),
         _ => Refused::Changed,
@@ -331,6 +383,10 @@ fn reject_with<S: Sink>(
         Err(WorkspaceError::Escapes { .. }) => {
             *trust = previous;
             Err(Left::Outside.into())
+        }
+        Err(WorkspaceError::Protected { .. }) => {
+            *trust = previous;
+            Err(Left::Protected.into())
         }
         // Anything else may have been after the write began. The path stays distrusted, and a
         // memory it holds is recorded as one the next session must not trust, as a rewind that
@@ -414,6 +470,7 @@ mod tests {
                 &mut self.trust,
                 &mut None,
                 None,
+                &mut crate::confirm::Unattended,
                 &mut NullSink,
             )
         }
@@ -837,7 +894,11 @@ mod tests {
                             detail: "disk full".into(),
                         });
                     }
-                    workspace.put_back(path, &Before::Bytes(text))
+                    workspace.put_back(
+                        path,
+                        &Before::Bytes(text),
+                        &mut crate::confirm::ApproveWrites,
+                    )
                 },
             );
 
@@ -1017,6 +1078,121 @@ mod tests {
         );
 
         assert_eq!(refused, Err(Refused::Left(Left::Outside)));
+        assert_eq!(project.text(), AFTER);
+        assert_eq!(project.trust, trust);
+    }
+
+    /// A path that has become a link to a protected name is put to the confirmer before the hunk
+    /// goes back, and where nobody can be asked the hunk is refused with the target as it was.
+    /// A person who says yes has it put back through the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_hunk_through_a_link_to_a_hook_is_put_to_the_confirmer_and_refused_where_nobody_can_answer()
+    {
+        let mut project = Project::new("hunks-link-to-hook", AFTER);
+        let hook = project.workspace.root().join(".git/hooks/pre-commit");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(&hook, AFTER).unwrap();
+        std::fs::remove_file(&project.path).unwrap();
+        std::os::unix::fs::symlink(&hook, &project.path).unwrap();
+        let backup = project.kept_text();
+        let hunk = project.listed(&backup).files.remove(0).hunks.remove(0);
+
+        let refused = project.reject(&backup, &hunk);
+
+        assert_eq!(refused, Err(Refused::Left(Left::Protected)));
+        assert_eq!(std::fs::read_to_string(&hook).unwrap(), AFTER);
+
+        let mut approving = crate::confirm::ApproveWrites;
+        let put_back = reject(
+            &project.workspace,
+            &backup,
+            &hunk,
+            &project.snapshot,
+            &mut project.trust,
+            &mut None,
+            None,
+            &mut approving,
+            &mut NullSink,
+        );
+
+        assert_eq!(put_back, Ok(()));
+        // Only the listed hunk went back: the line it changed is the old one, and nothing else of
+        // AFTER moved. AFTER itself also starts with `one\n`, so the start would not tell.
+        assert_eq!(
+            std::fs::read_to_string(&hook).unwrap(),
+            AFTER.replacen("TWO", "two", 1)
+        );
+    }
+
+    /// The question about a protected path is put before the file is read again, so the re-read is
+    /// the last look at the file before the write whatever time the answer took (SESSION-21).
+    #[test]
+    fn the_question_is_put_before_the_file_is_read_again_and_the_read_before_the_write() {
+        let mut project = Project::new("hunks-ask-order", AFTER);
+        let backup = project.kept_text();
+        let hunks = project.listed(&backup).files.remove(0).hunks;
+        let workspace = project.workspace.clone();
+        let order = std::cell::RefCell::new(Vec::new());
+
+        let put_back = reject_asking(
+            &workspace,
+            &backup,
+            &hunks[0],
+            &project.snapshot,
+            &mut project.trust,
+            None,
+            &mut NullSink,
+            |_| {
+                order.borrow_mut().push("ask");
+                Ok(())
+            },
+            |path| {
+                order.borrow_mut().push("read");
+                workspace.read_back(path)
+            },
+            |path, text| {
+                order.borrow_mut().push("write");
+                workspace.put_back_asked(path, &Before::Bytes(text))
+            },
+        );
+
+        assert_eq!(put_back, Ok(()));
+        assert_eq!(*order.borrow(), ["ask", "read", "write"]);
+    }
+
+    /// A refusal to the question writes nothing and does not read the file again.
+    #[test]
+    fn a_refused_question_ends_the_hunk_before_the_file_is_read_again() {
+        let mut project = Project::new("hunks-ask-refused", AFTER);
+        let backup = project.kept_text();
+        let hunks = project.listed(&backup).files.remove(0).hunks;
+        let workspace = project.workspace.clone();
+        let trust = project.trust.clone();
+        let read = std::cell::Cell::new(false);
+
+        let refused = reject_asking(
+            &workspace,
+            &backup,
+            &hunks[0],
+            &project.snapshot,
+            &mut project.trust,
+            None,
+            &mut NullSink,
+            |path| {
+                Err(WorkspaceError::Protected {
+                    path: path.display().to_string(),
+                })
+            },
+            |path| {
+                read.set(true);
+                workspace.read_back(path)
+            },
+            |_, _| panic!("written after a refusal"),
+        );
+
+        assert_eq!(refused, Err(Refused::Left(Left::Protected)));
+        assert!(!read.get(), "the file was read again after a refusal");
         assert_eq!(project.text(), AFTER);
         assert_eq!(project.trust, trust);
     }

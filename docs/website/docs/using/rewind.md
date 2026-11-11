@@ -56,7 +56,11 @@ and left to `/undo`. The [command reference](../reference/commands.md#hunks-numb
   warning. Restoring a backed-up file can overwrite later command changes to that same file;
   undo does not reverse the command itself.
 - **An edit you made since.** What goes back is what the path held *before the turn wrote to it*, so
-  an edit of your own in between is lost. Nothing compares the file first, and nothing asks.
+  an edit of your own in between is lost. Nothing compares the file first, and nothing asks about that edit.
+- **A protected name.** A path that is, or leads through a link to, a git hook, `.git`, `.bravebot`,
+  `.husky` or another name a write is asked about is put to you before it goes back, in the terminal.
+  If it is not approved, or nobody can be asked (the desktop app), that path is named as not put
+  back and the rest of the rewind still happens.
 - **A file past the budget.** What the last five turns wrote over is held to one budget between them
   rather than one each. Past it the path is still remembered and its contents are not, so the rewind
   **names that path** as one that did not go back, and the rest of the rewind still happens.

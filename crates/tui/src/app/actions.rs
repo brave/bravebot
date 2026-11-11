@@ -165,8 +165,28 @@ impl Held<'_> {
         );
     }
 
+    /// Run `ask` with the confirmer a restore puts its question to: the terminal, under the mode in
+    /// force now, as a write is (PERM-9). A restore that lands on a protected name is asked of the
+    /// person at the keyboard, who is there because they typed the command.
+    pub(super) fn asking_about_a_restore<R>(
+        &mut self,
+        terminal: &mut Tty,
+        ask: impl FnOnce(&mut Self, &mut dyn bravebot_agent::confirm::Confirmer) -> R,
+    ) -> R {
+        let permission_mode = self.session.live_permission_mode();
+        let auto_vetting = self.session.auto_vetting();
+        let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
+        let mut confirmer =
+            bravebot_agent::Confining::new(&mut asking, permission_mode, auto_vetting);
+        ask(self, &mut confirmer)
+    }
+
     /// Put the session back to where it stood `steps` turns ago, for `/undo` and `/rewind`.
-    pub(super) fn rewind_steps(&mut self, steps: usize) {
+    pub(super) fn rewind_steps(
+        &mut self,
+        confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+        steps: usize,
+    ) {
         let (trust, programs, language_servers) = self.answers.what_a_rewind_takes_back();
         rewind(
             self.session,
@@ -176,22 +196,27 @@ impl Held<'_> {
             self.stored,
             self.workspace,
             language_servers,
+            confirmer,
             steps,
         );
     }
 
-    pub(super) fn rewind_command(&mut self, turns: &str) {
+    pub(super) fn rewind_command(
+        &mut self,
+        confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+        turns: &str,
+    ) {
         if turns.is_empty() {
             list_rewind_points(self.session);
         } else {
             match turns.parse::<usize>() {
-                Ok(steps) if steps > 0 => self.rewind_steps(steps),
+                Ok(steps) if steps > 0 => self.rewind_steps(confirmer, steps),
                 // A run of digits too large for `usize` is a number past what any session
                 // remembers, not a non-number: `rewind_steps` only ever compares `steps`
                 // against how many points the stack holds, so the furthest-back value takes
                 // the same "no further" path `/rewind 4` over three turns does.
                 Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => {
-                    self.rewind_steps(usize::MAX)
+                    self.rewind_steps(confirmer, usize::MAX)
                 }
                 _ => self.session.note(t!(session_rewind_needs_a_number)),
             }
@@ -205,7 +230,11 @@ impl Held<'_> {
     /// turn ended would trust a half-written file again on a resume, so the record is written again
     /// when the map changed. Nothing is appended to the audit when no gate was passed, and nothing
     /// is saved where there is no record to keep, as with closing a directory.
-    pub(super) fn hunks_command(&mut self, argument: &str) {
+    pub(super) fn hunks_command(
+        &mut self,
+        confirmer: &mut dyn bravebot_agent::confirm::Confirmer,
+        argument: &str,
+    ) {
         let (trust, programs, language_servers) = self.answers.what_a_rewind_takes_back();
         carry_out_hunks(
             self.session,
@@ -215,6 +244,7 @@ impl Held<'_> {
             trust,
             programs,
             language_servers,
+            confirmer,
             argument,
         );
     }

@@ -6,7 +6,7 @@
 //! the numbers a list is read by, and the rows it is drawn in.
 
 use crate::state::{Entry, Session};
-use bravebot_agent::confirm::{shown_name, shown_path};
+use bravebot_agent::confirm::{Confirmer, shown_name, shown_path};
 use bravebot_agent::hunks::{self, Left, Listing, Refused};
 use bravebot_agent::lsp::LanguageServers;
 use bravebot_agent::report::Activity;
@@ -175,6 +175,10 @@ impl Attempt {
 }
 
 /// Put back the hunk of the last list that is listed under `number`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the caller holds the session, workspace, trust map, servers, home, confirmer and sink separately"
+)]
 fn attempt<S: Sink>(
     session: &Session,
     number: usize,
@@ -182,6 +186,7 @@ fn attempt<S: Sink>(
     trust: &mut TrustStore,
     servers: &mut Option<LanguageServers>,
     home: Option<&Path>,
+    confirmer: &mut dyn Confirmer,
     sink: &mut S,
 ) -> Attempt {
     let Some(listed) = &session.hunks_listed else {
@@ -212,6 +217,7 @@ fn attempt<S: Sink>(
         trust,
         servers,
         home,
+        confirmer,
         sink,
     );
     match result {
@@ -233,6 +239,10 @@ fn attempt<S: Sink>(
 /// Says what happened either way. A hunk that was not put back says why in a line, since a person
 /// who asked for one and saw nothing would take it for done. The list is drawn again after a hunk
 /// goes back, because the numbers below it have moved.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the caller holds the session, workspace, trust map, servers, home, confirmer and sink separately"
+)]
 pub fn put_back<S: Sink>(
     session: &mut Session,
     number: usize,
@@ -240,9 +250,12 @@ pub fn put_back<S: Sink>(
     trust: &mut TrustStore,
     servers: &mut Option<LanguageServers>,
     home: Option<&Path>,
+    confirmer: &mut dyn Confirmer,
     sink: &mut S,
 ) {
-    let Attempt { said, done } = attempt(session, number, workspace, trust, servers, home, sink);
+    let Attempt { said, done } = attempt(
+        session, number, workspace, trust, servers, home, confirmer, sink,
+    );
     session.note(said);
     if done {
         list(session, workspace, trust, sink);
@@ -274,6 +287,7 @@ fn why_left(left: Left) -> String {
         Left::TooDifferent => t!(session_hunks_left_too_different).to_string(),
         Left::Unreadable => t!(session_hunks_left_unreadable).to_string(),
         Left::Outside => t!(session_hunks_left_outside).to_string(),
+        Left::Protected => t!(session_hunks_left_protected).to_string(),
         Left::AsItWas => t!(session_hunks_left_as_it_was).to_string(),
     }
 }

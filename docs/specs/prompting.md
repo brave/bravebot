@@ -789,7 +789,9 @@ its lines and applies the one call that program approves ([cli.md](cli.md#CLI-36
 program no other permission. A closed channel refuses a run and answers no
 question, and it refuses to promote a slot however the check that read it answered: a word from a
 model is not a person having read something. A plan is refused too, so a manifest run with nobody to ask stops before its first step
-rather than walking a program nobody read.
+rather than walking a program nobody read. A rewind or `/hunks` that would put bytes back onto a
+protected name is refused the same way, reported as not put back, and the paths that are not
+protected still go back ([PERM-9](permissions.md#PERM-9)).
 
 A person may answer these prompts in advance, for a session or for a run, by choosing a mode:
 [permission-modes.md](permission-modes.md) is what each mode answers and what asking for one costs.
@@ -815,6 +817,8 @@ it is not the check this paragraph's first sentence rules out.
 `verified-by: bravebot_tui::remote_confirm::a_dropped_answer_channel_answers_no_question`
 `verified-by: bravebot_tui::remote_confirm::a_refusal_travels_back_too`
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
+`verified-by: bravebot_agent::workspace::a_rewind_with_one_protected_landing_still_puts_the_others_back`
+`verified-by: bravebot_agent::turn::a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confirmer`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
 `verified-by: bravebot_cli::running::a_program_approves_a_write_it_was_shown_and_declines_another`
 `verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`

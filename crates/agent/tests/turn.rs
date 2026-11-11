@@ -76350,6 +76350,26 @@ fn a_run_turn_scanning_with_work(
     String,
     bravebot_agent::Work,
 ) {
+    a_run_turn_scanning_asking(
+        workspace,
+        command,
+        programs,
+        &mut bravebot_agent::confirm::ApproveRuns,
+    )
+}
+
+/// The same, with `confirmer` answering what the turn asks.
+fn a_run_turn_scanning_asking<C: bravebot_agent::confirm::Confirmer + Send>(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+) -> (
+    Scratch,
+    bravebot_agent::report::RecordingReporter,
+    String,
+    bravebot_agent::Work,
+) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
@@ -76372,7 +76392,7 @@ fn a_run_turn_scanning_with_work(
         workspace,
         &Task::new("back the file up before changing it").with_home(Some(home.path.clone())),
         &mut bravebot_agent::Conversation::new(),
-        &mut bravebot_agent::confirm::ApproveRuns,
+        confirmer,
         &mut reporter,
         &mut sink,
         trusting_the_workspace(),
@@ -76559,6 +76579,57 @@ fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_works
         answered.contains("d/credentials could not be put back"),
         "the planner was not told the destination did not go back: {answered}"
     );
+}
+
+/// Putting a destination back is a write to wherever it lands. A destination the line wrote
+/// through a link to a protected name is put to the confirmer before the old bytes go back into
+/// it (PERM-9), and where the confirmer refuses it is named as not put back.
+#[cfg(unix)]
+#[test]
+fn a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confirmer() {
+    let back = "kept";
+    for approved in [false, true] {
+        let scratch = Scratch::new(&format!("credential-run-protected-{approved}"));
+        let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+        std::fs::write(scratch.path.join(".env"), &env).unwrap();
+        std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+        std::fs::write(scratch.path.join(".git/hooks/pre-commit"), back).unwrap();
+        std::os::unix::fs::symlink(".git/hooks/pre-commit", scratch.path.join("notes.txt"))
+            .unwrap();
+        let programs = vouching_for("cat", &[".env"], &scratch.path);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut confirmer = match approved {
+            true => RecordingConfirmer::approving(),
+            false => RecordingConfirmer::rejecting(),
+        }
+        .and_approving_runs();
+
+        let (_home, _reporter, answered, _work) = a_run_turn_scanning_asking(
+            &workspace,
+            "cat .env > notes.txt",
+            programs,
+            &mut confirmer,
+        );
+
+        let asked: Vec<_> = confirmer
+            .seen
+            .iter()
+            .filter(|request| request.protected)
+            .map(|request| request.path.clone())
+            .collect();
+        assert!(
+            !asked.is_empty(),
+            "nothing protected was put to the confirmer (approved: {approved}): {answered}"
+        );
+        let hook = std::fs::read_to_string(scratch.path.join(".git/hooks/pre-commit")).unwrap();
+        match approved {
+            true => assert_eq!(hook, back, "an approved put-back did not restore the hook"),
+            false => assert!(
+                answered.contains("could not be put back"),
+                "a refused put-back was not reported: {answered}"
+            ),
+        }
+    }
 }
 
 /// A redirection is confined where it lands when it is opened, and not only when its line is
@@ -92850,6 +92921,7 @@ fn a_save_is_undone_by_undo() {
         &target,
         &mut None,
         Some(&home),
+        &mut bravebot_agent::confirm::Unattended,
     );
     assert!(refused.is_empty(), "{refused:?}");
     assert!(!fact.exists(), "undo left the fact it made");

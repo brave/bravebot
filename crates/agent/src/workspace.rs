@@ -2164,7 +2164,41 @@ impl Workspace {
     /// A path whose file did not exist is removed again, and one already gone counts as removed:
     /// the state asked for is the state that is there. A path whose contents were not kept is
     /// refused without being touched, since what it held is not here to write.
-    pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
+    ///
+    /// A path that is a protected name, or lands on one once links are followed, or shares a file
+    /// with one through a hard link, is put to `confirmer` as a write to it is (MODE-2, PERM-9) and
+    /// left alone unless the answer is yes. The question is decided from the path alone: the bytes
+    /// being put back are carried to the write and read by nothing on the way.
+    pub(crate) fn put_back(
+        &self,
+        path: &Path,
+        was: &Before,
+        confirmer: &mut dyn crate::confirm::Confirmer,
+    ) -> Result<(), WorkspaceError> {
+        self.ask_before_put_back(path, was, confirmer)?;
+        self.put_back_asked(path, was)
+    }
+
+    /// The first half of [`Workspace::put_back`]: refuse a path a rewind may not reach and put a
+    /// protected one to `confirmer`. Nothing is written. A caller that has to read the file again
+    /// between the question and the write asks here first, since a person can take as long as they
+    /// like to answer, and then writes with [`Workspace::put_back_asked`].
+    pub(crate) fn ask_before_put_back(
+        &self,
+        path: &Path,
+        was: &Before,
+        confirmer: &mut dyn crate::confirm::Confirmer,
+    ) -> Result<(), WorkspaceError> {
+        self.confine_put_back(path, matches!(was, Before::Nothing))?;
+        if !matches!(was, Before::NotKept) {
+            self.ask_about_a_protected_restore(path, confirmer)?;
+        }
+        Ok(())
+    }
+
+    /// The second half of [`Workspace::put_back`]: confine the path again and write. Asks nothing,
+    /// so it is only for a path [`Workspace::ask_before_put_back`] has passed.
+    pub(crate) fn put_back_asked(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
         self.confine_put_back(path, matches!(was, Before::Nothing))?;
         let failed = |detail: String| WorkspaceError::Io {
             path: path.display().to_string(),
@@ -2177,6 +2211,46 @@ impl Workspace {
                 other => other.map_err(|e| failed(e.to_string())),
             },
             Before::NotKept => Err(failed("what it held was not kept".to_string())),
+        }
+    }
+
+    /// Put a restore onto a protected path to `confirmer`, which refuses it where nobody can be
+    /// asked. Nothing is asked of a path that is not protected.
+    ///
+    /// The request is the one a write to a protected path raises, with `protected` set so a mode
+    /// that answers writes unasked still does not answer it short of bypassing. It carries no body
+    /// and no comparison: the bytes are the backup's, which this driver does not read, so nothing
+    /// of them is drawn and the request is not marked untrusted.
+    fn ask_about_a_protected_restore(
+        &self,
+        path: &Path,
+        confirmer: &mut dyn crate::confirm::Confirmer,
+    ) -> Result<(), WorkspaceError> {
+        let shown = self.relative_display(path);
+        if !crate::tools::write_is_protected(self, &shown) {
+            return Ok(());
+        }
+        let request = crate::confirm::WriteRequest {
+            path: shown,
+            contents: String::new(),
+            existing: None,
+            diff: crate::diff::Diff::compute("", ""),
+            intent: crate::confirm::Intent::Overwrite,
+            untrusted: false,
+            remark: None,
+            credentials: Vec::new(),
+            protected: true,
+            may_always: false,
+            record: None,
+            written_since_checkout: false,
+            may_edit: false,
+        };
+        if confirmer.confirm_write(&request).approved() {
+            Ok(())
+        } else {
+            Err(WorkspaceError::Protected {
+                path: path.display().to_string(),
+            })
         }
     }
 

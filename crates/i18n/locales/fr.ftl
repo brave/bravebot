@@ -2967,6 +2967,7 @@ session-hunks-left-untrusted =
 session-hunks-left-not-text = ce n'est pas du texte
 session-hunks-left-too-different = il a tellement changé que ses morceaux ne peuvent pas être alignés
 session-hunks-left-outside = il ne se résout plus à l'intérieur du projet, donc il n'est pas lu
+session-hunks-left-protected = il est, ou mène maintenant à, un nom pour lequel une écriture serait demandée, et cela n'a pas été approuvé ici, donc il n'est pas écrit
 session-hunks-left-unreadable = il a disparu, n'est pas un fichier, ou est plus grand que ce qu'un rembobinage conserve
 session-hunks-left-as-it-was = il contient ce qu'il contenait avant le tour
 session-hunk-put-back = morceau { $number } de { $path } remis comme il était avant le tour { $turn }

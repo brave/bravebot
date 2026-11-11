@@ -1020,6 +1020,13 @@ Confinement is decided by where an operation lands and not by how its path is sp
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
 refused whether or not there is anything at the other end of it.
 
+Putting old bytes back with a rewind or `/hunks` is confined the same way, and a path that is a
+protected name, lands on one or shares a file with one is put to the person as a write is
+([PERM-9](permissions.md#PERM-9)). Reading the file to work out a hunk stays a read: it is confined
+and is not asked about, and nothing is written until the person has answered.
+
+`verified-by: bravebot_agent::workspace::a_rewind_onto_a_protected_name_is_put_to_the_person`
+
 `write_file`, `download_url` and `apply_checkout` confine the destination before anyone is asked
 about it. Each resolves it as soon as it is read, and one the working directory and the opened
 directories do not reach is refused there, whether it was named or came out of a reference: before

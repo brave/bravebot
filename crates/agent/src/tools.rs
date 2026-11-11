@@ -11579,7 +11579,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     for destination in &left.refused_at {
         if tools
             .workspace
-            .put_back(&destination.resolved, &destination.held)
+            .put_back(&destination.resolved, &destination.held, &mut *confirmer)
             .is_err()
         {
             stuck.push(destination.told.clone());

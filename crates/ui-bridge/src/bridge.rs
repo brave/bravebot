@@ -1989,6 +1989,7 @@ impl Bridge {
             &snapshot.trust,
             servers,
             bravebot_agent::home::directory().as_deref(),
+            &mut bravebot_agent::confirm::Unattended,
         );
         if !refused.is_empty() {
             state.rewind.record_gap(CoverageGap::BackupUnavailable);
@@ -4181,6 +4182,58 @@ mod coverage_tests {
             listed["commands"],
             json!([]),
             "the revoked command came back"
+        );
+    }
+
+    /// SESSION-19: a desktop rewind has no one to ask, so a path that is a protected name is
+    /// reported as not put back and keeps the bytes it holds, while another path still goes back.
+    #[test]
+    fn the_desktop_rewind_does_not_put_back_a_protected_name() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("rewind-protected-name");
+        std::fs::create_dir_all(&directory).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        let protected = directory.join(".gitmodules");
+        let ordinary = directory.join("notes.md");
+        std::fs::write(&protected, "written by the turn").unwrap();
+        std::fs::write(&ordinary, "written by the turn").unwrap();
+        let mut state = State::fresh(TrustStore::new(&directory));
+        let workspace = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &workspace, "change the submodules");
+        let backup = |path: &Path| bravebot_agent::workspace::Backup {
+            path: path.to_path_buf(),
+            was: bravebot_agent::workspace::Before::Bytes(b"original".to_vec()),
+            captured_trust: bravebot_core::label::Integrity::Trusted,
+            kept: false,
+        };
+        state
+            .rewind
+            .keep_backups(vec![backup(&protected), backup(&ordinary)]);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
+        let line = json!({"id": 1, "method": "session.rewind", "params": {
+            "session": handle, "steps": 1
+        }})
+        .to_string();
+
+        let rewound = bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+
+        assert_eq!(
+            rewound["refused"],
+            json!([".gitmodules"]),
+            "the protected name was not reported as not put back"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&protected).unwrap(),
+            "written by the turn",
+            "the rewind wrote into a protected name with nobody to ask"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&ordinary).unwrap(),
+            "original",
+            "the other path was not put back"
         );
     }
 
