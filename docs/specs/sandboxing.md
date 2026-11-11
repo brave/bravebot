@@ -5197,15 +5197,15 @@ shown by running the program, or not entirely:
   `bravebot-test`, since with `XDG_DATA_DIRS` removed `gio open` would start the host's browser
   for `https`. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
 
-  Per name, for the two stand-in tests (`gio` and `kde-open`), on macOS with the stub `PATH` above. A
-  temporary line in `opening_against` put one name back into the opener's environment after its
-  judging (removed afterwards; `opener.rs` was restored from saved bytes and its checksum compared).
-  For each of the 19 names of `CODE_SELECTORS` (`HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the 16 of `OPENER_SELECTORS`) both tests
-  failed with `<NAME> reached gio: ARGS https://example.invalid/` and `<NAME> reached kde-open: ARGS
-  https://example.invalid/`, and both pass without the line. A second temporary line removed one name
-  after the judging. For each of the 13 names that are not options (`BROWSER`, `HOME`, the five
-  `XDG_` directories, `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `GIO_LAUNCH_DESKTOP`, `QT_PLUGIN_PATH`,
-  `QT_QPA_PLATFORM_PLUGIN_PATH`, `KDESYCOCA`) both tests failed with `<NAME> was not kept`, so a safe
+  Per name, for the two stand-in tests (`gio` and `kde-open`), on macOS with the stub `PATH` above.
+  With a name put back into the opener's environment after its judging, each of the 19 names of
+  `CODE_SELECTORS` (`HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the 16 of
+  `OPENER_SELECTORS`) reaches `gio` and `kde-open`, and both
+  tests fail with `<NAME> reached gio: ARGS https://example.invalid/` and `<NAME> reached kde-open:
+  ARGS https://example.invalid/`. Both pass without it. With a name removed after the judging, each
+  of the 13 names that are not options (`BROWSER`, `HOME`, the five `XDG_` directories,
+  `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `GIO_LAUNCH_DESKTOP`, `QT_PLUGIN_PATH`,
+  `QT_QPA_PLATFORM_PLUGIN_PATH`, `KDESYCOCA`) fails both tests with `<NAME> was not kept`, so a safe
   value of each reaches the program `xdg-open` starts. This is what the opener hands on, not a trace
   of the real programs. `strace -f -e trace=execve,openat` of the real `gio open` and `kde-open` was
   not made: this host has no `strace` and no Linux VM or container runtime, `dtruss` refuses to run
