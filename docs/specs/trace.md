@@ -552,6 +552,11 @@ them:
   its test directory, which names no path either.
 
 The line breaks those sentences run over are kept and every other control character is pictured.
+A control character is drawn as `bravebot_agent::confirm::printable` draws it: U+0000 to U+001F as
+the Control Pictures U+2400 to U+241F, DEL as `␡` (U+2421), and each C1 control (U+0080 to U+009F),
+which has no picture, as `‹U+XXXX›`. Two different controls do not draw alike, and none draws as
+one of the enclosed alphanumerics U+2480 to U+249F; a text that holds the characters `‹U+0085›` or
+`␡` itself draws the same as the control it spells.
 The `bravebot` command line draws with `progress::printable`, which also spells a bidirectional
 control and a zero-width character as `‹U+XXXX›`, so every existing caller of it draws them that
 way as well as the control characters. The terminal client draws only control characters in notes;
@@ -567,6 +572,10 @@ That does not make its text safe for a terminal: a file name in a clone can hold
 that sets the terminal's title or colour. The replacement is a change of characters and the sink
 still branches on none of them ([TRACE-5](#TRACE-5)).
 
+`verified-by: bravebot_agent::confirm::a_control_character_is_drawn_as_its_picture_and_other_text_is_unchanged`
+`verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
+`verified-by: bravebot_core::invisible::a_single_character_is_written_out_as_its_code_point`
+`verified-by: bravebot_cli::progress::a_c1_control_is_drawn_once_as_its_code_point_by_the_command_line`
 `verified-by: bravebot_cli::main::a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`

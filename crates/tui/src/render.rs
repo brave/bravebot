@@ -1205,12 +1205,14 @@ fn draw_history_search(frame: &mut Frame, session: &Session) -> Laid {
 pub(crate) fn head_of(line: &str, room: usize) -> String {
     // A prompt may be a paragraph; it is one row here, so the rest is not shown at all.
     let first = line.lines().next().unwrap_or("");
-    if wrap::display_width(first) <= room && first.len() == line.len() {
-        return first.to_string();
+    // Measured as drawn: a control character is replaced by a mark that takes more columns than the
+    // character itself, which a count of the raw text misses.
+    let shown = printable(first);
+    if wrap::display_width(&shown) <= room && first.len() == line.len() {
+        return shown;
     }
     // Cut by the columns the row draws each cluster in, so what is kept and the ellipsis never come
     // to more than the room, whatever the characters are.
-    let shown = printable(first);
     let mut kept = String::new();
     let mut used = 0;
     for (cluster, columns) in wrap::cluster_strs(&shown) {
@@ -1229,13 +1231,14 @@ pub(crate) fn head_of(line: &str, room: usize) -> String {
 /// what a plain truncation does, and it leaves every attachment in a deep directory reading as the
 /// same long prefix with the filename gone, which is the one thing the row exists to show.
 fn tail_of(path: &str, room: usize) -> String {
-    if wrap::display_width(path) <= room || room == 0 {
-        return path.to_string();
+    // Measured as drawn, as in `head_of`.
+    let shown = printable(path);
+    if wrap::display_width(&shown) <= room || room == 0 {
+        return shown;
     }
 
     // One column for the ellipsis that says something was cut, and the rest cut by the columns the row
     // draws each cluster in.
-    let shown = printable(path);
     let mut tail = Vec::new();
     let mut used = 0;
     for (cluster, columns) in wrap::cluster_strs(&shown).into_iter().rev() {
@@ -5719,6 +5722,27 @@ mod tests {
                 } else {
                     assert_eq!((tail.as_str(), head.as_str()), (name, name));
                 }
+            }
+        }
+    }
+
+    /// A control character is drawn wider than it is measured raw: a C1 control is written as
+    /// `‹U+XXXX›`, eight columns. A cut that measures the text before it is drawn lets a row of
+    /// them run past the room, and a row that wraps takes a row the layout did not reserve. Rejects:
+    /// `head_of` and `tail_of` returning the text unchanged because its raw width fits.
+    #[test]
+    fn a_cut_fits_the_room_once_control_characters_are_drawn() {
+        use crate::wrap::display_width;
+        for text in [
+            "\u{85}".repeat(12),
+            "\u{9f}x".repeat(12),
+            "\u{7f}\u{1b}".repeat(12),
+        ] {
+            for room in 2..=40 {
+                let head = printable(&head_of(&text, room));
+                let tail = printable(&tail_of(&text, room));
+                assert!(display_width(&head) <= room, "{text:?} in {room}: {head:?}");
+                assert!(display_width(&tail) <= room, "{text:?} in {room}: {tail:?}");
             }
         }
     }

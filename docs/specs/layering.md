@@ -87,9 +87,15 @@ The kernel is where decisions derived from content are *taken*, not where they b
 `bravebot-tui` and `bravebot-cli` show quarantined content to the person watching. A terminal is
 not a context, and an agent that will not say which file it is working on has protected nobody.
 Everything shown is marked with a margin the renderer draws, and has its control characters
-replaced, so the content cannot draw its own. A complete colour code in output drawn for reading is
-taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
+replaced, so the content cannot draw its own. A control character is replaced by the mark for it and
+none is dropped: U+0000 to U+001F by the Control Pictures, DEL by `␡`, and each C1 control by
+`‹U+XXXX›`. None draws as one of the enclosed alphanumerics U+2480 to U+249F; a name that holds the
+characters `‹U+0085›` or `␡` itself draws the same as the control it spells. A complete colour code
+in output drawn for
+reading is taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 
+`verified-by: bravebot_agent::confirm::del_and_each_c1_control_draw_as_a_mark_no_printable_character_draws_as`
+`verified-by: bravebot_tui::render::a_cut_fits_the_room_once_control_characters_are_drawn`
 `verified-by: bravebot_tui::render::transcript::a_mcp_note_quoting_an_alias_with_an_escape_is_drawn_with_the_escape_made_visible`
 `verified-by: bravebot_cli::background::the_start_of_an_id_a_line_shows_is_drawn`
 `verified-by: bravebot_cli::mcp::an_alias_pasted_into_approve_or_enable_is_not_printed_with_its_control_characters`
