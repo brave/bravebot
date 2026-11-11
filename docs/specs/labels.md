@@ -700,7 +700,8 @@ arrives at all.
   sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
   read, which are in `bravebot-agent` too, the eighth is the choice of which parts of a tool
   result are taken, which is in `bravebot-mcp`, the ninth is the read of a processor's answer
-  for one number, which is in `bravebot-choice`, and the tenth is the trigger listener's reading
+  for one number or for an `apply` step's rows, and the numbering of the list those rows point
+  into, which are in `bravebot-choice`, and the tenth is the trigger listener's reading
   of a request's framing and path, which is in `bravebot-cli`. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
@@ -1115,6 +1116,18 @@ arrives at all.
   screen, and `Policy::carry_a_choice`, which returns an opaque `Carried`. Only
   `bravebot_mcp::protocol::with_choice` opens that, with `Carried::into_wire`, to write the number
   into the call. The uses of all three are pinned in `guards`.
+
+  An `apply` step's rows ([manifest.md](manifest.md#MANIFEST-16)) are read the same way, through two
+  more gates. `Policy::number_a_list` hands a read's reply to the crate, which decides which entries
+  hold the fields the plan's arguments take and numbers them; the numbered text is quarantined for
+  the processor at the list's label, so text inside an entry cannot shift the count.
+  `Policy::resolve_proposal` hands the processor's answer to the crate, which reads its rows,
+  resolves each against the plan's shape and the numbered entries, gives each value the type the
+  server's list declares for its argument, drops a row that does not fit, holds a value that is not
+  that type or repeats an earlier row, and counts each drop by a reason of a closed set. What comes
+  back is the resolved list, labelled with everything it derives from, which the driver carries to
+  the person and to the server and never reads. A hostile entry or answer can choose which of the
+  calls the plan allows are proposed, within its caps, and nothing else.
 
   Suppose the page a processor read is hostile and talks the processor round. Everything that buys
   it is on this list:
