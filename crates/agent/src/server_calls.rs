@@ -303,9 +303,10 @@ impl Servers {
     /// what a server returns is not what changes them.
     ///
     /// A read is given the slot its step names, and what the tool answered goes there instead,
-    /// quarantined as anything a fetch reads is. A read that gets no answer to put there ends the
-    /// run as a fetch that reads nothing does: the steps after it were written to use the slot. A
-    /// failure the tool reported is drawn in the margin first, as a call's is.
+    /// quarantined as anything a fetch reads is. Whatever reply arrived fills it, so a read goes
+    /// on or ends by whether a reply arrived and never by which kind (MANIFEST-15): a failure the
+    /// tool reported is drawn in the margin and its words fill the slot, and a reply this client
+    /// could not use fills it with this process's own sentence saying so.
     #[expect(
         clippy::too_many_arguments,
         reason = "forwarded to `mcp::call`, which takes the same list"
@@ -347,12 +348,21 @@ impl Servers {
             crate::mcp::Called::Failed(text) => {
                 (text, crate::mcp::origin_of_reply(&name, true), 0, true)
             }
-            // Nothing of the reply is kept, so there is nothing to draw.
+            // Nothing of the reply is kept, so there is nothing to draw, and a read's slot holds
+            // this process's own words that the reply could not be used.
             crate::mcp::Called::Unusable(_) => {
-                return match into {
-                    None => Ok(format!("{name} failed: its reply could not be used")),
-                    Some(_) => Err(format!("{name} failed: its reply could not be used")),
-                };
+                if let Some((slot, slots)) = into {
+                    let said = bravebot_core::value::Labelled::trusted(format!(
+                        "{name} replied, and its reply could not be used"
+                    ));
+                    policy
+                        .quarantine(step.tool(), slot.clone(), &name, &said, slots)
+                        .map_err(|d| d.to_string())?;
+                    return Ok(format!(
+                        "{name} failed: its reply could not be used, which is what {slot} holds"
+                    ));
+                }
+                return Ok(format!("{name} failed: its reply could not be used"));
             }
             crate::mcp::Called::Problem(problem) => return Err(problem),
         };
@@ -375,7 +385,14 @@ impl Servers {
                 });
                 match into {
                     None => Ok(format!("{name} replied; {parts} not shown")),
-                    Some(_) => Err(format!("{name} reported a failure, shown above")),
+                    Some((slot, slots)) => {
+                        policy
+                            .quarantine(step.tool(), slot.clone(), &name, &text, slots)
+                            .map_err(|d| d.to_string())?;
+                        Ok(format!(
+                            "{name} reported a failure, shown above, and its words are in {slot}"
+                        ))
+                    }
                 }
             }
         }

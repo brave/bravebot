@@ -494,10 +494,11 @@ about the list. Its alias, tool and arguments are what a call's are, routed, fix
 same way, and it is asked about at its step as a call is. It is a read: it comes before every action
 and names the slot its reply fills, quarantined as anything a read fetched is
 ([MANIFEST-8](#MANIFEST-8)), so a transform can read that slot and an answer can show what the
-transform made. It names no slot it takes from, so its arguments are still the plan's literals. A
-read that gets no reply to fill its slot with, because the tool reported a failure or the reply could
-not be used, ends the run as a failed read does, and a failure the tool reported is drawn in the
-margin first. A plan naming a tool the list does not mark read-only in an `mcp_read` is refused
+transform made. It names no slot it takes from, so its arguments are still the plan's literals.
+Whatever reply arrives fills the slot, since a reply that arrived ends nothing: a failure the tool
+reported is drawn in the margin and its words fill the slot, and a reply this client could not use
+fills it with this process's sentence saying so. A read that gets no reply ends the run as a call
+that gets none does. A plan naming a tool the list does not mark read-only in an `mcp_read` is refused
 before it is put to anybody and asked for once more.
 
 The planner is offered the step only where the session holds a list a person vouched for and a grant
@@ -608,7 +609,7 @@ nobody asked about.
 `verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it`
-`verified-by: bravebot_agent::manifest_server_calls::a_read_whose_tool_reports_a_failure_ends_the_run_and_draws_its_words`
+`verified-by: bravebot_agent::manifest_server_calls::a_read_whose_reply_arrived_fills_its_slot_whatever_it_holds`
 `verified-by: bravebot_core::manifest::a_server_read_fills_a_slot_a_later_step_uses`
 `verified-by: bravebot_core::manifest::a_server_read_comes_before_every_action_and_takes_from_no_slot`
 `verified-by: bravebot_agent::manifest::a_calls_arguments_object_is_carried_as_its_text`

@@ -230,9 +230,9 @@ fn answered(body: &str, unreliable: bool) -> String {
             ];
             if unreliable {
                 for name in ["error_tab", "garble_tab", "refuse_tab", "drop_tab"] {
-                    tools.push(
-                        json!({"name": name, "description": "Answers badly.", "inputSchema": none}),
-                    );
+                    // A read may name one of them, so each is marked read-only.
+                    tools.push(json!({"name": name, "description": "Answers badly.",
+                        "inputSchema": none, "annotations": {"readOnlyHint": true}}));
                 }
             }
             json!({ "tools": tools })
@@ -1906,47 +1906,53 @@ fn a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it() {
     assert!(ran.chat[2].contains(PAYLOAD));
 }
 
-/// A read whose tool reports a failure has nothing to put in its slot, so the run stops there as a
-/// fetch that reads nothing does, and the server's words are drawn in the margin and go nowhere
-/// else.
+/// A read whose reply arrived fills its slot whatever the reply holds, so the steps after it run: a
+/// failure the tool reported is drawn in the margin and its words fill the slot, and a reply this
+/// client cannot use fills it with this process's sentence saying so (MANIFEST-15).
 ///
-/// Rejects an implementation that fills the slot with the failure, one that runs the transform
-/// after it, and one that puts the server's words in the run's error.
+/// Rejects an implementation that ends the run on a failure or an unusable reply, which decides
+/// whether a run goes on by which kind of reply arrived, and one that puts the server's words in
+/// the run's error.
 #[test]
-fn a_read_whose_tool_reports_a_failure_ends_the_run_and_draws_its_words() {
-    let scratch = Scratch::new("read-fails");
-    let (url, mcp) = serve_browser();
-    let ran = walk(Walk {
-        session: session(&url, &scratch, false, true),
-        mode: PermissionMode::Ask,
-        task: Task::new("show what break_tab says"),
-        replies: vec![
-            shape(),
-            plan(vec![
-                read("break_tab", json!({}), "said"),
-                json!({"capability": "TRANSFORM", "args": {
-                    "reads": ["said"], "instruction": "as a short list", "out_slot": "list"}}),
-                json!({"capability": "ANSWER", "args": {"from_slot": "list"}}),
-            ]),
-        ],
-        mcp: &mcp,
-        confirmer: Calls::answering(vec![CallDecision::approve()]),
-        grants: None,
-    });
+fn a_read_whose_reply_arrived_fills_its_slot_whatever_it_holds() {
+    for (tool, said, drawn) in [
+        ("break_tab", "SERVER-WORDS-ON-FAILURE", 1),
+        ("error_tab", "its reply could not be used", 0),
+    ] {
+        let scratch = Scratch::new("read-fails");
+        let (url, mcp) = serve_unreliable_browser();
+        let ran = walk(Walk {
+            session: session(&url, &scratch, false, true),
+            mode: PermissionMode::Ask,
+            task: Task::new("show what the tab says"),
+            replies: vec![
+                shape(),
+                plan(vec![
+                    read(tool, json!({}), "said"),
+                    json!({"capability": "TRANSFORM", "args": {
+                        "reads": ["said"], "instruction": "as a short list", "out_slot": "list"}}),
+                    json!({"capability": "ANSWER", "args": {"from_slot": "list"}}),
+                ]),
+                says("- the tab said something"),
+            ],
+            mcp: &mcp,
+            confirmer: Calls::answering(vec![CallDecision::approve()]),
+            grants: None,
+        });
 
-    let failure = ran
-        .outcome
-        .expect_err("a read that fails ends the run")
-        .to_string();
-    assert!(failure.contains("reported a failure"), "{failure}");
-    assert!(!failure.contains("SERVER-WORDS-ON-FAILURE"), "{failure}");
-    assert_eq!(ran.called.len(), 1);
-    assert_eq!(ran.chat.len(), 2, "no processor call");
-    assert_eq!(ran.reporter.shown.len(), 1);
-    assert!(
-        ran.reporter.shown[0]
-            .preview
-            .join("\n")
-            .contains("SERVER-WORDS-ON-FAILURE")
-    );
+        assert!(ran.outcome.is_ok(), "{tool}: {:?}", ran.outcome.err());
+        assert_eq!(ran.called.len(), 1, "{tool}");
+        assert_eq!(ran.chat.len(), 3, "{tool}: the transform read the slot");
+        assert!(ran.chat[2].contains(said), "{tool}: {}", ran.chat[2]);
+        // A failure the tool reported is drawn in the margin as well; a reply the client could
+        // not use holds nothing to draw.
+        let shown: Vec<&str> = ran
+            .reporter
+            .shown
+            .iter()
+            .filter(|shown| shown.origin.contains(tool))
+            .map(|shown| shown.origin.as_str())
+            .collect();
+        assert_eq!(shown.len(), drawn, "{tool}: {shown:?}");
+    }
 }
