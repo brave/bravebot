@@ -40911,7 +40911,7 @@ mod tests {
         let sources = RuleSources {
             state: Some(state.to_path_buf()),
             named: named.map(std::path::Path::to_path_buf),
-            started: root.to_path_buf(),
+            left: vec![root.to_path_buf()],
             managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(root);
@@ -40957,7 +40957,7 @@ mod tests {
         let sources = RuleSources {
             state: Some(root.join("state")),
             named: None,
-            started: root.clone(),
+            left: vec![root.clone()],
             managed: bravebot_config::Managed::at(&file),
         };
         let elsewhere = root.join("elsewhere");
@@ -41398,6 +41398,59 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// PERM-14: every directory `/cd` leaves is remembered, not only the first. A `--settings`
+    /// file in the second directory stays the checkout's after the third is entered.
+    #[test]
+    fn a_named_file_in_a_directory_moved_through_is_still_asked_about_after_moving_on() {
+        use bravebot_core::permissions::Decision;
+        let root = crate::testutil::scratch_dir("bravebot-cd-named-through-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
+        // Each is a checkout of its own, so the repository the scratch directory sits in is not
+        // what makes the file one of a checkout's.
+        for directory in [&a, &b, &c] {
+            std::fs::create_dir_all(directory.join(".git")).expect("scratch");
+        }
+        let tooling = b.join("tooling.json");
+        std::fs::write(&tooling, CHECK).expect("the named file");
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules_naming(
+            &mut session,
+            &root.join("state"),
+            workspace.root(),
+            Some(&tooling),
+        );
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+
+        for directory in [&b, &c] {
+            assert_eq!(
+                change_directory(
+                    &mut session,
+                    &mut workspace,
+                    &mut answers,
+                    "a-session",
+                    directory.to_str().expect("utf-8 path"),
+                    |_, _| Some(false),
+                ),
+                Changed::Moved
+            );
+        }
+
+        assert_eq!(
+            answers
+                .rules
+                .permissions
+                .for_command(&["bash", "scripts/check.sh"]),
+            Decision::Unmatched,
+            "moving on from the directory the file is in made it the person's"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// PERM-15: reading the rules again where the session is, as `/clear` does, asks nothing about
     /// a rule the person granted there and puts in force what the file says now.
     #[test]
@@ -41454,7 +41507,7 @@ mod tests {
         let sources = RuleSources {
             state: Some(state.clone()),
             named: None,
-            started: checkout.clone(),
+            left: vec![checkout.clone()],
             managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(&checkout);

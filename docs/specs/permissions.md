@@ -836,9 +836,11 @@ train the habit of answering without reading, which is the whole of what asking 
 ### PERM-14: only the person's own file may write a rule that grants
 
 An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
-resolves outside the workspace and outside the one the session opened in. An `allow` rule in
+resolves outside the workspace, outside every directory the session has been in, and outside the
+checkout holding each of them. The checkout holding a directory is its nearest ancestor that has a
+`.git`, as [SANDBOX-30](sandboxing.md#SANDBOX-30) finds it for a directory a session opens. An `allow` rule in
 `.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a `--settings` file that resolves
-inside either takes
+inside any of those takes
 effect on being read by nothing: it answers no prompt and permits no fetch. Every one is reported,
 with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
 granted where the person granted it at the question [PERM-15](#PERM-15) puts.
@@ -858,8 +860,15 @@ a host nobody was shown from a refusal into a success. That is the capability
 name in a checkout's file is a request, not a grant. The local layer is the same file under another
 name, since nothing stops one being committed, which is why `vetting` reads the two identically. A
 `--settings` file is a path somebody typed at this invocation, which is their own claim, but the
-flag can name a file inside the checkout and a README saying so would be the same grant by another
-route. Moving out of that checkout with `/cd` does not change who wrote the file. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
+flag can name a file inside the checkout, or inside the checkout above a subdirectory the session
+was begun in, and a README saying so would be the same grant by another
+route. Moving out of that checkout with `/cd` does not change who wrote the file. A `.git` at the
+home directory makes a file under it a checkout's file the same way, so a dotfiles repository there
+refuses a `--settings` file beneath it that is not the home layer. This is a known cost of reading
+the checkout as fail-closed (Known costs below). [SANDBOX-20](sandboxing.md#SANDBOX-20) and
+[SANDBOX-30](sandboxing.md#SANDBOX-30) find the same checkout and leave out one that is or holds
+the home directory, on purpose, because counting it would take the reason from every program the
+account installed under the home. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
 silence reads to whoever wrote it as one in force.
 
 `verified-by: bravebot_config::settings::a_project_layer_allow_rule_is_not_granted`
@@ -871,7 +880,12 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`
 `verified-by: bravebot_config::settings::a_named_layer_inside_the_workspace_is_the_checkouts_file_under_another_name`
 `verified-by: bravebot_config::settings::a_named_layer_inside_where_the_session_began_grants_nothing_after_it_moves`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_the_working_directory_grants_nothing`
+`verified-by: bravebot_config::settings::a_named_layer_in_another_checkout_still_grants`
+`verified-by: bravebot_config::settings::a_named_layer_under_a_dotfiles_repository_at_or_above_home_grants_nothing`
+`verified-by: bravebot_config::settings::a_named_layer_in_the_checkout_above_cannot_open_the_network`
 `verified-by: bravebot_tui::app::a_named_file_in_the_checkout_left_behind_is_still_asked_about_after_moving`
+`verified-by: bravebot_tui::app::a_named_file_in_a_directory_moved_through_is_still_asked_about_after_moving_on`
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
 `verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
@@ -1234,6 +1248,18 @@ against them whole. A wrapper added to the table is a decision about both questi
 
 ## Known costs
 
+- **A dotfiles repository at the home directory refuses a `--settings` file under it.** PERM-14
+  reads the checkout holding the working directory, and each directory the session has been in, as
+  the nearest ancestor with a `.git`. Where that is the home directory or a directory above it, every
+  file beneath it is the checkout's, so a `--settings` file anywhere under the home other than the
+  home layer grants nothing and its `allow` rules are reported as dropped. This fails closed and is
+  chosen: reading such a repository as not a checkout would let a file it tracks answer a prompt.
+  [SANDBOX-20](sandboxing.md#SANDBOX-20) and [SANDBOX-30](sandboxing.md#SANDBOX-30) read the same
+  checkout and leave out one that is or holds the home directory, because counting it would take
+  the reason from every program the account installed under the home. The two differ on purpose: one
+  decides which files may grant a permission, the other which files count as ones the plan could
+  have written. A person with
+  such a repository keeps the file outside it, or in `~/.bravebot/settings.json`.
 - **A wrapper the table leaves whole is a second rule for the person, which PERM-20's Why says the
   table exists to avoid.** The Why gives the cost of not looking through a wrapper as a second rule
   for each one. The text leaves `xargs`, `npx`, `devbox run`, `docker exec`, a wrapper named by a

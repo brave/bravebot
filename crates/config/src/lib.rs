@@ -2392,6 +2392,9 @@ mod tests {
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&home).expect("scratch home");
         std::fs::create_dir_all(&cwd).expect("scratch cwd");
+        // A checkout of its own, so the scratch root's own place under the repository the tests
+        // run in does not make the named file the checkout's.
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
         let own = home.join("settings.json");
         std::fs::write(
             &own,

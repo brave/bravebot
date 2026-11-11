@@ -3128,6 +3128,333 @@ fn doctor_sandbox_check_starts_no_program_from_the_checkout_it_runs_in() {
     }
 }
 
+/// What [`plant_and_install`] set up for a command that opens no session.
+#[cfg(unix)]
+struct Planted {
+    /// The directory the command is run in, below the checkout.
+    here: PathBuf,
+    /// A `PATH` that finds the planted programs first and the installed ones after them.
+    path: String,
+    /// Files a planted program creates if it is started.
+    markers: Vec<PathBuf>,
+}
+
+#[cfg(unix)]
+impl Planted {
+    fn assert_none_started(&self, said: &str) {
+        for marker in &self.markers {
+            assert!(
+                !marker.exists(),
+                "{} was started: {said}",
+                marker.file_name().unwrap().to_string_lossy()
+            );
+        }
+    }
+}
+
+/// Each of `programs` planted in a `bin` of the checkout's root and in a `bin` of the directory
+/// below it that a command is run in, and installed in a third directory behind both, with the body
+/// given. A planted program creates a file named for where it was and what it is. Leaving out only
+/// the checkout, or only the directory the command ran in, leaves one planted program to be found,
+/// and a command that started nothing is told apart by the installed one's own result.
+#[cfg(unix)]
+fn plant_and_install(scratch: &Scratch, programs: &[(&str, &str)]) -> Planted {
+    let work = checkout_in(scratch);
+    let here = work.join("crates").join("cli");
+    std::fs::create_dir_all(&here).unwrap();
+    let tools = scratch.path.join("tools");
+    let mut markers = Vec::new();
+    for (name, installed) in programs {
+        for (place, directory) in [
+            ("checkout", work.join("bin")),
+            ("directory", here.join("bin")),
+        ] {
+            let marker = scratch.path.join(format!("ran-{place}-{name}"));
+            stand_in(&directory, name, &format!(": > '{}'", marker.display()));
+            markers.push(marker);
+        }
+        stand_in(&tools, name, installed);
+    }
+    let path = std::env::join_paths([here.join("bin"), work.join("bin"), tools]).unwrap();
+    Planted {
+        path: path.into_string().unwrap(),
+        here,
+        markers,
+    }
+}
+
+/// SANDBOX-30 over the process: `schedule remove` reads and writes the crontab with the installed
+/// `crontab`, and not with one in a `bin` of the checkout or of the directory it runs in. It opens
+/// no session, so nothing but the start of the program records those directories. The stored entry
+/// is written by hand, and the installed `crontab` records that it was run.
+#[cfg(unix)]
+#[test]
+fn schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-schedule-planted").with_file(
+        ".bravebot/schedules/1.entry",
+        "cron=0 9 * * *\ndir=/nowhere\nmode=read\nscheduler=crontab\n",
+    );
+    std::fs::write(scratch.path.join(".bravebot/schedules/1.prompt"), "hello").unwrap();
+    let installed_ran = scratch.path.join("ran-installed-crontab");
+    let installed = format!(
+        ": > '{}'\nwhile read -r line; do :; done",
+        installed_ran.display()
+    );
+    let planted = plant_and_install(&scratch, &[("crontab", installed.as_str())]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &planted.here,
+        &[("PATH", planted.path.as_str())],
+        &["schedule", "remove", "1"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("Removed schedule 1."), "{stdout}");
+    assert!(installed_ran.exists(), "the installed crontab was not run");
+}
+
+/// SANDBOX-30 over the process: `auth login bedrock` signs in with the installed AWS CLI, and not
+/// with one in a `bin` of the checkout or of the directory it runs in.
+#[cfg(unix)]
+#[test]
+fn auth_login_bedrock_starts_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-bedrock-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    let installed = AWS_WITH_A_LAPSED_PROFILE.trim_start_matches("#!/bin/sh\n");
+    let planted = plant_and_install(&scratch, &[("aws", installed)]);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", planted.path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("AWS_PROFILE", "lapsed"),
+    ]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &planted.here,
+        &environment,
+        &["auth", "login", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert!(
+        stdout.contains("enter the code PLACEHOLDER"),
+        "the installed aws was not run: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over the process: `auth status` asks the installed AWS CLI whether the account is
+/// signed in, and not one in a `bin` of the checkout or of the directory it runs in.
+#[cfg(unix)]
+#[test]
+fn auth_status_bedrock_starts_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-status-bedrock-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    std::fs::write(scratch.path.join("aws-work"), "").expect("sign in to work");
+    let installed = AWS_WITH_A_LAPSED_PROFILE.trim_start_matches("#!/bin/sh\n");
+    let planted = plant_and_install(&scratch, &[("aws", installed)]);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", planted.path.as_str()));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &planted.here,
+        &environment,
+        &["auth", "status", "bedrock"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.starts_with("bedrock work: signed in: "), "{stdout}");
+}
+
+/// `path` with the system directories behind it, so `script` is found when the command is run at a
+/// terminal. The planted and installed programs come first.
+#[cfg(unix)]
+fn with_the_system_behind(path: &str) -> String {
+    format!("{path}:/usr/bin:/bin")
+}
+
+/// SANDBOX-30 over the process, for `schedule add`, which writes the crontab with the installed
+/// `crontab`, and for `schedule list`, which reads the entries it stored. Neither opens a session.
+/// Run in a subdirectory of the checkout, with a `crontab` planted in the `bin` of the checkout and
+/// in the `bin` of that subdirectory, both ahead of the installed one on `PATH`.
+///
+/// Rejects an implementation that records the directory a command ran in only for the commands
+/// that open a session, or only for `schedule remove`: `add` then starts a planted `crontab`, and
+/// the marker file is made. `list` starts no scheduler program, so its half of this passes whatever
+/// is recorded and only pins that the planted file is not started and the entry is listed.
+#[cfg(unix)]
+#[test]
+fn schedule_add_and_list_start_no_crontab_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-schedule-add-planted");
+    let table = scratch.path.join("table");
+    let installed_ran = scratch.path.join("ran-installed-crontab");
+    let installed = format!(
+        ": > '{}'\ncase \"$1\" in\n  -l) exit 1 ;;\n  -) /bin/cat > '{}' ;;\nesac",
+        installed_ran.display(),
+        table.display()
+    );
+    let planted = plant_and_install(&scratch, &[("crontab", installed.as_str())]);
+    let path = with_the_system_behind(&planted.path);
+    let environment = [("PATH", path.as_str())];
+
+    // The command line of `script -c` on Linux is one string for a shell, which needs the words with
+    // spaces quoted; the BSD `script` takes the words as they are.
+    let quoted = |word: &'static str| {
+        if cfg!(target_os = "linux") {
+            format!("'{word}'")
+        } else {
+            word.to_string()
+        }
+    };
+    let cron = quoted("0 9 * * 1-5");
+    let prompt = quoted("list merged pull requests");
+    let added = in_a_terminal_command(
+        &scratch.path,
+        Some(&planted.here),
+        &environment,
+        &[
+            "schedule",
+            "add",
+            "--cron",
+            cron.as_str(),
+            "--prompt",
+            prompt.as_str(),
+            "--scheduler",
+            "crontab",
+        ],
+    )
+    .stdin(Stdio::null())
+    .output()
+    .unwrap();
+    let (stdout, stderr) = said(&added);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert!(
+        installed_ran.exists(),
+        "the installed crontab was not run: {stdout}{stderr}"
+    );
+    assert!(
+        std::fs::read_to_string(&table)
+            .unwrap_or_default()
+            .contains("bravebot-schedule:"),
+        "the installed crontab was not given the entry: {stdout}{stderr}"
+    );
+
+    let listed = in_a_terminal_command(
+        &scratch.path,
+        Some(&planted.here),
+        &environment,
+        &["schedule", "list"],
+    )
+    .stdin(Stdio::null())
+    .output()
+    .unwrap();
+    let (stdout, stderr) = said(&listed);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert!(
+        stdout.contains("list merged pull requests"),
+        "the entry was not listed: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-30 over the process, in the checkout's root: the directory a command ran in is itself
+/// the checkout, so there is no ancestor to find, and a `crontab` planted in its own `bin` is not
+/// started. `schedule remove` runs the installed `crontab`, which records that it ran.
+///
+/// Rejects an implementation that records only the checkout found above the directory (a walk that
+/// starts at the parent), which leaves the root's own `bin` searched, and one that records nothing.
+#[cfg(unix)]
+#[test]
+fn a_command_run_in_the_checkouts_root_starts_no_program_from_its_bin() {
+    let scratch = Scratch::new("cli-running-schedule-root-planted").with_file(
+        ".bravebot/schedules/1.entry",
+        "cron=0 9 * * *\ndir=/nowhere\nmode=read\nscheduler=crontab\n",
+    );
+    std::fs::write(scratch.path.join(".bravebot/schedules/1.prompt"), "hello").unwrap();
+    let work = checkout_in(&scratch);
+    let planted_ran = scratch.path.join("ran-root-crontab");
+    stand_in(
+        &work.join("bin"),
+        "crontab",
+        &format!(": > '{}'", planted_ran.display()),
+    );
+    let installed_ran = scratch.path.join("ran-installed-crontab");
+    stand_in(
+        &scratch.path.join("tools"),
+        "crontab",
+        &format!(
+            ": > '{}'\nwhile read -r line; do :; done",
+            installed_ran.display()
+        ),
+    );
+    let path = std::env::join_paths([work.join("bin"), scratch.path.join("tools")])
+        .unwrap()
+        .into_string()
+        .unwrap();
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &work,
+        &[("PATH", path.as_str())],
+        &["schedule", "remove", "1"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !planted_ran.exists(),
+        "the crontab in the root's own bin was started: {stdout}{stderr}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(installed_ran.exists(), "the installed crontab was not run");
+}
+
+/// SANDBOX-30 over the process: the list `bravebot auth login` offers when no way is named marks a
+/// way as held by asking the AWS CLI whether the account is signed in, and that is the installed
+/// one, not one in a `bin` of the checkout or of the directory it runs in. Nothing answers the
+/// question, so the command ends at it.
+///
+/// Rejects an implementation that records the directory only in the commands that name a way:
+/// the planted `aws` is started and its marker made, or the Bedrock way is not shown as held.
+#[cfg(unix)]
+#[test]
+fn the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-auth-list-planted").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}}}"#,
+    );
+    std::fs::write(scratch.path.join("aws-work"), "").expect("sign in to work");
+    let installed = AWS_WITH_A_LAPSED_PROFILE.trim_start_matches("#!/bin/sh\n");
+    let planted = plant_and_install(&scratch, &[("aws", installed)]);
+    let path = with_the_system_behind(&planted.path);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([("PATH", path.as_str()), ("BRAVEBOT_USE_BEDROCK", "1")]);
+
+    let output = in_a_terminal_command(
+        &scratch.path,
+        Some(&planted.here),
+        &environment,
+        &["auth", "login"],
+    )
+    .stdin(Stdio::null())
+    .output()
+    .unwrap();
+
+    let (stdout, stderr) = said(&output);
+    planted.assert_none_started(&format!("{stdout}{stderr}"));
+    assert!(
+        stdout.contains("(signed in)"),
+        "the installed aws did not report the account signed in: {stdout}{stderr}"
+    );
+}
+
 /// CRED-14 over the process: this agent's signing key and key id are not in the environment of
 /// `ssh-keygen`, `ssh` or `git`, which run unconfined with the person's access to `~/.ssh`. Each
 /// stand-in reports what it was handed in the part of its answer the report shows.
@@ -4213,9 +4540,14 @@ fn a_settings_file_named_on_the_command_line_is_read_above_the_ones_found() {
     let named = scratch.path.join("ci.json");
     std::fs::write(&named, r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
         .expect("write the named layer");
+    // Started in a checkout of its own: the scratch directory is under this repository's `target/`,
+    // so a run started in the crate's directory would have the named file inside its checkout.
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".git")).expect("create the checkout");
 
-    let output = bravebot(
+    let output = bravebot_started_in(
         &scratch.path,
+        &checkout,
         // A configuration with nothing wrong with it, so `doctor` reports the layers rather than
         // stopping at the configuration. Set rather than left out because CI builds with no
         // credentials baked in, where a run that read them off the build would find none.
@@ -8959,7 +9291,8 @@ fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() 
         ("AWS_REGION", "us-east-1"),
         ("AWS_PROFILE", "lapsed"),
     ]);
-    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let output =
+        bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "login", "bedrock"]);
 
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
@@ -8985,6 +9318,21 @@ fn auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed() 
         !settings.contains("BRAVEBOT_USE_BEDROCK"),
         "the switch was recorded for an account that failed: {settings}"
     );
+}
+
+/// [`bravebot`] started in a checkout of its own under `scratch`, beside the stand-in AWS CLI
+/// rather than inside the checkout it is in.
+///
+/// Every command leaves out the directory it runs in and the checkout holding it (SANDBOX-30). Run
+/// from this crate's directory, that checkout is the repository, which holds `scratch` and so the
+/// `bin` the stand-in is in, and the AWS CLI is then not found.
+#[cfg(unix)]
+fn bravebot_beside_the_stand_in(
+    scratch: &Scratch,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Output {
+    bravebot_started_in(&scratch.path, &checkout_in(scratch), environment, arguments)
 }
 
 /// Put the stand-in AWS CLI under `scratch`, and return the `PATH` that finds it.
@@ -9017,7 +9365,8 @@ fn auth_login_bedrock_records_the_opt_in_once_its_account_signs_in() {
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
     ]);
 
-    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let output =
+        bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "login", "bedrock"]);
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stdout}{stderr}");
     assert!(stdout.contains("profile work is signed in"), "{stdout}");
@@ -9036,7 +9385,7 @@ fn auth_login_bedrock_records_the_opt_in_once_its_account_signs_in() {
         "the record lost what the file said: {recorded}"
     );
 
-    let doctor = bravebot(&scratch.path, &environment, &["doctor"]);
+    let doctor = bravebot_beside_the_stand_in(&scratch, &environment, &["doctor"]);
     let (stdout, stderr) = said(&doctor);
     assert!(doctor.status.success(), "{stdout}{stderr}");
     let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
@@ -9050,7 +9399,7 @@ fn auth_login_bedrock_records_the_opt_in_once_its_account_signs_in() {
         "{stdout}"
     );
 
-    let again = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let again = bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "login", "bedrock"]);
     let (stdout, stderr) = said(&again);
     assert!(again.status.success(), "{stdout}{stderr}");
     assert!(
@@ -9076,6 +9425,8 @@ fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
             r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1"}}"#,
         );
     let path = aws_stand_in(&scratch);
+    // A checkout of its own, so the repository this test runs in is not the one left out.
+    std::fs::create_dir_all(scratch.path.join("checkout/.git")).expect("create the checkout");
     let mut environment = NOTHING_CONFIGURED.to_vec();
     environment.extend([
         ("PATH", path.as_str()),
@@ -9128,7 +9479,8 @@ fn auth_login_bedrock_signs_in_only_a_provider_block_where_no_tier_names_a_model
     let mut environment = NOTHING_CONFIGURED.to_vec();
     environment.extend([("PATH", path.as_str()), ("AWS_REGION", "us-east-1")]);
 
-    let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+    let output =
+        bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "login", "bedrock"]);
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stdout}{stderr}");
@@ -9158,8 +9510,8 @@ fn auth_login_bedrock_in_an_incognito_session_records_nothing() {
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
     ]);
 
-    let output = bravebot(
-        &scratch.path,
+    let output = bravebot_beside_the_stand_in(
+        &scratch,
         &environment,
         &["--incognito", "auth", "login", "bedrock"],
     );
@@ -9220,7 +9572,8 @@ fn auth_login_bedrock_leaves_a_settings_file_it_cannot_record_in_as_it_is() {
         ]);
         environment.extend(exported.map(|value| ("BRAVEBOT_USE_BEDROCK", value)));
 
-        let output = bravebot(&scratch.path, &environment, &["auth", "login", "bedrock"]);
+        let output =
+            bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "login", "bedrock"]);
 
         let (stdout, stderr) = said(&output);
         assert_eq!(
@@ -9275,7 +9628,7 @@ fn doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential() 
         ("AWS_PROFILE", "lapsed"),
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
     ]);
-    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+    let output = bravebot_beside_the_stand_in(&scratch, &environment, &["doctor"]);
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stdout}{stderr}");
@@ -9337,7 +9690,7 @@ fn doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile() {
             ("AWS_PROFILE", profile),
             ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
         ]);
-        let output = bravebot(&scratch.path, &environment, &["doctor"]);
+        let output = bravebot_beside_the_stand_in(&scratch, &environment, &["doctor"]);
         let (stdout, stderr) = said(&output);
         assert!(output.status.success(), "{stdout}{stderr}");
         let lines: Vec<String> = stdout.lines().map(|line| line.trim().to_string()).collect();
@@ -9673,9 +10026,29 @@ fn status_of(
     environment: &[(&str, &str)],
     arguments: &[&str],
 ) -> (Option<i32>, String, String) {
+    status_started_in(scratch, None, environment, arguments)
+}
+
+/// [`status_of`] started in a checkout of its own under `scratch`, for a test whose stand-in is in
+/// a `bin` under `scratch` ([`bravebot_beside_the_stand_in`]).
+#[cfg(unix)]
+fn status_beside_the_stand_in(
+    scratch: &Scratch,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> (Option<i32>, String, String) {
+    status_started_in(scratch, Some(&checkout_in(scratch)), environment, arguments)
+}
+
+fn status_started_in(
+    scratch: &Scratch,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> (Option<i32>, String, String) {
     let mut command = vec!["auth", "status"];
     command.extend(arguments);
-    let output = bravebot(&scratch.path, environment, &command);
+    let output = run(&scratch.path, cwd, environment, &command);
     let (stdout, stderr) = said(&output);
     assert!(
         !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
@@ -10757,7 +11130,7 @@ fn auth_status_bedrock_asks_the_aws_cli_without_signing_in() {
     let mut environment = NOTHING_CONFIGURED.to_vec();
     environment.push(("PATH", path.as_str()));
 
-    let (code, stdout, stderr) = status_of(&scratch, &environment, &["bedrock"]);
+    let (code, stdout, stderr) = status_beside_the_stand_in(&scratch, &environment, &["bedrock"]);
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(
         stdout.starts_with("bedrock work: not signed in: "),
@@ -10770,7 +11143,7 @@ fn auth_status_bedrock_asks_the_aws_cli_without_signing_in() {
     );
 
     std::fs::write(scratch.path.join("aws-work"), "").expect("sign in to work");
-    let (code, stdout, stderr) = status_of(&scratch, &environment, &["bedrock"]);
+    let (code, stdout, stderr) = status_beside_the_stand_in(&scratch, &environment, &["bedrock"]);
     assert_eq!(code, Some(0), "{stdout}{stderr}");
     assert!(stdout.starts_with("bedrock work: signed in: "), "{stdout}");
 }

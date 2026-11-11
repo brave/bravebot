@@ -207,18 +207,6 @@ fn origin_command(program: &Path) -> std::process::Command {
     command
 }
 
-/// Leave out of the lookup for programs the directory this command ran in and the checkouts
-/// holding it ([`bravebot_sandbox::programs::keep_out_with_checkout`]). A command that starts
-/// programs with no session of its own calls this before its first lookup.
-///
-/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session. A checkout's
-/// `bin` first on `PATH` would otherwise be searched for the programs started below.
-pub(crate) fn keep_out_where_this_ran() {
-    if let Ok(cwd) = std::env::current_dir() {
-        bravebot_sandbox::programs::keep_out_with_checkout(&cwd);
-    }
-}
-
 /// The variables `ssh-keygen`, `ssh` and `git` read to choose a program to run
 /// ([SANDBOX-30], [PATH-008](../../../docs/best-practices/paths.md#PATH-008)).
 ///
@@ -383,7 +371,6 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
-    keep_out_where_this_ran();
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };

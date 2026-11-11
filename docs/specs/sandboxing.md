@@ -945,7 +945,8 @@ Every other write a row grants is granted.
 A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
 reaches a `.git` and each other protected name as it does on Linux. Every other stage keeps the
-refusal. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+refusal, and so does a stage whose program is a file named `git` under a directory the plan may write
+to, the checkout holding a session directory among them ([SANDBOX-20](#SANDBOX-20)). On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
 [mcp-servers.md](mcp-servers.md)'s known cost and a known cost of `run` ([SANDBOX-18](#SANDBOX-18)).
 The Windows backend withholds nothing of the kind, and no server is started there
@@ -976,6 +977,7 @@ is held back from a protected name by this clause, so on macOS and for a stage t
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 
 <a id="SANDBOX-15"></a>
@@ -1062,7 +1064,7 @@ or `ssh+git`, before a `--` or after one; where a signing `git` argv holds any a
 a `git-merge-<name>` from the search path; where a `gh` argv holds `--`; and where `kubectl` is
 given `--kubeconfig` or `docker` is given `--config`. None is carried by a program whose resolved
 file is under a directory the plan may write to ([SANDBOX-20](#SANDBOX-20) says which those are,
-toolchain caches among them), which could have been named `aws` or `git` by the plan itself, as
+toolchain caches and the checkout holding a session directory among them), which could have been named `aws` or `git` by the plan itself, as
 [SANDBOX-20](#SANDBOX-20) holds for the network. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
@@ -1106,7 +1108,7 @@ by name, such as `origin`, has its URL in the repository's configuration, which 
 a clone or an earlier stage may have written, so it selects no entry. The run prompt names the key
 on the stage it applies to. Only the person's own settings file and a `--settings` file outside the
 workspace set the block, as for `sandbox.mode` ([SANDBOX-22](#SANDBOX-22)). A checkout's project and
-local files and a `--settings` file inside the workspace are not obeyed, and `doctor` names the
+local files and a `--settings` file inside the workspace or such a checkout are not obeyed, and `doctor` names the
 file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string, a
 `git` block or an `identities` value that is not an object, and an entry whose key the rules above
 refuse, all but the one about the directories the plan may write, which it has no session to know.
@@ -1351,6 +1353,7 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_sandbox::scope::a_program_no_scope_knows_carries_none`
 `verified-by: bravebot_sandbox::scope::a_scope_is_keyed_on_the_file_without_a_windows_executable_extension`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_carries_no_scope_by_its_name`
+`verified-by: bravebot_agent::confine::a_program_above_the_session_directory_in_its_checkout_carries_no_scope_by_its_name`
 `verified-by: bravebot_sandbox::scope::a_stage_reaches_its_own_scope_and_no_other`
 `verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
 `verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_is_refused_whatever_spells_it`
@@ -1698,7 +1701,9 @@ do not follow a link made later. The interval between the check and the sandbox 
 remains: a name relinked in it is not caught, as for the scratch directory.
 
 A stage's program is git where the file it resolved to, with its links followed, is named `git`, or
-`git.exe` in any case on Windows, and lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
+`git.exe` in any case on Windows, and lies beneath none of the rows the stage writes and none of the
+checkouts holding a session directory or a directory the session left ([SANDBOX-20](#SANDBOX-20)
+says which). The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
 would leave no git anywhere. A script, `make`, `npm`, `gh` or any other program is not git, and git
 started by one runs under that stage's profile. The lift changes a profile only on macOS, the one
@@ -1781,6 +1786,7 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 
 `verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 `verified-by: bravebot_agent::confine::a_prompt_says_a_program_other_than_git_can_write_a_git_directory_where_none_is_held_back`
 `verified-by: bravebot_agent::confine::the_description_follows_the_platform_it_describes`
@@ -2096,14 +2102,27 @@ what a program printed, and none is granted to a file under a directory the plan
 it could have named `curl` itself. A stage that carries one is also granted the resolver ([SANDBOX-3](#SANDBOX-3)) and keeps the unix socket rule
 it already had, so the agent socket still reaches a remote stage. A stage started with `NAME=value`
 assignments carries no scope ([SANDBOX-16](#SANDBOX-16)), and so none of the third kind.
-A directory the plan may write to is one of the session's directories, the scratch directory or the
-temporary directory, or a row some stage of the session may be given for writing, whatever that
-stage's program: each toolchain's caches, in every mode, since a file left there outlives a switch to
-`read-only`; a directory a person remembered for writing ([SANDBOX-23](#SANDBOX-23)); a path a
-`request_path` for writing was granted ([SANDBOX-28](#SANDBOX-28)); and an `allowWrite` entry
-([SANDBOX-25](#SANDBOX-25)), less what a `denyWrite` or `denyRead` entry takes back. A stage that
+A directory the plan may write to is one of the session's directories, the checkout holding each of
+them, the scratch directory or the temporary directory, or a row some stage of the session may be
+given for writing, whatever that stage's program: each toolchain's caches, in every mode, since a
+file left there outlives a switch to `read-only`; a directory a person remembered for writing
+([SANDBOX-23](#SANDBOX-23)); a path a `request_path` for writing was granted
+([SANDBOX-28](#SANDBOX-28)); and an `allowWrite` entry ([SANDBOX-25](#SANDBOX-25)), less what a
+`denyWrite` or `denyRead` entry takes back. A stage that
 runs a file is often not given the row it lies under, and the file counts all the same, since
-another stage of the plan could have written it. The rows the mode bypass gives without a request
+another stage of the plan could have written it. The checkout is the one
+[SANDBOX-30](#SANDBOX-30) finds for a directory: the nearest of the directory and its ancestors with
+a `.git`, a file as well as a directory. It counts for each directory the session opened, added or
+moved to, and for each it has since closed or left, since closing a directory removes nothing a
+stage wrote there. The `bin` of a checkout can be first on `PATH` and hold a file a contributor's
+commit added, above the directory the session opened in, so a file there is as much the plan's as
+one inside that directory. A checkout that is the account's home directory, or holds it, such as a
+dotfiles repository, does not count, since it would take the reason from every program the account
+installed under the home, `~/.local/bin` among them. [PERM-14](permissions.md#PERM-14) finds the same
+checkout for a `--settings` file and does not leave that one out: a file under a dotfiles repository
+at the home directory is the checkout's there, which fails closed (Known costs in
+[permissions.md](permissions.md#known-costs)). The checkout is read from the file system each
+time a stage is built. The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out, as they are for `git` ([SANDBOX-18](#SANDBOX-18)): they are
 every path the account can write, so counting them would take the reason from every program the
 account installed, rustup's `cargo` and a Homebrew `git` among them. Under bypass a stage can
@@ -2124,8 +2143,8 @@ The setting is read from `--run-network <open|closed>`, from `run.network` in a 
 from a managed pin, in that order of strength: a managed pin is final, the flag outranks a file, and
 a file outranks the default. A managed pin that is neither word is read as `closed`, not ignored,
 because a mistyped restriction must not open the network. A file in the person's home, or one named by `--settings` from outside
-the workspace, may set either word. A file a checkout carries, which includes a named file inside
-the workspace, may set `closed` and never `open`, and `doctor` says that it was ignored. A word that
+the workspace and outside every checkout the session has been in ([PERM-14](permissions.md#PERM-14)), may set either word. A file a checkout carries, which includes a named file inside
+the workspace or such a checkout, may set `closed` and never `open`, and `doctor` says that it was ignored. A word that
 is neither is reported and not obeyed. The desktop's bridge takes no flag: it settles the answer once,
 when it starts, from the person's home layer, the file `--settings` named, when it exists, the settings file of the
 directory it started in and the managed pin, and every window's turns read that answer. A project a
@@ -2152,6 +2171,9 @@ reach, but can ask for less of it.
 `verified-by: bravebot_sandbox::toolchain::only_the_programs_that_fetch_are_known_to_fetch`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_keeps_no_network_by_its_name`
 `verified-by: bravebot_agent::confine::a_program_in_a_directory_a_person_let_programs_write_keeps_no_network_by_its_name`
+`verified-by: bravebot_agent::confine::a_program_above_the_session_directory_in_its_checkout_keeps_no_network_by_its_name`
+`verified-by: bravebot_agent::confine::a_directory_the_session_left_keeps_its_checkout_in_the_set_the_plan_writes`
+`verified-by: bravebot_agent::confine::an_outer_repository_or_a_home_that_is_a_repository_is_not_the_checkout_of_a_session_directory`
 `verified-by: bravebot_config::run_network::a_managed_pin_that_is_neither_word_closes_the_network`
 `verified-by: bravebot_agent::confine::the_policy_the_line_and_the_description_agree_on_which_stages_keep_the_network`
 `verified-by: bravebot_agent::confine::the_fetch_bit_is_keyed_on_the_resolved_file`
@@ -2454,10 +2476,10 @@ managed pin of `strict` therefore keeps, and `strict` is still looser than `read
 
 The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
 key of the settings, and from the managed file's pin; the default is `workspace-write`. In the settings, the home file and a `--settings` file outside
-the workspace may name any of the four, the later of the two winning. The checkout's project and
-local files, and a `--settings` file inside the workspace, may name only `strict`; a `read-only`,
+the workspace and every checkout the session has been in ([PERM-14](permissions.md#PERM-14)) may name any of the four, the later of the two winning. The checkout's project and
+local files, and a `--settings` file inside either, may name only `strict`; a `read-only`,
 `workspace-write` or `off` there is not obeyed and `doctor` names the file and the word. A `strict` from any of them
-holds over what the home file or a `--settings` file outside the workspace chose, unless `strict` is looser than that
+holds over what the home file or a `--settings` file outside them chose, unless `strict` is looser than that
 choice or than the managed file's pin, which it is only of `read-only`. Such a `strict` is not obeyed and refuses
 nothing, and `doctor` names its file and the file that chose `read-only`. A value that is not exactly one of the four words chooses
 nothing and is reported with its file, except `standard`, the earlier name of `workspace-write`: it
@@ -2471,7 +2493,7 @@ run sets `sandbox.holdBackTemporaryDirectory` to `true`, as Codex's `workspace-w
 mode that confines, and under bypass, whose stages write every path the account can, it is a refusal of
 the directory: the scratch directory and a person's own `allowWrite` entries are rows of their own and stay. A program that makes a scratch file there is refused, which is a shell heredoc,
 `mktemp` and a compiler's intermediate files, and the `run` description says so. Only the person's own
-settings file and a `--settings` file outside the workspace are read for the key, as for `sandbox.mode`:
+settings file and a `--settings` file outside the workspace and the checkouts the session has been in are read for the key, as for `sandbox.mode`:
 a checkout's project or local file that sets it is not obeyed and is reported as an unread key. Any
 value but `true` asks for nothing. A `denyWrite` entry naming the temporary directory refuses it as well,
 and is the way to hold back one path of it. On Windows a session with a directory of its own grants no
@@ -2879,7 +2901,7 @@ keeps a name the program chose out of a sentence the planner reads.
 The list is named by `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` (`ask` or
 `refuse`). `deniedHosts` and `onUnlisted: refuse` only take reach away, so any layer may write them.
 `allowedHosts` and `onUnlisted: ask` give it back, so they are read from the person's own settings,
-the file `--settings` names outside the workspace and nothing a clone brings, as the allowances of
+the file `--settings` names outside the workspace and the checkouts the session has been in, and nothing a clone brings, as the allowances of
 `sandbox.filesystem` are; a project or local layer's is named by `doctor` and not read. A key that
 is not there is no list. A list that is set, even an empty one, is one, and a layer whose list was
 not read does not make one. A value that is not a list of strings, or an `onUnlisted` that is
@@ -3124,8 +3146,8 @@ nothing and is not added.
 
 `denyRead` and `denyWrite` are read from every layer, since they only take reach away. `allowRead`
 and `allowWrite` are read from the person's own file, the file `--settings` names from outside the
-workspace, the command line and the managed file, and never from a project layer, a local layer or a
-named file inside the workspace, so a cloned repository cannot widen its own sandbox. A layer that
+workspace and the checkouts the session has been in, the command line and the managed file, and never from a project layer, a local layer or a
+named file inside either, so a cloned repository cannot widen its own sandbox. A layer that
 tried names the file in `doctor`. The managed file may pin each list: a pinned `allowRead` or
 `allowWrite` is the whole list and the person's own entries are not read, and a pinned refusal is
 added to the person's and cannot be lifted by an entry at or beneath it.
@@ -3770,7 +3792,8 @@ condition below holds, and in no other case it is asked about as [SANDBOX-29](#S
   not on it, and a program absent from the table is asked about. A program whose behaviour reads a file
   a confined stage could have written, as `git` reads `.git/config` and `.git/hooks`, is listed only on
   a platform that holds that file back from every stage ([SANDBOX-14](#SANDBOX-14)), which is macOS.
-  No stage's program is a file under a directory the plan may write to ([RUN-5](tools/run.md#RUN-5)).
+  No stage's program is a file under a directory the plan may write to, the checkout holding a session
+  directory among them ([RUN-5](tools/run.md#RUN-5)).
 - **Every condition [SANDBOX-29](#SANDBOX-29) puts on accepting `unconfined` still holds.** The mode
   is not `strict`, `read-only` or `off`, the workspace is trusted, a managed `run.network` is not
   `closed`, and the caller is not a delegate. A rule that says ask, or deny, decides first
@@ -3859,8 +3882,9 @@ configuration that hides the refusal from a crate. Tests are allowed at the root
 file. A new spawn that looks a name up through
 `PATH` is added to the list above, in the same change, or resolved first.
 
-- **Those directories are the session's.** Each directory the session was opened on, added, or
-  moved to and the checkout holding it (next bullet), its scratch directory, the system temporary
+- **Those directories are the session's and the process's.** Each directory the session was opened on, added, or
+  moved to and the checkout holding it (next bullet), the directory the process ran in and the
+  checkout holding it (next bullet, recorded for every command), its scratch directory, the system temporary
   directory, every row a stage's policy
   grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it, and every row the policy a
   local MCP server is launched under grants writes in, its declared directory and its own home
@@ -3879,16 +3903,24 @@ file. A new spawn that looks a name up through
   `PATH` and hold a file a contributor added, which a session opened in a subdirectory of the
   checkout would start in place of the installed program, unconfined. The same function,
   `bravebot_sandbox::programs::keep_out_with_checkout`, records a directory and its checkout for a
-  directory a session opens, adds or moves to, and for a command that opens no session.
-  `doctor --push-identity` and `doctor --sandbox-check` are new processes, which know of no
-  directory a stage wrote in an earlier session, so each records the directory it ran in the same
-  way. The checkout is the nearest of the directory itself and its ancestors with a `.git`, a file
+  directory a session opens, adds or moves to, and for every command that opens no session.
+  Every command is a new process, which knows of no directory a stage wrote in an earlier session,
+  so `main` records the directory the process ran in, and the checkout holding it, once, before the
+  command line is read and before any command is dispatched. A command added later is covered
+  without a call of its own, and `bravebot schedule`, `bravebot auth login chatgpt`,
+  `bravebot auth login bedrock`, `bravebot auth status` and both `doctor` commands start the
+  programs they look up under that record. A deep link that moves the process to another directory
+  records that directory as well. Where the working directory cannot be read nothing is recorded.
+  The checkout is the nearest of the directory itself and its ancestors with a `.git`, a file
   as well as a directory, so a linked worktree or a submodule is the checkout holding the
   directory. A directory that holds a `.git` is its own checkout and nothing above it is added.
   Only the nearest is taken. Taking every ancestor with a `.git` would also leave out an outer repository
   that merely contains the checkout, such as a dotfiles repository at the account's home or the
   repository a worktree is nested in, and with it every installed `bin` under it. A directory under
-  no checkout is recorded by itself. A virtualenv or tool directory a stage was granted elsewhere
+  no checkout is recorded by itself. The confinement finds the checkout of a session directory with
+  the same function, `bravebot_sandbox::programs::with_checkout`, to decide which files count as the
+  plan's ([SANDBOX-20](#SANDBOX-20)), and leaves out a checkout that is the account's home directory
+  or holds it, which this lookup does not. A virtualenv or tool directory a stage was granted elsewhere
   is not known to a command that opens no session. A program either doctor command starts is also
   started without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
@@ -3908,8 +3940,8 @@ file. A new spawn that looks a name up through
   path is started as given. A hook's relative path is the person's own and runs from the directory
   the hook runs in ([HOOK-4](hooks.md#HOOK-4)).
 - **Nothing found is not installed.** A person whose only `aws` is in such a directory, an
-  activated virtualenv's `bin` among them, or in the `bin` of the checkout a session was opened in,
-  is told it is not installed
+  activated virtualenv's `bin` among them, or in the `bin` of the checkout a session was opened in
+  or a command ran in, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
 - **The editor's, a hook's, the credential authority's, the inhibitor's, a clipboard tool's, the
@@ -4412,8 +4444,8 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 
 A program a person keeps in a `bin` of the nearest checkout holding a directory a session opens,
 adds or moves to reads as not installed to every lookup above for the rest of the process, whether
-the session was opened at the checkout's root or below it, and a command that opens no session
-leaves out the same one. Where the account's home directory holds a `.git`, such as a dotfiles
+the session was opened at the checkout's root or below it, and every command, whether or not it
+opens a session, leaves out the one holding the directory it ran in. Where the account's home directory holds a `.git`, such as a dotfiles
 repository, a session opened in a directory below the home that has no nearer `.git` leaves out the
 home as its checkout, so `~/bin` and every other directory under the home that is on `PATH` is not
 searched and a program kept in one reads as not installed. A session opened below a nearer checkout
@@ -5159,6 +5191,14 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent`
 `verified-by: bravebot_cli::running::doctor_sandbox_check_starts_no_program_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::schedule_remove_starts_no_crontab_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_login_bedrock_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::auth_status_bedrock_starts_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::chatgpt_account::auth_login_chatgpt_opens_the_address_with_no_program_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::schedule_add_and_list_start_no_crontab_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::a_command_run_in_the_checkouts_root_starts_no_program_from_its_bin`
+`verified-by: bravebot_cli::running::the_auth_way_list_asks_no_aws_from_the_checkout_it_runs_in`
+`verified-by: bravebot_sandbox::checkout_in_search::a_command_that_recorded_its_directory_does_not_find_the_checkouts_bin`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_starts_the_program_behind_a_directory_a_stage_may_write`
 `verified-by: bravebot_agent::usability_path::a_setup_stage_looks_up_the_programs_it_starts_only_behind_the_directory`
