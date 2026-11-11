@@ -1412,14 +1412,13 @@ fn short_name_of(path: &Path) -> Option<PathBuf> {
 }
 
 /// #3926, PERM-5 and PERM-20: the spellings a `deny` or `ask` command rule reads as the program
-/// they name do start that program. The regression it rejects: the fold reading a spelling as a
-/// program that Windows would not start, which refuses or misattributes a line for no reason, and
-/// the reading being tested nowhere on the host that decides it. Each spelling is started by this
-/// process through the standard library, outside any container, and a failure names the spelling.
-///
-/// These assertions are the expected behaviour of Windows and have not been observed to pass: the
-/// first run of the `sandbox-windows` job is the first observation. A trailing dot is part of the
-/// expectation because the fold takes it off.
+/// they name do start that program. This checks the platform assumption the fold relies on and
+/// never calls the fold, so a regression in the fold cannot fail it; the tests in
+/// `bravebot-core` pin the fold. The fault it rejects is a spelling the fold treats as the program
+/// that Windows does not start as that program, which would refuse or misattribute a line. Each
+/// spelling is started by this process through the standard library, outside any container, and a
+/// failure names the spelling. The failure of this test was not demonstrated, since it runs only
+/// on Windows.
 #[test]
 fn the_spellings_a_command_rule_folds_start_the_program_they_name() {
     let (directory, expected) = a_directory_of_programs("spellings-fold");
@@ -1469,10 +1468,9 @@ fn the_spellings_a_command_rule_folds_start_the_program_they_name() {
 /// #3926: for the spellings whose result is not asserted, a trailing space and a `::$DATA` stream
 /// suffix, only that Windows never starts a different program under them. The fold reads both as
 /// the program they name, so the claim a rule needs is that a spelling either starts the program
-/// named or starts nothing. Which of the two it is gets printed for each, so a log of the
-/// `sandbox-windows` job settles it; an outcome that is neither fails and names the spelling.
-///
-/// Neither outcome has been observed by the author of the change.
+/// named or starts nothing. Which of the two it is gets printed for each; an outcome that is
+/// neither fails and names the spelling. Like the test above, this checks the platform assumption
+/// and never calls the fold.
 #[test]
 fn a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing() {
     let (directory, expected) = a_directory_of_programs("spellings-observed");

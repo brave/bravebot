@@ -404,8 +404,6 @@ evaluated on would make the same settings file refuse a line on one machine and 
 `verified-by: bravebot_core::policy::a_short_name_refusal_names_the_short_name_and_not_the_wrapper_over_it`
 `verified-by: bravebot_core::policy::a_denied_program_respelled_is_refused_at_both_gates`
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
-`verified-by: bravebot_sandbox::windows::the_spellings_a_command_rule_folds_start_the_program_they_name`
-`verified-by: bravebot_sandbox::windows::a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing`
 `verified-by: bravebot_core::permissions::a_trailing_colon_star_is_a_trailing_wildcard_and_a_colon_elsewhere_is_not`
 `verified-by: bravebot_core::permissions::a_space_in_an_allow_rule_covers_only_the_gap_between_two_words`
 `verified-by: bravebot_core::permissions::a_space_in_a_deny_or_ask_rule_covers_a_space_inside_a_word_too`
@@ -1306,14 +1304,15 @@ against them whole. A wrapper added to the table is a decision about both questi
   a trailing dot or space, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat` of a program
   word are folded, and an 8.3 short name is refused while a command rule restricts
   ([PERM-5](#PERM-5)). What `CreateProcessW` and `canonicalize` do with each spelling is read from
-  the code and has not been run. Two tests in `crates/sandbox/tests/windows.rs` start a copy of
-  `whoami.exe` under the spellings and run in the `sandbox-windows` CI job, and no log of that job
-  shows either run yet. `the_spellings_a_command_rule_folds_start_the_program_they_name` expects
-  `tool.exe.`, `TOOL.EXE`, an 8.3 short name, `t.cmd` and `t.bat` to start the program.
+  the code, and no test exercising the fold asserts it. Two tests in
+  `crates/sandbox/tests/windows.rs` start a copy of `whoami.exe` under the spellings and check the
+  platform assumption the fold relies on without calling it.
+  `the_spellings_a_command_rule_folds_start_the_program_they_name` expects `tool.exe.`, `TOOL.EXE`,
+  an 8.3 short name, `t.cmd` and `t.bat` to start the program.
   `a_trailing_space_or_a_stream_suffix_starts_the_program_named_or_nothing` expects a trailing space
-  and `::$DATA` to start either that program or nothing, and prints which. Whether each spelling
-  starts the program is unchecked on Windows until a job log shows those runs, and so is
-  everything the tests do not start: `canonicalize` and the 8.3 short name of a directory. The
+  and `::$DATA` to start either that program or nothing. Whether each spelling starts the program
+  is therefore not asserted for the fold, and neither is everything those tests do not start:
+  `canonicalize` and the 8.3 short name of a directory. The
   AppContainer backend refuses a final component that ends in a dot or space or holds a colon
   ([SANDBOX-4](sandboxing.md#SANDBOX-4)), so only a stage run unconfined is exposed to those
   spellings. The fold takes off the exact suffix `::$DATA` and no other stream, so a rule such as
