@@ -156,6 +156,7 @@ the pane does; nothing of it is written under `~/.bravebot` ([INCOG-3](incognito
 `verified-by: bravebot_tui::herdr::each_state_the_title_tracks_reaches_herdr_as_its_own`
 `verified-by: bravebot_tui::herdr::only_a_question_carries_a_message_and_it_is_the_fixed_one`
 `verified-by: bravebot_tui::herdr::a_title_turned_off_still_tells_herdr`
+`verified-by: bravebot_tui::app::tests::herdr::adopting_the_settings_tells_herdr_the_session_holds_its_pane_idle`
 
 <a id="HERDR-9"></a>
 ### HERDR-9: the terminal interface tells herdr how to reopen the session, once its record is written

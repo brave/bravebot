@@ -1,5 +1,7 @@
-//! HERDR-12: the run tells herdr it has left the pane when it leaves for good, and not when it
-//! only hands the terminal over for a while.
+//! HERDR-8, HERDR-9 and HERDR-12 through the interface's own calls: the run tells herdr it holds
+//! the pane once its settings are read, hands over how to reopen the session on each pass, and
+//! tells herdr it has left the pane when it leaves for good, and not when it only hands the
+//! terminal over for a while.
 
 use super::*;
 use crate::herdr::script;
@@ -18,11 +20,11 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
 /// Long enough for a request that was going to be sent to have arrived.
 const NOTHING_ARRIVES_WITHIN: Duration = Duration::from_millis(300);
 
-/// A herdr that records the method of each request it is sent, and answers it or never does.
+/// A herdr that records each request it is sent, and answers it or never does.
 struct FakeHerdr {
     _directory: tempfile::TempDir,
     socket: PathBuf,
-    methods: Receiver<String>,
+    requests: Receiver<Value>,
 }
 
 impl FakeHerdr {
@@ -30,7 +32,7 @@ impl FakeHerdr {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("herdr.sock");
         let listener = UnixListener::bind(&socket).unwrap();
-        let (recorded, methods) = channel();
+        let (recorded, requests) = channel();
         std::thread::spawn(move || {
             let mut kept = Vec::new();
             for stream in listener.incoming() {
@@ -45,14 +47,13 @@ impl FakeHerdr {
                 } else {
                     kept.push(stream);
                 }
-                let method = request["method"].as_str().unwrap_or_default().to_string();
-                let _ = recorded.send(method);
+                let _ = recorded.send(request);
             }
         });
         FakeHerdr {
             _directory: directory,
             socket,
-            methods,
+            requests,
         }
     }
 
@@ -60,15 +61,22 @@ impl FakeHerdr {
         Reporter::from_variables(inside_herdr(&self.socket))
     }
 
-    fn next(&self) -> String {
-        self.methods
+    fn next_request(&self) -> Value {
+        self.requests
             .recv_timeout(ARRIVES_WITHIN)
             .expect("herdr was sent a request")
     }
 
+    fn next(&self) -> String {
+        self.next_request()["method"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
     fn nothing_more(&self) {
-        if let Ok(method) = self.methods.recv_timeout(NOTHING_ARRIVES_WITHIN) {
-            panic!("herdr was sent {method}");
+        if let Ok(request) = self.requests.recv_timeout(NOTHING_ARRIVES_WITHIN) {
+            panic!("herdr was sent {}", request["method"]);
         }
     }
 }
@@ -104,6 +112,23 @@ fn leaving_for_good_tells_herdr_the_run_has_left_its_pane_however_the_way_out_we
         assert_eq!(left.is_err(), failed, "the way out's own result comes back");
         assert_eq!(herdr.next(), "pane.release_agent", "failed: {failed}");
     }
+}
+
+/// HERDR-8, through `adopt_settings`, which `begin_session` calls once the settings are read and
+/// before the first question it can ask. Rejects: a session that first reaches herdr with its first
+/// frame, after the startup questions, so herdr shows the pane as a plain shell while they wait.
+#[test]
+fn adopting_the_settings_tells_herdr_the_session_holds_its_pane_idle() {
+    let herdr = FakeHerdr::start(true);
+    let _held = script::hold(herdr.reporter());
+    adopt_settings(
+        &mut Session::new("none"),
+        &bravebot_config::Settings::default(),
+        None,
+    );
+    let request = herdr.next_request();
+    assert_eq!(request["method"], "pane.report_agent");
+    assert_eq!(request["params"]["state"], "idle");
 }
 
 /// HERDR-12, through the end of `run`. Rejects: a run that ends by handing the terminal back the

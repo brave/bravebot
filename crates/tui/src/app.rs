@@ -2369,6 +2369,9 @@ fn adopt_settings(
     settings: &bravebot_config::Settings,
     asked_effort: Option<bravebot_aichat::protocol::Effort>,
 ) {
+    // Once the settings are read and before the first question the session can ask, so herdr
+    // knows bravebot holds the pane from the start rather than from the first frame (HERDR-8).
+    crate::herdr::state(crate::title::State::Ready);
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
     // And the level a turn asks for, which the record or this file answers, whichever BACKEND-43
@@ -2639,9 +2642,6 @@ fn begin_session(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
     );
-    // Before the first question the session can ask, so herdr knows bravebot holds the pane from
-    // the start rather than from the first frame.
-    crate::herdr::state(crate::title::State::Ready);
     crate::notify::adopt(
         settings.notification_method(),
         settings.notification_condition(),
