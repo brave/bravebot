@@ -488,9 +488,106 @@ pub fn start_against(
         restrict_path(&mut command);
     }
     if let CodeSelectors::Checked(own) = selectors {
-        withhold_checked(&mut command, own, held, outside_stage_writable);
+        let held: Vec<(OsString, OsString)> = held.into_iter().collect();
+        let shim = is_version_manager_shim(program.as_path(), &held);
+        withhold_checked(
+            &mut command,
+            own,
+            held.iter().cloned(),
+            outside_stage_writable,
+        );
+        if shim {
+            withhold_home_a_stage_may_write(&mut command, &held, outside_stage_writable);
+        }
     }
     command
+}
+
+/// Directories under `HOME` where asdf and pyenv keep their data when `ASDF_DATA_DIR` and
+/// `PYENV_ROOT` are not set. Both hold the shims in a `shims` directory directly under them.
+const SHIM_ROOTS_UNDER_HOME: [&str; 2] = [".asdf", ".pyenv"];
+
+/// The variables that move those directories elsewhere.
+const SHIM_ROOT_VARIABLES: [&str; 2] = ["ASDF_DATA_DIR", "PYENV_ROOT"];
+
+/// Whether `program` is a shim of asdf or pyenv: a file in a `shims` directory that sits directly in
+/// `~/.asdf`, in `~/.pyenv`, or in the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names in `held`.
+///
+/// A shim stands for another program, so its own name says nothing about what it runs. It is
+/// recognised by where it is, which is the path the lookup returned and not anything read from a
+/// file. The directory names are compared without regard to case, which can only make more files
+/// shims, and the only thing a shim changes is that `HOME` is judged
+/// ([`withhold_home_a_stage_may_write`]).
+fn is_version_manager_shim(program: &Path, held: &[(OsString, OsString)]) -> bool {
+    let Some(directory) = program.parent() else {
+        return false;
+    };
+    let Some(root) = directory.parent().filter(|_| {
+        directory
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("shims"))
+    }) else {
+        return false;
+    };
+    SHIM_ROOTS_UNDER_HOME.iter().any(|under| {
+        root.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(under))
+    }) || SHIM_ROOT_VARIABLES.iter().any(|variable| {
+        held.iter()
+            .any(|(name, value)| is_variable(name, variable) && Path::new(value) == root)
+    })
+}
+
+/// Take `HOME` off `command` unless it names a directory outside every directory a stage may write
+/// and neither `.asdf` nor `.pyenv` under it leads into one ([`under_home_outside_stage_writable`]).
+///
+/// `HOME` chooses code for both managers: with a `.tool-versions`, asdf runs
+/// `~/.asdf/installs/<tool>/<version>/bin/<tool>`, and with `PYENV_ROOT` unset pyenv reads hooks
+/// from `$HOME/.pyenv`. A stage that may write what `HOME` reaches could make a shim started for
+/// `gcloud`, `ssh` or `git` run a file it wrote. `HOME` is not in [`CODE_SELECTORS`] because those
+/// programs need it, and so it is judged only for a shim ([SANDBOX-30]).
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md#SANDBOX-30
+fn withhold_home_a_stage_may_write(
+    command: &mut Command,
+    held: &[(OsString, OsString)],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) {
+    let Some((_, home)) = held.iter().find(|(name, _)| is_variable(name, "HOME")) else {
+        return;
+    };
+    let home = Path::new(home);
+    if !(may_be_run(Names::Directory, home, outside_stage_writable)
+        && under_home_outside_stage_writable(home, &SHIM_ROOTS_UNDER_HOME, outside_stage_writable))
+    {
+        command.env_remove("HOME");
+    }
+}
+
+/// Whether each of the paths `under` `home` is outside the directories a stage may write.
+///
+/// A session opened on `~/.config` or `~/.pyenv` has no row for `HOME` itself, so `HOME` alone
+/// passes while what a program reads under it can be written. Each path is judged as it is when it
+/// exists (a link counts and is followed by the judgment). One that does not exist is judged by the
+/// nearest existing directory above it below `home`, since whoever may write that directory can
+/// make the path. `home` itself is judged by the caller.
+fn under_home_outside_stage_writable(
+    home: &Path,
+    under: &[&str],
+    outside_stage_writable: &impl Fn(&Path) -> bool,
+) -> bool {
+    under.iter().all(|under| {
+        let mut path = home.join(under);
+        while path != home {
+            if path.symlink_metadata().is_ok() {
+                return outside_stage_writable(&path);
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+        true
+    })
 }
 
 /// The program as an absolute path, or `None` when the only one `PATH` offers is in a directory
@@ -2440,6 +2537,183 @@ mod tests {
             Path::new(&list(&[&safe, &genuine])),
             &session
         ));
+    }
+
+    /// Whether a start of `program` given `selectors` takes `HOME` off, when this process holds
+    /// `HOME` as `home` and the `extra` variables besides, and `session` is the one directory a stage
+    /// may write.
+    #[cfg(unix)]
+    fn home_removed(
+        selectors: CodeSelectors<'_>,
+        program: &Path,
+        home: &Path,
+        extra: &[(&str, &Path)],
+        session: &Path,
+    ) -> bool {
+        let row = session.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let mut held = vec![(OsString::from("HOME"), home.as_os_str().to_os_string())];
+        held.extend(
+            extra
+                .iter()
+                .map(|(name, value)| (OsString::from(*name), value.as_os_str().to_os_string())),
+        );
+        let command = start_against(
+            &Resolved::found_earlier(program),
+            Inherits::All,
+            SearchPath::Inherited,
+            selectors,
+            held,
+            &|file: &Path| outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new("HOME") && now.is_none())
+    }
+
+    /// SANDBOX-30. The regression it rejects: a checked start of an asdf or pyenv shim that leaves
+    /// `HOME` as it was given, so a `HOME` a stage may write makes the shim for `git`, `ssh` or
+    /// `gcloud` run `~/.asdf/installs/<tool>/<version>/bin/<tool>` or a hook under `~/.pyenv`
+    /// that the stage wrote. The shims are in the places the two managers keep them: under
+    /// `~/.asdf` and `~/.pyenv`, and under the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names.
+    /// The control is the same shim with a `HOME` outside every directory a stage may write.
+    #[cfg(unix)]
+    #[test]
+    fn home_is_removed_for_an_asdf_or_pyenv_shim_when_a_stage_may_write_it() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t1h");
+        let moved = safe.join("moved-root");
+        let shims = [
+            (
+                executable(&safe.join(".asdf").join("shims"), "git"),
+                Vec::new(),
+            ),
+            (
+                executable(&safe.join(".pyenv").join("shims"), "python3"),
+                Vec::new(),
+            ),
+            (
+                executable(&moved.join("shims"), "ssh"),
+                vec![("ASDF_DATA_DIR", moved.as_path())],
+            ),
+            (
+                executable(&moved.join("shims"), "gcloud"),
+                vec![("PYENV_ROOT", moved.as_path())],
+            ),
+        ];
+
+        for (shim, extra) in &shims {
+            assert!(
+                home_removed(CodeSelectors::Checked(&[]), shim, &session, extra, &session),
+                "HOME reached {}",
+                shim.display()
+            );
+            assert!(
+                !home_removed(CodeSelectors::Checked(&[]), shim, &safe, extra, &session),
+                "HOME was removed for {} though no stage may write it",
+                shim.display()
+            );
+        }
+    }
+
+    /// SANDBOX-30. The regression it rejects: judging `HOME` alone for a shim, so a `HOME` outside
+    /// every directory a stage may write passes while `~/.pyenv` or `~/.asdf` under it leads into
+    /// one, which is where the hooks and installed tools are read from. A directory that is not
+    /// there is judged by the one above it, which is `HOME`, so a `HOME` with neither is kept.
+    #[cfg(unix)]
+    #[test]
+    fn home_is_removed_for_a_shim_when_what_it_reads_under_home_leads_into_a_stage_directory() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t1u");
+        let shim = executable(&safe.join(".asdf").join("shims"), "git");
+        let home = scratch_dir("programs-selectors-t1u-home");
+        let checked_home =
+            |home: &Path| home_removed(CodeSelectors::Checked(&[]), &shim, home, &[], &session);
+
+        assert!(!checked_home(&home), "a HOME holding neither was removed");
+        std::fs::create_dir_all(home.join(".asdf")).unwrap();
+        assert!(
+            !checked_home(&home),
+            "a .asdf outside every stage directory"
+        );
+        std::fs::remove_dir_all(home.join(".asdf")).unwrap();
+        for name in [".pyenv", ".asdf"] {
+            std::os::unix::fs::symlink(&session, home.join(name)).unwrap();
+            assert!(checked_home(&home), "{name} led into a stage directory");
+            std::fs::remove_file(home.join(name)).unwrap();
+        }
+    }
+
+    /// SANDBOX-30. The regression it rejects: judging `HOME` for every checked start, which takes
+    /// it from gcloud, `ssh` and `git`, which need it, or for a program in a directory named
+    /// `shims` that is not a version manager's. The same `HOME` a stage may write is kept for a
+    /// program that is not a shim, and a shim started by a start that is kept is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn home_is_kept_for_a_program_that_is_not_an_asdf_or_pyenv_shim() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("t1n2");
+        let programs = [
+            executable(&safe.join("bin"), "git"),
+            executable(&safe.join("other").join("shims"), "git"),
+            executable(&safe.join(".asdf").join("installs"), "git"),
+            executable(&safe.join(".asdf").join("shims").join("deeper"), "git"),
+        ];
+
+        for program in &programs {
+            assert!(
+                !home_removed(
+                    CodeSelectors::Checked(&[]),
+                    program,
+                    &session,
+                    &[],
+                    &session
+                ),
+                "HOME was removed for {}",
+                program.display()
+            );
+        }
+        let shim = executable(&safe.join(".asdf").join("shims"), "git");
+        assert!(!home_removed(
+            CodeSelectors::Kept,
+            &shim,
+            &session,
+            &[],
+            &session
+        ));
+    }
+
+    /// SANDBOX-30, PATH-003. A shim is in the directory `ASDF_DATA_DIR` or `PYENV_ROOT` names only
+    /// where the value and the directory are the same bytes. The regression it rejects: comparing
+    /// them through `to_string_lossy`, which reads `moved-\xff` as `moved-\u{FFFD}`, so a variable
+    /// naming one directory makes a program in the other a shim and `HOME` is judged for the wrong
+    /// program, or is not judged for a shim.
+    #[cfg(unix)]
+    #[test]
+    fn a_shim_root_that_is_not_text_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = Path::new(OsStr::from_bytes(b"moved-\xff"));
+        let lookalike = Path::new("moved-\u{FFFD}");
+        let shim_in = |root: &Path| root.join("shims").join("git");
+        let held = |variable: &str, value: &Path| {
+            vec![(OsString::from(variable), value.as_os_str().to_os_string())]
+        };
+
+        for variable in SHIM_ROOT_VARIABLES {
+            assert!(
+                is_version_manager_shim(&shim_in(not_text), &held(variable, not_text)),
+                "{variable} naming the exact bytes"
+            );
+            assert!(
+                is_version_manager_shim(&shim_in(lookalike), &held(variable, lookalike)),
+                "{variable} naming the lookalike"
+            );
+            assert!(
+                !is_version_manager_shim(&shim_in(not_text), &held(variable, lookalike)),
+                "{variable} naming the lookalike made a shim of the bytes' directory"
+            );
+            assert!(
+                !is_version_manager_shim(&shim_in(lookalike), &held(variable, not_text)),
+                "{variable} naming the bytes made a shim of the lookalike's directory"
+            );
+        }
     }
 
     /// The regression it rejects: the prefix `BASH_FUNC_` or the pattern `ASDF_<TOOL>_VERSION`

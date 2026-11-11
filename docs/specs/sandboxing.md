@@ -3943,6 +3943,19 @@ file. A new spawn that looks a name up through
   The pattern `ASDF_<tool>_VERSION` is matched by its shape because the tool is part of the name,
   and `ASDF_DATA_DIR` is judged by its value, so a prefix of `ASDF_` is not used.
 
+  `HOME` is not in the generic table, because gcloud, `ssh` and `git` need it, so a checked start
+  judges it only for a program that is an asdf or pyenv shim: a file directly in a `shims`
+  directory that is directly in a directory named `.asdf` or `.pyenv`, or in the directory
+  `ASDF_DATA_DIR` or `PYENV_ROOT` names in the environment being checked (a directory name is
+  compared without regard to case). The shim is recognised by the path the lookup returned, and
+  nothing is read from the file. For such a program `HOME` is removed unless it is an existing
+  absolute directory outside every directory a stage may write and neither `.asdf` nor `.pyenv`
+  under it leads into one; one that does not exist is judged by the nearest existing directory above
+  it below `HOME`, as the browser opener judges its own paths. A kept start is not judged. The cost
+  is that a shim whose `HOME` is a directory a stage may write runs with no `HOME`, so the program
+  it stands for finds no configuration there. A shim found outside those directories, or one
+  that a person has copied elsewhere, is not recognised and is started with the `HOME` it was given.
+
   A value is kept when `may_be_run` accepts it for what the variable names, as the last bullet of
   this list states. A list of commands, which `BROWSER` is (`Names::Commands`), is accepted when it
   is not empty and every entry, split as `PATH` is, is one program (accepted as a program is) alone
@@ -3950,7 +3963,8 @@ file. A new spawn that looks a name up through
   with arguments, a second command or a shell line is removed whole. A variable in no list is left
   as it is, so `GIT_CONFIG` and `LD_DEBUG` reach the program, and so does `HOME` for every program
   but the AWS CLI and the browser opener, whose lists hold it (the browser opener judges it as
-  described below). Every checked start is given the generic table, which
+  described below), and an asdf or pyenv shim (the paragraph above). Every checked start is given
+  the generic table, which
   `programs::withhold_code_selectors_with` applies together with the
   program's own list: gcloud's is in `crates/agent/src/gcloud.rs`
   ([BACKEND-65](backends.md#BACKEND-65)), the AWS CLI's in `crates/bedrock/src/credentials.rs`,
@@ -4453,8 +4467,8 @@ shown by running the program, or not entirely:
     name matters when `pyenv` itself is started), `PYENV_VERSION=../../../evil` (resolved to
     `$PYENV_ROOT/versions/../../../evil/bin/python3`, which ran; an absolute path did not).
     `HOME` selects `$HOME/.pyenv` when `PYENV_ROOT` is unset, and a hook under it ran with
-    `pyenv exec`. A shim for a program other than `aws` is started with `HOME` unchanged, which is
-    tracked by #3915. Nothing ran under `PYENV_DIR`, `_PYENV_SHIM_PATH`, `PYENV_NATIVE_EXT` or
+    `pyenv exec`. A checked start of a pyenv shim removes `HOME` when a stage may write what it
+    reaches (the paragraph after the generic table). Nothing ran under `PYENV_DIR`, `_PYENV_SHIM_PATH`, `PYENV_NATIVE_EXT` or
     `PYTHONPATH` (the planted Python never
     started). `PYENV_DEBUG` was run only together with a `PS4` that holds a command substitution,
     which ran it, as the `PS4` row above does. A plug-in under
@@ -4466,9 +4480,9 @@ shown by running the program, or not entirely:
     nothing; the name holds the tool, so it is matched by shape in `CODE_SELECTOR_PATTERNS`) and
     `HOME` (with a `.tool-versions`, `~/.asdf/installs/<tool>/<version>/bin/<tool>` ran). Nothing
     ran under `ASDF_DIR`, `ASDF_CONCURRENCY` or `ASDF_TOOL_VERSIONS_FILENAME`. `HOME` is in
-    the AWS CLI's list and the opener's and in no other, because gcloud, `ssh` and `git` need it, so
-    an asdf or pyenv shim that stands for another program is run with the `HOME` it was given.
-    That is tracked by #3915.
+    the AWS CLI's list and the opener's and in no other list, because gcloud, `ssh` and `git` need it,
+    so a checked start judges it for an asdf or pyenv shim alone, as the paragraph after the generic
+    table states.
   - **`aws` script**: the names, and the versions, are in the AWS table above. Run: Homebrew
     `awscli` 2.39.7 and pip `awscli` 1.46.3 (scripts), and the frozen 2.37.12 executable. Version
     2.39.7 was also read from source.
@@ -4817,6 +4831,9 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_sandbox::programs::an_exported_function_and_an_asdf_tool_version_are_removed_by_the_shape_of_the_name`
 `verified-by: bravebot_sandbox::programs::an_exported_function_or_tool_version_whose_name_is_not_text_is_removed`
 `verified-by: bravebot_sandbox::programs::a_bash_script_runs_the_code_in_shellopts_ps4_and_an_exported_function`
+`verified-by: bravebot_sandbox::programs::home_is_removed_for_an_asdf_or_pyenv_shim_when_a_stage_may_write_it`
+`verified-by: bravebot_sandbox::programs::home_is_removed_for_a_shim_when_what_it_reads_under_home_leads_into_a_stage_directory`
+`verified-by: bravebot_sandbox::programs::home_is_kept_for_a_program_that_is_not_an_asdf_or_pyenv_shim`
 `verified-by: bravebot_bedrock::credentials::a_pager_the_cli_runs_for_its_help_is_kept_only_when_it_is_an_installed_program`
 `verified-by: bravebot_bedrock::credentials::a_home_a_stage_may_write_is_not_the_one_the_cli_reads_its_configuration_from`
 `verified-by: bravebot_bedrock::credentials::a_python_warning_filter_or_botocore_plugin_is_removed_whatever_it_holds`
