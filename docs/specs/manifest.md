@@ -650,9 +650,10 @@ row holds no address, alias or path. The answer is read by the reader that reads
 number ([processors.md](processors.md)), outside the driver. A row it cannot read, or that gives an
 argument in a way the plan does not allow, names what is not there, repeats a call or passes a cap
 (`max_rows`, 50 by default and at most 100; `max_new`, 12 by default and at most 50), is dropped and
-counted by reason. New text is one line of at most 64 characters with every control and every
-character that draws as nothing made a space. A call depends on at most one earlier call, the one
-whose new text it uses.
+counted by reason. So is a row giving a value that is not the type the server's list declares for
+its argument, and every value is sent as that type. New text is one line of at most 64 characters
+with every control and every character that draws as nothing made a space. A call depends on at most
+one earlier call, the one whose new text it uses.
 
 The resolved calls are put to the person as one question, each value drawn with where it came from
 and as untrusted content is drawn, and no rule, standing answer or mode answers it, bypassing
@@ -687,6 +688,7 @@ stdio server, so no egress gate stands between the step and it.
 `verified-by: bravebot_choice::rows::an_argument_of_several_kinds_takes_the_one_the_row_gave`
 `verified-by: bravebot_choice::rows::a_wrapped_list_is_found_at_its_pointer_and_numbers_count`
 `verified-by: bravebot_choice::rows::new_text_is_cleaned_and_the_caps_hold`
+`verified-by: bravebot_choice::rows::a_value_is_sent_as_its_declared_type_and_a_row_that_is_not_is_dropped`
 `verified-by: bravebot_choice::rows::rows_point_into_several_lists_and_take_arrays_of_entries`
 
 ## Known costs

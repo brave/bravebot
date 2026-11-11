@@ -2455,34 +2455,18 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     }
 }
 
-/// `value` as the JSON type `kind` names, where the list gave one: a whole number, a number or a
-/// switch read from its text, an array of `items` from the JSON array a list of entries resolved
-/// to, and text otherwise. `None` where the text is not that type.
-fn as_declared(value: &str, kind: Option<&str>, items: Option<&str>) -> Option<Value> {
-    match kind {
-        // A value taken from several entries is the JSON array of their values as text, each sent
-        // as the type the list gives the array's items.
-        Some("array") => match serde_json::from_str::<Value>(value).ok()? {
-            Value::Array(values) => values
-                .iter()
-                .map(|item| as_declared(item.as_str()?, items, None))
-                .collect::<Option<Vec<_>>>()
-                .map(Value::Array),
-            _ => None,
-        },
-        Some("integer") => value.trim().parse::<i64>().ok().map(Value::from),
-        Some("number") => value
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(Value::Number),
-        Some("boolean") => match value.trim() {
-            "true" => Some(Value::Bool(true)),
-            "false" => Some(Value::Bool(false)),
-            _ => None,
-        },
-        _ => Some(Value::String(value.to_string())),
+/// A typed value as JSON. The resolver typed it as the tool's list declares, so this only carries
+/// it, and a number the resolver keeps finite always has a JSON form.
+fn wire(sent: bravebot_core::apply::Sent) -> Value {
+    use bravebot_core::apply::Sent;
+    match sent {
+        Sent::Text(text) => Value::String(text),
+        Sent::Integer(number) => Value::from(number),
+        Sent::Number(number) => {
+            serde_json::Number::from_f64(number).map_or(Value::Null, Value::Number)
+        }
+        Sent::Switch(on) => Value::Bool(on),
+        Sent::Array(values) => Value::Array(values.into_iter().map(wire).collect()),
     }
 }
 
@@ -2515,36 +2499,13 @@ pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
     if let Err(denial) = policy.before_mcp_call_rules(alias, &tool) {
         return Called::Problem(format!("refused: {denial}"));
     }
-    // Each value is sent as the type the vouched list gives its argument, so a number or a switch
-    // is not sent as text. A value that is not that type is not sent at all.
-    let kinds: BTreeMap<String, (Option<String>, Option<String>)> = offer
-        .callable()
-        .into_iter()
-        .find(|callable| callable.alias == alias && callable.tool == tool)
-        .map(|callable| {
-            callable
-                .arguments
-                .into_iter()
-                .map(|argument| (argument.name, (argument.kind, argument.items)))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut typed = Map::new();
-    for (key, value) in arguments {
-        let (kind, items) = kinds.get(&key).cloned().unwrap_or_default();
-        match as_declared(&value, kind.as_deref(), items.as_deref()) {
-            Some(value) => {
-                typed.insert(key, value);
-            }
-            None => {
-                return Called::Problem(format!(
-                    "refused: the value given for '{key}' of {name} is not the {} the tool takes",
-                    kind.unwrap_or_default()
-                ));
-            }
-        }
-    }
-    let arguments = Value::Object(typed);
+    // Each value was typed by the resolver as the vouched list gives its argument.
+    let arguments = Value::Object(
+        arguments
+            .into_iter()
+            .map(|(key, sent)| (key, wire(sent)))
+            .collect(),
+    );
     let session = &offer.session;
     let answered = following_a_move(
         policy,

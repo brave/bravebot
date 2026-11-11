@@ -21,7 +21,7 @@
 
 use bravebot_core::apply::{
     Call, Dropped, Entries, Kind, LARGEST_ENTRIES, LARGEST_LIST, LONGEST_NEW, Numbered, Resolved,
-    Shape, Source,
+    Sent, Shape, Source,
 };
 use bravebot_core::invisible::draws_as_nothing;
 use serde_json::Value;
@@ -298,12 +298,53 @@ fn row(
         }
         arguments.push((name.clone(), value, source));
     }
+    // Each value is sent as the type the tool's list declares for its argument, and a row whose
+    // value is not that type is dropped here, before the person is shown the list.
+    let sent = arguments
+        .iter()
+        .map(|(name, value, _)| {
+            let declared = tool.types.get(name).cloned().unwrap_or_default();
+            typed(value, declared.kind.as_deref(), declared.items.as_deref())
+                .map(|value| (name.clone(), value))
+                .ok_or(Dropped::Type)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Call {
         tool: index,
         name: tool.name.clone(),
         arguments,
+        sent,
         after,
     })
+}
+
+/// `value` as the JSON type `kind` names, where the list gave one: a whole number, a finite number
+/// or a switch read from its text, an array of `items` from the JSON array of text a list of
+/// entries resolved to, and text otherwise. `None` where the text is not that type.
+fn typed(value: &str, kind: Option<&str>, items: Option<&str>) -> Option<Sent> {
+    match kind {
+        Some("array") => match serde_json::from_str::<Value>(value).ok()? {
+            Value::Array(values) => values
+                .iter()
+                .map(|item| typed(item.as_str()?, items, None))
+                .collect::<Option<Vec<_>>>()
+                .map(Sent::Array),
+            _ => None,
+        },
+        Some("integer") => value.trim().parse::<i64>().ok().map(Sent::Integer),
+        Some("number") => value
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite())
+            .map(Sent::Number),
+        Some("boolean") => match value.trim() {
+            "true" => Some(Sent::Switch(true)),
+            "false" => Some(Sent::Switch(false)),
+            _ => None,
+        },
+        _ => Some(Sent::Text(value.to_string())),
+    }
 }
 
 /// The value of `field` of entry `number`, from 1, of the list at `list`.
@@ -449,6 +490,7 @@ mod tests {
             lists: vec!["marks".into()],
             tools: vec![
                 Tool {
+                    types: Default::default(),
                     name: "create_bookmark_folder".into(),
                     arguments: vec![
                         ("title".into(), Kind::New),
@@ -456,6 +498,7 @@ mod tests {
                     ],
                 },
                 Tool {
+                    types: Default::default(),
                     name: "move_bookmark".into(),
                     arguments: vec![
                         (
@@ -580,6 +623,51 @@ row 9: tool 1 title=new:7
         );
     }
 
+    /// MANIFEST-16. A value is sent as the type the tool's list gives its argument, and a row whose
+    /// value is not that type is dropped and counted before the person is shown the list. The
+    /// regressions it rejects are a number sent as text, and a value the server would refuse
+    /// reaching the person's list, where approving it could only fail the call.
+    #[test]
+    fn a_value_is_sent_as_its_declared_type_and_a_row_that_is_not_is_dropped() {
+        let shape = Shape {
+            lists: vec!["issues".into()],
+            tools: vec![Tool {
+                name: "close".into(),
+                arguments: vec![(
+                    "issue".into(),
+                    Kind::Entry {
+                        list: 0,
+                        field: "number".into(),
+                    },
+                )],
+                types: BTreeMap::from([(
+                    "issue".to_string(),
+                    bravebot_core::apply::Declared {
+                        kind: Some("integer".into()),
+                        items: None,
+                    },
+                )]),
+            }],
+            max_rows: 50,
+            max_new: 12,
+        };
+        let issues = Entries(vec![
+            BTreeMap::from([("number".to_string(), "150".to_string())]),
+            BTreeMap::from([("number".to_string(), "not a number".to_string())]),
+        ]);
+        let resolved = resolve(
+            "row 1: tool 1 issue=entry:1\nrow 2: tool 1 issue=entry:2\n",
+            &[issues],
+            &shape,
+        );
+        assert_eq!(resolved.calls.len(), 1, "{:?}", resolved.calls);
+        assert_eq!(
+            resolved.calls[0].sent,
+            vec![("issue".to_string(), Sent::Integer(150))]
+        );
+        assert_eq!(resolved.dropped.get(&Dropped::Type), Some(&1));
+    }
+
     /// An argument that may take one of several kinds takes whichever the row gave: a move may
     /// land in a folder an earlier row made or in one the list holds, and a list entry that lacks
     /// the field the row names it for is dropped.
@@ -654,6 +742,7 @@ row 9: tool 1 title=new:7
         let shape = Shape {
             lists: vec!["issues".into()],
             tools: vec![Tool {
+                types: Default::default(),
                 name: "close".into(),
                 arguments: vec![(
                     "issue".into(),
@@ -723,6 +812,7 @@ row 9: tool 1 title=new:7
             lists: vec!["issues".into(), "labels".into()],
             tools: vec![
                 Tool {
+                    types: Default::default(),
                     name: "label".into(),
                     arguments: vec![
                         (
@@ -745,6 +835,7 @@ row 9: tool 1 title=new:7
                     ],
                 },
                 Tool {
+                    types: Default::default(),
                     name: "close".into(),
                     arguments: vec![(
                         "issues".into(),
