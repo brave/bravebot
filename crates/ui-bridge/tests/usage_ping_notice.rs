@@ -194,9 +194,11 @@ fn the_window_sends_one_ping_a_day_once_its_notice_is_shown() {
     assert!(seen[0].starts_with("/1/usage/bravebot?"), "{seen:?}");
     assert!(seen[0].contains("&surface=desktop&"), "{seen:?}");
     assert!(seen[0].contains("&backend=brave&"), "{seen:?}");
+    // A service of its own, empty, so the wait runs its whole bound rather than ending on the
+    // ping the window before left in `seen`.
     assert_eq!(
-        a_window_pinging(&home, &service, &[]),
-        seen,
+        a_window_pinging(&home, &PingService::start(), &[]),
+        Vec::<String>::new(),
         "a second window the same day pinged again"
     );
 }
