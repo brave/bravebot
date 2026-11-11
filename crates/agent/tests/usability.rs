@@ -1000,7 +1000,8 @@ fn a_setup_npm_does_not_read_an_npmrc_in_its_directory() {
     );
 }
 
-/// A setup stage that writes `marker` when it runs.
+/// The marker shows whether a setup stage started after the suite could not remove a
+/// configuration file, which must stop the start before any program runs.
 fn marking_stage(marker: &Path) -> Stage {
     Stage::new(
         "sh",
