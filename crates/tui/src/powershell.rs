@@ -10,7 +10,8 @@
 //!
 //! [`CODE_SELECTORS`] was written from documentation. It has not been shown by running `powershell`
 //! on Windows that any variable in it changes what runs (#3808). The Linux lists were written from
-//! source and were not shown by running the programs on Linux (#3810).
+//! source and then run on Linux (glibc 2.42, systemd 257, xdg-utils 1.2.1): the bus-address names
+//! have a test that starts the real program, and SANDBOX-30 records what each program did.
 
 use bravebot_sandbox::programs::{CodeSelectors, Inherits, Names, Resolved, SearchPath, selectors};
 use std::ffi::OsString;
@@ -73,8 +74,10 @@ const OSASCRIPT_CODE_SELECTORS: [(&str, Names); 1] = [("CFFIXED_USER_HOME", Name
 ///
 /// `DBUS_STARTER_ADDRESS` and `DBUS_STARTER_BUS_TYPE` are read only by `sd_bus_default` and
 /// `sd_bus_open`, which `inhibit.c` does not call. `SYSTEMD_PAGER` and `PAGER` are read by
-/// `pager_open`, which `inhibit.c` calls only for `--list`, which no start passes. No Linux run was
-/// made (SANDBOX-30, "What a checked start does not cover").
+/// `pager_open`, which `inhibit.c` calls only for `--list`, which no start passes. Run on Linux
+/// (systemd 257): `DBUS_SYSTEM_BUS_ADDRESS=unixexec:path=<helper>` made `systemd-inhibit` run the
+/// helper, and the other names it reads through `getenv` select no program or file
+/// (SANDBOX-30, "What a checked start does not cover").
 const SYSTEMD_INHIBIT_CODE_SELECTORS: [(&str, Names); 1] =
     [("DBUS_SYSTEM_BUS_ADDRESS", Names::Options)];
 
@@ -92,20 +95,30 @@ const SYSTEMD_INHIBIT_CODE_SELECTORS: [(&str, Names); 1] =
 /// - `QT_PLUGIN_PATH` is the list of directories a Qt program loads plug-ins from
 ///   (Qt 5.15.12 `qcoreapplication.cpp` lines 2728 and 2939), as `kmimetypefinder` is.
 /// - `PERL5LIB` and `PERLLIB` are directories Perl adds to `@INC` and loads modules from when it is
-///   not in taint mode (perl v5.38.0 `perl.c` lines 4823 to 4830), as the Perl `mimetype` script
-///   is. `PERL5OPT` is in the generic table.
+///   not in taint mode, as the Perl `mimetype` script is (run on Linux: a planted module in either
+///   was loaded by `mimetype`, which is not in taint mode). `PERL5OPT` is in the generic table.
+/// - `DBUS_SESSION_BUS_ADDRESS` is read by `dbus-send`, which `xdg-mime` runs from its desktop
+///   detection when `XDG_CURRENT_DESKTOP`, `KDE_FULL_SESSION`, `GNOME_DESKTOP_SESSION_ID` and
+///   `MATE_DESKTOP_SESSION_ID` are all unset (xdg-utils 1.2.1 `xdg-mime`, the `dbus-send` call in
+///   `detectDE`). libdbus accepts a `unixexec:` address and runs the program its `path=` names.
+///   Run on Linux: an address `unixexec:path=<helper>` made `xdg-mime query filetype` run the
+///   helper. The address is a [`Names::BusAddress`], so the person's own `unix:path=` bus outside
+///   every directory a stage may write is kept. `gio info` ran no helper for the same address, since
+///   GDBus has no `unixexec:` transport.
 ///
-/// The tools `xdg-mime` starts are not all read. The source of `qtxdg-mat` and whether `mimetype`
-/// runs in taint mode were not read, so the list can be short. Passing `--type` would stop
+/// The tools `xdg-mime` starts are not all run. `kmimetypefinder` and `qtxdg-mat` are not installed
+/// on the host the run was made on, so the list can be short. Passing `--type` would stop
 /// `xdg-mime` being run and is not done because it declares a type the content may not have.
-/// `WL_SEAT` is not read by `wl-copy`. No Linux run was made (SANDBOX-30, "What a checked start
+/// `WL_SEAT` is not read by `wl-copy`. `wl-copy` itself was not installed on that host, so the
+/// chain from `wl-copy` to `xdg-mime` is read from its source (SANDBOX-30, "What a checked start
 /// does not cover").
-const WL_COPY_CODE_SELECTORS: [(&str, Names); 5] = [
+const WL_COPY_CODE_SELECTORS: [(&str, Names); 6] = [
     selectors::GIO_EXTRA_MODULES,
     selectors::GIO_MODULE_DIR,
     selectors::QT_PLUGIN_PATH,
     ("PERL5LIB", Names::Directories),
     ("PERLLIB", Names::Directories),
+    ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),
 ];
 
 /// Whether `program`, as a lookup resolved it, is PowerShell: a file named `powershell`, with or
@@ -198,8 +211,9 @@ fn start_against(
             // alone (SANDBOX-30, empty-list starts). `xclip` 0.13 and `xsel` 1.2.1 read no
             // variable of their own, and libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 read only
             // names that select a socket, a credential file or data (`DISPLAY`, `XAUTHORITY`,
-            // `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). `pbcopy` and `clip` read none. No
-            // Linux run was made. The sources are in the SANDBOX-30 bullet.
+            // `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). `pbcopy` and `clip` read none. Run
+            // on Linux for `xclip` 0.13 under Xvfb; `xsel` was not installed. The sources and the
+            // run are in the SANDBOX-30 bullet.
             CodeSelectors::Checked(&[]),
             held,
             outside_stage_writable,
@@ -280,8 +294,8 @@ mod tests {
 
     /// SANDBOX-30. `systemd-inhibit` connects to the system bus with sd-bus, which runs the
     /// program a `unixexec:` address names. The address is not a path, so it is removed whatever it
-    /// holds, and sd-bus uses its default system bus. The list is from systemd v255 source and no
-    /// Linux run was made. The regression it rejects: `systemd-inhibit` started with the generic
+    /// holds, and sd-bus uses its default system bus. The list is from systemd v255 source and was
+    /// run on Linux by the test below. The regression it rejects: `systemd-inhibit` started with the generic
     /// table alone, so a `unixexec:` address naming a program a stage wrote reaches it; the name
     /// classed as a directory list, so a value that is an absolute safe directory is kept; or the
     /// list given to every program started through [`start`].
@@ -338,12 +352,16 @@ mod tests {
 
     /// SANDBOX-30. `wl-copy` is started with no `--type`, so it runs `xdg-mime`, which runs `gio
     /// info`, `kmimetypefinder` or the Perl `mimetype` by name. The list is from the source of
-    /// wl-clipboard v2.2.1, xdg-utils v1.2.1, GLib 2.80.0, Qt 5.15.12 and perl v5.38.0, and no
-    /// Linux run was made. The regression it rejects: `wl-copy` started with the generic table
+    /// wl-clipboard v2.2.1, xdg-utils v1.2.1, GLib 2.80.0, Qt 5.15.12 and perl v5.38.0, and the
+    /// session bus name was run on Linux by the test below. The regression it rejects: `wl-copy`
+    /// started with the generic table
     /// alone, so a module, plug-in or Perl library directory a stage wrote reaches the tools
     /// `xdg-mime` starts; a list name judged by its first entry or as one path, so a list with a
     /// stage-writable entry among safe ones is kept; `GIO_MODULE_DIR` read as a list, so two
-    /// directories joined are kept; or a name classed as options, so a safe directory is removed.
+    /// directories joined are kept; a name classed as options, so a safe directory is removed; or
+    /// `DBUS_SESSION_BUS_ADDRESS` left out, so a `unixexec:` address naming a program a stage wrote
+    /// reaches the `dbus-send` that `xdg-mime` starts, or classed as options, so the person's own
+    /// session bus is removed from the copy.
     #[test]
     fn the_directories_xdg_mime_would_load_code_from_are_removed_from_wl_copy_when_a_stage_may_write_them()
      {
@@ -379,6 +397,31 @@ mod tests {
         assert!(withheld("GIO_MODULE_DIR", OsStr::new("modules")));
         assert!(!withheld("GIO_MODULE_DIR", genuine.as_os_str()));
 
+        // The session bus: an address that names a program, or a socket a stage may write, is
+        // removed whole, and the person's own socket is kept.
+        let address = |path: &Path| OsString::from(format!("unix:path={}", path.display()));
+        let genuine_bus = address(&fixture.genuine_file());
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &OsString::from(format!(
+                "unixexec:path={}",
+                genuine.join("helper").display()
+            ))
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &address(&fixture.planted_file())
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &OsString::from(format!(
+                "{};unixexec:path=bravebot-bus-helper",
+                genuine_bus.to_string_lossy()
+            ))
+        ));
+        assert!(withheld("DBUS_SESSION_BUS_ADDRESS", OsStr::new("")));
+        assert!(!withheld("DBUS_SESSION_BUS_ADDRESS", &genuine_bus));
+
         // Only `wl-copy` is given these names, and `wl-copy` is not given another program's.
         for program in [
             "/usr/bin/xclip",
@@ -388,6 +431,15 @@ mod tests {
         ] {
             assert!(
                 !removed_by(program, "PERL5LIB", planted.as_os_str(), &fixture),
+                "{program}"
+            );
+            assert!(
+                !removed_by(
+                    program,
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    OsStr::new(&format!("unixexec:path={}", planted.display())),
+                    &fixture
+                ),
                 "{program}"
             );
         }
@@ -755,5 +807,170 @@ mod tests {
                 "{file} starts a program without powershell::start"
             );
         }
+    }
+
+    /// Start `program_name` with `arguments` holding a `unixexec:` address that names a helper in
+    /// `name`, and say whether the helper ran, or `None` where a program it needs is not installed.
+    ///
+    /// With `checked` false the start keeps the environment as a person's would hold it. With
+    /// `checked` true the start is the one `/caffeinate` and the clipboard make, and the variable
+    /// reaches the program only if that start did not remove it. A `stand_in` is a script written
+    /// as `program_name` in the session directory, for a program that is not installed.
+    #[cfg(target_os = "linux")]
+    fn a_unixexec_address_runs_the_helper(
+        label: &str,
+        program_name: &str,
+        stand_in: Option<&str>,
+        arguments: &[&str],
+        name: &str,
+        checked: bool,
+    ) -> Option<bool> {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = |path: &Path, body: &str| {
+            std::fs::write(path, body).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let session = scratch_dir(&format!("powershell-real-{label}"));
+        let _ = std::fs::remove_dir_all(&session);
+        std::fs::create_dir_all(session.join("bin")).unwrap();
+        let session = session.canonicalize().unwrap();
+        let program = match stand_in {
+            Some(body) => {
+                let program = session.join("bin").join(program_name);
+                executable(&program, body);
+                program
+            }
+            None => bravebot_sandbox::programs::find(OsStr::new(program_name))?,
+        };
+        let marker = session.join("marker");
+        let helper = session.join("helper");
+        executable(
+            &helper,
+            &format!("#!/bin/sh\n: >> '{}'\nexit 1\n", marker.display()),
+        );
+        std::fs::write(session.join("content.txt"), "text\n").unwrap();
+        let address = OsString::from(format!("unixexec:path={}", helper.display()));
+
+        let mut command = if checked {
+            let writable = vec![session.clone()];
+            let mut command = start_against(
+                &Resolved::found_earlier(&program),
+                [(OsString::from(name), address.clone())],
+                &|file: &Path| {
+                    bravebot_sandbox::programs::outside_stage_writable_with(file, &writable, &[])
+                },
+            );
+            // The start settles what a program inherits from this process, which holds no such
+            // variable, so the variable reaches the program unless the start removed it.
+            let removed = command
+                .get_envs()
+                .any(|(set, now)| set == OsStr::new(name) && now.is_none());
+            if !removed {
+                command.env(name, &address);
+            }
+            command
+        } else {
+            let mut command = bravebot_sandbox::programs::start(
+                &Resolved::found_earlier(&program),
+                Inherits::All,
+                SearchPath::Inherited,
+                CodeSelectors::Kept,
+            );
+            command.env(name, &address);
+            command
+        };
+        // `xdg-mime` asks `dbus-send` about the session only when no desktop is named.
+        for desktop in [
+            "XDG_CURRENT_DESKTOP",
+            "KDE_FULL_SESSION",
+            "GNOME_DESKTOP_SESSION_ID",
+            "MATE_DESKTOP_SESSION_ID",
+        ] {
+            command.env_remove(desktop);
+        }
+        let _ = command
+            .args(arguments)
+            .current_dir(&session)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let ran = marker.exists();
+        let _ = std::fs::remove_dir_all(&session);
+        Some(ran)
+    }
+
+    /// SANDBOX-30, run on Linux (systemd 257): `systemd-inhibit` runs the program a `unixexec:`
+    /// address in `DBUS_SYSTEM_BUS_ADDRESS` names. The control starts the real program with the
+    /// address and must run the helper, so the check cannot pass because the program never reads
+    /// the address. Prints `skipped` and passes where `systemd-inhibit` is not installed. The
+    /// regression it rejects: the name left out of `SYSTEMD_INHIBIT_CODE_SELECTORS`, so the
+    /// inhibitor `/caffeinate` starts runs a helper a stage wrote.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_unixexec_system_bus_address_runs_a_helper_through_systemd_inhibit_unless_the_start_removes_it()
+     {
+        let arguments = ["--what=idle", "--who=bravebot-test", "--why=test", "true"];
+        let run = |checked| {
+            a_unixexec_address_runs_the_helper(
+                "systemd-inhibit",
+                "systemd-inhibit",
+                None,
+                &arguments,
+                "DBUS_SYSTEM_BUS_ADDRESS",
+                checked,
+            )
+        };
+        let Some(control) = run(false) else {
+            eprintln!("skipped: systemd-inhibit is not installed");
+            return;
+        };
+        assert!(
+            control,
+            "systemd-inhibit did not run the helper a unixexec address names"
+        );
+        assert_eq!(
+            run(true),
+            Some(false),
+            "the checked start left the address for systemd-inhibit"
+        );
+    }
+
+    /// SANDBOX-30, run on Linux (xdg-utils 1.2.1): `wl-copy` starts `xdg-mime query filetype`, and
+    /// with no desktop named `xdg-mime` asks `dbus-send` about the session bus, which runs the
+    /// program a `unixexec:` address in `DBUS_SESSION_BUS_ADDRESS` names. A stand-in `wl-copy` that
+    /// runs that query stands for the program, which is not installed on the host. The control
+    /// starts it without the checked start and must run the helper. Prints `skipped` and passes
+    /// where `xdg-mime` or `dbus-send` is not installed. The regression it rejects: the name left
+    /// out of `WL_COPY_CODE_SELECTORS`, so a helper a stage wrote runs on every copy.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_unixexec_session_bus_address_runs_a_helper_through_the_xdg_mime_wl_copy_starts_unless_the_start_removes_it()
+     {
+        let installed = |name: &str| bravebot_sandbox::programs::find(OsStr::new(name)).is_some();
+        if !(installed("xdg-mime") && installed("dbus-send")) {
+            eprintln!("skipped: xdg-mime or dbus-send is not installed");
+            return;
+        }
+        let stand_in = "#!/bin/sh\nexec xdg-mime query filetype content.txt\n";
+        let run = |checked| {
+            a_unixexec_address_runs_the_helper(
+                "wl-copy",
+                "wl-copy",
+                Some(stand_in),
+                &[],
+                "DBUS_SESSION_BUS_ADDRESS",
+                checked,
+            )
+        };
+        assert_eq!(
+            run(false),
+            Some(true),
+            "xdg-mime did not run the helper a unixexec address names"
+        );
+        assert_eq!(
+            run(true),
+            Some(false),
+            "the checked start left the address for the programs wl-copy starts"
+        );
     }
 }

@@ -4582,9 +4582,9 @@ file. A new spawn that looks a name up through
   | File | Start | Names read | Basis |
   |---|---|---|---|
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
-  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis. None of the four passes `edit`, `-H` or `-M`. No Linux run was made | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis and the Linux run of `systemctl`. None of the four passes `edit`, `-H` or `-M` | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
-  | `crates/tui/src/powershell.rs` | `xclip` and `xsel`, the clipboard tools that are not `powershell`, `osascript`, `systemd-inhibit` or `wl-copy`, with `pbcopy`, `clip` and `/usr/bin/caffeinate`, which are started through the same function | `xclip` 0.13 and `xsel` 1.2.1 read no variable of their own that selects code, and the libraries they use read names that select a socket, a credential file or data only (`DISPLAY`, `XAUTHORITY`, `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). On macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. `systemd-inhibit` and `wl-copy` have lists of their own and are not empty-list starts. No Linux run was made | `xclip.c`, `xclib.c` of xclip 0.13, `xsel.c` of xsel 1.2.1, libX11 1.8.7, libxcb 1.16 and libXau 1.0.11, read for `getenv`, `exec*`, `dlopen` and `popen`; the strings of the macOS binaries for the other two |
+  | `crates/tui/src/powershell.rs` | `xclip` and `xsel`, the clipboard tools that are not `powershell`, `osascript`, `systemd-inhibit` or `wl-copy`, with `pbcopy`, `clip` and `/usr/bin/caffeinate`, which are started through the same function | `xclip` 0.13 and `xsel` 1.2.1 read no variable of their own that selects code, and the libraries they use read names that select a socket, a credential file or data only (`DISPLAY`, `XAUTHORITY`, `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). On macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. `systemd-inhibit` and `wl-copy` have lists of their own and are not empty-list starts. `xclip` was run on Linux under Xvfb and `xsel` was not | `xclip.c`, `xclib.c` of xclip 0.13, `xsel.c` of xsel 1.2.1, libX11 1.8.7, libxcb 1.16 and libXau 1.0.11, read for `getenv`, `exec*`, `dlopen` and `popen`; the strings of the macOS binaries for the other two |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
 
   The unconfined `make`, `cargo`, `npm`, `go` and `python3` starts of `doctor --sandbox-check` are
@@ -4651,9 +4651,9 @@ shown by running the program, or not entirely:
   variable does. `gcloud.cmd` and `APPDATA` are not in it, and have not been checked on Windows. It
   is tracked by #3808.
 - The dynamic-loader names (`LD_*`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `MUSL_LOCPATH`) have three
-  tests in `crates/sandbox/tests/linux_loader.rs`, which is compiled only on Linux. None has been
-  run on a Linux host or loader. The file was compiled and linted for `x86_64-unknown-linux-gnu` on
-  macOS. The first,
+  tests in `crates/sandbox/tests/linux_loader.rs`, which is compiled only on Linux. All three pass on
+  Ubuntu 25.10 (x86_64, kernel 6.17, glibc 2.42), and the file was also compiled and linted for
+  `x86_64-unknown-linux-gnu` on macOS. The first,
   `a_loader_variable_naming_a_library_a_stage_may_write_is_removed_and_a_safe_one_still_loads`,
   builds libraries that write a marker file when the loader runs them. For `LD_PRELOAD`,
   `LD_AUDIT`, `LD_LIBRARY_PATH` and `GCONV_PATH` (a converter module named by a `gconv-modules`
@@ -4668,7 +4668,9 @@ shown by running the program, or not entirely:
   `ld_origin_path_and_musl_locpath_reach_a_process_only_when_they_name_a_directory_a_stage_cannot_write`,
   is of the same kind for `LD_ORIGIN_PATH` and `MUSL_LOCPATH`. It does not show what the loader
   does with `LD_ORIGIN_PATH`, which glibc reads only when it cannot read `/proc/self/exe`
-  (see below). That run was not made.
+  (see below). A separate run with a planted `LD_ORIGIN_PATH` loaded nothing from it while `/proc`
+  was readable. The run with no `/proc` could not be made, since `unshare -rm` is refused on that
+  host.
   The names come from ld.so(8) on man7.org, which was read. Its secure-execution section says that
   in that mode "the effects of some environment variables are voided or modified, and furthermore
   those environment variables are stripped from the environment", and lists `GCONV_PATH`,
@@ -4684,8 +4686,20 @@ shown by running the program, or not entirely:
   from ftp.gnu.org, with `raw.githubusercontent.com/bminor/glibc/glibc-2.40` for single files and
   `dl-tunables.list` of glibc 2.41 and 2.42) and musl 1.2.5 (musl.libc.org release tarball). Every
   `getenv` and `secure_getenv` call in the library code of both was listed, and each name below was
-  decided from the code that reads it. No Linux host was available, so no loader or library was
-  run, and every decision rests on that reading.
+  decided from the code that reads it. A run on Ubuntu 25.10 (glibc 2.42, x86_64, kernel 6.17) then
+  checked the names below. Each program was started with `env -i`, `PATH`, a scratch `HOME` and the
+  one variable, naming a planted library or helper that writes a marker file:
+  - `LD_PRELOAD` and `LD_AUDIT` each ran the planted library's constructor in `/usr/bin/true`.
+    `GCONV_PATH` made `iconv` load a module that a `gconv-modules` file in the directory names, and
+    the module's constructor ran.
+  - `LD_LIBRARY_PATH` ran a planted `libneed.so` for a program whose `RUNPATH` names the real one,
+    and ran nothing when it named the program's own library directory.
+  - `LD_ORIGIN_PATH` ran nothing for a program whose `RUNPATH` is `$ORIGIN/lib` while `/proc` was
+    readable. The case with no `/proc` was not run.
+  - `LOCPATH` made `setlocale` open locale files under the directory (13 opens, all succeeded) and
+    start no program. `NLSPATH` made `catopen` open a catalog under the directory and start no
+    program. `GLIBC_TUNABLES=glibc.cpu.name=/tmp/x` opened no file named `/tmp/x`.
+  - musl was not run. The musl names rest on the source reading.
   The table holds `GCONV_PATH`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` and `LD_PRELOAD`,
   which name a library, a module or a directory searched for libraries (glibc `elf/rtld.c`
   `process_envvars` lines 2565 to 2728, `elf/dl-load.c` line 833, `iconv/gconv_cache.c` line 56 with
@@ -4738,14 +4752,13 @@ shown by running the program, or not entirely:
   `ci.yml` has no musl or Alpine job. `linux_loader.rs` uses a glibc converter module and
   `RUNPATH`, so it is written for glibc.
 - `systemd-inhibit` and `systemctl --user` are given the generic table and one or two names of their
-  own. No Linux run was made for either; the decisions rest on systemd v255 source (v257 for a
-  cross-check of the names), and the manual pages systemctl(1) and systemd-inhibit(1) from
-  freedesktop.org (latest) were read as well. Not covered: no `systemd-inhibit` or `systemctl` was
-  started with any of these names, so that sd-bus runs the program a `unixexec:` address names, and
-  that `systemctl` ignores `DBUS_SYSTEM_BUS_ADDRESS` for user scope, are read from source and not
-  observed. A distribution's systemd differs from the v255 tag in patches and build options, and
-  was not read. Whether `systemctl enable` reads `SYSTEMD_UNIT_PATH` on a booted host is the third
-  item of the not-settled bullet below.
+  own. The decisions rest on systemd v255 source (v257 for a cross-check of the names) and the
+  manual pages systemctl(1) and systemd-inhibit(1) from freedesktop.org (latest). Both programs were
+  then run on Ubuntu 25.10 with systemd 257.9, each started with `env -i`, `PATH`, a scratch `HOME`
+  and the variable under test, with a helper script that writes a marker file as the program an
+  address names. Not covered: a distribution's systemd differs from the v255 tag in patches and
+  build options, and only this one was run. Whether `systemctl enable` reads `SYSTEMD_UNIT_PATH` on
+  a booted host is the third item of the not-settled bullet below.
   - `systemd-inhibit` (`crates/tui/src/caffeinate.rs`, `start_program`, through
     `crates/tui/src/powershell.rs`) is given `DBUS_SYSTEM_BUS_ADDRESS` as `Names::Options`.
     `sd_bus_default_system` reads it (`src/login/inhibit.c` line 268, `src/libsystemd/sd-bus/sd-bus.c`
@@ -4755,13 +4768,27 @@ shown by running the program, or not entirely:
     No `Names` kind judges an address, so the variable is removed whatever it holds, including a
     plain `unix:path=` address. sd-bus then uses `unix:path=/run/dbus/system_bus_socket`. A person
     whose system bus is elsewhere gets an inhibitor that exits at once, which `/caffeinate`
-    reports as no hold. A rule that kept a `unix:path=` address outside every stage-writable
-    directory and refused every other transport would keep that case working. It needs a new
-    `Names` kind and a test, for a variable few people set, and was not built.
+    reports as no hold. `Names::BusAddress`, which the browser opener's list uses, keeps a
+    `unix:path=` address outside every stage-writable directory and refuses every other transport,
+    so it would keep that case working here. The inhibitor's and the scheduler's lists use
+    `Names::Options`.
     `DBUS_STARTER_ADDRESS` and `DBUS_STARTER_BUS_TYPE` are read only by `sd_bus_default` and
     `sd_bus_open`, which `inhibit.c` does not call. `SYSTEMD_PAGER` and `PAGER` are read by
     `pager_open`, which `inhibit.c` line 62 calls only for `--list`, which no start passes. The
     start sends stdout and stderr to `/dev/null`.
+    Run: `DBUS_SYSTEM_BUS_ADDRESS=unixexec:path=<helper>` made `systemd-inhibit` run the helper, and
+    the helper's exit status 1 became the inhibitor's. A bare `path=` name was found on `PATH` and
+    run. `unix:path=/run/dbus/system_bus_socket` was honoured (exit 0, as with no variable), and
+    `unix:path=<real socket>;unixexec:path=<helper>` connected to the first entry and ran no helper.
+    `DBUS_SESSION_BUS_ADDRESS=unixexec:...` ran nothing, since the inhibitor connects to the system
+    bus. With a loader shim logging `getenv`, `systemd-inhibit` read `DBUS_SYSTEM_BUS_ADDRESS`,
+    `SYSTEMD_BUS_TIMEOUT`, `SYSTEMD_ENABLE_LOG_CONTEXT`, `SYSTEMD_MEMPOOL`, `SYSTEMD_EXEC_PID`, the
+    `SYSTEMD_LOG_*` names, `NOTIFY_SOCKET`, `JOURNAL_STREAM`, `LIBBLKID_DEBUG`, `OPENSSL_ia32cap`,
+    `LANG` and the colour switches (`NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE`). None of the others
+    names a program or a file. A program that reads `environ` directly is not seen by that method.
+    The test
+    `a_unixexec_system_bus_address_runs_a_helper_through_systemd_inhibit_unless_the_start_removes_it`
+    runs the real program as a control.
   - `systemctl --user` (`crates/schedule/src/schedule.rs`: `--user daemon-reload` twice,
     `--user enable --now` and `--user disable --now`, all through `succeeds`) is given
     `DBUS_SESSION_BUS_ADDRESS` as `Names::Options` and `SYSTEMD_UNIT_PATH` as `Names::Directories`.
@@ -4777,10 +4804,26 @@ shown by running the program, or not entirely:
     by `list-*`, `show`, `status`, `edit` and help, which no start passes. `SYSTEMD_LIB_DIR` is not
     in v255 or v257. `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are the values `schedule.rs` itself
     uses to place the unit, and are left as set.
-- `xclip` and `xsel` are given the generic table and no names of their own. No Linux run was made.
-  Not covered: that neither tool loads a library or runs a program under any variable was not
-  observed, and a libX11 built with `--enable-loadable-i18n` was not read (the fourth item of the
-  not-settled bullet below).
+    Run: `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` made `systemctl --user daemon-reload` run
+    the helper when `XDG_RUNTIME_DIR` was unset (exit 1). It ran nothing when `XDG_RUNTIME_DIR`
+    named the real runtime directory (exit 0, the private socket was used), and ran nothing when it
+    named a directory with no socket (exit 1). `DBUS_SYSTEM_BUS_ADDRESS=unixexec:...` ran nothing
+    with `--user`. `SYSTEMD_UNIT_PATH` made a client-side `enable` (`SYSTEMD_OFFLINE=1`) open the
+    unit file in the directory it named and link it into `~/.config/systemd/user` (exit 0, and exit
+    1 without the variable), so a unit file there chooses the `ExecStart` that systemd then runs.
+    With the `getenv` shim, `systemctl --user daemon-reload` read `SYSTEMCTL_FORCE_BUS`,
+    `SYSTEMD_OFFLINE`, `SYSTEMD_IN_CHROOT`, `SYSTEMD_IGNORE_CHROOT`, `XDG_RUNTIME_DIR`,
+    `NOTIFY_SOCKET`, `JOURNAL_STREAM`, `OPENSSL_ia32cap`, `LIBBLKID_DEBUG`, `LANG`, the
+    `SYSTEMD_LOG_*` names and the colour switches. None of the names not already listed names a
+    program or a file. The test
+    `a_unixexec_session_bus_address_runs_a_helper_through_systemctl_unless_the_start_removes_it`
+    runs the real program as a control.
+- `xclip` and `xsel` are given the generic table and no names of their own. `xclip` 0.13 was run
+  under Xvfb on Ubuntu 25.10 (libX11 1.8.12). `XLOCALEDIR` and `XLOCALELIBDIR` each named a copy of
+  `/usr/share/X11/locale` that holds a planted `xi18n.so`: `xclip` opened files there (6 opens, all
+  succeeded) and loaded no library, and that libX11 holds no `xi18n` string. `xsel` is not installed
+  on that host and was not run. Not covered: a libX11 built with `--enable-loadable-i18n` (the
+  fourth item of the not-settled bullet below), and `xsel`.
   xclip 0.13 (`xclip.c`, `xclib.c`) has no `getenv`, `exec*`, `dlopen`, `popen` or `system(`, and
   xsel 1.2.1 (`xsel.c`) reads only `XDG_CACHE_HOME` and `HOME` (lines 354 and 355), to place a
   state directory it writes to. libX11 1.8.7, libxcb 1.16 and libXau 1.0.11 were read for every
@@ -4790,12 +4833,13 @@ shown by running the program, or not entirely:
   compose data that is parsed. `XLOCALEDIR` is read only on the locale path, which neither tool
   reaches. A server a stage wrote can read what is copied, which this entry does not decide.
   The starts are in `crates/tui/src/clipboard.rs`.
-- `wl-copy` is given `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `QT_PLUGIN_PATH`, `PERL5LIB` and
-  `PERLLIB` (`WL_COPY_CODE_SELECTORS` in `crates/tui/src/powershell.rs`). No Linux run was made.
-  Not covered: which of the programs `xdg-mime` starts runs on a given desktop was not observed,
-  the source of `qtxdg-mat` (LXQt) was not read, and whether the Perl `mimetype` runs in taint mode
-  was not settled (the first and second items of the not-settled bullet below), so the list can be
-  short.
+- `wl-copy` is given `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `QT_PLUGIN_PATH`, `PERL5LIB`,
+  `PERLLIB` and `DBUS_SESSION_BUS_ADDRESS` (`Names::BusAddress`) (`WL_COPY_CODE_SELECTORS` in
+  `crates/tui/src/powershell.rs`). `wl-copy` is not installed on the host the run was made on, so
+  the programs it starts were run in its place on Ubuntu 25.10: `xdg-mime` 1.2.1, `gio info` and
+  the Perl `mimetype`. Not covered: `kmimetypefinder` and `qtxdg-mat` are not installed there, so
+  what KDE and LXQt run was not observed (the first item of the not-settled bullet below), and the
+  list can be short.
   The start passes no `--type`, so `wl-copy` runs `xdg-mime query filetype` on the content
   (wl-clipboard v2.2.1 `src/wl-copy.c` lines 266 to 267), and `xdg-mime` (xdg-utils v1.2.1
   `scripts/xdg-mime.in` lines 63 to 129 and 684 to 700) runs `gio info`, `kmimetypefinder`,
@@ -4813,21 +4857,34 @@ shown by running the program, or not entirely:
   programs runs and are not code selectors, but a stage that sets them changes which of the names
   above matter. Passing `--type text/plain` so that `xdg-mime` never runs would remove the
   exposure; it was not done because it declares a type the content may not have.
-- Not settled for the five programs above. Each needs a Linux host:
+  Run: `GIO_EXTRA_MODULES` and `GIO_MODULE_DIR`, each naming a directory with a planted GLib module,
+  made `gio info` run the module's constructor, and the control did not. `PERL5LIB`, `PERLLIB` and
+  `PERL5OPT=-I<dir>` each made `/usr/bin/mimetype` (`#!/usr/bin/perl`, libfile-mimeinfo-perl 0.35,
+  no `-T`) load a planted `File/MimeInfo.pm`. With no desktop named, `xdg-mime query filetype` ran
+  `dbus-send` (`detectDE`, line 580 of the installed script) and then `mimetype`, and
+  `DBUS_SESSION_BUS_ADDRESS=unixexec:path=<helper>` made `dbus-send` run the helper. With
+  `XDG_CURRENT_DESKTOP` set to `GNOME`, `KDE`, `XFCE` or `LXQt` the helper did not run, and `gio info`
+  run directly with the address did not run it either. `GNOME` and `XFCE` ran `gio`, `KDE` ran no
+  program of KDE and `LXQt` found no method, since `kmimetypefinder` and `qtxdg-mat` are not
+  installed. The address is a `Names::BusAddress`, so a `unix:path=` socket outside every directory a
+  stage may write is kept. The tests
+  `a_unixexec_session_bus_address_runs_a_helper_through_the_xdg_mime_wl_copy_starts_unless_the_start_removes_it`
+  and `the_directories_xdg_mime_would_load_code_from_are_removed_from_wl_copy_when_a_stage_may_write_them`
+  cover the name; the first starts a stand-in `wl-copy` that runs the real `xdg-mime`.
+- Not settled for the five programs above. Each needs a host or a privilege the run did not have:
   - `xdg-mime` under LXQt runs `qtxdg-mat mimetype` (`xdg-mime.in` lines 114 to 128), whose source
     was not read. Run `XDG_CURRENT_DESKTOP=LXQt strace -f -e trace=execve,openat xdg-mime query
     filetype /tmp/x 2>&1 | grep -E 'execve|\.so'`.
-  - Whether the Perl `mimetype` runs in taint mode, which ignores `PERL5LIB`, was not settled; the
-    module source could not be fetched. Run `head -1 $(command -v mimetype)` and
-    `PERL5LIB=/tmp/p strace -f -e trace=openat mimetype /tmp/x`.
-  - Whether `systemctl enable` reads `SYSTEMD_UNIT_PATH` on a booted host, where
-    `install_client_side()` is false, was not traced in `src/shared/install.c`. Run
-    `SYSTEMD_UNIT_PATH=/tmp/u strace -f -e trace=openat systemctl --user enable --now <timer>`. If
-    nothing under `/tmp/u` is opened, the name can be dropped.
-  - Distribution builds of libX11 with `--enable-loadable-i18n` were not read. Run
-    `ldd $(command -v xclip)` and `strings $(readlink -f /usr/lib/x86_64-linux-gnu/libX11.so.6) |
-    grep -c xi18n`, or `strace -f -e trace=openat,execve env XLOCALEDIR=/tmp/loc xclip -selection
-    clipboard -o` and check that nothing under `/tmp/loc` is opened.
+  - The `mimetype` of another distribution may run in taint mode, which ignores `PERL5LIB`. The one
+    that was run (Debian's libfile-mimeinfo-perl 0.35) does not.
+  - `systemctl --user enable --runtime` on the booted host did not touch the directory
+    `SYSTEMD_UNIT_PATH` named: no syscall named a path under it and the unit was not found.
+    `enable --now`, as the scheduler runs it, was not traced there, since it installs a unit in the
+    person's own session. The name stays in the list for the client-side case above.
+  - Distribution builds of libX11 with `--enable-loadable-i18n` were not read. The libX11 1.8.12 of
+    Ubuntu 25.10 holds no `xi18n` string and loaded nothing from `XLOCALEDIR`.
+  - `xsel`, `wl-copy`, a musl host and the no-`/proc` case of `LD_ORIGIN_PATH` were not run. The
+    first three are not installed on the host, and `unshare -rm` is refused there.
 - A Homebrew or pip `aws` script, an asdf or pyenv shim, `gio open`, `kde-open` and `osascript` were
   examined for the variables they read to choose code, by running each where it could be run, and
   the names are in the generic table or in the list of the start that runs the program (the AWS
@@ -5496,6 +5553,10 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::powershell::a_program_other_than_powershell_is_not_given_the_powershell_names`
 `verified-by: bravebot_tui::powershell::powershell_is_known_by_its_name_whatever_extension_or_case_the_lookup_found`
 `verified-by: bravebot_tui::powershell::the_clipboard_tool_and_the_inhibitor_start_powershell_through_the_checked_start`
+`verified-by: bravebot_tui::powershell::a_unixexec_system_bus_address_runs_a_helper_through_systemd_inhibit_unless_the_start_removes_it`
+`verified-by: bravebot_tui::powershell::a_unixexec_session_bus_address_runs_a_helper_through_the_xdg_mime_wl_copy_starts_unless_the_start_removes_it`
+`verified-by: bravebot_tui::powershell::the_directories_xdg_mime_would_load_code_from_are_removed_from_wl_copy_when_a_stage_may_write_them`
+`verified-by: bravebot_schedule::schedule::a_unixexec_session_bus_address_runs_a_helper_through_systemctl_unless_the_start_removes_it`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`
 `verified-by: bravebot_bedrock::credentials::an_aws_browser_entry_that_is_not_text_is_removed`
