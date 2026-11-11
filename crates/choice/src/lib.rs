@@ -43,7 +43,7 @@ pub fn number_a_list<S: Sink>(
     list: &SlotId,
     at: &str,
     fields: &BTreeSet<String>,
-    into: SlotId,
+    into: &SlotId,
     slots: &mut SlotStore,
 ) -> Result<Labelled<Entries>, Denial> {
     policy.number_a_list(list, at, fields, into, slots, rows::number)
