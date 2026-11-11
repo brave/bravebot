@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { ConnectionLostError, ProtocolError, RpcAgentClient, RpcError, StaleActionError, UnsupportedError } from '../src/common/index.js'
+import { ConnectionLostError, ProtocolError, RpcAgentClient, RpcError, StaleActionError, UnknownSendError, UnsupportedError } from '../src/common/index.js'
 import { rawRequest } from '../src/common/client.js'
 import { FIXTURES } from './support/scenario.js'
 
@@ -497,4 +497,96 @@ test('an instance listing in a shape the host does not send is refused', async (
     })
     await assert.rejects(client.instance(), ProtocolError)
   }
+})
+
+/** A bridge holding session `s1` whose answers to `turn.send` and `turn.lookup` a test chooses. `null` sends no answer. */
+async function aSendRecord(answer: { send?: (messageId: string) => unknown; lookup?: (messageId: string) => unknown }) {
+  const sent: { method: string; params: Record<string, unknown> }[] = []
+  let client: RpcAgentClient
+  client = new RpcAgentClient({
+    write(line) {
+      const request = JSON.parse(line) as { id: number; method: string; params: Record<string, unknown> }
+      sent.push(request)
+      let reply: unknown = { ok: {} }
+      if (request.method === 'agent.info') reply = { ok: { capabilities: { sessionView: contract.capability } } }
+      if (request.method === 'session.new') reply = { ok: { session: 's1' } }
+      if (request.method === 'session.view.start') {
+        client.receive(JSON.stringify({ event: 'session.view.initial', session: 's1', data: {
+          sequence: 0, turn: 0, target: 0, status: 'idle', pending: null, rows: [],
+        } }) + '\n')
+      }
+      if (request.method === 'turn.send') reply = answer.send ? answer.send(request.params.messageId as string) : { ok: { turn: 1, target: 1 } }
+      if (request.method === 'turn.lookup') reply = answer.lookup ? answer.lookup(request.params.messageId as string) : { ok: { state: 'not_received' } }
+      if (reply !== null) client.receive(JSON.stringify({ id: request.id, ...(reply as object) }) + '\n')
+    },
+  }, { workspaces: [{ id: 'work', name: 'Work', directory: '/work' }] })
+  const session = await client.createSession({ workspace: 'work' })
+  const of = (method: string) => sent.filter((request) => request.method === method).map((request) => request.params)
+  return { client, session, of }
+}
+
+test('a send whose answer may be lost names the message id it went out under, and a refusal does not', async () => {
+  const lost = await aSendRecord({ send: () => null })
+  const sending = lost.session.send('hello')
+  lost.client.transportClosed('eof')
+  const error = await sending.then(() => assert.fail('the send succeeded'), (error: unknown) => error)
+  assert.ok(error instanceof UnknownSendError, `a lost send failed with ${String(error)}`)
+  assert.equal(error.outcome, 'unknown')
+  assert.equal(error.code, 'agent_gone')
+  assert.equal(error.messageId, lost.of('turn.send')[0]?.messageId)
+
+  const internal = await aSendRecord({ send: () => ({ error: { code: 'internal', message: 'bridge failed' } }) })
+  const failed = await internal.session.send('hello').then(() => assert.fail('the send succeeded'), (error: unknown) => error)
+  assert.ok(failed instanceof UnknownSendError)
+  assert.equal(failed.messageId, internal.of('turn.send')[0]?.messageId)
+
+  const refused = await aSendRecord({ send: () => ({ error: { code: 'busy', message: 'a turn is running' } }) })
+  const rejected = await refused.session.send('hello').then(() => assert.fail('the send succeeded'), (error: unknown) => error)
+  assert.ok(rejected instanceof RpcError && !(rejected instanceof UnknownSendError), 'a refused send was reported as unknown')
+  assert.equal(rejected.outcome, 'rejected')
+})
+
+test('a message status is looked up under the session and id, and each answer the host gives is read', async () => {
+  const answers = [
+    { state: 'accepted', turn: 3, target: 4 },
+    { state: 'refused', error: { code: 'busy', message: 'a turn is running' } },
+    { state: 'not_received' },
+  ]
+  for (const ok of answers) {
+    const { session, of } = await aSendRecord({ lookup: () => ({ ok }) })
+    assert.deepEqual(await session.messageStatus('m-1'), ok)
+    assert.deepEqual(of('turn.lookup'), [{ session: 's1', messageId: 'm-1' }])
+  }
+  for (const ok of [{ state: 'accepted', turn: 3 }, { state: 'refused', error: { code: 'busy' } }, { state: 'lost' }, null]) {
+    const { session } = await aSendRecord({ lookup: () => ({ ok }) })
+    await assert.rejects(session.messageStatus('m-1'), ProtocolError, JSON.stringify(ok))
+  }
+  const gone = await aSendRecord({ lookup: () => ({ error: { code: 'no_such_session', message: 'unknown session' } }) })
+  await assert.rejects(gone.session.messageStatus('m-1'), (error: unknown) => error instanceof RpcError && error.code === 'no_such_session')
+})
+
+test('a resend goes out under the same id and text only once after a lookup that answered not received', async () => {
+  let state = 'not_received'
+  const answers: Record<string, unknown> = {
+    accepted: { ok: { state: 'accepted', turn: 1, target: 1 } },
+    refused: { ok: { state: 'refused', error: { code: 'busy', message: 'a turn is running' } } },
+    failed: { error: { code: 'no_such_session', message: 'unknown session' } },
+    malformed: { ok: { state: 'lost' } },
+  }
+  const { session, of } = await aSendRecord({ lookup: () => answers[state] ?? { ok: { state } } })
+  await assert.rejects(session.resend('m-1', 'hello'), StaleActionError, 'a resend went out with no lookup')
+  assert.deepEqual(await session.messageStatus('m-1'), { state: 'not_received' })
+  await assert.rejects(session.resend('m-2', 'hello'), StaleActionError, 'a lookup of one id allowed a resend of another')
+  assert.deepEqual(await session.resend('m-1', 'hello'), { turn: 1, target: 1 })
+  await assert.rejects(session.resend('m-1', 'hello'), StaleActionError, 'one not received answer allowed two resends')
+  assert.deepEqual(of('turn.send'), [{ session: 's1', prompt: 'hello', messageId: 'm-1' }])
+
+  for (const later of ['accepted', 'refused', 'failed', 'malformed']) {
+    state = 'not_received'
+    await session.messageStatus('m-1')
+    state = later
+    await session.messageStatus('m-1').catch(() => undefined)
+    await assert.rejects(session.resend('m-1', 'hello'), StaleActionError, `a resend went out after a later lookup was ${later}`)
+  }
+  assert.equal(of('turn.send').length, 1)
 })

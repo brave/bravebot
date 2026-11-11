@@ -131,6 +131,14 @@ export class FakeSession implements AgentSession {
     return (await this.on.send?.(text)) ?? { turn: this.current.turn + 1, target: this.current.target + 1 }
   }
 
+  async messageStatus(): Promise<never> {
+    throw new Error('not used')
+  }
+
+  async resend(): Promise<never> {
+    throw new Error('not used')
+  }
+
   async decide(request: number, decision: 'approve' | 'reject'): Promise<void> {
     this.calls.push({ method: 'decide', args: [request, decision] })
     await this.on.decide?.(request, decision)

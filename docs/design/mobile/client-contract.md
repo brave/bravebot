@@ -104,7 +104,7 @@ duplicate or late one, which the client reports with its code. A decision other 
 `reject`, answers that are not typed text, chosen indexes or `null`, and a second reply to a request
 while the first is being sent are refused locally.
 
-`instance` and `attach` need `bravebot-host`; `bravebot-rpc` alone refuses them. An `attach` of a session this client holds is refused without sending. `takeControl` and `messageStatus` fail locally: connected takeover is stage 5a, and settling a send is step 3.2 of stage 4b in the [implementation plan](implementation-plan.md#4b-prevent-duplicate-sends-and-recover-pending-messages). A question a turn asks appears in the
+`instance` and `attach` need `bravebot-host`; `bravebot-rpc` alone refuses them. An `attach` of a session this client holds is refused without sending. `takeControl` fails locally: connected takeover is stage 5a. A send that may have reached the bridge fails with `UnknownSendError` carrying its message id. `messageStatus` looks the id up with `turn.lookup`, and `resend` sends it again under the same id only after this session's latest lookup of it answered `not_received`, once per such answer ([RPCVIEW-13](../../specs/session-view.md#RPCVIEW-13)). The client never resends on its own. A question a turn asks appears in the
 view, and cancelling the turn refuses it.
 
 A runtime without version 1 of the capability is refused before any session is created. A close
@@ -170,7 +170,7 @@ a scratch project. They show:
 - close, EOF, a killed process and unreadable input.
 
 **Not established.** The local program cancelling a question of an unsupported kind (written, not
-exercised), native rendering, remote security, settling a send cut off by a lost connection,
+exercised), native rendering, remote security, keeping a send cut off by a lost connection across a restart of the app,
 qualifying a session by target and runtime instance (a session object belongs to one connection and
 ends with it; `instance()` names the host's run, but nothing stores it across restarts), takeover from a controller that is still connected, controller ownership, a stale-action guarantee beyond the targets RPCVIEW-6 gives, a persistent host, and
 operating systems other than macOS.
