@@ -634,7 +634,7 @@ than patching what it drew.
 
 #### `turn.send`
 
-`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10).
+`messageId` is required: 1 to 64 ASCII letters, digits, `-` or `_`, new for each Send action within the session handle. A send without one, or with any other value, is refused with `bad_request` and starts no turn (RPCVIEW-10). A send under an id the session has recorded starts no turn: with the same parameters it is given the first answer again, and with others it is refused with `bad_request`. A refusal is recorded too, so a send after one needs a new id. A session records at most 4096 sends and refuses a new id past that (RPCVIEW-11).
 
 The optional `model` parameter selects a model ID for this and subsequent turns on the
 open session handle. Provider IDs remain qualified (for example,
@@ -767,6 +767,14 @@ keeps the behaviour it had.
 
 **One turn at a time per session.** A second `turn.send` on a session with a turn in
 flight errors `turn_in_flight`. Different sessions run concurrently.
+
+#### `turn.lookup`
+
+```json
+{ "id": 7, "method": "turn.lookup", "params": { "session": "s1", "messageId": "0b6f1c9e-3d2a-4f5e-9a71-2c4d8e6f0a13" } }
+```
+
+Says what the session answered the `turn.send` with that id: `{ "state": "accepted", "turn": 5, "target": 12 }`, `{ "state": "refused", "error": { "code": "turn_in_flight", "message": "..." } }`, or `{ "state": "not_received" }`. It does not depend on the view's rows, and it says whether a turn started, not how it ended. An unknown handle, which is what a session closed or a bridge restarted leaves, is refused with `no_such_session`; a client takes that as unknown, not as not sent (RPCVIEW-11).
 
 #### `turn.cancel`
 

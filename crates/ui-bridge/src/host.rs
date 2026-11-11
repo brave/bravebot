@@ -642,6 +642,7 @@ mod tests {
         let mut host = a_host_with_a_session_controlled_by_connection_one();
         for method in [
             "turn.send",
+            "turn.lookup",
             "trust.reply",
             "session.view.resync",
             "session.close",
@@ -655,6 +656,7 @@ mod tests {
         }
         for method in [
             "turn.send",
+            "turn.lookup",
             "trust.reply",
             "session.view.resync",
             "session.close",
