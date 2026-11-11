@@ -61,6 +61,19 @@ print(out.hex())
 /// What tmux wraps a query in: `ESC P tmux ;`.
 const TMUX_WRAPPER: &[u8] = b"\x1bPtmux;";
 
+/// The library `DYLD_INSERT_LIBRARIES` names. dyld aborts a process that honours the variable when
+/// the path is not a library it can load, and an empty file is not one. Whether the driver's
+/// interpreter or the binary honours the variable depends on the machine (a protected system
+/// program drops it, an interpreter from Xcode or the command line tools does not), so macOS names
+/// a system library every process can load. Linux ignores the variable.
+fn inserted_library(selectors: &Path) -> &Path {
+    if cfg!(target_os = "macos") {
+        Path::new("/usr/lib/libSystem.B.dylib")
+    } else {
+        selectors
+    }
+}
+
 /// Plants a `tmux` that appends what it was started with, and the loader and shell variables it
 /// was given, to `marker`.
 fn plant_tmux(directory: &Path, marker: &Path) {
@@ -122,7 +135,7 @@ fn run_under_tmux(name: &str, variable: &str, value: &str) -> Option<Run> {
         .env("PATH", format!("{}:/usr/bin:/bin", planted.display()))
         .env("BASH_ENV", &selectors)
         .env("LD_PRELOAD", &selectors)
-        .env("DYLD_INSERT_LIBRARIES", &selectors)
+        .env("DYLD_INSERT_LIBRARIES", inserted_library(&selectors))
         .env(variable, value);
 
     let output = command.output().expect("python runs the driver");
