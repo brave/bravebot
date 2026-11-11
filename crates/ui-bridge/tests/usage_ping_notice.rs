@@ -212,3 +212,38 @@ fn a_window_whose_notice_was_shown_before_pings_at_its_start() {
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert!(seen[0].contains("&surface=desktop&"), "{seen:?}");
 }
+
+/// The standalone `bravebot-acp` neither says the notice nor records it as said, so the front end
+/// a person sees next still tells them, and it sends no ping.
+#[test]
+fn the_standalone_acp_executable_says_no_notice_and_sends_no_ping() {
+    let home = home("standalone-acp");
+    let service = PingService::start();
+    let output = Command::new(env!("CARGO_BIN_EXE_bravebot-acp"))
+        .current_dir(&home)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", &home)
+        .env("SERVICES_KEY_AICHAT", "a-services-key")
+        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
+        .env("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1")
+        .env("BRAVEBOT_USAGE_PING", "1")
+        .env("BRAVEBOT_USAGE_PING_URL", &service.url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("bravebot-acp runs");
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(!said.contains("usage ping"), "{said}");
+    assert!(!home.join(".bravebot/usage-ping-notice").exists());
+    assert_eq!(
+        service.pinged_within(std::time::Duration::from_secs(2)),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ask(&home, &[], &["usage_ping.notice_due"]),
+        [json!({"due": true})],
+        "the window was not left to tell the person"
+    );
+}

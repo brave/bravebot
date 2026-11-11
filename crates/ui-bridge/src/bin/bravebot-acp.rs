@@ -60,13 +60,6 @@ fn main() {
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
 
-    // Once, before the first usage ping, and on stderr because stdout is the protocol.
-    if let Some(notice) = bravebot_session::store::take_usage_ping_notice() {
-        use std::io::Write;
-        // Not `eprintln!`, which panics where the editor closed stderr.
-        let _ = writeln!(std::io::stderr().lock(), "bravebot-acp: {notice}");
-    }
-
     // EOF on stdin ends the loop with every session closed, which refuses anything waiting on an
     // answer from an editor that has gone away and fires `session-ended`.
     let finished = bravebot_ui_bridge::acp_loop::serve(

@@ -212,6 +212,7 @@ at all.
 `verified-by: bravebot_usage_ping::sending::a_ping_started_at_startup_can_be_waited_for`
 `verified-by: bravebot_ui_bridge::usage_ping_notice::the_window_sends_one_ping_a_day_once_its_notice_is_shown`
 `verified-by: bravebot_ui_bridge::usage_ping_notice::a_window_whose_notice_was_shown_before_pings_at_its_start`
+`verified-by: bravebot_ui_bridge::usage_ping_notice::the_standalone_acp_executable_says_no_notice_and_sends_no_ping`
 
 <a id="PING-8"></a>
 ### PING-8: `backend` names a kind of service, never an id a person chose
