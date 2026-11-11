@@ -359,6 +359,10 @@ fn field_of(lists: &[Entries], list: usize, number: usize, field: &str) -> Resul
 
 /// The value one argument of `kind` takes from what the row gave it, where it came from, and the
 /// earlier call it depends on, if any. A choice of kinds takes the first that fits what was given.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each kind a value may take, each resolving and checking its own"
+)]
 fn value_of(
     kind: &Kind,
     given_value: Option<Given>,

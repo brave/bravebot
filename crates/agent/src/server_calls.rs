@@ -568,6 +568,10 @@ impl Servers {
     /// whose tool reports a failure, by the protocol's own `isError`, ends nothing, and the calls
     /// that depend on it are not made.
     #[expect(
+        clippy::too_many_lines,
+        reason = "the step in order: its lists numbered, its rows proposed and resolved, the list put, and each call made and drawn"
+    )]
+    #[expect(
         clippy::too_many_arguments,
         reason = "the policy, chat, egress, people to ask, slots and the step one apply needs"
     )]
@@ -623,7 +627,7 @@ impl Servers {
                     &SlotId::new(name),
                     &pointers[at],
                     &shape.entry_fields(at),
-                    into.clone(),
+                    &into,
                     slots,
                 )
                 .map_err(|denial| denial.to_string())?,

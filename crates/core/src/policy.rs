@@ -5732,7 +5732,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         list: &SlotId,
         at: &str,
         fields: &BTreeSet<String>,
-        into: SlotId,
+        into: &SlotId,
         slots: &mut crate::slot::SlotStore,
         reader: fn(&str, &str, &str, &BTreeSet<String>) -> crate::apply::Numbered,
     ) -> Gated<Labelled<crate::apply::Entries>> {
