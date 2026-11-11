@@ -7,7 +7,7 @@
 // `GIO_EXTRA_MODULES` and `GIO_MODULE_DIR`, and `kde-open` loads Qt plug-ins and a service cache.
 // A program a person approved with
 // `run` may have written what those name. `shell` is stubbed here and records, for each call, which
-// of the fifteen names were still set.
+// of the sixteen names were still set.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -18,7 +18,7 @@ import { buildSync } from 'esbuild'
 const require = createRequire(import.meta.url)
 const NAMES = [
   'BROWSER', 'GIO_LAUNCH_DESKTOP', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS',
-  'GIO_EXTRA_MODULES', 'GIO_MODULE_DIR', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QT_QPA_PLATFORMTHEME',
+  'XDG_CACHE_HOME', 'GIO_EXTRA_MODULES', 'GIO_MODULE_DIR', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QT_QPA_PLATFORMTHEME',
   'QT_QPA_GENERIC_PLUGINS', 'QT_QPA_PLATFORM', 'QT_STYLE_OVERRIDE', 'KDESYCOCA',
 ]
 
@@ -39,7 +39,7 @@ const source = buildSync({
 const module = { exports: {} }
 new Function('require', 'module', 'exports', source)(
   (id) => (id === 'electron' ? electron : require(id)), module, module.exports)
-const { OPENER_SELECTORS, removeOpenerSelectors, openExternal, openPath, showItemInFolder } = module.exports
+const { OPENER_SELECTORS, FILE_NAME_PREFIXES, removeOpenerSelectors, openExternal, openPath, showItemInFolder } = module.exports
 
 function planted() {
   for (const name of NAMES) process.env[name] = '/stage/' + name
@@ -47,7 +47,7 @@ function planted() {
   calls.length = 0
 }
 
-test('the fifteen names are the ones the opener scripts read', () => {
+test('the sixteen names are the ones the opener scripts read', () => {
   // The fault is a list that drops one, or that adds `PATH`, which the opener's own reduced search
   // path already covers and which every other program needs.
   assert.deepEqual([...OPENER_SELECTORS].sort(), [...NAMES].sort())
@@ -102,6 +102,37 @@ test('the home, runtime directory and session bus address are left set for the a
       else process.env[name] = before[index]
     })
   }
+})
+
+test('a file-name prefix is deleted only when it has a slash, by the pure function and before each call', async () => {
+  // `xdg-mime` joins `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX` to a file name without checking
+  // them, so `../../stage/evil` reads a file outside the judged directories. The fault is a list
+  // that leaves them out, or one that deletes `XDG_CURRENT_DESKTOP` always, which hides the desktop
+  // from `xdg-open`.
+  assert.deepEqual([...FILE_NAME_PREFIXES].sort(), ['XDG_CURRENT_DESKTOP', 'XDG_MENU_PREFIX'])
+  const env = { XDG_CURRENT_DESKTOP: '../../stage/evil', XDG_MENU_PREFIX: '../../../stage/', EDITOR: 'vim' }
+  assert.deepEqual(removeOpenerSelectors(env).sort(), ['XDG_CURRENT_DESKTOP', 'XDG_MENU_PREFIX'])
+  assert.deepEqual(env, { EDITOR: 'vim' })
+  const kept = { XDG_CURRENT_DESKTOP: 'GNOME', XDG_MENU_PREFIX: 'gnome-' }
+  assert.deepEqual(removeOpenerSelectors(kept), [])
+  assert.deepEqual(kept, { XDG_CURRENT_DESKTOP: 'GNOME', XDG_MENU_PREFIX: 'gnome-' })
+  const colon = { XDG_CURRENT_DESKTOP: 'GNOME:../x' }
+  assert.deepEqual(removeOpenerSelectors(colon), ['XDG_CURRENT_DESKTOP'], 'one entry of a : list with a slash')
+
+  // Through the three calls, on the real `process.env`.
+  for (const name of FILE_NAME_PREFIXES) delete process.env[name]
+  const seen = () => FILE_NAME_PREFIXES.filter((name) => name in process.env)
+  for (const call of [() => openExternal('https://brave.com/'), () => openPath('/work/a'), async () => showItemInFolder('/work/a')]) {
+    process.env.XDG_CURRENT_DESKTOP = '../../stage/evil'
+    process.env.XDG_MENU_PREFIX = '../../../stage/'
+    await call()
+    assert.deepEqual(seen(), [])
+  }
+  process.env.XDG_CURRENT_DESKTOP = 'GNOME'
+  await openExternal('https://brave.com/')
+  assert.equal(process.env.XDG_CURRENT_DESKTOP, 'GNOME')
+  delete process.env.XDG_CURRENT_DESKTOP
+  calls.length = 0
 })
 
 test('only external-open.ts calls the opening functions of electron shell', () => {

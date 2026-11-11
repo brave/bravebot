@@ -4157,9 +4157,11 @@ file. A new spawn that looks a name up through
   `crates/tui/src/opener.rs`, the Windows `powershell` starts' in `crates/tui/src/powershell.rs` and
   the sandbox usability suite's in `crates/agent/src/usability.rs`.
   The browser opener adds `BROWSER`, the four `XDG_` directories that `xdg-open` reads to choose
-  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `GIO_LAUNCH_DESKTOP`, `HOME`,
-  `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
-  and the GIO, Qt, KDE and Windows names in its table below. `GIO_LAUNCH_DESKTOP` is one file
+  the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `XDG_CACHE_HOME` (the
+  directory `kde-open` reads its service cache from when `KDESYCOCA` is not set),
+  `GIO_LAUNCH_DESKTOP`, `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
+  and the GIO, Qt, KDE and Windows names in its table below, 29 names in `CODE_SELECTORS` in
+  `crates/tui/src/opener.rs`. `GIO_LAUNCH_DESKTOP` is one file
   (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
   3100, read only when the process is not setuid), so a value is removed unless it is an existing
@@ -4192,8 +4194,16 @@ file. A new spawn that looks a name up through
   Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
   helper that git's configuration names can do the same. `xdg-open` itself reads `BROWSER` only in
   its generic path, so under GNOME with `gio` installed it is not read. The desktop application
-  deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories and the GIO, Qt and KDE names
-  of the opener's table below from its own environment before it asks
+  deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories, `XDG_CACHE_HOME` and the GIO,
+  Qt and KDE names of the opener's table below from its own environment (`OPENER_SELECTORS`, 16
+  names: the opener's 19 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the application leaves set, as
+  `APPLICATION_EXCEPTIONS` in `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
+  `XDG_MENU_PREFIX` when the value contains a `/` (`FILE_NAME_PREFIXES` in
+  `ui/src/main/external-open.ts`, tested by `a file-name prefix is deleted only when it has a slash,
+  by the pure function and before each call` in `ui/scripts/external-open.test.mjs`; with the `/`
+  test replaced by `false &&` that test failed on `Expected values to be strictly deep-equal:
+  actual [] expected ['XDG_CURRENT_DESKTOP', 'XDG_MENU_PREFIX']`, and it passes with it restored.
+  Electron was not run for these two names), before it asks
   Electron to open an address or a file, since
   it starts the opener through Electron and not through this start. It does not delete `HOME`,
   `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: the
@@ -4565,6 +4575,7 @@ file. A new spawn that looks a name up through
   | `XDG_DATA_HOME`, `XDG_CONFIG_HOME` | a directory | where `xdg-open` and `gio open` read `mimeapps.list` and the `.desktop` entry of the handler |
   | `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS` | a list of directories | the same, searched in order |
   | `HOME` | a directory | the base of the four above when they are not set, so a changed `HOME` selects the handler. `$HOME/.config` and `$HOME/.local/share/applications` are judged with it |
+  | `XDG_CACHE_HOME` | a directory | where `kde-open` looks for the service cache when `KDESYCOCA` is not set (a relative value is ignored by Qt and removed here) |
   | `GIO_EXTRA_MODULES` | a list of directories | modules `gio` loads |
   | `GIO_MODULE_DIR` | a directory | the directory `gio` loads modules from |
   | `GIO_LAUNCH_DESKTOP` | a file | the wrapper `gio open` executes with the command line of the handler it starts |
@@ -4577,6 +4588,11 @@ file. A new spawn that looks a name up through
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
   | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
   | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds; whether the start needs it was not run |
+
+  That is 29 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
+  application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
+  `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the ten Windows names, 16, and
+  `make check-code-selectors` fails when the two differ in anything else.
 
   What was run and what was read for these names is in "What a checked start does not cover".
 
@@ -5014,30 +5030,75 @@ shown by running the program, or not entirely:
     other names it and every run reads the same menu. The test added with #3884 runs `kde-open` once
     per name with a marker handler, and the CI step runs it under `dbus-run-session` and prints the
     names it observed as `kde-open observed:` lines. The lines below on why each name matters are
-    from source only. They were read at these commits, none of which is a release tag: kde-cli-tools
-    aa1f650a282c (`kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
-    `KIOCLIENT_AS_KDEOPEN`), KIO a80751d2, KService 2bd4461c and KCoreAddons e96958b2, and Qt 6.10.0
-    (tag v6.10.0, commit 5a8637e4516b). `QT_PLUGIN_PATH` (`qcoreapplication.cpp`) and
+    from source only, read at these release tags: kde-cli-tools v6.8.3
+    (c919db4967c8; `kioclient/CMakeLists.txt` builds `kde-open` from `kioclient.cpp` with
+    `KIOCLIENT_AS_KDEOPEN`), KDE Frameworks v6.29.0 (KIO 15c259aa513f, KService 4045082107bf,
+    KConfig d31e66191c7a, KCoreAddons 8ce411949768) and Qt v6.10.0 (5a8637e4516b). `kde-open` does
+    not call `QDesktopServices` or `KRun` itself: `kioclient.cpp` line 262 creates a
+    `KIO::OpenUrlJob`. That job calls `QDesktopServices::openUrl` (`openurljob.cpp` lines 184 and
+    683-687) only inside a Flatpak or Snap sandbox (`/.flatpak-info` exists or `SNAP` is set) or
+    when no open-with handler is found. Qt reads `DEFAULT_BROWSER` and `BROWSER` there
+    (`qdesktopunixservices.cpp` lines 107 and 109) only when `xdg-open` is not on `PATH`. On a
+    normal run an `https` address goes to `KApplicationTrader::preferredService` for
+    `x-scheme-handler/https` and then `http` (`openurljob.cpp` lines 253-259), then to
+    `BrowserApplication` in the KDE configuration, and the service is started by
+    `KProcessRunner`. None of `OpenUrlJob`, `KProcessRunner` and `ApplicationLauncherJob` reads
+    `BROWSER`, `KDE_SESSION_VERSION`, `XDG_CURRENT_DESKTOP` or `TERMINAL`. Qt reads
+    `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` only when absolute, and
+    `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` as `:` lists that drop relative entries
+    (`qstandardpaths_unix.cpp` lines 227-406), with no setuid check. `HOME` is used as given.
+    `PATH` is split with empty entries skipped (`desktopexecparser.cpp` line 296). KService reads
+    `XDG_CURRENT_DESKTOP` as a `:` list of lowercased file-name prefixes for `<desktop>-mimeapps.list`
+    without stripping `/` (`kmimeassociations.cpp` line 47), and `XDG_MENU_PREFIX` as a prefix of the
+    menu file name (`vfolder_menu.cpp` line 726). `kde-open` builds the service cache in the
+    process (`ksycoca.cpp` lines 672 and 732) and does not start `kbuildsycoca6`.
+    Names these readings show to be read, and which are not in the opener's list: `PATH` (the
+    opener uses its own reduced one), `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX` (file-name
+    prefixes joined to directories already judged; for `kde-open` only, see the next entry for
+    `xdg-open`, which removes them when they contain a `/`), `KDE_SESSION_VERSION`, `KDEHOME` and `KDEDIRS`
+    (read for the theme only when `KDE_SESSION_VERSION` is 4), `DEFAULT_BROWSER` and `SNAP` (the
+    Qt fallback above), `DESKTOP_SESSION`, `KDE_FULL_SESSION` and `GNOME_DESKTOP_SESSION_ID`
+    (fallbacks when `XDG_CURRENT_DESKTOP` is empty; a `DESKTOP_SESSION` containing `/` makes Qt read a
+    file of that name; `xdg-open` and `xdg-mime` 1.2.1 only compare it with fixed names in a `case`
+    in `xdg-utils-common.in` and read no file named by it), `QT_IM_MODULE` and `QT_IM_MODULES` (an
+    input-context plug-in, not traced to
+    `kde-open`'s start), and any variable a configuration value or `qt.conf` names as `$X` or `$(X)`.
+    These were not added to the list. `PATH`, `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX` are
+    covered as above. The rest are read on paths that `kde-open` reaches only in a Flatpak or
+    Snap sandbox, under KDE 4, or with an empty `XDG_CURRENT_DESKTOP`, or are not traced to its
+    start, and no run shows otherwise. `DBUS_SESSION_BUS_ADDRESS` is read by libdbus, which was not
+    read, and plasma-integration, `KStartupInfo` and a setuid check were not read. Plasma 5's
+    `kde-open5` (`Plasma/5.27`, 6358bcf65828) also only creates an `OpenUrlJob` at
+    `kioclient.cpp` line 251; KIO 5 was not read. `QT_PLUGIN_PATH` (`qcoreapplication.cpp`) and
     `QT_QPA_PLATFORM_PLUGIN_PATH` (`qguiapplication.cpp`) name directories plug-ins load from,
     `QT_QPA_PLATFORMTHEME`, `QT_QPA_GENERIC_PLUGINS` and `QT_QPA_PLATFORM` (`qguiapplication.cpp`)
     and `QT_STYLE_OVERRIDE` (`qapplication.cpp`) name the plug-in loaded from them, and
-    `KDESYCOCA` (`ksycoca.cpp` line 698) names the cache the `Exec` line of a handler is read from.
-    The directories the handler is looked for in come from Qt's `QStandardPaths`, which reads
-    `XDG_DATA_HOME` (`qstandardpaths_unix.cpp` line 227), `XDG_CONFIG_HOME` (line 247),
-    `XDG_DATA_DIRS` (line 394) and `XDG_CONFIG_DIRS` (line 406), and KService's `KMimeAssociations`
-    (`kmimeassociations.cpp` line 71) and `KSycoca` (`ksycoca.cpp` lines 695 and 707) take their
-    `mimeapps.list` and `.desktop` directories and the cache from it.
-    `KSycoca` puts the cache file under the generic cache directory, which is `XDG_CACHE_HOME`
-    (`qstandardpaths_unix.cpp` line 189) or `HOME/.cache`, when `KDESYCOCA` is not set.
-    `XDG_CACHE_HOME` is not in the opener's list, and whether it should be is not decided here.
+    `KDESYCOCA` (`ksycoca.cpp`) names the cache the `Exec` line of a handler is read from. The
+    directories the handler is looked for in come from Qt's `QStandardPaths`, and KService's
+    `KMimeAssociations` (`kmimeassociations.cpp` line 71) and `KSycoca` (`ksycoca.cpp` lines 695
+    and 707) take their `mimeapps.list` and `.desktop` directories and the cache from it.
     `XDG_CURRENT_DESKTOP` is read by `KService::showInCurrentDesktop` (`kservice.cpp` line 445)
     and by `KMimeAssociations` (`kmimeassociations.cpp` line 47), to choose which entries are shown
     and the name `<desktop>-mimeapps.list`. These reads are from source and none was observed in a
-    run. Which release of KDE Frameworks or Plasma these names hold for is not recorded. `KDEHOME`,
-    `KDEDIRS`, `KDE_FULL_SESSION`, `KDE_SESSION_VERSION`, `KDE_FORK_SLAVES` and the `QML*_IMPORT_PATH`
-    names have no read in the files searched, which does not show they are never read. Handler
-    selection was read at the default-branch commits kio ad78db8a, KService 2bd4461c and KConfig
-    eb4dec9c, and qtbase `dev` 7d402fc0: `KIO::OpenUrlJob` (`openurljob.cpp`) asks
+    run. The releases these names hold for are the ones recorded above. `KDE_FORK_SLAVES` and the
+    `QML*_IMPORT_PATH` names have no read in the files searched, which does not show they are never
+    read. Read again at the same tags (files
+    fetched with `gh api` at the tag): `KSycoca::absoluteFilePath` (`ksycoca.cpp` lines 693-709)
+    returns `KDESYCOCA` when set and otherwise a file in the `GenericCacheLocation` directory
+    (`XDG_CACHE_HOME`) named for a SHA-1 of the `GenericDataLocation` list (`XDG_DATA_DIRS`), so
+    `XDG_DATA_DIRS` also chooses which cache file is opened. `KConfigPrivate::expandString`
+    (`kconfig.cpp` lines 192-232) replaces `$NAME` and `${NAME}` in a configuration value with the
+    environment variable of that name, which is the "any variable a configuration value names"
+    above; `KDE_SKIP_KDERC` (line 117) only decides whether `/etc/kde5rc` is read and `LANGUAGE`
+    (line 81) the translation language. `qstandardpaths_unix.cpp` reads `XDG_CACHE_HOME` (line 189),
+    `XDG_DATA_HOME` (227), `XDG_CONFIG_HOME` (247), `XDG_DATA_DIRS` (394) and `XDG_CONFIG_DIRS`
+    (406), clears a relative `XDG_CACHE_HOME` and `XDG_DATA_HOME`, and drops relative entries of
+    the lists. A search of `ksycoca.cpp`, `kmimeassociations.cpp` and `vfolder_menu.cpp` for
+    `qgetenv`, `qEnvironmentVariable` and `getenv` found only `KDESYCOCA`, `XDG_CURRENT_DESKTOP`
+    and `XDG_MENU_PREFIX`. The `kde-open5` path (Plasma 5, KIO 5) was not read.
+    `XDG_CACHE_HOME` is in the opener's list for that reason. Handler selection was read at the
+    default-branch commits kio ad78db8a, KService 2bd4461c and KConfig eb4dec9c, and qtbase `dev`
+    7d402fc0: `KIO::OpenUrlJob` (`openurljob.cpp`) asks
     `KApplicationTrader::preferredService` for the scheme or the MIME type, which reads
     `mimeapps.list` and the service cache. `QStandardPaths` (`qstandardpaths_unix.cpp`) reads
     `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` and falls back on
@@ -5055,10 +5116,42 @@ shown by running the program, or not entirely:
     from source and was not run, and whether `kde-open` needs a session bus is not established. The
     `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there, and
     whether a bus is required is not established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
+- Five more names `xdg-open` and `xdg-mime` 1.2.1 read, judged from the real scripts (read in full
+  for these names, and the first two run) on macOS with `uname` stubbed to print `Linux`, not on a
+  Linux host:
+  - `XDG_CURRENT_DESKTOP` as a file-name prefix: `xdg-mime query default` joins each `:` entry,
+    lowercased, to a directory already judged, as `<entry>-mimeapps.list`, without stripping `/`.
+    A stage can choose code to run with it. The run used `XDG_CURRENT_DESKTOP=../../stage/evil`
+    with `XDG_CONFIG_HOME` and `XDG_CONFIG_DIRS` set to an installed directory: `xdg-open` read
+    `<installed config>/../../stage/evil-mimeapps.list`, which named a `.desktop` file in the
+    stage, and ran the planted handler. The opener removes `XDG_CURRENT_DESKTOP` when its value
+    contains a `/` and keeps it otherwise, since it also chooses the desktop mode.
+  - `XDG_MENU_PREFIX`: `defapp_fallback` joins it to each applications directory as
+    `<prefix>defaults.list` and `<prefix>mimeinfo.cache`. The run used
+    `XDG_MENU_PREFIX=../../../stage/`; `xdg-open` read `stage/defaults.list` and ran the planted
+    handler. The opener removes it when its value contains a `/`.
+    `a_file_name_prefix_with_a_slash_does_not_lead_the_installed_xdg_open_out_of_a_judged_directory`
+    runs both against the real script, and `a_file_name_prefix_is_removed_only_when_it_has_a_slash`
+    checks the rule. With the `/` test in `opening_against` replaced by one that never matches,
+    both failed (`XDG_CURRENT_DESKTOP=../../stage/evil: the planted handler ran`), and both passed
+    with it restored. Neither is run on Linux.
+  - `KDE_SESSION_VERSION`: in the `xdg-open` start it is matched against the literals `4`, `5` and
+    `6` (`open_kde`), so the only name built from it is `kde-open5`, found on the opener's reduced
+    `PATH`. `xdg-mime query default` reads it as a number (`-lt 6`) and builds `ktraderclient5`
+    only for `5`. The `eval 'kbuildsycoca${KDE_SESSION_VERSION}'` (`update_kde_cache`) and
+    `kde${KDE_SESSION_VERSION}-config` are in the `default`, `install` and `uninstall` paths, which
+    `xdg-open` does not start. No value selects a program outside `PATH`. Not removed; read, not run.
+  - `XDG_UTILS_REALPATH_BACKEND`: `xdg_realpath` matches it against `realpath`, `busybox-realpath`
+    and `readlink` and exits for any other value, so it chooses among programs found on `PATH`.
+    Not removed; read, not run.
+  - `XDG_RUNTIME_DIR`: `detectDE` tests `[ -f "$XDG_RUNTIME_DIR/flatpak-info" ]` and then sets the
+    mode to `flatpak`, where `open_flatpak` calls `gdbus` for the portal. It does not read the
+    file. A stage that makes the file exist changes the mode to one that hands the address to the
+    portal, and no stage path is run. Not removed; read, not run.
 - The browser opener's `BROWSER` and `XDG_*` names ([CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13))
   were run on one Linux host against `xdg-open` and `xdg-mime` 1.2.1 and `gio` 2.86.0, for the
   cells marked run below. Every test added after that run is not run: the host here is macOS,
-  the opener tests are Linux-only and print `skipped` elsewhere, and CI has run only some of them. In the
+  the opener tests that need a Linux `xdg-open` print `skipped` unless one is first on `PATH`, and PR #3914 (merged; run 42913319739 at 55f04e9) passed its `Format, lint, and test` job on `ubuntu-26.04` after the step installing `xdg-utils` 1.2.1-2ubuntu2, `libglib2.0-bin` 2.88.0 and `kde-cli-tools` 6.6.4. `cargo nextest` listed 23 `opener::tests` cases as PASS with durations from 0.010 s to 52.7 s, among them the installed-`xdg-open` `BROWSER` case (0.111 s), the GNOME `HOME` case (0.130 s) and the stand-in `kde-open` case (2.726 s). The log cannot show whether any printed `skipped`: nextest hides the output of a passing test and the log holds no line with `skipped:`. The evidence is that they passed with `CI` set (the runner sets it for every step; the log does not print it), on Linux, where a missing `xdg-open`, `gio` or `kde-open`, or an installed `xdg-open` that does not run the handler, fails the generic-mode, GNOME and stand-in `kde-open` cases instead of skipping (`the_runner_must_run_the_handlers` in `crates/tui/src/opener.rs`). The KDE case that runs an installed handler can still skip a name, as below. No CI run covers the edits made since. In the
   `check` job on `ubuntu-latest`, `ci.yml` installs `xdg-utils`, `libglib2.0-bin` and
   `kde-cli-tools`. On Linux with `CI` set, the generic-mode `XDG_*`, GNOME and KDE tests fail when
   `xdg-open`, `gio` or `kde-open` is missing, and the generic-mode and GNOME tests also fail when
@@ -5076,8 +5169,8 @@ shown by running the program, or not entirely:
   it prints `skipped`, as it did on this macOS host. The test that puts a stand-in `kde-open` first on `PATH` and reads what
   the `xdg-open` starts it with fails on Linux with `CI` set when `xdg-open` does not start the
   stand-in, so the opener's names are checked there against a started `kde-open`. The
-  generic-mode `BROWSER` test through the installed `xdg-open` is older and prints `skipped` in
-  those cases on every platform. On macOS every opener test prints `skipped` even when `CI` is set.
+  generic-mode `BROWSER` test through the installed `xdg-open` fails in those cases too on Linux
+  with `CI` set, and prints `skipped` elsewhere. On macOS with no `xdg-open` on `PATH` every opener test prints `skipped` even when `CI` is set. With the real `xdg-open` 1.2.1 and a `uname` that prints `Linux` first on `PATH`, the 28 `opener::` tests passed here, 25 with no skip line and 3 with one: the real-`gio` `HOME` test, the real-`gio` `XDG_` test (all four names) and the real-`kde-open` test (`no xdg-open and kde-open on this host`). No GNOME or KDE host was available, so `cargo test -p bravebot-tui opener` has not been run on one.
   With no `DISPLAY` or `WAYLAND_DISPLAY`, `xdg-open` 1.2.1 does not look up a scheme handler in
   generic mode, so the generic test sets `DISPLAY`. The generic-mode test failed on the CI runner
   with the installed handler not run; its run now prints `xdg-open`'s debug output when that
@@ -5086,13 +5179,17 @@ shown by running the program, or not entirely:
 
   | Name | Generic desktop | `XDG_CURRENT_DESKTOP=GNOME` (`gio open`) | `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` (`kde-open`) |
   |---|---|---|---|
-  | `BROWSER` | Test, run on Linux: the planted helper is not run and an installed one is. | No test. `xdg-open` reaches `BROWSER` in `open_generic`, which `open_gnome` reaches only without `gio` (per the 1.1.x script; not checked against 1.2.1), and the GNOME test needs `gio`. Not run. | Test, not run: the planted helper must not run if an installed `BROWSER` helper runs. If it does not, the test prints that `kde-open` does not read `BROWSER` and asserts nothing. |
-  | `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Test, not run: the planted handler is not run and an installed one is. `xdg-mime query default` was run on Linux and returned a handler planted under each. | Test, run on Linux: `gio open` started a handler planted under each, so each selects the program that opens the address. The test was changed after that run and its new form is not run. | Test, not run: the planted handler is not run and an installed one is. |
+  | `BROWSER` | Test, run against the real script: the planted helper is not run and an installed one is. The test ran against the real `xdg-open` 1.2.1 script on macOS with `uname` stubbed to print `Linux`, not on a Linux host, and passed with the fix. With `BROWSER` no longer removed by the opener it failed with `left: (true, true)`, `right: (false, true)`: the planted helper ran. The `ci.yml` run of the test on `ubuntu-latest` passed in 0.183 s, which does not show whether it printed `skipped`; the test now fails there in that case. | No test of the script reaching `BROWSER` with `gio` installed, since it does not: in `xdg-open` 1.2.1 `open_gnome` and `open_gnome3` run `gio open` and `gvfs-open` first and reach `open_generic`, where `BROWSER` is read, only when none answers `--help` (script lines 645-676). Test, run against the real script on macOS with `uname` stubbed: `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome_without_gio` shadows `gio`, `gvfs-open` and `gnome-open` with programs that fail and sets `XDG_CURRENT_DESKTOP=GNOME`; the planted helper is not run and an installed one is. With `BROWSER` no longer removed by the opener it failed with `left: (true, true)`, `right: (false, true)`. Not run on Linux; it does not show what a real GNOME session adds. Safe and unsafe values with `gio` installed: `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome` (stand-in `gio`, real `xdg-open` 1.2.1, macOS, `uname` stubbed) showed an installed `BROWSER` value reaches `gio`, which was started with the address, and a value in a directory a stage may write does not; with the opener checking no names it failed with `BROWSER reached gio`. No real GNOME session was run. | Test, run against the real script on macOS with `uname` stubbed: `the_installed_xdg_open_does_not_read_browser_under_kde_whatever_kde_open_does` shadows `kde-open`, `kde-open5` and `kfmclient` with programs that fail and sets `KDE_SESSION_VERSION=6`; neither an installed nor a planted `BROWSER` helper runs, because `open_kde` (script lines 609-633) never reaches `open_generic`. With `open_kde` edited to call `open_generic` the test failed with `left: (false, true)`, `right: (false, false)`. It shows nothing about what the real `kde-open` reads; the tests that run a stand-in `kde-open` show `BROWSER` does not reach it. Not run on Linux. `a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts` (stand-in `kde-open`, same host) showed an installed `BROWSER` value reaches `kde-open`, which was started with the address, and a value in a directory a stage may write does not; with the opener checking no names it failed with `BROWSER reached kde-open`. The real `kde-open` was not run. |
+  | `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Test, run against the real script on macOS with `uname` stubbed, not on a Linux host: the planted handler is not run and an installed one is, for each name. With the four names no longer removed by the opener it failed on `XDG_CONFIG_DIRS` with `left: (true, true)`, `right: (false, true)`. `XDG_DATA_DIRS` is removed by two entries, the opener's own in `CODE_SELECTORS` in `crates/tui/src/opener.rs` and the generic table's in `crates/sandbox/src/programs.rs`, and either one alone is enough. Run on macOS with `uname` stubbed and the `opener::` tests (28), reading the output: with both entries deleted, six failed (`a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome`, its `kde_open` twin, `an_xdg_directory_is_judged_by_where_it_leads_on_the_disk`, `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode` with `left: (true, true)`, `right: (false, true)`, `the_opener_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write` and `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode`) and 22 passed. With only the generic table's entry deleted all 28 passed. With only the opener's own entry deleted 26 passed and the two stand-in tests (gio and kde-open) failed, on their check that `XDG_DATA_DIRS` is in the opener's list and not on a leak, since the generic table still removed the value. So no test shows the opener's entry alone, or the generic table's alone, to be what keeps a planted `XDG_DATA_DIRS` from `gio open`; the tests show the pair does. The real-`gio` test `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` skips on this host (see below), so it was not shown to fail under this fault. With the judging of `XDG_DATA_DIRS` disabled in `withhold_code_selectors_with` (both list entries kept) the same six tests failed, among them `XDG_DATA_DIRS reached gio: ARGS https://example.invalid/` and `XDG_DATA_DIRS reached kde-open`. `xdg-mime query default` was run on Linux and returned a handler planted under each. | Two tests. (1) `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` (real `gio open`): run on Linux earlier, where `gio open` started a handler planted under each name, so each selects the program that opens the address; the test was changed after that run and its new form is not run on Linux. On macOS (xdg-open 1.2.1 with `uname` stubbed, Homebrew `gio` 2.90.1) it prints `skipped` for all four names: `gio open bravebot-test://example.invalid/` exits 2 with `Operation not supported`, `gio mime x-scheme-handler/bravebot-test` finds no default application with a `mimeapps.list` planted under `XDG_CONFIG_HOME`, and `gio launch` prints `The launch command is not currently supported on this platform`. (2) `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome` (stand-in `gio` first on `PATH`, answers `gio help open`, logs `gio open` and the five names it sees; `XDG_CURRENT_DESKTOP=GNOME`): run against the real `xdg-open` 1.2.1 on macOS with `uname` stubbed, not on a Linux host, with no skip: for each of the five names a value in a directory a stage may write is not seen by `gio` and a value in an installed directory is seen by `gio`, which was started with the address. This shows what the opener hands on, not what `gio` reads. With the opener checking no names it failed with `BROWSER reached gio: ARGS https://example.invalid/`; with the opener not checking `XDG_DATA*` and `XDG_CONFIG*` it failed with `XDG_DATA_HOME reached gio`; with the four names left out of the test's list (the opener's list) it failed on `XDG_CONFIG_DIRS is not in the opener's list`. | Test, run against the real `xdg-open` 1.2.1 on macOS with `uname` stubbed, not on a Linux host, with a stand-in `kde-open` first on `PATH` and `KDE_SESSION_VERSION=6`, `a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts`: for each of the five names a value in a directory a stage may write is not seen by `kde-open` and a value in an installed directory is, and `kde-open` was started with the address, with no skip. The same three faults as for GNOME failed it (`BROWSER reached kde-open`, `XDG_DATA_HOME reached kde-open`, and the list check). The real `kde-open` was not run: no KDE session or `kde-open` on this host, so what it reads from the four names is blocked. |
 
   The opener tests are `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open`
   (generic, `BROWSER`),
   `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode`,
-  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` and
+  `an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome`,
+  `a_browser_helper_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome_without_gio`,
+  `the_installed_xdg_open_does_not_read_browser_under_kde_whatever_kde_open_does`,
+  `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome`,
+  `a_name_a_stage_may_write_is_not_passed_to_the_kde_open_the_installed_xdg_open_starts` and
   `a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`.
   The KDE test sets `KDE_SESSION_VERSION=5` where `kde-open5` is found and `6` otherwise, since
   `xdg-open` 1.2.1 runs `kfmclient exec` when it is unset, `kde-open5` for 5 and `kde-open` for 4
@@ -5100,48 +5197,91 @@ shown by running the program, or not entirely:
   `bravebot-test`, since with `XDG_DATA_DIRS` removed `gio open` would start the host's browser
   for `https`. It sets `XDG_CURRENT_DESKTOP` on a host with no GNOME session.
 
+  Per name, for the two stand-in tests (`gio` and `kde-open`), on macOS with the stub `PATH` above. A
+  temporary line in `opening_against` put one name back into the opener's environment after its
+  judging (removed afterwards; `opener.rs` was restored from saved bytes and its checksum compared).
+  For each of the 19 names of `CODE_SELECTORS` (`HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the 16 of `OPENER_SELECTORS`) both tests
+  failed with `<NAME> reached gio: ARGS https://example.invalid/` and `<NAME> reached kde-open: ARGS
+  https://example.invalid/`, and both pass without the line. A second temporary line removed one name
+  after the judging. For each of the 13 names that are not options (`BROWSER`, `HOME`, the five
+  `XDG_` directories, `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `GIO_LAUNCH_DESKTOP`, `QT_PLUGIN_PATH`,
+  `QT_QPA_PLATFORM_PLUGIN_PATH`, `KDESYCOCA`) both tests failed with `<NAME> was not kept`, so a safe
+  value of each reaches the program `xdg-open` starts. This is what the opener hands on, not a trace
+  of the real programs. `strace -f -e trace=execve,openat` of the real `gio open` and `kde-open` was
+  not made: this host has no `strace` and no Linux VM or container runtime, `dtruss` refuses to run
+  (`DTrace requires additional privileges`), and there is no GNOME or KDE session or `kde-open`.
+
   Electron 44.9.3 on Linux, run under Xvfb, was made to call `openExternal` and `openPath` of
   `ui/src/main/external-open.ts` with all five names set to directories and a script a stage could
   have written. It started `xdg-open` for each call with none of the five in its environment. The
   same two calls made on Electron's `shell` without the deletion started `xdg-open` with all five,
   so Electron hands its environment to `xdg-open` and the deletion is what removes them. The
   by-hand run was made before `GIO_LAUNCH_DESKTOP` was listed, so it set five names; the test sets
-  fifteen. `ui/scripts/external-open-electron.test.mjs` repeats that run as the test case `electron
-  on linux starts xdg-open without the fifteen names for openExternal and openPath through
+  sixteen. `ui/scripts/external-open-electron.test.mjs` repeats that run as the test case `electron
+  on linux starts xdg-open without the sixteen names for openExternal and openPath through
   external-open.ts and with them without it`, which expects exactly two starts in each run. It
   needed `--no-sandbox` and `--disable-dev-shm-usage` on the host that ran it. The case `electron
-  on linux starts any xdg-open for showItemInFolder without the fifteen names through
+  on linux starts any xdg-open for showItemInFolder without the sixteen names through
   external-open.ts and with them without it` asserts no start count, since how many times Electron
   starts `xdg-open` is Electron's choice, and fails when either run starts none. Each start through
-  `external-open.ts` must carry none of the names and each control start all fifteen. It sets
+  `external-open.ts` must carry none of the names and each control start all sixteen. It sets
   `DBUS_SESSION_BUS_ADDRESS` to a missing socket so that Electron falls back to `xdg-open`. In
-  Electron v44.9.3 (`shell/common/platform_util_linux.cc`) `showItemInFolder` first checks the
-  portal and `org.freedesktop.FileManager1` over the session bus, which libdbus finds through
-  `DBUS_SESSION_BUS_ADDRESS`; where neither is running, or a call fails, it runs `xdg-open .` in
-  the folder that holds the file, and `openPath` and `openExternal` start `xdg-open` through the
-  same helper. That helper sets only the working directory, `MM_NOTTTY`, and the activation token,
-  so the child gets Electron's environment. This was read, not run, and the source read does not
-  show what a missing socket does to the bus connection itself: a null connection returns without
-  starting `xdg-open`, which the case reports as a run that started none. Both cases print `skipped` where
+  Electron 44.9.3 (`shell/common/platform_util_linux.cc`, read at tag v44.9.3) `ShowItemInFolder`
+  asks the session bus, which libdbus finds through `DBUS_SESSION_BUS_ADDRESS`, for the portal and
+  then for the file manager; with neither, or when a call fails, it calls
+  `OpenParentFolderFallback`, which calls `OpenFolder` on the parent directory and so starts
+  `xdg-open`. With a portal or a file manager running it sends the path over D-Bus and does not
+  start `xdg-open`, so no deletion is needed there. `openPath` and `openExternal` start `xdg-open`
+  through the same helper, which sets only the working directory, `MM_NOTTTY` and the activation
+  token, so the child gets Electron's environment. The CI run below shows that a missing socket
+  reaches the fallback on `ubuntu-latest`. Both cases print `skipped` where
   there is no Linux, `xvfb-run` or Electron binary, and on Linux with `CI` set a missing `xvfb-run`
-  or Electron fails them. Neither has been run on Linux since the test was changed. The
-  `showItemInFolder` case has never been run on Linux.
+  or Electron fails them. The `ci.yml` job `Front end` runs `make check-ui-build` on `ubuntu-latest`
+  after installing `xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64`, no workflow sets
+  `ELECTRON_SKIP_BINARY_DOWNLOAD`, and the log of run 42949876078 lists both cases as passed (✔)
+  and not skipped. The earlier fifteen-name form of the first case passed on the `ubuntu-latest`
+  `Front end` job of that run (3.27 s; 1.99 s for the `showItemInFolder` case, which asserted a
+  start of the control and of the run through `external-open.ts`),
+  so that form started Electron there and `showItemInFolder` started `xdg-open`. Neither case has
+  been run on Linux since the test was changed to sixteen names.
 
   The variables `xdg-open` 1.2.1 and `xdg-mime` 1.2.1 use were listed from their source. Besides
   the names in the opener's list, they read `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `KDE_FULL_SESSION`,
   `GNOME_DESKTOP_SESSION_ID`, `MATE_DESKTOP_SESSION_ID` and `LXQT_SESSION_CONFIG` to choose among
   launchers whose names are fixed, `KDE_SESSION_VERSION` to complete the name `kde-open5`,
-  `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`. They also read
-  `XDG_RUNTIME_DIR`, which is in the opener's list, for a `flatpak-info` file that switches to
-  `gdbus`. None of the names in this sentence names a file to run.
+  `XDG_UTILS_REALPATH_BACKEND` to choose between `realpath` and `readlink`, and `XDG_RUNTIME_DIR`
+  (in the opener's list) for a `flatpak-info` file that switches to `gdbus`. None of those names a file to run.
+  The complete set of `$NAME` expansions in the two scripts, from a text search of the 1.2.1 files
+  with the shell's own working variables removed (`DE`, `MIME`, `IFS`, `DIR`, `DESKTOP`, `KTRADER`),
+  is those names, the five names, `XDG_MENU_PREFIX`, `PATH`, and the following, which do not choose
+  a file or program: `XDG_UTILS_DEBUG_LEVEL` (prints debug output), `XDG_UTILS_ENABLE_DOUBLE_HYPEN`
+  (option parsing), `DISPLAY` and `WAYLAND_DISPLAY` (`has_display`, `xdg-open` line 431: whether
+  generic mode looks up a scheme handler at all), `HOSTNAME` (the host part removed from a
+  `file://` address; `hostname` or `uname -n` when unset), and `XDG_UTILS_INSTALL_MODE` (the
+  install and uninstall actions of `xdg-mime` only). `XDG_DATA_APPS` and `KDE_CONFIG_PATH` occur
+  only in comments. Parsing, from `xdg-mime` `defapp_generic` and `xdg-open` `open_envvar`:
+  `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_DATA_HOME` and `XDG_DATA_DIRS` are each split on `:`
+  by the shell (`IFS=:`) and the four are walked in the order config home, config dirs, data home,
+  data dirs, so a `:` in `XDG_CONFIG_HOME` or `XDG_DATA_HOME` adds directories. No entry is checked
+  for being absolute, so a relative entry is read against the working directory. An unset or empty
+  value is replaced by `$HOME/.config`, `/etc/xdg`, `$HOME/.local/share` and
+  `/usr/local/share/:/usr/share/`. `BROWSER` is split on `:`; an empty entry is skipped; an entry
+  containing `%s` is run as the output of `printf` with the address, only when the address is one
+  argument, and any other entry is run unquoted with the address as its argument, so the shell
+  splits it into a program and arguments and finds the program on `PATH`; the first entry that exits
+  with status 0 ends the search. `xdg-open` removes `xdg-open` entries from `BROWSER` first (line
+  1063). These parsing rules are from the 1.2.1 source and from the runs described below, which
+  used the real scripts with `uname` stubbed.
   `xdg-mime` 1.2.1 also reads `XDG_CURRENT_DESKTOP` and `XDG_MENU_PREFIX` as file-name prefixes
   (`<desktop>-mimeapps.list`, `<prefix>defaults.list`, `<prefix>mimeinfo.cache`) and
   `KDE_SESSION_VERSION` as a suffix of program names (`kde-open5`, `kbuildsycoca<version>`,
-  `ktraderclient<version>`, `kde<version>-config`). None of the three is in the opener's list. The
-  prefixes are joined to directories the opener already judges, and a file read that way supplies
-  only a desktop-entry id, which is looked up in those directories. `xdg-mime` does not validate
-  either prefix, so a value containing `/` can select a file outside them, and what that file
-  supplies is limited in the same way. The program names built from `KDE_SESSION_VERSION` are
+  `ktraderclient<version>`, `kde<version>-config`). `xdg-mime` does not validate either prefix, so a
+  value containing `/` selects a file outside the directories the opener judged. The earlier
+  reading here, that such a file supplies only a desktop-entry id looked up in those directories,
+  was wrong: the id may itself contain `../`, and a run against the real scripts started a handler
+  planted in a stage-writable directory through `XDG_CURRENT_DESKTOP=../../stage/evil` and through
+  `XDG_MENU_PREFIX=../../../stage/` (see the entry above). The opener therefore removes both when
+  the value contains a `/`. `KDE_SESSION_VERSION` is not in the list. The program names built from `KDE_SESSION_VERSION` are
   resolved on the reduced `PATH`. The `eval` at `xdg-mime.in` line 37 and the `kde<version>-config`
   start at line 832 are reached only by the install, uninstall and makedefault actions, and
   `xdg-open` runs `xdg-mime query` only. These readings are from the source and were not run.
@@ -5188,23 +5328,75 @@ shown by running the program, or not entirely:
   directory a stage may write or that does not exist, a runtime directory that is empty or
   relative, and an address that is abstract, `tcp:`, `launchd:`, repeated-key, contains `%` or is
   otherwise refused, whatever it points to.
-  `kde-open` was read in `kioclient.cpp` of kde-cli-tools (commit `aa1f650`) and in `openurljob.cpp`,
-  `kprocessrunner.cpp` and `desktopexecparser.cpp` of KIO (commit `608d332`), taken from the GitHub
-  mirror of the KDE repositories. Those files read `PATH` directly (`desktopexecparser.cpp`
-  line 296), reference no `BROWSER`, and read no `XDG_*` or `KDE_*` variable by name.
-  `kprocessrunner.cpp` sets `XDG_ACTIVATION_TOKEN` in the environment of the process it starts and
-  does not read it. The libraries they call do read `XDG_*` names, as the `kde-open` entry above
-  records (`QStandardPaths`, `KMimeAssociations`, `KSycoca`; KService 2bd4461c and Qt 6.10.0), so
-  reading nothing by name in those files does not mean `kde-open` ignores the `XDG_` names. The
-  terminal emulator comes from the KDE configuration file and not from the environment.
+  The variable list for `gio open` was completed from source in GLib 2.86.0 (`e33be08bda99`) and
+  2.88.4 (`802d1893cd5f`), by reading every `g_getenv`, `g_environ_getenv` and `getenv` reachable
+  from `gio-tool-open.c`; no category 1 or 2 variable differs in rule between them, and the line
+  numbers below are 2.86.0's. Parsing: `XDG_DATA_HOME` and `XDG_CONFIG_HOME` are one path each, used
+  when set and non-empty (`gutils.c` lines 1872 and 1937), relative accepted, and fall back to
+  `$HOME/.local/share` and `$HOME/.config`. `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS` (lines 2699 and
+  2783) are split on `:` with empty and relative elements kept, and fall back to
+  `/usr/local/share/:/usr/share/` and `/etc/xdg`. `HOME` (line 838) is used when set, even empty;
+  when unset GLib uses the passwd entry of `LOGNAME` if that is the process's uid and otherwise of
+  the uid (lines 681-700), and `/` when there is none. No `XDG_*` or `HOME` read checks for setuid.
+  `PATH` (lines 371 and 388; `gdesktopappinfo.c` lines 2958 and 3005) is split on `:`, defaults to
+  `/bin:/usr/bin:.`, and an empty element means the current directory. `GIO_EXTRA_MODULES`
+  (`giomodule.c` line 1323) is a `:` list of directories whose modules are loaded, and
+  `GIO_MODULE_DIR` (line 1262) is one directory; both are ignored when setuid, and an empty
+  element of the first fails to open. `GIO_LAUNCH_DESKTOP` is read at `gdesktopappinfo.c` line
+  3041 in 2.86.0 (line 3100 in 2.88.4). `xdgmime.c` (lines 217-300) parses `XDG_DATA_HOME`,
+  `HOME` and `XDG_DATA_DIRS` a second time for the `mime` directory, with different rules: an
+  empty `XDG_DATA_HOME` gives `/mime/`, an empty `XDG_DATA_DIRS` gives no directory, and empty
+  elements are skipped. Its `aliases` and `subclasses` files change which handler is chosen even
+  for `https`. Category 1 or 2 names read by `gio open` that are not in the opener's list: `PATH`
+  (the opener replaces it, see above), `XDG_CURRENT_DESKTOP` (limited to letters, digits, `-` and
+  `_` per element) and `LOGNAME` (read
+  only when `HOME` is unset, and only a name with the process's uid is accepted). These were not
+  added to the opener. `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` (`gutils.c` line 2129 and
+  `gdbusaddress.c` lines 1043 and 1350: which session bus receives D-Bus activation and portal
+  calls; an app is started over it only when its entry is `DBusActivatable`) are in the opener's list and are judged as described above. A GIO module that is loaded, and GVfs, may read more; that was not read.
+  The async branch of `gappinfo.c` was not read line by line. `G_RESOURCE_OVERLAYS`
+  (`gresource.c` line 370) and `GSETTINGS_*` are not reached from `gio open`, as far as the search
+  found. `GIO_USE_*`, `GIO_USE_PORTALS`, `SNAP`, `DISPLAY`, `LANGUAGE`, `LC_*`, `LANG`, `PWD`,
+  `G_MESSAGES_DEBUG` and `G_DEBUG` select an option or a name among loaded modules and name no file
+  or program.
+  `kde-open` was read at the release tags recorded in its entry above, in `kioclient.cpp`,
+  `openurljob.cpp`, `kprocessrunner.cpp` and `desktopexecparser.cpp`, and in Qt's
+  `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig`. Those four files read `PATH`
+  directly (`desktopexecparser.cpp` line 296) and reference no `BROWSER`. `kprocessrunner.cpp`
+  sets `XDG_ACTIVATION_TOKEN` in the environment of the process it starts and does not read it.
+  The `XDG_*` names are read by `QStandardPaths` and
+  `KService` as that entry records. The terminal emulator comes from the KDE configuration
+  file (`TerminalApplication`, expanded for `$VAR`) and not from a variable of its own.
   `HOME` is in the opener's list and is removed when it names a directory a stage may write. With
   `XDG_CURRENT_DESKTOP=GNOME` and no other name set, an
   `xdg-open` run with `HOME` naming a directory that held a `mimeapps.list` and a `.desktop` entry
   started the planted handler through `gio open`.
   `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` runs that, and
   `a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk` runs the judgment on the
-  disk. What `gio` does with `HOME` removed was not run: the test removes nothing it can see
-  `gio` fall back from, and does not run on a host where the account has handlers of its own.
+  disk. With `HOME` removed by the opener, `gio open` was run twice on macOS (Homebrew `gio` 2.90.1, `env -i`): with `HOME` set to a directory holding a `mimeapps.list` and a `.desktop` entry for `bravebot-test`, and with `HOME` unset. Both exited 2 with `Operation not supported`, so on this host `gio` does not start a handler either way and what it falls back to when `HOME` is missing (the passwd entry, read in `glib/gutils.c` and not run) is blocked until a Linux host where `gio open` starts handlers. What the opener hands on was run: the real `xdg-open` 1.2.1 with `uname` stubbed and `XDG_CURRENT_DESKTOP=GNOME` started a stand-in `gio` with `open bravebot-test://example.invalid/` and `HOME` unset (the stand-in logged `HOME unset`), and `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome` shows the same through the opener for a planted `HOME`: `gio` is started with the address and without `HOME`. With the judging of `HOME` disabled in `withhold_code_selectors_with` that test failed with `HOME reached gio: ... SET HOME=.../opener-gio-home-planted-session/selected`, and it passes with it restored.
+  Source read for this list, on a macOS host with no Linux container, VM or `xdg-open`: xdg-utils
+  1.2.1 (tag `v1.2.1`, commit `356c380ad6fecc9ce6bea1f6a77986ba67402c80`), GLib 2.86.0
+  (`e33be08bda99f453e497064e9e021d6306bbeb7d`) and 2.88.4 (`802d1893cd5f4928991b5295263f1700311a3490`),
+  kde-cli-tools 6.8.3, KDE Frameworks 6.29.0 and Qt 6.10.0. `xdg-open` and `xdg-mime` choose
+  handlers by `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `HOME` and
+  `BROWSER`; `gio open` adds `GIO_LAUNCH_DESKTOP`, `GIO_EXTRA_MODULES` and `GIO_MODULE_DIR`, and
+  reads `XDG_CURRENT_DESKTOP` only to choose a `<name>-mimeapps.list` inside directories already
+  chosen. 2.86.0 and 2.88.4 differ on this path only in how `GIO_MODULE_DIR` is read. `kde-open`
+  reads its service cache from `KDESYCOCA` or else from `XDG_CACHE_HOME` (or `$HOME/.cache`), which
+  is why `XDG_CACHE_HOME` is in the list. The real xdg-utils 1.2.1 `xdg-open` and `xdg-mime`
+  scripts, with `uname` stubbed to print `Linux` so that they take the generic path (on Darwin
+  they select `darwin` and run nothing), were run under `env -i` on that host with each of
+  `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_DATA_DIRS` naming a directory with
+  a `mimeapps.list` for `x-scheme-handler/https` and a `.desktop` entry, and `BROWSER` naming a
+  fallback. In all four runs the handler from the named directory ran and the fallback did not.
+  Those runs show that each of the four names selects the program the real scripts run. They were
+  not made on a Linux host and not through the opener, so the opener's removal of
+  `XDG_CONFIG_DIRS` rests on the source (`xdg-mime` `defapp_generic`, which reads the variable
+  without checking it) and on the stubbed run, and was not run on Linux. The removal of the other
+  three names has the same standing in generic mode, except for the `BROWSER` test and the GNOME
+  `gio open` cells marked run above. The Windows `rundll32` start was read and not run.
+  Not read: `G_RESOURCE_OVERLAYS` is read and judged unreachable, the `QT_*` names not listed, and `LD_*` variables.
+  These are unobserved.
   These were not run: a D-Bus service that answers `gio open` after the portal call it receives, so
   that what it can make `gio open` start is unobserved. The Windows `rundll32 url.dll,FileProtocolHandler` start's list was read from public source:
   Wine's `url.dll` hands the address to `ShellExecuteA`, Wine's `shlexec.c` expands
@@ -5236,14 +5428,17 @@ shown by running the program, or not entirely:
   with none; `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
-  stand-in for `xdg-open` instead; a run showing that `kde-open` chooses its handler through
-  `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME` and
-  `XDG_CURRENT_DESKTOP`, which is supported by source and unobserved (Qt's `QDesktopServices` and
+  stand-in for `xdg-open` instead; that `kde-open` chooses its handler
+  through `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME`
+  and `XDG_CURRENT_DESKTOP`, which is read from source and was not run (Qt's `QDesktopServices` and
   `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig` are read, see the `kde-open` entry
-  above); the parts of GLib not
-  read (the `gcontenttype` implementations, `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
-  the passwd fallback for `HOME`); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
-  set, which is shown only by a test of the opener's judgment of the value. The list of variables
+  above); a start of `kde-open` by a Frameworks release other than 6.29.0
+  or by Plasma 5 (only `kde-open5`'s `kioclient.cpp` was read, not KIO 5);
+  `DBUS_SESSION_BUS_ADDRESS`, which libdbus reads and was not read; plasma-integration,
+  `KStartupInfo` and any setuid check in Qt or KDE; the parts of GLib not
+  read (the `gcontenttype` implementations are read for `xdgmime.c` only, and `gsandbox.c`, the splitting of `PATH` in `gspawn.c` and
+  the passwd fallback for `HOME` were read and not run); and a run of `gio open` or `kde-open` with `GIO_LAUNCH_DESKTOP`
+  set, which is shown only by a test of the opener's judgment of the value, and by a run with a stand-in `gio`: the real `xdg-open` 1.2.1 (`uname` stubbed) with `XDG_CURRENT_DESKTOP=GNOME` started the stand-in with `GIO_LAUNCH_DESKTOP` still in its environment, and through the opener `a_name_a_stage_may_write_is_not_passed_to_the_gio_the_installed_xdg_open_starts_under_gnome` shows the value is kept for an installed wrapper and not seen by `gio` for one in a stage-writable directory (with its judging disabled it failed with `GIO_LAUNCH_DESKTOP reached gio`). The real `gio open` executing the wrapper was not run: Homebrew `gio` on macOS cannot launch a handler. The list of variables
   the launchers read is therefore complete only for `xdg-open` and `xdg-mime` 1.2.1 and, for the
   files named above, `gio open` and `kde-open`.
   They are tracked by #3822.
@@ -5728,7 +5923,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
 `verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
 `verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the fifteen names set and the same calls on Electron's shell start it with all fifteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the nine Windows names, which the application keeps)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
@@ -5753,8 +5948,8 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the fifteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the fifteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
-`verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the fifteen names where Electron's own shell starts it with all fifteen; its showItemInFolder case is a test case of its own and has never been run on Linux; the ui job of CI runs it through make check-ui-build on ubuntu-latest and it prints skipped elsewhere)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the sixteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the sixteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
+`verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the sixteen names where Electron's own shell starts it with all sixteen; its showItemInFolder case is a test case of its own and passed on Linux in CI in its fifteen-name form, asserting a start of xdg-open; the ui job of CI runs it through make check-ui-build on ubuntu-latest and fails on Linux when Electron or xvfb-run is missing)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`

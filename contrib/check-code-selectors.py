@@ -47,6 +47,8 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    application leaves them set. Without `HOME`, `gio` also reads the account's passwd home (the
    comment at the top of external-open.ts and SANDBOX-30 give the reasons). The ten Windows names
    of the rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
+   `FILE_NAME_PREFIXES` in the same two files (the names removed only when their value holds a
+   `/`) must be the same list in both.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -184,6 +186,11 @@ APPLICATION_LIST = re.compile(
 )
 APPLICATION_TEST_LIST = re.compile(r"\bconst\s+NAMES\s*=\s*\[(.*?)\]", re.DOTALL)
 QUOTED = re.compile(r"""['"](""" + NAME + r""")['"]""")
+# The names removed only when their value holds a `/`, in the opener and in the application.
+OPENER_PREFIXES = re.compile(r"\bconst\s+FILE_NAME_PREFIXES\b[^=]*=\s*\[(.*?)\]\s*;", re.DOTALL)
+APPLICATION_PREFIXES = re.compile(
+    r"export\s+const\s+FILE_NAME_PREFIXES\b[^=]*=\s*\[(.*?)\]", re.DOTALL
+)
 
 
 def quoted_names(pattern, text):
@@ -235,6 +242,39 @@ def application_complaints(opener_text, application_text, application_test_text)
                 f"{what} in {label} names {', '.join(extra)}, which CODE_SELECTORS in {OPENER} "
                 "does not list. Add it there, or remove it here."
             )
+    return complaints
+
+
+def prefix_complaints(opener_text, application_text):
+    """Every way `FILE_NAME_PREFIXES` in the opener and in the application differ.
+
+    The names are removed only when the value holds a `/`, in both, so a name in one list and not
+    the other is passed on by whichever program lacks it. A list this script cannot find or reads
+    as empty is reported.
+    """
+    complaints = []
+    found = {}
+    for label, pattern, text in [
+        (OPENER, OPENER_PREFIXES, opener_text),
+        (APPLICATION, APPLICATION_PREFIXES, application_text),
+    ]:
+        names = quoted_names(pattern, text)
+        if not names:
+            complaints.append(
+                f"FILE_NAME_PREFIXES is not readable in {label}. If its shape changed, teach "
+                "check-code-selectors.py."
+            )
+            continue
+        if len(names) != len(set(names)):
+            complaints.append(f"FILE_NAME_PREFIXES in {label} names a variable twice: {names}.")
+        found[label] = set(names)
+    if len(found) == 2 and found[OPENER] != found[APPLICATION]:
+        only_rust = sorted(found[OPENER] - found[APPLICATION])
+        only_application = sorted(found[APPLICATION] - found[OPENER])
+        complaints.append(
+            f"FILE_NAME_PREFIXES differs between {OPENER} and {APPLICATION}: only in the opener "
+            f"{only_rust}, only in the application {only_application}."
+        )
     return complaints
 
 
@@ -786,6 +826,12 @@ export const OPENER_SELECTORS = [
 ] as const
 """
 MJS_LIST = "const NAMES = ['BROWSER', 'GIO_LAUNCH_DESKTOP', 'XDG_DATA_HOME']\n"
+OPENER_PREFIX_LIST = (
+    'const FILE_NAME_PREFIXES: [&str; 2] = ["XDG_CURRENT_DESKTOP", "XDG_MENU_PREFIX"];\n'
+)
+TS_PREFIX_LIST = (
+    "export const FILE_NAME_PREFIXES = ['XDG_CURRENT_DESKTOP', 'XDG_MENU_PREFIX'] as const\n"
+)
 
 
 def selftest():
@@ -1289,6 +1335,41 @@ def selftest():
         got = application_complaints(opener_text, ts_text, mjs_text)
         case(f"application: {claim}", len(got) == expected, got)
 
+    prefix_cases = [
+        ("the prefix lists agree", OPENER_PREFIX_LIST, TS_PREFIX_LIST, 0),
+        (
+            "a prefix only the opener lists fails once",
+            OPENER_PREFIX_LIST.replace('"XDG_MENU_PREFIX"]', '"XDG_MENU_PREFIX", "NEW"]'),
+            TS_PREFIX_LIST,
+            1,
+        ),
+        (
+            "a prefix only the application lists fails once",
+            OPENER_PREFIX_LIST,
+            TS_PREFIX_LIST.replace("'XDG_MENU_PREFIX'", "'XDG_MENU_PREFIX', 'NEW'"),
+            1,
+        ),
+        ("an opener prefix list that is not found fails", "fn main() {}\n", TS_PREFIX_LIST, 1),
+        ("an application prefix list that is not found fails", OPENER_PREFIX_LIST, "", 1),
+        (
+            "an empty application prefix list fails",
+            OPENER_PREFIX_LIST,
+            "export const FILE_NAME_PREFIXES = [] as const\n",
+            1,
+        ),
+        (
+            "a prefix listed twice fails",
+            OPENER_PREFIX_LIST,
+            TS_PREFIX_LIST.replace("'XDG_MENU_PREFIX'", "'XDG_MENU_PREFIX', 'XDG_MENU_PREFIX'"),
+            1,
+        ),
+    ]
+    for claim, opener_text, ts_text, expected in prefix_cases:
+        got = prefix_complaints(opener_text, ts_text)
+        case(f"prefixes: {claim}", len(got) == expected, got)
+    got = prefix_complaints(OPENER_LIST, TS_LIST)
+    case("prefixes: lists of selectors are not read as prefixes", len(got) == 2, got)
+
     broke = [(claim, got) for claim, held, got in checks if not held]
     for claim, got in broke:
         print(f"selftest: {claim}, got {got!r}", file=sys.stderr)
@@ -1319,6 +1400,7 @@ def main():
             complaints.append(f"{label} is not there. If it moved, teach check-code-selectors.py.")
             application_texts.append("")
     complaints += application_complaints(files.get(OPENER, ""), *application_texts)
+    complaints += prefix_complaints(files.get(OPENER, ""), application_texts[0])
     for complaint in complaints:
         print(complaint, file=sys.stderr)
     if complaints:
