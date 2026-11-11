@@ -79,14 +79,11 @@ fn inserted_library(selectors: &Path) -> &Path {
 fn plant_tmux(directory: &Path, marker: &Path) {
     std::fs::create_dir_all(directory).expect("create the directory the planted program is in");
     let program = directory.join("tmux");
-    std::fs::write(
-        &program,
-        format!(
-            "#!/bin/sh\necho \"tmux $* LD_PRELOAD=$LD_PRELOAD DYLD_INSERT_LIBRARIES=$DYLD_INSERT_LIBRARIES BASH_ENV=$BASH_ENV\" >> '{}'\n",
-            marker.display()
-        ),
-    )
-    .expect("write the planted program");
+    use std::os::unix::ffi::OsStrExt;
+    let mut script = b"#!/bin/sh\necho \"tmux $* LD_PRELOAD=$LD_PRELOAD DYLD_INSERT_LIBRARIES=$DYLD_INSERT_LIBRARIES BASH_ENV=$BASH_ENV\" >> '".to_vec();
+    script.extend_from_slice(marker.as_os_str().as_bytes());
+    script.extend_from_slice(b"'\n");
+    std::fs::write(&program, script).expect("write the planted program");
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
         .expect("make the planted program executable");
@@ -132,7 +129,11 @@ fn run_under_tmux(name: &str, variable: &str, value: &str) -> Option<Run> {
         .arg("--dangerously-skip-permissions");
     environment(&mut command, &home, &stand_in);
     command
-        .env("PATH", format!("{}:/usr/bin:/bin", planted.display()))
+        .env(
+            "PATH",
+            std::env::join_paths([planted.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+                .expect("join the PATH of the run"),
+        )
         .env("BASH_ENV", &selectors)
         .env("LD_PRELOAD", &selectors)
         .env("DYLD_INSERT_LIBRARIES", inserted_library(&selectors))
