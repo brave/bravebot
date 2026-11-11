@@ -233,7 +233,9 @@ to a listener of this machine's loopback from a container granted the network
 (`a_container_granted_the_network_cannot_connect_to_this_hosts_loopback`). It passed in the
 `Sandbox on Windows` job of CI run 42972425516 (job 130363809021), where the probe printed `loopback
 127.0.0.1:56331 from a container granted the network: refused: connection timed out`, so the
-connect did not reach the listener and ended by timing out and not by an immediate refusal. No
+connect did not reach the listener and ended by timing out and not by an immediate refusal. Run
+42978585691 printed `loopback 127.0.0.1:49844 from a container granted the network: refused:
+connection timed out` and the test passed again. No
 test listens on a port from a container, so this clause says nothing of listening.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
@@ -436,8 +438,8 @@ On Windows a grant is an entry that what is beneath the directory inherits, and 
 not what a junction beneath the directory leads to. That is shown for a junction made from outside a
 stage. The backend makes no reparse-point check when it writes an entry, and whether a grant crosses
 a junction a stage made inside a directory it was granted for writing has not been observed on
-Windows: in run 42972425516 (job 130363809021) no stage could make one, by `mklink /J` or by a
-program calling `FSCTL_SET_REPARSE_POINT`. It is listed with the known costs.
+Windows: in runs 42972425516 (job 130363809021) and 42978585691 no stage could make one, by
+`mklink /J` or by a program calling `FSCTL_SET_REPARSE_POINT`. It is listed with the known costs.
 
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
@@ -5855,7 +5857,9 @@ holding a stage and looks for a folder `bravebot-<pid>-` under `%LOCALAPPDATA%\P
 deletes the profile it finds so the runner is left clean. It passed in the `Sandbox on Windows`
 job of CI run 42972425516 (job 130363809021), which printed `profiles of holder 5804: left
 ["bravebot-5804-0-8829290d23592f7f"]; deleted [("bravebot-5804-0-8829290d23592f7f", 0)]; remaining
-after the delete []`: the killed holder left one profile and the delete removed it. The test ties a
+after the delete []`: the killed holder left one profile and the delete removed it. Run
+42978585691 printed the same for holder 872 (`left ["bravebot-872-0-b96ff706a680f6cc"]; deleted
+[("bravebot-872-0-b96ff706a680f6cc", 0)]; remaining after the delete []`). The test ties a
 folder to the holder by process identifier alone, so an earlier leftover of a reused
 identifier would be found as well. The entry left behind
 names a security identifier no other run holds, so the residue is an entry for a container that no
@@ -5903,7 +5907,8 @@ reported as what it is.
   `junction-probe junction made` or `junction-probe junction not made: <error>`. Both routes were
   run in the `Sandbox on Windows` job of CI run 42972425516 (job 130363809021) and both were
   refused: the test printed `junction not made by a stage by either route: mklink:  [stderr:
-  Access is denied.]; probe: junction not made: Access is denied. (os error 5)` and returned. Neither
+  Access is denied.]; probe: junction not made: Access is denied. (os error 5)` and returned, and
+  run 42978585691 printed the same line. Neither
   `junction grant crossed` nor `junction grant did not cross` was printed, so no run has shown
   whether a grant crosses a junction a stage made, and no clause is claimed from it. The probe's
   output does not say which of its calls was refused. Where the grant crosses,
@@ -5947,8 +5952,20 @@ reported as what it is.
   command line by rules of its own, and it reads '%' in an argument as its own syntax ... refusing
   rather than starting it" }`. The start was refused by [SANDBOX-4](#SANDBOX-4) before any process
   ran, because the test's line was `echo %BRAVEBOT_NAMED%`, so that run does not show whether the
-  named-environment shape starts. The test now runs `cmd.exe /c set BRAVEBOT_NAMED`, which holds no
-  `%`, and expects `BRAVEBOT_NAMED=named`. That form has not been run on Windows.
+  named-environment shape starts. The test then ran `cmd.exe /c set BRAVEBOT_NAMED`, which holds no
+  `%`, and expects `BRAVEBOT_NAMED=named`. In run 42978585691 that start failed with `SpawnFailed(Os
+  { code: 203, kind: Uncategorized, message: "The system could not find the environment option that
+  was entered." })` (panic at `crates\sandbox\tests\windows.rs:1084`, 28 tests passed and this one
+  failed). The same run passed the stage tests that inherit the environment and printed the same
+  junction, `profiles of holder`, `this process is in a job: true` and loopback lines as run
+  42972425516, so the only start that failed was the one naming `SystemRoot` and `BRAVEBOT_NAMED`
+  alone. The log does not say which variable the platform looked for, and whether the cause is the
+  block the backend writes or a variable `cmd.exe` needs is not established. No product code was
+  changed for it. The test now starts the same program with four environments, the first being
+  `SystemRoot` and `BRAVEBOT_NAMED` alone and each later one adding `windir`, then `TEMP` and `TMP`,
+  then `PATH` and `ComSpec`. It prints the outcome of each and fails, listing all four, if any does
+  not print `BRAVEBOT_NAMED=named`, so the next run on Windows shows which of them the platform
+  refuses.
 - The output of a `cmd.exe` line that starts a second `cmd.exe` ended with a closing quote on the
   Windows runner (`child-ran"`). The tests that start a child compare the output with that quote
   removed. Whether the quote comes from `cmd.exe` reading its `/c` line or from the line the backend

@@ -1080,29 +1080,76 @@ fn a_stage_starting_no_child_runs_under_a_policy_that_denies_subprocesses() {
 /// holds no `%`: the backend refuses a `cmd.exe` argument holding one, because `cmd.exe` reads it
 /// as its own syntax (SANDBOX-4), and `echo %BRAVEBOT_NAMED%` was refused that way in run
 /// 42972425516 before any process started.
+///
+/// In run 42978585691 the start of that program with only `SystemRoot` and `BRAVEBOT_NAMED`
+/// failed with `SpawnFailed` and OS error 203 ("The system could not find the environment option
+/// that was entered"), and the log does not show which variable the platform looked for. So the
+/// test starts the program with four environments, each naming more than the one before, and
+/// prints the outcome of each before it asserts anything. Each environment is asserted: every one
+/// must start the program and print the variable, and the failure message lists the outcome of all
+/// four, so a run shows which of them the platform refuses.
 #[test]
 fn a_stage_started_with_only_the_system_root_and_one_variable_sees_that_variable() {
     let sandbox = sandbox();
     let policy = the_base("named-environment");
-    let system_root = std::env::var_os("SystemRoot").expect("the system directory is named");
-    let environment = Environment::Only(
-        bravebot_sandbox::Variables::new()
-            .with("SystemRoot", system_root)
-            .with("BRAVEBOT_NAMED", "named"),
+    let system_root = std::path::PathBuf::from(
+        std::env::var_os("SystemRoot").expect("the system directory is named"),
     );
+    let temporary = system_root.join("Temp");
+    let shell = system_root.join("System32").join("cmd.exe");
+    let named = || {
+        bravebot_sandbox::Variables::new()
+            .with("SystemRoot", system_root.clone())
+            .with("BRAVEBOT_NAMED", "named")
+    };
+    let environments = [
+        ("SystemRoot and one variable", named()),
+        ("plus windir", named().with("windir", system_root.clone())),
+        (
+            "plus windir, TEMP and TMP",
+            named()
+                .with("windir", system_root.clone())
+                .with("TEMP", temporary.clone())
+                .with("TMP", temporary.clone()),
+        ),
+        (
+            "plus windir, TEMP, TMP, PATH and ComSpec",
+            named()
+                .with("windir", system_root.clone())
+                .with("TEMP", temporary.clone())
+                .with("TMP", temporary.clone())
+                .with("PATH", system_root.join("System32"))
+                .with("ComSpec", shell),
+        ),
+    ];
 
-    let (code, printed) = run_with(
-        &sandbox,
-        "cmd.exe",
-        &["/c", "set BRAVEBOT_NAMED"],
-        &policy,
-        environment,
-    )
-    .expect("the stage starts with a named environment");
+    let mut outcomes = Vec::new();
+    let mut refused = Vec::new();
+    for (label, variables) in environments {
+        let outcome = run_with(
+            &sandbox,
+            "cmd.exe",
+            &["/c", "set BRAVEBOT_NAMED"],
+            &policy,
+            Environment::Only(variables),
+        );
+        let line = format!("named-environment {label}: {outcome:?}");
+        eprintln!("{line}");
+        let started = matches!(
+            &outcome,
+            Ok((Some(0), printed)) if printed.trim_end_matches('"') == "BRAVEBOT_NAMED=named"
+        );
+        if !started {
+            refused.push(label);
+        }
+        outcomes.push(line);
+    }
 
-    eprintln!("named-environment started: {printed}");
-    assert_eq!(code, Some(0), "{printed}");
-    assert_eq!(printed.trim_end_matches('"'), "BRAVEBOT_NAMED=named");
+    assert!(
+        refused.is_empty(),
+        "these environments did not start the program and print the variable: {refused:?}\n{}",
+        outcomes.join("\n")
+    );
 }
 
 /// The line the next two tests hand `cmd.exe`: it starts a second `cmd.exe`, which is a program
