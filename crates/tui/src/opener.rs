@@ -2866,6 +2866,27 @@ mod tests {
         }
     }
 
+    /// The slash check of a file name prefix runs on the bytes of the value. A value that is not
+    /// UTF-8 and holds a `/` is removed, so it is not read as having none. One that is not UTF-8
+    /// and holds no `/` is kept, as is the text with the replacement character written out.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_name_prefix_that_is_not_text_is_judged_by_its_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        for name in FILE_NAME_PREFIXES {
+            assert!(
+                withheld_bytes(name, OsStr::from_bytes(b"../\xff")),
+                "{name}: a value that is not text and has a slash was passed on"
+            );
+            assert!(
+                !withheld_bytes(name, OsStr::from_bytes(b"GNOME\xff")),
+                "{name}: a value that is not text and has no slash was removed"
+            );
+            assert!(!withheld(name, "GNOME\u{fffd}"), "{name}");
+        }
+    }
+
     /// CHATGPT-13: the opener is started with the variables [CRED-14] removes left out and the
     /// arguments it was given. A start that inherited everything would hand this agent's own
     /// credentials to whatever `open` or `xdg-open` resolves to.
