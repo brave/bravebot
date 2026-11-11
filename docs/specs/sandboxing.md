@@ -5195,14 +5195,15 @@ shown by running the program, or not entirely:
 
   Per name, for the two stand-in tests (`gio` and `kde-open`), on macOS with the stub `PATH` above.
   With a name put back into the opener's environment after its judging, each of the 19 names of
-  `CODE_SELECTORS` (`HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the 16 of
-  `OPENER_SELECTORS`) reaches `gio` and `kde-open`, and both
+  `CODE_SELECTORS` that are not Windows names (`HOME`, `XDG_RUNTIME_DIR`,
+  `DBUS_SESSION_BUS_ADDRESS` and the 16 of `OPENER_SELECTORS`) reaches `gio` and `kde-open`, and both
   tests fail with `<NAME> reached gio: ARGS https://example.invalid/` and `<NAME> reached kde-open:
   ARGS https://example.invalid/`. Both pass without it. With a name removed after the judging, each
   of the 13 names that are not options (`BROWSER`, `HOME`, the five `XDG_` directories,
   `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `GIO_LAUNCH_DESKTOP`, `QT_PLUGIN_PATH`,
   `QT_QPA_PLATFORM_PLUGIN_PATH`, `KDESYCOCA`) fails both tests with `<NAME> was not kept`, so a safe
-  value of each reaches the program `xdg-open` starts. This is what the opener hands on, not a trace
+  value of each reaches the program `xdg-open` starts. The ten Windows names were in neither run.
+  This is what the opener hands on, not a trace
   of the real programs. `strace -f -e trace=execve,openat` of the real `gio open` and `kde-open` was
   not made: this host has no `strace` and no Linux VM or container runtime, `dtruss` refuses to run
   (`DTrace requires additional privileges`), and there is no GNOME or KDE session or `kde-open`.
