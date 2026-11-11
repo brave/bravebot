@@ -1273,15 +1273,20 @@ fn model_lines(config: &Config, model: &str, note: String) -> Vec<Line> {
 
 /// Which deployment an endpoint names, without naming the host.
 ///
-/// Matched on the host rather than parsed, because the answer wanted is one of three words and a
-/// URL parser would still leave the mapping to be written. An unrecognised host is reported as
-/// custom rather than guessed at.
+/// The host is read with [`bravebot_core::url::host_of`], which ends it at the first `/`, `?` or
+/// `#` and leaves userinfo and port out, so a suffix or exact match against it cannot be fooled by
+/// a fragment or a path that merely holds one of these strings: `https://attacker.example#.brave.com`
+/// reads as `custom`, not `prod`, because its host is `attacker.example`. An endpoint with no host
+/// at all is reported as custom rather than guessed at.
 fn environment(endpoint: &str) -> &'static str {
-    if endpoint.contains("127.0.0.1") || endpoint.contains("localhost") {
+    let Some(host) = bravebot_core::url::host_of(endpoint) else {
+        return t!(environment_custom);
+    };
+    if host == "127.0.0.1" || host == "localhost" {
         t!(environment_local)
-    } else if endpoint.contains(".brave.software") {
+    } else if host.ends_with(".brave.software") {
         t!(environment_dev)
-    } else if endpoint.contains(".brave.com") {
+    } else if host.ends_with(".brave.com") {
         t!(environment_prod)
     } else {
         t!(environment_custom)
@@ -2885,6 +2890,9 @@ mod tests {
         assert_eq!(environment("https://ai-chat.bsg.brave.com"), "prod");
         assert_eq!(environment("http://127.0.0.1:8080"), "local");
         assert_eq!(environment("https://example.invalid"), "custom");
+        assert_eq!(environment("https://attacker.example#.brave.com"), "custom");
+        assert_eq!(environment("https://attacker.example?.brave.com"), "custom");
+        assert_eq!(environment("https://localhost.attacker.example"), "custom");
     }
 
     /// Whether this directory is trusted is the first thing a person wants from a status panel, and
